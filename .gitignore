@@ -7,12 +7,13 @@
 /.pnpm-store/
 /node_modules/
 **/node_modules/
-/.turbo/
+**/.turbo/
 **/.next/
 **/dist/
 **/coverage/
 **/__pycache__/
 *.py[cod]
+*.tsbuildinfo
 
 # Autonomous development runtime (never visible in commits or worktrees)
 /.agent-state/
