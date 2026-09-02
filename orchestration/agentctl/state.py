@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     checks_json TEXT NOT NULL,
     capabilities_json TEXT NOT NULL DEFAULT '[]',
     attempt INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL,
     fencing_token TEXT,
     next_wake_at REAL,
@@ -157,6 +158,17 @@ class State:
         with self.transaction():
             self.connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)",
+                (utc_now(),),
+            )
+            columns = {
+                str(row[1]) for row in self.connection.execute("PRAGMA table_info(tasks)").fetchall()
+            }
+            if "failure_count" not in columns:
+                self.connection.execute(
+                    "ALTER TABLE tasks ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"
+                )
+            self.connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)",
                 (utc_now(),),
             )
 
@@ -311,6 +323,7 @@ class State:
                 "thread_id",
                 "reviewer_thread_id",
                 "attempt",
+                "failure_count",
                 "fencing_token",
                 "next_wake_at",
                 "candidate_sha",
@@ -388,6 +401,30 @@ class State:
                 payload={"reason": reason, "fencingToken": token},
             )
         return token
+
+    def note_failure(self, task_id: str, *, actor: str, reason: str) -> int:
+        with self.transaction():
+            cursor = self.connection.execute(
+                """
+                UPDATE tasks
+                SET failure_count = failure_count + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (utc_now(), task_id),
+            )
+            if cursor.rowcount != 1:
+                raise AgentCtlError(f"unknown task: {task_id}")
+            row = self.connection.execute(
+                "SELECT failure_count FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            count = int(row[0])
+            self.event(
+                task_id=task_id,
+                actor=actor,
+                kind="task.failure_recorded",
+                payload={"reason": reason, "failureCount": count},
+            )
+        return count
 
     def begin_attempt(self, task_id: str, phase: str, *, log_path: Path, result_path: Path) -> str:
         with self.transaction():

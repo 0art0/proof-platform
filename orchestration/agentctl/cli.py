@@ -193,7 +193,7 @@ def command_status(config: Config, args: argparse.Namespace) -> int:
         retry = f" wake={task['next_wake_at']:.0f}" if task.get("next_wake_at") else ""
         print(
             f"{task['id']:<40} {task['status']:<20} attempt={task['attempt']}"
-            f"{retry}  {task['title']}"
+            f" failures={task['failure_count']}/{task['max_attempts']}{retry}  {task['title']}"
         )
     return 0
 

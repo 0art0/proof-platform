@@ -101,6 +101,7 @@ def _review(
         )
     elif verdict == "request_changes":
         feedback = json_dumps({"summary": result["summary"], "findings": result["findings"]})
+        state.note_failure(task["id"], actor="reviewer", reason="review requested changes")
         state.transition(
             task["id"],
             "rework",

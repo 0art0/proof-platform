@@ -137,6 +137,18 @@ def _launch_tasks(config: Config, state: State) -> int:
     for task in candidates:
         if launched >= available:
             break
+        if task["status"] == "rework" and int(task["failure_count"]) >= int(task["max_attempts"]):
+            state.transition(
+                task["id"],
+                "failed",
+                actor="scheduler",
+                fields={"last_error": "automatic rework budget exhausted"},
+                payload={
+                    "failureCount": task["failure_count"],
+                    "maxAttempts": task["max_attempts"],
+                },
+            )
+            continue
         if task["status"] == "retry_wait" and float(task.get("next_wake_at") or 0) > epoch_now():
             continue
         ready, blocked = _dependencies_ready(state, task)

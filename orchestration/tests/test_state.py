@@ -33,7 +33,7 @@ class StateTests(unittest.TestCase):
         self.state.migrate()
         self.assertEqual(self.state.integrity_check(), "ok")
         migrations = self.state.connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-        self.assertEqual(migrations, 1)
+        self.assertEqual(migrations, 2)
 
     def test_transition_and_event_are_atomic(self) -> None:
         task_id = self.create_task()
@@ -63,6 +63,20 @@ class StateTests(unittest.TestCase):
             "SELECT finished_at FROM attempts WHERE fencing_token = ?", (token,)
         ).fetchone()
         self.assertIsNone(attempt[0])
+
+    def test_failure_budget_is_durable_and_separate_from_launch_attempts(self) -> None:
+        task_id = self.create_task()
+        self.state.begin_attempt(
+            task_id,
+            "implement",
+            log_path=self.root / "log",
+            result_path=self.root / "result",
+        )
+        self.assertEqual(self.state.get_task(task_id)["failure_count"], 0)
+        self.assertEqual(
+            self.state.note_failure(task_id, actor="test", reason="review requested changes"), 1
+        )
+        self.assertEqual(self.state.get_task(task_id)["failure_count"], 1)
 
     def test_backup_includes_committed_state(self) -> None:
         task_id = self.create_task()
@@ -94,4 +108,3 @@ class StateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

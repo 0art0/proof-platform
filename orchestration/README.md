@@ -90,4 +90,4 @@ queued ──> preparing ──> running ──> verifying ──> reviewing
                                                 needs_resolution      integrated
 ```
 
-`cancelled` is terminal from every non-integrated state. Rate limits do not consume a retry attempt and are tracked as deadlines rather than active workers.
+`cancelled` is terminal from every non-integrated state. Rate limits do not consume the automatic failure/rework budget and are tracked as deadlines rather than active workers.
