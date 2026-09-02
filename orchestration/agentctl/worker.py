@@ -9,7 +9,7 @@ from typing import Any
 from .codex import CodexOutcome, run_codex, validate_result_shape
 from .config import Config
 from .contracts import implementer_prompt, reviewer_prompt
-from .gitops import commit_candidate
+from .gitops import commit_candidate, validate_candidate
 from .scope import validate_scope
 from .state import State
 from .util import AgentCtlError, atomic_write, epoch_now, json_dumps
@@ -131,13 +131,7 @@ def execute(root: Path, task_id: str, token: str, phase: str) -> int:
 
         if phase == "review":
             state.transition(task_id, "verifying", actor="worker", expected="running")
-            report = validate_scope(
-                worktree=Path(task["worktree"]),
-                base_sha=str(task["base_sha"]),
-                allowed=task["scope"],
-                protected=config.protected_paths,
-                elevated=config.elevated_paths,
-            )
+            report = validate_candidate(config, task)
             run_checks(
                 config=config,
                 state=state,
@@ -299,4 +293,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -51,12 +52,16 @@ def config_for(root: Path, *, review_enabled: bool = False) -> Config:
 
 
 def git(root: Path, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        environment.pop(key, None)
     return subprocess.run(
         ["git", *arguments],
         cwd=root,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
         check=check,
     )
 
@@ -71,4 +76,3 @@ def initialize_repository(root: Path) -> str:
     git(root, "add", ".gitignore", "README.md")
     git(root, "commit", "-m", "initial")
     return git(root, "rev-parse", "HEAD").stdout.strip()
-

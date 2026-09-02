@@ -2,7 +2,17 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-node_bin="$repo_root/.tools/node-v24.20.0-linux-x64/bin"
+tool_root="$repo_root"
+
+if [[ ! -x "$tool_root/.tools/node-v24.20.0-linux-x64/bin/node" ]] && command -v git >/dev/null 2>&1; then
+  common_git="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  candidate_root="$(dirname "$common_git")"
+  if [[ -x "$candidate_root/.tools/node-v24.20.0-linux-x64/bin/node" ]]; then
+    tool_root="$candidate_root"
+  fi
+fi
+
+node_bin="$tool_root/.tools/node-v24.20.0-linux-x64/bin"
 
 if command -v node >/dev/null 2>&1 && [[ "$(node -p 'process.versions.node.split(`.`)[0]')" == "24" ]]; then
   node_bin="$(dirname "$(command -v node)")"
@@ -13,18 +23,11 @@ if [[ ! -x "$node_bin/node" ]]; then
   exit 127
 fi
 
-export COREPACK_HOME="$repo_root/.tools/corepack"
-export PNPM_HOME="$repo_root/.tools/pnpm-home"
-export PNPM_STORE_DIR="$repo_root/.pnpm-store"
+export COREPACK_HOME="$tool_root/.tools/corepack"
+export PNPM_HOME="$tool_root/.tools/pnpm-home"
+export PNPM_STORE_DIR="$tool_root/.pnpm-store"
 export PATH="$PNPM_HOME:$node_bin:$PATH"
 export NEXT_TELEMETRY_DISABLED=1
 export TURBO_TELEMETRY_DISABLED=1
-
-# Some managed workspaces expose a read-only .git placeholder. The bootstrap
-# uses Git's supported separate metadata directory in that environment.
-if [[ -f "$repo_root/.git-data/HEAD" ]]; then
-  export GIT_DIR="$repo_root/.git-data"
-  export GIT_WORK_TREE="$repo_root"
-fi
 
 exec corepack pnpm "$@"

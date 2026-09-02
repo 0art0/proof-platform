@@ -10,6 +10,7 @@ The supervisor is the continuously running component. Language-model processes a
 - Worker prompts contain the objective, frozen base, allowed paths, checks, and relevant repository rules—not another task's transcript.
 - Worker commands run with Codex's `workspace-write` sandbox and `never` approval policy. Reviewer and user-facing orchestrator turns are read-only.
 - Runtime SQLite, logs, prompts, model outputs, and the dedicated tmux socket live in `.agent-state/`, outside task worktrees.
+- The `nodew` and `pnpmw` wrappers resolve the canonical checkout's verified toolchain and content-addressed store from a worktree's Git common directory; workers get reproducible dependencies without owning the control plane.
 - Scope validation checks the complete diff without rename collapsing, all untracked files, symlink escapes, submodules, ancestry, protected paths, and `git diff --check`.
 - The trusted runner, not the model, creates the candidate commit.
 - Integration uses a fresh staging worktree at the current `main`, applies the exact candidate commit, verifies that prospective tree, and advances `main` only while holding an integration lock and only when the expected head is unchanged.

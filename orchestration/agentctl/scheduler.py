@@ -12,7 +12,7 @@ from typing import Any, Iterator
 from .config import Config
 from .gitops import prepare_worktree
 from .scope import scopes_overlap
-from .state import State
+from .state import State, TASK_TRANSITIONS
 from .tmux import has_session, list_sessions, start_session
 from .util import AgentCtlError, epoch_now
 
@@ -67,7 +67,7 @@ def reconcile(config: Config, state: State) -> None:
         if worktree and task["status"] not in {"queued", "cancelled"} and not Path(worktree).exists():
             current = state.get_task(task["id"])
             if current["status"] not in {"integrated", "failed", "cancelled", "needs_resolution"}:
-                if "failed" in __import__("agentctl.state", fromlist=["TASK_TRANSITIONS"]).TASK_TRANSITIONS[current["status"]]:
+                if "failed" in TASK_TRANSITIONS[current["status"]]:
                     state.transition(
                         task["id"],
                         "failed",
@@ -265,4 +265,3 @@ def daemon(config: Config, *, once: bool = False) -> int:
     finally:
         state.close()
     return 0
-

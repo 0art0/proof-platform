@@ -9,11 +9,13 @@ from .scope import ScopeReport, changed_paths, validate_scope
 from .util import AgentCtlError, Completed, run, safe_slug
 
 
-def git_environment(root: Path) -> dict[str, str] | None:
+def git_environment(root: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        environment.pop(key, None)
     separate = root.resolve() / ".git-data"
     if not (separate / "HEAD").is_file():
-        return None
-    environment = os.environ.copy()
+        return environment
     environment["GIT_DIR"] = str(separate)
     environment["GIT_WORK_TREE"] = str(root.resolve())
     return environment

@@ -201,7 +201,11 @@ def run_codex(
         except (OSError, json.JSONDecodeError):
             result = None
     thread_id = _thread_id_from_jsonl(stdout) or resume_thread_id
-    rate_limited, retry_at = classify_rate_limit(stdout, config.rate_limit_fallback)
+    rate_limited, retry_at = (
+        classify_rate_limit(stdout, config.rate_limit_fallback)
+        if returncode != 0
+        else (False, None)
+    )
     return CodexOutcome(
         returncode=returncode,
         thread_id=thread_id,
