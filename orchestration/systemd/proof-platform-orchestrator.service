@@ -1,0 +1,16 @@
+[Unit]
+Description=Proof Platform autonomous development supervisor
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Code/proof-platform
+ExecStart=%h/Code/proof-platform/scripts/orchestrator-supervise
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
+

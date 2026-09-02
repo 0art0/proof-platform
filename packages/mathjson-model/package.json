@@ -1,0 +1,16 @@
+{
+  "name": "@proof/mathjson-model",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cortex-js/compute-engine": "^0.120.0",
+    "zod": "^4.5.4"
+  }
+}

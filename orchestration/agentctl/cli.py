@@ -1,0 +1,365 @@
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import sys
+from pathlib import Path
+from typing import Any, Sequence
+
+from . import __version__
+from .config import Config
+from .gitops import ensure_repository, root_git
+from .integrate import integrate_task
+from .scheduler import daemon
+from .scope import validate_proposed_scopes
+from .state import State, TASK_TRANSITIONS
+from .tmux import attach, has_session, list_sessions, start_session, stop_session
+from .util import AgentCtlError, json_dumps, run, utc_now
+from .verify import parse_command
+
+
+def _state(config: Config) -> State:
+    config.ensure_runtime_directories()
+    state = State(config.database_path)
+    state.migrate()
+    return state
+
+
+def command_doctor(config: Config, _args: argparse.Namespace) -> int:
+    checks: list[tuple[str, bool, str]] = []
+    for command in ("git", "tmux", "python3", config.codex_command):
+        path = shutil.which(command)
+        checks.append((command, path is not None, path or "not found"))
+    git_check = root_git(config.root, ["rev-parse", "--is-inside-work-tree"], check=False)
+    checks.append(("git repository", git_check.returncode == 0, git_check.stderr.strip() or git_check.stdout.strip()))
+    head_check = root_git(config.root, ["rev-parse", "--verify", "HEAD"], check=False)
+    checks.append(("initial commit", head_check.returncode == 0, head_check.stdout.strip() or "missing"))
+    node_check = run([str(config.root / "scripts" / "nodew"), "--version"], cwd=config.root, check=False)
+    checks.append(("Node.js 24", node_check.returncode == 0, (node_check.stdout + node_check.stderr).strip()))
+    pnpm_check = run([str(config.root / "scripts" / "pnpmw"), "--version"], cwd=config.root, check=False)
+    checks.append(("pnpm", pnpm_check.returncode == 0, (pnpm_check.stdout + pnpm_check.stderr).strip()))
+    if config.database_path.exists():
+        state = State(config.database_path)
+        try:
+            state.migrate()
+            integrity = state.integrity_check()
+            checks.append(("SQLite state", integrity == "ok", integrity))
+        finally:
+            state.close()
+    else:
+        checks.append(("SQLite state", True, "not initialized"))
+    width = max(len(label) for label, _, _ in checks)
+    for label, ok, detail in checks:
+        print(f"{'ok' if ok else 'FAIL':4}  {label:<{width}}  {detail}")
+    return 0 if all(ok for _, ok, _ in checks) else 1
+
+
+def command_init(config: Config, _args: argparse.Namespace) -> int:
+    ensure_repository(config.root)
+    config.ensure_runtime_directories()
+    state = State(config.database_path)
+    try:
+        state.migrate()
+        if state.integrity_check() != "ok":
+            raise AgentCtlError("SQLite integrity check failed after initialization")
+        backup = config.state_dir / "backups" / f"state-initial-{utc_now().replace(':', '-')}.sqlite3"
+        state.backup(backup)
+    finally:
+        state.close()
+    print(f"initialized autonomous workflow state at {config.database_path}")
+    return 0
+
+
+def command_start(config: Config, _args: argparse.Namespace) -> int:
+    ensure_repository(config.root)
+    state = _state(config)
+    state.close()
+    name = f"{config.tmux_prefix}-orchestrator"
+    if has_session(config, name):
+        print(f"orchestrator already running in tmux session {name}")
+        return 0
+    start_session(
+        config,
+        name,
+        [str(config.root / "scripts" / "orchestrator-supervise")],
+        cwd=config.root,
+    )
+    print(f"started orchestrator in tmux session {name}")
+    return 0
+
+
+def command_stop(config: Config, _args: argparse.Namespace) -> int:
+    name = f"{config.tmux_prefix}-orchestrator"
+    if has_session(config, name):
+        stop_session(config, name)
+        print(f"stopped {name}; task workers were left intact")
+    else:
+        print("orchestrator is not running")
+    return 0
+
+
+def command_attach(config: Config, _args: argparse.Namespace) -> int:
+    name = f"{config.tmux_prefix}-orchestrator"
+    if not has_session(config, name):
+        raise AgentCtlError("orchestrator tmux session is not running")
+    return attach(config, name)
+
+
+def command_daemon(config: Config, args: argparse.Namespace) -> int:
+    ensure_repository(config.root)
+    return daemon(config, once=args.once)
+
+
+def command_ask(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        message_id = state.create_message(args.message)
+    finally:
+        state.close()
+    print(message_id)
+    return 0
+
+
+def command_messages(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        messages = state.list_messages()
+    finally:
+        state.close()
+    if args.json:
+        print(json.dumps(messages, indent=2, ensure_ascii=False))
+        return 0
+    if not messages:
+        print("no orchestrator messages")
+        return 0
+    for message in messages:
+        print(f"{message['id']}  {message['status']}  {message['created_at']}")
+        print(f"  user: {message['content']}")
+        if message.get("reply"):
+            print(f"  orchestrator: {message['reply']}")
+        if message.get("last_error"):
+            print(f"  error: {message['last_error']}")
+    return 0
+
+
+def command_task_add(config: Config, args: argparse.Namespace) -> int:
+    prompt = args.prompt
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+    if not prompt:
+        raise AgentCtlError("provide --prompt or --prompt-file")
+    scopes = validate_proposed_scopes(args.write, config.protected_paths)
+    if not args.check:
+        raise AgentCtlError("at least one --check is required")
+    for command in args.check:
+        parse_command(command)
+    state = _state(config)
+    try:
+        for dependency in args.depends:
+            state.get_task(dependency)
+        task_id = state.create_task(
+            title=args.title,
+            prompt=prompt,
+            scopes=scopes,
+            checks=args.check,
+            base_branch=config.base_branch,
+            max_attempts=config.max_task_attempts,
+            dependencies=args.depends,
+            priority=args.priority,
+            capabilities=args.capability,
+        )
+    finally:
+        state.close()
+    print(task_id)
+    return 0
+
+
+def command_status(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        tasks = state.list_tasks()
+    finally:
+        state.close()
+    if args.json:
+        print(json.dumps(tasks, indent=2, ensure_ascii=False))
+        return 0
+    sessions = set(list_sessions(config))
+    print(f"orchestrator: {'running' if f'{config.tmux_prefix}-orchestrator' in sessions else 'stopped'}")
+    if not tasks:
+        print("no tasks")
+        return 0
+    for task in tasks:
+        retry = f" wake={task['next_wake_at']:.0f}" if task.get("next_wake_at") else ""
+        print(
+            f"{task['id']:<40} {task['status']:<20} attempt={task['attempt']}"
+            f"{retry}  {task['title']}"
+        )
+    return 0
+
+
+def command_task_show(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        task = state.get_task(args.task_id)
+        task["dependencies"] = state.dependencies(args.task_id)
+        task["events"] = state.events(args.task_id, limit=args.events)
+    finally:
+        state.close()
+    print(json.dumps(task, indent=2, ensure_ascii=False))
+    return 0
+
+
+def command_logs(config: Config, args: argparse.Namespace) -> int:
+    matches = sorted((config.state_dir / "logs").glob(f"{args.task_id}-*"))
+    if not matches:
+        raise AgentCtlError(f"no logs found for {args.task_id}")
+    selected = matches if args.all else matches[-1:]
+    for path in selected:
+        print(f"==> {path.name} <==")
+        print(path.read_text(encoding="utf-8", errors="replace"), end="")
+    return 0
+
+
+def command_approve(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        state.transition(
+            args.task_id,
+            "ready_to_integrate",
+            actor="user",
+            expected="awaiting_approval",
+            payload={"approval": "explicit CLI approval"},
+        )
+    finally:
+        state.close()
+    print(f"approved {args.task_id}; integration is still a separate action")
+    return 0
+
+
+def command_integrate(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        integrated = integrate_task(config, state, args.task_id)
+    finally:
+        state.close()
+    print(f"integrated {args.task_id} at {integrated}")
+    return 0
+
+
+def command_retry(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    try:
+        task = state.get_task(args.task_id)
+        if "queued" not in TASK_TRANSITIONS[task["status"]]:
+            raise AgentCtlError(f"task cannot be retried from {task['status']}")
+        state.fence_task(args.task_id, actor="user", reason="manual retry")
+        state.transition(
+            args.task_id,
+            "queued",
+            actor="user",
+            expected=task["status"],
+            fields={"next_wake_at": None, "last_error": None},
+            payload={"reason": "manual retry"},
+        )
+    finally:
+        state.close()
+    print(f"queued {args.task_id} for retry")
+    return 0
+
+
+def command_cancel(config: Config, args: argparse.Namespace) -> int:
+    state = _state(config)
+    session: str | None = None
+    try:
+        task = state.get_task(args.task_id)
+        if "cancelled" not in TASK_TRANSITIONS[task["status"]]:
+            raise AgentCtlError(f"task cannot be cancelled from {task['status']}")
+        state.fence_task(args.task_id, actor="user", reason=args.reason)
+        session = task.get("tmux_session")
+        state.transition(
+            args.task_id,
+            "cancelled",
+            actor="user",
+            expected=task["status"],
+            payload={"reason": args.reason},
+        )
+    finally:
+        state.close()
+    if session:
+        stop_session(config, session)
+    print(f"cancelled {args.task_id}; worktree and logs were retained")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agentctl", description="Proof Platform autonomous workflow")
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--version", action="version", version=__version__)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("doctor").set_defaults(handler=command_doctor)
+    commands.add_parser("init").set_defaults(handler=command_init)
+    commands.add_parser("start").set_defaults(handler=command_start)
+    commands.add_parser("stop").set_defaults(handler=command_stop)
+    commands.add_parser("attach").set_defaults(handler=command_attach)
+
+    daemon_parser = commands.add_parser("daemon", help=argparse.SUPPRESS)
+    daemon_parser.add_argument("--once", action="store_true")
+    daemon_parser.set_defaults(handler=command_daemon)
+
+    ask_parser = commands.add_parser("ask")
+    ask_parser.add_argument("message")
+    ask_parser.set_defaults(handler=command_ask)
+
+    messages_parser = commands.add_parser("messages")
+    messages_parser.add_argument("--json", action="store_true")
+    messages_parser.set_defaults(handler=command_messages)
+
+    task_parser = commands.add_parser("task")
+    task_commands = task_parser.add_subparsers(dest="task_command", required=True)
+    add_parser = task_commands.add_parser("add")
+    add_parser.add_argument("--title", required=True)
+    prompt_group = add_parser.add_mutually_exclusive_group(required=True)
+    prompt_group.add_argument("--prompt")
+    prompt_group.add_argument("--prompt-file")
+    add_parser.add_argument("--write", action="append", required=True)
+    add_parser.add_argument("--check", action="append", default=[])
+    add_parser.add_argument("--depends", action="append", default=[])
+    add_parser.add_argument("--capability", action="append", default=[])
+    add_parser.add_argument("--priority", type=int, default=0)
+    add_parser.set_defaults(handler=command_task_add)
+    show_parser = task_commands.add_parser("show")
+    show_parser.add_argument("task_id")
+    show_parser.add_argument("--events", type=int, default=100)
+    show_parser.set_defaults(handler=command_task_show)
+
+    status_parser = commands.add_parser("status")
+    status_parser.add_argument("--json", action="store_true")
+    status_parser.set_defaults(handler=command_status)
+
+    logs_parser = commands.add_parser("logs")
+    logs_parser.add_argument("task_id")
+    logs_parser.add_argument("--all", action="store_true")
+    logs_parser.set_defaults(handler=command_logs)
+
+    for name, handler in (("approve", command_approve), ("integrate", command_integrate), ("retry", command_retry)):
+        action_parser = commands.add_parser(name)
+        action_parser.add_argument("task_id")
+        action_parser.set_defaults(handler=handler)
+    cancel_parser = commands.add_parser("cancel")
+    cancel_parser.add_argument("task_id")
+    cancel_parser.add_argument("--reason", default="cancelled by user")
+    cancel_parser.set_defaults(handler=command_cancel)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    try:
+        config = Config.load(arguments.root)
+        return int(arguments.handler(config, arguments))
+    except (AgentCtlError, OSError, json.JSONDecodeError) as exc:
+        print(f"agentctl: {exc}", file=sys.stderr)
+        return 2

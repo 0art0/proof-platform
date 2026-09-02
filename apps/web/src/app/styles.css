@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light;
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  background: #f4f0e7;
+  color: #17211b;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  box-sizing: border-box;
+  display: grid;
+  min-height: 100vh;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: clamp(3rem, 12vw, 10rem) clamp(1.5rem, 8vw, 8rem);
+  align-content: center;
+}
+
+h1 {
+  max-width: 16ch;
+  margin: 0;
+  font-size: clamp(3rem, 9vw, 7.5rem);
+  font-weight: 500;
+  line-height: 0.92;
+  letter-spacing: -0.055em;
+}
+
+p {
+  max-width: 45rem;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.1rem;
+  line-height: 1.65;
+}
+
+.eyebrow {
+  color: #9d3f27;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}

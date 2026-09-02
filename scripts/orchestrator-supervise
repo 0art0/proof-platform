@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+stopping=0
+trap 'stopping=1' TERM INT
+
+while [[ "$stopping" -eq 0 ]]; do
+  "$repo_root/scripts/agentctl" daemon
+  exit_code=$?
+  if [[ "$stopping" -ne 0 ]]; then
+    break
+  fi
+  printf 'orchestrator exited with status %s; restarting in 5 seconds\n' "$exit_code" >&2
+  sleep 5 &
+  wait $! || true
+done
+

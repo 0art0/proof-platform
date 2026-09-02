@@ -1,0 +1,10 @@
+.agent-state
+.tools
+.worktrees
+.next
+coverage
+dist
+node_modules
+pnpm-lock.yaml
+platform-design-plan.md
+

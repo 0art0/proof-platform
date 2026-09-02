@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "proof-platform",
+    "baseBranch": "main"
+  },
+  "runtime": {
+    "maxParallel": 3,
+    "pollIntervalSeconds": 5,
+    "workerTimeoutSeconds": 3600,
+    "verificationTimeoutSeconds": 1800,
+    "rateLimitFallbackSeconds": 900,
+    "maxTaskAttempts": 5,
+    "tmuxSessionPrefix": "proof-platform"
+  },
+  "codex": {
+    "command": "codex",
+    "model": null,
+    "implementerSandbox": "workspace-write",
+    "reviewerSandbox": "read-only",
+    "approvalPolicy": "never",
+    "reviewEnabled": true
+  },
+  "paths": {
+    "stateDirectory": ".agent-state",
+    "worktreeDirectory": ".worktrees"
+  },
+  "scope": {
+    "protectedPaths": [
+      ".git/**",
+      ".agent-state/**",
+      ".worktrees/**",
+      "AGENTS.md",
+      "orchestration/**",
+      "scripts/agentctl",
+      "scripts/orchestrator-supervise",
+      ".github/workflows/**"
+    ],
+    "elevatedReviewPaths": [
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "**/package.json",
+      "**/migrations/**",
+      "tsconfig.base.json",
+      "turbo.json"
+    ]
+  },
+  "verification": {
+    "candidateCommands": [],
+    "integrationCommands": [
+      "./scripts/pnpmw install --offline --frozen-lockfile",
+      "./scripts/pnpmw verify"
+    ]
+  },
+  "integration": {
+    "requireHumanApproval": true,
+    "requireCleanCanonicalWorktree": true,
+    "retainCompletedWorktrees": true,
+    "push": false
+  }
+}

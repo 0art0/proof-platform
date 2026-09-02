@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+node_bin="$repo_root/.tools/node-v24.20.0-linux-x64/bin"
+
+if command -v node >/dev/null 2>&1 && [[ "$(node -p 'process.versions.node.split(`.`)[0]')" == "24" ]]; then
+  node_bin="$(dirname "$(command -v node)")"
+fi
+
+if [[ ! -x "$node_bin/node" ]]; then
+  echo "Node.js 24 is required. Run the documented toolchain bootstrap first." >&2
+  exit 127
+fi
+
+export COREPACK_HOME="$repo_root/.tools/corepack"
+export PNPM_HOME="$repo_root/.tools/pnpm-home"
+export PNPM_STORE_DIR="$repo_root/.pnpm-store"
+export PATH="$PNPM_HOME:$node_bin:$PATH"
+export NEXT_TELEMETRY_DISABLED=1
+export TURBO_TELEMETRY_DISABLED=1
+
+# Some managed workspaces expose a read-only .git placeholder. The bootstrap
+# uses Git's supported separate metadata directory in that environment.
+if [[ -f "$repo_root/.git-data/HEAD" ]]; then
+  export GIT_DIR="$repo_root/.git-data"
+  export GIT_WORK_TREE="$repo_root"
+fi
+
+exec corepack pnpm "$@"

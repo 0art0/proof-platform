@@ -1,0 +1,22 @@
+{
+  "name": "@proof/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@proof/protocol": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "openai": "^7.8.0",
+    "pg": "^8.23.0",
+    "pg-boss": "^12.29.0",
+    "pino": "^10.3.1",
+    "zod": "^4.5.4"
+  }
+}

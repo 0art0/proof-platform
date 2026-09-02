@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+required_major="24"
+
+if command -v node >/dev/null 2>&1 && [[ "$(node -p 'process.versions.node.split(`.`)[0]')" == "$required_major" ]]; then
+  exec node "$@"
+fi
+
+local_node="$repo_root/.tools/node-v24.20.0-linux-x64/bin/node"
+if [[ ! -x "$local_node" ]]; then
+  echo "Node.js 24 is required. Run the documented toolchain bootstrap first." >&2
+  exit 127
+fi
+
+exec "$local_node" "$@"
+

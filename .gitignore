@@ -1,0 +1,28 @@
+# Repository-local toolchain and package manager state
+/.git/
+/.agents/
+/.codex/
+/.tools/
+/.git-data/
+/.pnpm-store/
+/node_modules/
+**/node_modules/
+/.turbo/
+**/.next/
+**/dist/
+**/coverage/
+**/__pycache__/
+*.py[cod]
+
+# Autonomous development runtime (never visible in commits or worktrees)
+/.agent-state/
+/.worktrees/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+*.swp

@@ -1,0 +1,17 @@
+{
+  "name": "@proof/retrieval",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@proof/library": "workspace:*",
+    "@proof/mathjson-model": "workspace:*",
+    "@proof/moves": "workspace:*"
+  }
+}
