@@ -65,7 +65,19 @@ def integrate_task(config: Config, state: State, task_id: str) -> str:
             ).stdout.split()
             if not commits:
                 raise AgentCtlError("candidate contains no commits beyond its recorded base")
-            cherry_pick = run(["git", "cherry-pick", *commits], cwd=staging, check=False)
+            cherry_pick = run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Proof Platform Orchestrator",
+                    "-c",
+                    "user.email=orchestrator@proof-platform.local",
+                    "cherry-pick",
+                    *commits,
+                ],
+                cwd=staging,
+                check=False,
+            )
             if cherry_pick.returncode != 0:
                 raise AgentCtlError(
                     "candidate conflicts with the current base; staging worktree was preserved at "

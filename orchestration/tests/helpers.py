@@ -76,3 +76,29 @@ def initialize_repository(root: Path) -> str:
     git(root, "add", ".gitignore", "README.md")
     git(root, "commit", "-m", "initial")
     return git(root, "rev-parse", "HEAD").stdout.strip()
+
+
+def initialize_separate_repository(root: Path) -> str:
+    root.mkdir(parents=True, exist_ok=True)
+    git(root, "init", "--bare", "--initial-branch=main", ".git-data")
+    git_dir = root / ".git-data"
+    common = (f"--git-dir={git_dir}", f"--work-tree={root}")
+    git(root, f"--git-dir={git_dir}", "config", "core.bare", "false")
+    git(root, f"--git-dir={git_dir}", "config", "core.worktree", "..")
+    (root / ".gitignore").write_text(
+        ".agent-state/\n.worktrees/\n.git-data/\n", encoding="utf-8"
+    )
+    (root / "README.md").write_text("base\n", encoding="utf-8")
+    git(root, *common, "add", ".gitignore", "README.md")
+    git(
+        root,
+        *common,
+        "-c",
+        "user.name=Agentctl Test",
+        "-c",
+        "user.email=agentctl-test@example.invalid",
+        "commit",
+        "-m",
+        "initial",
+    )
+    return git(root, *common, "rev-parse", "HEAD").stdout.strip()
