@@ -22,6 +22,7 @@ def _task_snapshot(state: State) -> list[dict[str, Any]]:
             "status": task["status"],
             "scopes": task["scope"],
             "dependencies": state.dependencies(task["id"]),
+            "todoPath": state.todo_path_for_task(task["id"]),
             "summary": task["result_summary"],
             "error": task["last_error"],
         }
@@ -75,6 +76,11 @@ def _validate_proposal(config: Config, result: dict[str, Any]) -> list[dict[str,
             raise AgentCtlError(f"task {task.get('key')} has no write scope")
         if not isinstance(checks, list) or not checks:
             raise AgentCtlError(f"task {task.get('key')} has no verification commands")
+        todo_path = task.get("todoPath")
+        if not isinstance(todo_path, list) or len(todo_path) > 8:
+            raise AgentCtlError(f"task {task.get('key')} has an invalid TODO path")
+        if any(not isinstance(item, str) or not item.strip() for item in todo_path):
+            raise AgentCtlError(f"task {task.get('key')} has an empty TODO path component")
         task["writeScopes"] = list(validate_proposed_scopes(scopes, config.protected_paths))
         for command in checks:
             parse_command(str(command))
@@ -86,6 +92,7 @@ def execute(root: Path, message_id: str) -> int:
     state = State(config.database_path)
     try:
         state.migrate()
+        state.ensure_todo_root(config.project_name)
         messages = {message["id"]: message for message in state.list_messages()}
         message = messages.get(message_id)
         if message is None:
@@ -98,6 +105,7 @@ def execute(root: Path, message_id: str) -> int:
         prompt = (
             f"{prompt_template}\n\n## User request\n\n{message['content']}\n\n"
             f"## Durable task snapshot\n\n{json_dumps(_task_snapshot(state))}\n"
+            f"\n## Durable project TODO\n\n{json_dumps(state.todo_tree())}\n"
         )
         log_path = config.state_dir / "logs" / f"{message_id}-orchestrator.jsonl"
         result_path = config.state_dir / "results" / f"{message_id}-orchestrator.json"
@@ -143,6 +151,9 @@ def execute(root: Path, message_id: str) -> int:
             objective = str(proposal["objective"])
             if non_goals:
                 objective += f"\n\nNon-goals:\n{non_goals}"
+            todo_parent_id = state.ensure_todo_path(
+                list(map(str, proposal["todoPath"])), source="orchestrator"
+            )
             task_id = state.create_task(
                 title=str(proposal["title"]),
                 prompt=objective,
@@ -151,6 +162,7 @@ def execute(root: Path, message_id: str) -> int:
                 base_branch=config.base_branch,
                 max_attempts=config.max_task_attempts,
                 dependencies=dependencies,
+                todo_parent_id=todo_parent_id,
             )
             key_to_id[str(proposal["key"])] = task_id
             created.append(task_id)
@@ -193,4 +205,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -12,12 +12,27 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["key", "title", "objective", "nonGoals", "writeScopes", "checks", "dependsOn"],
+        "required": [
+          "key",
+          "title",
+          "objective",
+          "nonGoals",
+          "todoPath",
+          "writeScopes",
+          "checks",
+          "dependsOn"
+        ],
         "properties": {
           "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$" },
           "title": { "type": "string", "minLength": 1, "maxLength": 160 },
           "objective": { "type": "string", "minLength": 1, "maxLength": 8000 },
           "nonGoals": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+          "todoPath": {
+            "type": "array",
+            "description": "Planning hierarchy below the project root, for example [Stage 1, Selection spike]",
+            "items": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "maxItems": 8
+          },
           "writeScopes": {
             "type": "array",
             "items": { "type": "string" },

@@ -32,6 +32,10 @@ class Config:
         return str(self.raw["project"]["baseBranch"])
 
     @property
+    def project_name(self) -> str:
+        return str(self.raw["project"]["name"])
+
+    @property
     def state_dir(self) -> Path:
         return self.root / str(self.raw["paths"]["stateDirectory"])
 
@@ -113,4 +117,3 @@ class Config:
         self.worktree_dir.mkdir(parents=True, exist_ok=True)
         for name in ("logs", "contracts", "results", "backups", "tmp"):
             (self.state_dir / name).mkdir(parents=True, exist_ok=True, mode=0o700)
-

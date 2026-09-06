@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+remote_prompt="$(<"$repo_root/orchestration/prompts/remote-orchestrator.md")"
+export AGENT_ROLE="user-facing-orchestrator"
+
+exec codex \
+  --cd "$repo_root" \
+  --sandbox read-only \
+  --ask-for-approval on-request \
+  -c "mcp_servers.proof_platform_orchestrator.command='$repo_root/scripts/agentctl-mcp'" \
+  -c "mcp_servers.proof_platform_orchestrator.required=true" \
+  -c "mcp_servers.proof_platform_orchestrator.enabled_tools=['proof_platform_submit_intent','proof_platform_status','proof_platform_messages']" \
+  -c "mcp_servers.proof_platform_orchestrator.default_tools_approval_mode='writes'" \
+  "$remote_prompt"

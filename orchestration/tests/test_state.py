@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agentctl.state import State
+from agentctl.state import State, TODO_ROOT_ID
 from agentctl.util import AgentCtlError
 
 
@@ -33,7 +33,51 @@ class StateTests(unittest.TestCase):
         self.state.migrate()
         self.assertEqual(self.state.integrity_check(), "ok")
         migrations = self.state.connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-        self.assertEqual(migrations, 2)
+        self.assertEqual(migrations, 3)
+
+    def test_todo_hierarchy_is_durable_and_tasks_are_linked(self) -> None:
+        self.state.ensure_todo_root("Proof Platform")
+        stage = self.state.create_todo(title="Stage 1", description="Interaction spike")
+        slice_id = self.state.ensure_todo_path(["Stage 1", "Selections"])
+        self.assertEqual(self.state.ensure_todo_path(["stage 1", "selections"]), slice_id)
+        task_id = self.state.create_task(
+            title="Implement operand paths",
+            prompt="Implement it with tests",
+            scopes=["packages/selections/**"],
+            checks=["python3 -V"],
+            base_branch="main",
+            max_attempts=3,
+            todo_parent_id=slice_id,
+        )
+        self.assertEqual(self.state.todo_path_for_task(task_id), ["Stage 1", "Selections"])
+        self.assertEqual(self.state.todo_for_task(task_id)["status"], "ready")
+        tree = self.state.todo_tree()
+        self.assertEqual(tree["id"], TODO_ROOT_ID)
+        self.assertEqual(tree["title"], "Proof Platform")
+        self.assertEqual(tree["children"][0]["id"], stage)
+
+    def test_task_transitions_drive_linked_todo_and_parent_status(self) -> None:
+        stage = self.state.create_todo(title="Stage 1")
+        task_id = self.state.create_task(
+            title="Build a slice",
+            prompt="Build it",
+            scopes=["packages/kernel/**"],
+            checks=["python3 -V"],
+            base_branch="main",
+            max_attempts=3,
+            todo_parent_id=stage,
+        )
+        self.state.transition(task_id, "preparing", actor="test")
+        self.assertEqual(self.state.todo_for_task(task_id)["status"], "in_progress")
+        self.assertEqual(self.state.get_todo(stage)["status"], "in_progress")
+        self.state.transition(task_id, "cancelled", actor="test")
+        self.assertEqual(self.state.todo_for_task(task_id)["status"], "cancelled")
+        self.assertEqual(self.state.get_todo(stage)["status"], "cancelled")
+
+    def test_task_linked_todo_cannot_bypass_task_state_machine(self) -> None:
+        task_id = self.create_task()
+        with self.assertRaises(AgentCtlError):
+            self.state.update_todo_status(task_id, "done")
 
     def test_transition_and_event_are_atomic(self) -> None:
         task_id = self.create_task()

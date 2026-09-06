@@ -39,12 +39,22 @@ Submit natural-language intent to the read-only orchestrator context:
 ./scripts/agentctl messages
 ```
 
-The structured orchestrator response is validated before proposed tasks enter SQLite. For direct, explicit contracts:
+The structured orchestrator response is validated before proposed tasks enter SQLite. It also assigns every task a path in the durable project TODO tree. Inspect or extend that hierarchy independently of the execution queue:
+
+```bash
+./scripts/agentctl todo
+./scripts/agentctl todo add --title "Stage 1" --description "MathJSON interaction spike"
+./scripts/agentctl todo add --parent TODO_ID --title "Selection paths"
+./scripts/agentctl todo set TODO_ID blocked
+```
+
+Task-linked TODO leaves follow the task state machine and cannot be manually marked done. Planning branches aggregate their children's state. For direct, explicit contracts:
 
 ```bash
 ./scripts/agentctl task add \
   --title "Implement operand-path replacement" \
   --prompt-file docs/tasks/operand-paths.md \
+  --todo-parent TODO_ID \
   --write 'packages/selections/**' \
   --check './scripts/pnpmw --filter @proof/selections test'
 ```
@@ -65,9 +75,23 @@ Observe and control work:
 
 By default, a reviewed task stops at `awaiting_approval`. Approval never implies integration; `integrate` is a second explicit action. If the base has moved, the exact candidate is restaged and fully reverified. Conflicts leave the canonical branch untouched.
 
+## Remote orchestrator
+
+A dedicated Codex app-server thread can expose the same durable TODO, task status, and supervisor inbox through authenticated Remote Control:
+
+```bash
+./scripts/agentctl remote start
+./scripts/agentctl remote pair
+./scripts/agentctl remote status
+```
+
+The remote thread runs with a read-only filesystem sandbox. Its MCP surface has only three allow-listed operations: submit user intent to the supervisor inbox, read durable status/TODO state, and read orchestrator replies. Reads are pre-approved; submitting intent is marked as a write and uses Codex's normal user approval prompt. The thread cannot edit the repository, approve or integrate candidates, or control tmux. `remote stop` stops only this repository's thread and deliberately leaves the host-wide Codex Remote Control daemon alone.
+
+In the ChatGPT mobile app, open the Remote tab and pair with the short-lived code. The host must remain awake, online, and running Codex. OpenAI currently documents Remote Control hosts as macOS and Windows; on other hosts, `remote start` keeps the restricted local thread ready but returns a nonzero status if the authenticated relay is unavailable. The SQLite queue is shown through this thread—it is not uploaded as a native Codex Cloud task list.
+
 ## State and recovery
 
-SQLite uses WAL mode, foreign keys, a busy timeout, versioned migrations, atomic transitions, append-only events, and attempt fencing tokens. `agentctl doctor` runs `PRAGMA integrity_check`. Before scheduling, the daemon reconciles statuses with tmux sessions and Git worktrees. Interrupted attempts retain their worktree, diff, logs, and thread identifier.
+SQLite uses WAL mode, foreign keys, a busy timeout, versioned migrations, atomic transitions, append-only events, and attempt fencing tokens. The same database stores the parent/child TODO tree and its task links. `agentctl doctor` runs `PRAGMA integrity_check`. Before scheduling, the daemon reconciles statuses with tmux sessions and Git worktrees. Interrupted attempts retain their worktree, diff, logs, and thread identifier.
 
 Do not copy only `state.sqlite3` while the daemon is live; use SQLite's backup API or stop the supervisor so WAL data is included. Failed and cancelled evidence is retained by default.
 

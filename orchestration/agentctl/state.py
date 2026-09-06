@@ -29,6 +29,29 @@ TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     "integrated": frozenset(),
 }
 
+TODO_ROOT_ID = "project"
+TODO_STATUSES = frozenset(
+    {"planned", "ready", "in_progress", "waiting", "blocked", "done", "cancelled"}
+)
+TASK_TODO_STATUS = {
+    "queued": "ready",
+    "preparing": "in_progress",
+    "running": "in_progress",
+    "verifying": "in_progress",
+    "reviewing": "in_progress",
+    "rework": "ready",
+    "retry_wait": "waiting",
+    "needs_input": "blocked",
+    "awaiting_approval": "waiting",
+    "ready_to_integrate": "waiting",
+    "integrating": "in_progress",
+    "needs_resolution": "blocked",
+    "blocked_dependency": "blocked",
+    "failed": "blocked",
+    "cancelled": "cancelled",
+    "integrated": "done",
+}
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -71,6 +94,21 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     depends_on TEXT NOT NULL REFERENCES tasks(id) ON DELETE RESTRICT,
     PRIMARY KEY (task_id, depends_on),
     CHECK (task_id <> depends_on)
+);
+
+CREATE TABLE IF NOT EXISTS todo_items (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT REFERENCES todo_items(id) ON DELETE RESTRICT,
+    task_id TEXT UNIQUE REFERENCES tasks(id) ON DELETE RESTRICT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (id <> parent_id),
+    CHECK (status IN ('planned', 'ready', 'in_progress', 'waiting', 'blocked', 'done', 'cancelled'))
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
@@ -135,6 +173,10 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status, priority DESC, created_at);
 CREATE INDEX IF NOT EXISTS tasks_wake_idx ON tasks(next_wake_at) WHERE next_wake_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS todo_parent_idx ON todo_items(parent_id, sort_order, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS todo_planning_sibling_title_idx
+    ON todo_items(IFNULL(parent_id, ''), title COLLATE NOCASE)
+    WHERE task_id IS NULL;
 CREATE INDEX IF NOT EXISTS messages_status_idx ON messages(status, created_at);
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, id);
 """
@@ -156,6 +198,7 @@ class State:
     def migrate(self) -> None:
         self.connection.executescript(SCHEMA)
         with self.transaction():
+            self.connection.execute("DROP INDEX IF EXISTS todo_sibling_title_idx")
             self.connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)",
                 (utc_now(),),
@@ -169,6 +212,48 @@ class State:
                 )
             self.connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)",
+                (utc_now(),),
+            )
+            now = utc_now()
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO todo_items(
+                    id, parent_id, task_id, title, description, status,
+                    sort_order, source, created_at, updated_at
+                ) VALUES(?, NULL, NULL, 'Project', '', 'planned', 0, 'system', ?, ?)
+                """,
+                (TODO_ROOT_ID, now, now),
+            )
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO todo_items(
+                    id, parent_id, task_id, title, description, status,
+                    sort_order, source, created_at, updated_at
+                )
+                SELECT
+                    tasks.id, ?, tasks.id, tasks.title, tasks.prompt,
+                    CASE tasks.status
+                        WHEN 'queued' THEN 'ready'
+                        WHEN 'preparing' THEN 'in_progress'
+                        WHEN 'running' THEN 'in_progress'
+                        WHEN 'verifying' THEN 'in_progress'
+                        WHEN 'reviewing' THEN 'in_progress'
+                        WHEN 'rework' THEN 'ready'
+                        WHEN 'retry_wait' THEN 'waiting'
+                        WHEN 'awaiting_approval' THEN 'waiting'
+                        WHEN 'ready_to_integrate' THEN 'waiting'
+                        WHEN 'integrating' THEN 'in_progress'
+                        WHEN 'cancelled' THEN 'cancelled'
+                        WHEN 'integrated' THEN 'done'
+                        ELSE 'blocked'
+                    END,
+                    tasks.priority * -1, 'task', tasks.created_at, tasks.updated_at
+                FROM tasks
+                """,
+                (TODO_ROOT_ID,),
+            )
+            self.connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)",
                 (utc_now(),),
             )
 
@@ -209,6 +294,215 @@ class State:
             (task_id, message_id, actor, kind, json_dumps(payload), utc_now()),
         )
 
+    def ensure_todo_root(self, title: str) -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            raise AgentCtlError("project TODO title must not be empty")
+        now = utc_now()
+        with self.transaction():
+            self.connection.execute(
+                """
+                INSERT INTO todo_items(
+                    id, parent_id, task_id, title, description, status,
+                    sort_order, source, created_at, updated_at
+                ) VALUES(?, NULL, NULL, ?, '', 'planned', 0, 'system', ?, ?)
+                ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
+                WHERE todo_items.title <> excluded.title
+                """,
+                (TODO_ROOT_ID, clean_title, now, now),
+            )
+
+    def create_todo(
+        self,
+        *,
+        title: str,
+        parent_id: str = TODO_ROOT_ID,
+        description: str = "",
+        status: str = "planned",
+        sort_order: int = 0,
+        source: str = "user",
+    ) -> str:
+        clean_title = title.strip()
+        if not clean_title:
+            raise AgentCtlError("TODO title must not be empty")
+        if status not in TODO_STATUSES:
+            raise AgentCtlError(f"invalid TODO status: {status}")
+        todo_id = f"todo-{safe_slug(clean_title, limit=28)}-{uuid.uuid4().hex[:8]}"
+        now = utc_now()
+        with self.transaction():
+            parent = self.connection.execute(
+                "SELECT task_id FROM todo_items WHERE id = ?", (parent_id,)
+            ).fetchone()
+            if parent is None:
+                raise AgentCtlError(f"unknown parent TODO: {parent_id}")
+            if parent["task_id"] is not None:
+                raise AgentCtlError("an executable task cannot contain child TODO items")
+            try:
+                self.connection.execute(
+                    """
+                    INSERT INTO todo_items(
+                        id, parent_id, task_id, title, description, status,
+                        sort_order, source, created_at, updated_at
+                    ) VALUES(?,?,NULL,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        todo_id,
+                        parent_id,
+                        clean_title,
+                        description.strip(),
+                        status,
+                        sort_order,
+                        source,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise AgentCtlError(
+                    f"TODO title already exists below {parent_id}: {clean_title}"
+                ) from exc
+            self._refresh_todo_ancestors(todo_id)
+            self.event(
+                actor="supervisor",
+                kind="system.todo.created",
+                payload={"id": todo_id, "parentId": parent_id, "title": clean_title},
+            )
+        return todo_id
+
+    def ensure_todo_path(self, titles: Sequence[str], *, source: str = "orchestrator") -> str:
+        parent_id = TODO_ROOT_ID
+        for raw_title in titles:
+            title = str(raw_title).strip()
+            if not title:
+                raise AgentCtlError("TODO path components must not be empty")
+            row = self.connection.execute(
+                """
+                SELECT id FROM todo_items
+                WHERE parent_id = ? AND task_id IS NULL AND title = ? COLLATE NOCASE
+                """,
+                (parent_id, title),
+            ).fetchone()
+            if row is None:
+                parent_id = self.create_todo(title=title, parent_id=parent_id, source=source)
+            else:
+                parent_id = str(row["id"])
+        return parent_id
+
+    def get_todo(self, todo_id: str) -> dict[str, Any]:
+        row = self.connection.execute(
+            "SELECT * FROM todo_items WHERE id = ?", (todo_id,)
+        ).fetchone()
+        if row is None:
+            raise AgentCtlError(f"unknown TODO: {todo_id}")
+        return dict(row)
+
+    def list_todos(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM todo_items
+            ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END,
+                     sort_order, created_at, id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def todo_tree(self) -> dict[str, Any]:
+        items = {str(item["id"]): item for item in self.list_todos()}
+        if TODO_ROOT_ID not in items:
+            raise AgentCtlError("project TODO root is missing")
+        children: dict[str, list[dict[str, Any]]] = {}
+        for item in items.values():
+            parent_id = item.get("parent_id")
+            if parent_id is not None:
+                children.setdefault(str(parent_id), []).append(item)
+
+        def build(item_id: str, ancestors: frozenset[str]) -> dict[str, Any]:
+            if item_id in ancestors:
+                raise AgentCtlError(f"cycle detected in TODO hierarchy at {item_id}")
+            item = dict(items[item_id])
+            item["children"] = [
+                build(str(child["id"]), ancestors | {item_id})
+                for child in children.get(item_id, [])
+            ]
+            return item
+
+        return build(TODO_ROOT_ID, frozenset())
+
+    def todo_for_task(self, task_id: str) -> dict[str, Any]:
+        row = self.connection.execute(
+            "SELECT * FROM todo_items WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        if row is None:
+            raise AgentCtlError(f"task has no linked TODO: {task_id}")
+        return dict(row)
+
+    def todo_path_for_task(self, task_id: str) -> list[str]:
+        item = self.todo_for_task(task_id)
+        path: list[str] = []
+        parent_id = item.get("parent_id")
+        while parent_id and parent_id != TODO_ROOT_ID:
+            parent = self.get_todo(str(parent_id))
+            path.append(str(parent["title"]))
+            parent_id = parent.get("parent_id")
+        return list(reversed(path))
+
+    def update_todo_status(self, todo_id: str, status: str, *, actor: str = "user") -> None:
+        if status not in TODO_STATUSES:
+            raise AgentCtlError(f"invalid TODO status: {status}")
+        with self.transaction():
+            todo = self.connection.execute(
+                "SELECT task_id FROM todo_items WHERE id = ?", (todo_id,)
+            ).fetchone()
+            if todo is None:
+                raise AgentCtlError(f"unknown TODO: {todo_id}")
+            if todo["task_id"] is not None:
+                raise AgentCtlError("task-linked TODO status is controlled by the task state machine")
+            self.connection.execute(
+                "UPDATE todo_items SET status = ?, updated_at = ? WHERE id = ?",
+                (status, utc_now(), todo_id),
+            )
+            self._refresh_todo_ancestors(todo_id)
+            self.event(
+                actor=actor,
+                kind="system.todo.status",
+                payload={"id": todo_id, "status": status},
+            )
+
+    def _refresh_todo_ancestors(self, item_id: str) -> None:
+        row = self.connection.execute(
+            "SELECT parent_id FROM todo_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        parent_id = str(row["parent_id"]) if row and row["parent_id"] is not None else None
+        while parent_id:
+            statuses = [
+                str(child["status"])
+                for child in self.connection.execute(
+                    "SELECT status FROM todo_items WHERE parent_id = ?", (parent_id,)
+                ).fetchall()
+            ]
+            if not statuses:
+                break
+            if all(status in {"done", "cancelled"} for status in statuses):
+                aggregate = "done" if "done" in statuses else "cancelled"
+            elif "in_progress" in statuses:
+                aggregate = "in_progress"
+            elif "ready" in statuses:
+                aggregate = "ready"
+            elif "waiting" in statuses:
+                aggregate = "waiting"
+            elif "blocked" in statuses:
+                aggregate = "blocked"
+            else:
+                aggregate = "planned"
+            self.connection.execute(
+                "UPDATE todo_items SET status = ?, updated_at = ? WHERE id = ?",
+                (aggregate, utc_now(), parent_id),
+            )
+            row = self.connection.execute(
+                "SELECT parent_id FROM todo_items WHERE id = ?", (parent_id,)
+            ).fetchone()
+            parent_id = str(row["parent_id"]) if row and row["parent_id"] is not None else None
+
     def create_task(
         self,
         *,
@@ -221,6 +515,7 @@ class State:
         dependencies: Sequence[str] = (),
         priority: int = 0,
         capabilities: Sequence[str] = (),
+        todo_parent_id: str = TODO_ROOT_ID,
     ) -> str:
         if not title.strip() or not prompt.strip():
             raise AgentCtlError("task title and prompt must not be empty")
@@ -229,6 +524,13 @@ class State:
         task_id = f"{safe_slug(title, limit=28)}-{uuid.uuid4().hex[:8]}"
         now = utc_now()
         with self.transaction():
+            parent = self.connection.execute(
+                "SELECT task_id FROM todo_items WHERE id = ?", (todo_parent_id,)
+            ).fetchone()
+            if parent is None:
+                raise AgentCtlError(f"unknown parent TODO: {todo_parent_id}")
+            if parent["task_id"] is not None:
+                raise AgentCtlError("an executable task cannot contain child TODO items")
             self.connection.execute(
                 """
                 INSERT INTO tasks(
@@ -256,11 +558,35 @@ class State:
                     "INSERT INTO task_dependencies(task_id, depends_on) VALUES(?,?)",
                     (task_id, dependency),
                 )
+            self.connection.execute(
+                """
+                INSERT INTO todo_items(
+                    id, parent_id, task_id, title, description, status,
+                    sort_order, source, created_at, updated_at
+                ) VALUES(?,?,?,?,?,'ready',?,'task',?,?)
+                """,
+                (
+                    task_id,
+                    todo_parent_id,
+                    task_id,
+                    title.strip(),
+                    prompt.strip(),
+                    priority * -1,
+                    now,
+                    now,
+                ),
+            )
+            self._refresh_todo_ancestors(task_id)
             self.event(
                 task_id=task_id,
                 actor="supervisor",
                 kind="task.created",
-                payload={"title": title, "scopes": list(scopes), "dependencies": list(dependencies)},
+                payload={
+                    "title": title,
+                    "scopes": list(scopes),
+                    "dependencies": list(dependencies),
+                    "todoParentId": todo_parent_id,
+                },
             )
         return task_id
 
@@ -352,6 +678,11 @@ class State:
                 kind="task.transition",
                 payload={"from": current, "to": target, **payload},
             )
+            self.connection.execute(
+                "UPDATE todo_items SET status = ?, updated_at = ? WHERE task_id = ?",
+                (TASK_TODO_STATUS[target], utc_now(), task_id),
+            )
+            self._refresh_todo_ancestors(task_id)
         return self.get_task(task_id)
 
     def update_task(self, task_id: str, *, actor: str, fields: dict[str, Any], kind: str) -> None:

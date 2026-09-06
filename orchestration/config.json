@@ -33,6 +33,8 @@
       "AGENTS.md",
       "orchestration/**",
       "scripts/agentctl",
+      "scripts/agentctl-mcp",
+      "scripts/orchestrator-remote",
       "scripts/orchestrator-supervise",
       ".github/workflows/**"
     ],
