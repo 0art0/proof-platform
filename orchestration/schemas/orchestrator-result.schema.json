@@ -2,10 +2,30 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["reply", "needsUserInput", "tasks"],
+  "required": ["reply", "needsUserInput", "consultation", "tasks"],
   "properties": {
     "reply": { "type": "string", "minLength": 1, "maxLength": 8000 },
     "needsUserInput": { "type": "boolean" },
+    "consultation": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reason", "questions"],
+          "properties": {
+            "kind": { "enum": ["technical", "progress_review"] },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+            "questions": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "minItems": 1,
+              "maxItems": 4
+            }
+          }
+        }
+      ]
+    },
     "tasks": {
       "type": "array",
       "maxItems": 12,

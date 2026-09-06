@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings", "gaps", "recommendations"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1, "maxLength": 2500 },
+    "findings": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "area", "message"],
+        "properties": {
+          "severity": { "enum": ["blocking", "warning", "note"] },
+          "area": { "enum": ["mathematics", "code", "architecture", "scope", "testing", "progress"] },
+          "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 },
+      "maxItems": 8
+    },
+    "recommendations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 },
+      "maxItems": 8
+    }
+  }
+}

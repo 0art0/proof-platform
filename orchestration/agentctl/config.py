@@ -99,10 +99,45 @@ class Config:
     def codex_command(self) -> str:
         return str(self.raw["codex"]["command"])
 
-    @property
-    def codex_model(self) -> str | None:
-        value = self.raw["codex"].get("model")
+    def codex_model(self, role: str) -> str | None:
+        role_config = self.raw["codex"].get("roles", {}).get(role, {})
+        value = role_config.get("model", self.raw["codex"].get("model"))
         return str(value) if value else None
+
+    def codex_reasoning_effort(self, role: str) -> str | None:
+        role_config = self.raw["codex"].get("roles", {}).get(role, {})
+        value = role_config.get(
+            "reasoningEffort", self.raw["codex"].get("reasoningEffort")
+        )
+        return str(value) if value else None
+
+    @property
+    def advisor_enabled(self) -> bool:
+        return bool(self.raw["codex"].get("advisor", {}).get("enabled", False))
+
+    @property
+    def advisor_milestone_interval(self) -> int:
+        value = int(self.raw["codex"].get("advisor", {}).get("milestoneInterval", 8))
+        return max(1, value)
+
+    @property
+    def advisor_max_subagents(self) -> int:
+        value = int(self.raw["codex"].get("advisor", {}).get("maxSubagents", 2))
+        return max(0, min(3, value))
+
+    @property
+    def advisor_subagent_model(self) -> str:
+        return str(
+            self.raw["codex"].get("advisor", {}).get("subagentModel", "gpt-5.6-sol")
+        )
+
+    @property
+    def advisor_subagent_reasoning_effort(self) -> str:
+        return str(
+            self.raw["codex"]
+            .get("advisor", {})
+            .get("subagentReasoningEffort", "xhigh")
+        )
 
     @property
     def review_enabled(self) -> bool:

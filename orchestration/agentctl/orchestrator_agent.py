@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .codex import run_codex, validate_result_shape
+from .codex import CodexOutcome, run_codex, validate_result_shape
 from .config import Config
 from .scope import validate_proposed_scopes
 from .state import State
@@ -28,6 +28,107 @@ def _task_snapshot(state: State) -> list[dict[str, Any]]:
         }
         for task in state.list_tasks()
     ]
+
+
+def _design_context(root: Path) -> str:
+    sections = []
+    for name in ("platform-design-plan.md", "platform-design-refinement.md"):
+        content = (root / name).read_text(encoding="utf-8")
+        sections.append(f"## {name}\n\n{content}")
+    return "\n\n".join(sections)
+
+
+def _condensed_progress(config: Config, state: State) -> dict[str, Any]:
+    tasks = state.list_tasks()
+    status_counts: dict[str, int] = {}
+    for task in tasks:
+        status = str(task["status"])
+        status_counts[status] = status_counts.get(status, 0) + 1
+    integrated_count = status_counts.get("integrated", 0)
+    last_review = state.latest_event("advisor.progress_review.completed")
+    reviewed_at_count = (
+        int(last_review["payload"].get("integratedTaskCount", 0)) if last_review else 0
+    )
+    return {
+        "taskCounts": status_counts,
+        "integratedTaskCount": integrated_count,
+        "milestoneReviewInterval": config.advisor_milestone_interval,
+        "milestoneReviewDue": (
+            config.advisor_enabled
+            and integrated_count - reviewed_at_count >= config.advisor_milestone_interval
+        ),
+        "lastProgressReview": (
+            {
+                "createdAt": last_review["created_at"],
+                "integratedTaskCount": reviewed_at_count,
+            }
+            if last_review
+            else None
+        ),
+        "recentTasks": [
+            {
+                "id": task["id"],
+                "title": task["title"],
+                "status": task["status"],
+                "todoPath": state.todo_path_for_task(task["id"]),
+                "summary": str(task.get("result_summary") or "")[:600],
+                "error": str(task.get("last_error") or "")[:600],
+            }
+            for task in tasks[-8:]
+        ],
+    }
+
+
+def _condensed_provisional(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "reply": str(result["reply"])[:2000],
+        "needsUserInput": bool(result["needsUserInput"]),
+        "tasks": [
+            {
+                "key": task.get("key"),
+                "title": task.get("title"),
+                "objective": str(task.get("objective") or "")[:1200],
+                "writeScopes": task.get("writeScopes"),
+                "checks": task.get("checks"),
+                "dependsOn": task.get("dependsOn"),
+            }
+            for task in result.get("tasks", [])
+            if isinstance(task, dict)
+        ],
+    }
+
+
+def _record_rate_limit(
+    *,
+    config: Config,
+    state: State,
+    message_id: str,
+    outcome: CodexOutcome,
+    actor: str,
+    thread_id: str | None,
+) -> None:
+    retry_at = outcome.retry_at or epoch_now() + config.rate_limit_fallback
+    state.set_rate_limit("codex-default", retry_at, outcome.output[-2000:])
+    state.update_message(
+        message_id,
+        status="retry_wait",
+        actor=actor,
+        thread_id=thread_id,
+        next_wake_at=retry_at,
+        last_error=f"{actor} rate limited; retry at {retry_at}",
+    )
+
+
+def _record_failure(
+    *, state: State, message_id: str, outcome: CodexOutcome, actor: str
+) -> None:
+    state.update_message(
+        message_id,
+        status="failed",
+        actor=actor,
+        thread_id=outcome.thread_id,
+        last_error=outcome.output[-8000:],
+    )
 
 
 def _topological_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -102,15 +203,22 @@ def execute(root: Path, message_id: str) -> int:
         prompt_template = (config.root / "orchestration" / "prompts" / "orchestrator.md").read_text(
             encoding="utf-8"
         )
+        design_context = _design_context(config.root)
+        progress = _condensed_progress(config, state)
         prompt = (
-            f"{prompt_template}\n\n## User request\n\n{message['content']}\n\n"
+            f"{prompt_template}\n\n# Required design context\n\n{design_context}\n\n"
+            f"# Current orchestration context\n\n## User request\n\n{message['content']}\n\n"
             f"## Durable task snapshot\n\n{json_dumps(_task_snapshot(state))}\n"
             f"\n## Durable project TODO\n\n{json_dumps(state.todo_tree())}\n"
+            f"\n## Advisor status and condensed progress\n\n{json_dumps(progress)}\n"
+            f"\nAdvisor enabled: {config.advisor_enabled}. If milestoneReviewDue is true, "
+            "request a progress_review consultation unless user input is required first.\n"
         )
-        log_path = config.state_dir / "logs" / f"{message_id}-orchestrator.jsonl"
-        result_path = config.state_dir / "results" / f"{message_id}-orchestrator.json"
+        log_path = config.state_dir / "logs" / f"{message_id}-orchestrator-initial.jsonl"
+        result_path = config.state_dir / "results" / f"{message_id}-orchestrator-initial.json"
         outcome = run_codex(
             config=config,
+            role="orchestrator",
             cwd=config.root,
             prompt=prompt,
             schema=config.root / "orchestration" / "schemas" / "orchestrator-result.schema.json",
@@ -121,27 +229,127 @@ def execute(root: Path, message_id: str) -> int:
             resume_thread_id=str(message.get("thread_id") or "") or None,
         )
         if outcome.rate_limited:
-            retry_at = outcome.retry_at or epoch_now() + config.rate_limit_fallback
-            state.set_rate_limit("codex-default", retry_at, outcome.output[-2000:])
-            state.update_message(
-                message_id,
-                status="retry_wait",
+            _record_rate_limit(
+                config=config,
+                state=state,
+                message_id=message_id,
+                outcome=outcome,
                 actor="orchestrator",
                 thread_id=outcome.thread_id,
-                next_wake_at=retry_at,
-                last_error=f"rate limited; retry at {retry_at}",
             )
             return 0
         if outcome.returncode != 0:
-            state.update_message(
-                message_id,
-                status="failed",
-                actor="orchestrator",
-                thread_id=outcome.thread_id,
-                last_error=outcome.output[-8000:],
+            _record_failure(
+                state=state, message_id=message_id, outcome=outcome, actor="orchestrator"
             )
             return 1
-        result = validate_result_shape(outcome.result, ("reply", "needsUserInput", "tasks"))
+        result = validate_result_shape(
+            outcome.result, ("reply", "needsUserInput", "consultation", "tasks")
+        )
+        consultation = result["consultation"]
+        if consultation is not None:
+            if not config.advisor_enabled:
+                raise AgentCtlError("orchestrator requested consultation while advisor is disabled")
+            if result["needsUserInput"]:
+                raise AgentCtlError(
+                    "orchestrator cannot request consultation and user input in the same response"
+                )
+            advisor_template = (
+                config.root / "orchestration" / "prompts" / "advisor.md"
+            ).read_text(encoding="utf-8")
+            advisor_prompt = (
+                f"{advisor_template}\n\n## Consultation request\n\n"
+                f"{json_dumps(consultation)}\n\n## User request\n\n{message['content']}\n\n"
+                f"## Condensed progress\n\n{json_dumps(progress)}\n\n"
+                f"## Condensed provisional Sol response\n\n"
+                f"{json_dumps(_condensed_provisional(result))}\n\n"
+                f"Subagent limit: {config.advisor_max_subagents}. Every subagent must use "
+                f"{config.advisor_subagent_model} with reasoning effort "
+                f"{config.advisor_subagent_reasoning_effort}.\n"
+            )
+            advisor_outcome = run_codex(
+                config=config,
+                role="advisor",
+                cwd=config.root,
+                prompt=advisor_prompt,
+                schema=config.root / "orchestration" / "schemas" / "advisor-result.schema.json",
+                result_path=config.state_dir / "results" / f"{message_id}-advisor.json",
+                log_path=config.state_dir / "logs" / f"{message_id}-advisor.jsonl",
+                sandbox="read-only",
+                timeout=config.worker_timeout,
+            )
+            if advisor_outcome.rate_limited:
+                _record_rate_limit(
+                    config=config,
+                    state=state,
+                    message_id=message_id,
+                    outcome=advisor_outcome,
+                    actor="advisor",
+                    thread_id=outcome.thread_id,
+                )
+                return 0
+            if advisor_outcome.returncode != 0:
+                _record_failure(
+                    state=state,
+                    message_id=message_id,
+                    outcome=advisor_outcome,
+                    actor="advisor",
+                )
+                return 1
+            advisory = validate_result_shape(
+                advisor_outcome.result, ("summary", "findings", "gaps", "recommendations")
+            )
+            consultation_kind = str(consultation["kind"])
+            state.event(
+                message_id=message_id,
+                actor="advisor",
+                kind=f"advisor.{consultation_kind}.completed",
+                payload={
+                    "integratedTaskCount": progress["integratedTaskCount"],
+                    "summary": str(advisory["summary"])[:2000],
+                },
+            )
+            final_outcome = run_codex(
+                config=config,
+                role="orchestrator",
+                cwd=config.root,
+                prompt=(
+                    "## Astra advisory\n\n"
+                    f"{json_dumps(advisory)}\n\n"
+                    "Reassess your provisional response using this advice. Resolve material gaps, "
+                    "return the final reply and task contracts, and set consultation to null."
+                ),
+                schema=config.root / "orchestration" / "schemas" / "orchestrator-result.schema.json",
+                result_path=config.state_dir / "results" / f"{message_id}-orchestrator-final.json",
+                log_path=config.state_dir / "logs" / f"{message_id}-orchestrator-final.jsonl",
+                sandbox="read-only",
+                timeout=config.worker_timeout,
+                resume_thread_id=outcome.thread_id,
+            )
+            if final_outcome.rate_limited:
+                _record_rate_limit(
+                    config=config,
+                    state=state,
+                    message_id=message_id,
+                    outcome=final_outcome,
+                    actor="orchestrator",
+                    thread_id=final_outcome.thread_id,
+                )
+                return 0
+            if final_outcome.returncode != 0:
+                _record_failure(
+                    state=state,
+                    message_id=message_id,
+                    outcome=final_outcome,
+                    actor="orchestrator",
+                )
+                return 1
+            outcome = final_outcome
+            result = validate_result_shape(
+                outcome.result, ("reply", "needsUserInput", "consultation", "tasks")
+            )
+            if result["consultation"] is not None:
+                raise AgentCtlError("orchestrator requested more than one consultation")
         proposed = _validate_proposal(config, result)
         key_to_id: dict[str, str] = {}
         created: list[str] = []

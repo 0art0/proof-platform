@@ -19,6 +19,29 @@ from .util import AgentCtlError, json_dumps, run, utc_now
 from .verify import parse_command
 
 
+IDIOTS_GUIDE = """\
+Idiot's guide:
+  First run:
+    1. ./scripts/agentctl doctor       Check Git, tmux, Codex, Node, and pnpm.
+    2. ./scripts/agentctl init         Create the local task database (once).
+    3. ./scripts/agentctl start        Start the supervisor in the background.
+
+  Get work done:
+    4. ./scripts/agentctl ask "Describe the change you want"
+    5. ./scripts/agentctl messages     Read Sol's reply and created task IDs.
+    6. ./scripts/agentctl status       Watch delegated workers and reviews.
+    7. ./scripts/agentctl approve TASK_ID
+    8. ./scripts/agentctl integrate TASK_ID
+
+  If something goes wrong:
+    ./scripts/agentctl logs TASK_ID    Show the latest worker or reviewer log.
+    ./scripts/agentctl retry TASK_ID   Retry a failed or paused task.
+    ./scripts/agentctl stop            Stop the supervisor.
+
+Approval and integration are deliberately separate. Nothing is pushed remotely.
+"""
+
+
 def _state(config: Config) -> State:
     config.ensure_runtime_directories()
     state = State(config.database_path)
@@ -455,10 +478,15 @@ def command_cancel(config: Config, args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentctl", description="Proof Platform autonomous workflow")
+    parser = argparse.ArgumentParser(
+        prog="agentctl",
+        description="Proof Platform autonomous workflow",
+        epilog=IDIOTS_GUIDE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--version", action="version", version=__version__)
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
 
     commands.add_parser("doctor").set_defaults(handler=command_doctor)
     commands.add_parser("init").set_defaults(handler=command_init)
@@ -477,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         remote_commands.add_parser(name).set_defaults(handler=handler)
 
-    daemon_parser = commands.add_parser("daemon", help=argparse.SUPPRESS)
+    daemon_parser = commands.add_parser("daemon")
     daemon_parser.add_argument("--once", action="store_true")
     daemon_parser.set_defaults(handler=command_daemon)
 
@@ -550,6 +578,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.command is None:
+        parser.print_help()
+        return 0
     try:
         config = Config.load(arguments.root)
         return int(arguments.handler(config, arguments))

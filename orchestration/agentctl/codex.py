@@ -111,6 +111,7 @@ def _sanitized_environment() -> dict[str, str]:
 def run_codex(
     *,
     config: Config,
+    role: str,
     cwd: Path,
     prompt: str,
     schema: Path,
@@ -130,8 +131,14 @@ def run_codex(
         "--ask-for-approval",
         str(config.raw["codex"]["approvalPolicy"]),
     ]
-    if config.codex_model:
-        command.extend(["--model", config.codex_model])
+    model = config.codex_model(role)
+    if model:
+        command.extend(["--model", model])
+    reasoning_effort = config.codex_reasoning_effort(role)
+    if reasoning_effort:
+        command.extend(
+            ["--config", f"model_reasoning_effort={json.dumps(str(reasoning_effort))}"]
+        )
     if resume_thread_id:
         command.extend(
             [

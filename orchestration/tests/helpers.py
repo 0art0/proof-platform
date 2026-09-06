@@ -23,7 +23,19 @@ def config_for(root: Path, *, review_enabled: bool = False) -> Config:
         },
         "codex": {
             "command": "codex",
-            "model": None,
+            "roles": {
+                "orchestrator": {"model": "gpt-5.6-sol", "reasoningEffort": "xhigh"},
+                "advisor": {"model": "gpt-6-astra", "reasoningEffort": "xhigh"},
+                "implementer": {"model": "gpt-5.6-sol", "reasoningEffort": "xhigh"},
+                "reviewer": {"model": "gpt-5.6-sol", "reasoningEffort": "xhigh"},
+            },
+            "advisor": {
+                "enabled": True,
+                "milestoneInterval": 8,
+                "maxSubagents": 2,
+                "subagentModel": "gpt-5.6-sol",
+                "subagentReasoningEffort": "xhigh",
+            },
             "implementerSandbox": "workspace-write",
             "reviewerSandbox": "read-only",
             "approvalPolicy": "never",

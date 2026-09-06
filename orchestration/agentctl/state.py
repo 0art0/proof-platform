@@ -616,6 +616,14 @@ class State:
         ).fetchall()
         return [dict(row) | {"payload": json.loads(row["payload_json"])} for row in reversed(rows)]
 
+    def latest_event(self, kind: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1", (kind,)
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row) | {"payload": json.loads(row["payload_json"])}
+
     def transition(
         self,
         task_id: str,
@@ -882,7 +890,7 @@ class State:
         ).fetchone()
         return float(row[0]) if row else None
 
-    def create_message(self, content: str) -> str:
+    def create_message(self, content: str, *, actor: str = "user") -> str:
         if not content.strip():
             raise AgentCtlError("message must not be empty")
         message_id = f"msg-{uuid.uuid4().hex[:12]}"
@@ -894,7 +902,7 @@ class State:
             )
             self.event(
                 message_id=message_id,
-                actor="user",
+                actor=actor,
                 kind="message.created",
                 payload={"content": content.strip()},
             )

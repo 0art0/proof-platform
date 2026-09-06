@@ -229,8 +229,53 @@ def _launch_tasks(config: Config, state: State) -> int:
     return launched
 
 
+def _event_integrated_count(event: dict[str, Any] | None) -> int:
+    if event is None:
+        return 0
+    return int(event["payload"].get("integratedTaskCount", 0))
+
+
+def _queue_advisor_checkpoint(config: Config, state: State) -> str | None:
+    if not config.advisor_enabled:
+        return None
+    if any(
+        message["status"] in {"pending", "running", "retry_wait"}
+        for message in state.list_messages()
+    ):
+        return None
+    integrated_count = sum(
+        task["status"] == "integrated" for task in state.list_tasks()
+    )
+    last_completed = _event_integrated_count(
+        state.latest_event("advisor.progress_review.completed")
+    )
+    last_requested = _event_integrated_count(
+        state.latest_event("advisor.progress_review.requested")
+    )
+    baseline = max(last_completed, last_requested)
+    if integrated_count - baseline < config.advisor_milestone_interval:
+        return None
+    message_id = state.create_message(
+        (
+            "Run the scheduled orchestration checkpoint. Review the condensed durable progress "
+            f"after {integrated_count} integrated tasks, request one Astra progress-review "
+            "consultation, then use its feedback to identify missing gaps, challenge the current "
+            "implementation, and create only the corrective tasks that are actually needed."
+        ),
+        actor="supervisor",
+    )
+    state.event(
+        message_id=message_id,
+        actor="supervisor",
+        kind="advisor.progress_review.requested",
+        payload={"integratedTaskCount": integrated_count},
+    )
+    return message_id
+
+
 def run_once(config: Config, state: State) -> int:
     reconcile(config, state)
+    _queue_advisor_checkpoint(config, state)
     launched_message = _launch_message(config, state)
     launched_tasks = _launch_tasks(config, state)
     return int(launched_message) + launched_tasks

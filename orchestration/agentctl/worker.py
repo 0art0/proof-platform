@@ -56,6 +56,7 @@ def _review(
     review_result = config.state_dir / "results" / f"{task['id']}-{attempt}-review.json"
     outcome = run_codex(
         config=config,
+        role="reviewer",
         cwd=Path(task["worktree"]),
         prompt=reviewer_prompt(config, task),
         schema=config.root / "orchestration" / "schemas" / "review-result.schema.json",
@@ -170,6 +171,7 @@ def execute(root: Path, task_id: str, token: str, phase: str) -> int:
         result_path = config.state_dir / "results" / f"{task_id}-{attempt}-implementer.json"
         outcome = run_codex(
             config=config,
+            role="implementer",
             cwd=Path(task["worktree"]),
             prompt=implementer_prompt(config, task),
             schema=config.root / "orchestration" / "schemas" / "worker-result.schema.json",

@@ -2,6 +2,10 @@
 
 `agentctl` is a repository-local supervisor for isolated Codex implementers and reviewers. It is intentionally independent of the application toolchain: Python, SQLite, Git, tmux, and the Codex CLI are its only runtime requirements.
 
+The default model routing uses `gpt-5.6-sol` xhigh for the read-only primary orchestrator, implementers, and reviewers. The primary orchestrator may request one `gpt-6-astra` xhigh consultation when a critical mathematical, architectural, correctness, or security decision warrants it, or after each checkpoint of eight newly integrated tasks. Astra receives condensed progress and provisional-plan context, may delegate at most two independent read-only questions to `gpt-5.6-sol` xhigh subagents, and returns advice to the same Sol thread before contracts are created. Each role has its own entry under `codex.roles`; advisor limits live under `codex.advisor`. The legacy top-level `codex.model` and `codex.reasoningEffort` keys remain valid as fallbacks.
+
+Every primary-orchestrator turn receives the current full contents of both `platform-design-plan.md` and `platform-design-refinement.md` as required design context before it evaluates the user request or creates contracts.
+
 The supervisor is the continuously running component. Language-model processes are bounded turns. This distinction matters: if an account is rate-limited, durable state remains available, the worker releases its slot, and the supervisor sleeps until the recorded deadline before resuming that task's own Codex thread.
 
 ## Safety model
