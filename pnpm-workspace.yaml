@@ -9,3 +9,4 @@ engineStrict: true
 saveExact: false
 sharedWorkspaceLockfile: true
 strictPeerDependencies: true
+verifyDepsBeforeRun: error

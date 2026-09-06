@@ -74,9 +74,15 @@ importers:
       '@cortex-js/compute-engine':
         specifier: ^0.120.0
         version: 0.120.0
+      '@proof/mathjson-model':
+        specifier: workspace:*
+        version: link:../../packages/mathjson-model
       '@proof/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@proof/selections':
+        specifier: workspace:*
+        version: link:../../packages/selections
       mathlive:
         specifier: ^0.110.0
         version: 0.110.0

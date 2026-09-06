@@ -2,6 +2,7 @@
   "name": "@proof/web",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "next build",
     "dev": "next dev",
@@ -11,7 +12,9 @@
   },
   "dependencies": {
     "@cortex-js/compute-engine": "^0.120.0",
+    "@proof/mathjson-model": "workspace:*",
     "@proof/protocol": "workspace:*",
+    "@proof/selections": "workspace:*",
     "mathlive": "^0.110.0",
     "next": "^16.3.4",
     "react": "^19.2.8",

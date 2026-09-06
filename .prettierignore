@@ -5,6 +5,7 @@
 coverage
 dist
 node_modules
+test-results
+playwright-report
 pnpm-lock.yaml
 platform-design-plan.md
-

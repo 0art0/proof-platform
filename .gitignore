@@ -11,6 +11,8 @@
 **/.next/
 **/dist/
 **/coverage/
+**/test-results/
+**/playwright-report/
 **/__pycache__/
 *.py[cod]
 *.tsbuildinfo

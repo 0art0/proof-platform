@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "lint": "./scripts/turbow run lint",
     "test": "./scripts/turbow run test",
+    "test:e2e": "playwright test",
     "typecheck": "./scripts/turbow run typecheck",
     "verify": "prettier --check . && PYTHONPATH=orchestration python3 -m unittest discover -s orchestration/tests -v && ./scripts/turbow run lint typecheck test build",
     "agents": "./scripts/agentctl",
