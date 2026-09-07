@@ -31,6 +31,16 @@ An autonomous worker must never:
 
 Worktrees and tmux provide operational isolation, not a security boundary. The supervisor therefore uses Codex sandboxing, removes control-plane environment variables, validates ancestry and every changed path, and verifies candidates in a fresh integration worktree.
 
+## Expert guidance and model selection
+
+For non-trivial mathematical or programming tasks where expert judgment could materially improve the approach, first consult an Astra (`gpt-6-astra`) subagent for a concise rough plan, key risks, and suggested verification. Skip this consultation for routine, well-understood changes.
+
+Use Astra judiciously for high-level guidance. At selected significant milestones—such as settling the mathematical approach, completing a major implementation slice, or encountering evidence that challenges the plan—send an Astra subagent a compact summary of the objective, decisions, progress, verification results, and open questions. Request focused expert review and next-step guidance. Avoid automatic consultation after every step, repeated reviews without new evidence, and large context dumps.
+
+Delegate actual programming work to GPT-5.6 Sol (`gpt-5.6-sol`) at `xhigh` reasoning effort, or use a less costly model or reasoning configuration appropriate to the task's difficulty and risk.
+
+All delegation remains subject to the existing role boundaries, task contracts, allowed scopes, and supervisor scheduling rules. Astra consultations are advisory and do not replace the required fresh acceptance review or authorize implementation or integration.
+
 ## Worker procedure
 
 1. Read the task contract, this file, relevant nested instructions, and only the context needed for the assigned scope.
