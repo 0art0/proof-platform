@@ -14,7 +14,9 @@
         "required": ["severity", "area", "message"],
         "properties": {
           "severity": { "enum": ["blocking", "warning", "note"] },
-          "area": { "enum": ["mathematics", "code", "architecture", "scope", "testing", "progress"] },
+          "area": {
+            "enum": ["mathematics", "code", "architecture", "scope", "testing", "progress"]
+          },
           "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
         }
       }

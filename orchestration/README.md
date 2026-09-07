@@ -29,10 +29,10 @@ The checkout must be a writable Git repository with at least one commit. `agentc
 ```bash
 ./scripts/agentctl doctor
 ./scripts/agentctl init
-./scripts/agentctl start
+./scripts/agentctl start --web
 ```
 
-`start` launches a dedicated tmux server and a restart loop. This survives terminal detachment, not host reboot. To start after reboot, adapt and install `orchestration/systemd/proof-platform-orchestrator.service` as a user service.
+`start --web` launches the supervisor and the local Next.js dashboard in separate sessions on agentctl's dedicated tmux server. Open <http://127.0.0.1:3000/orchestrator>. Both services survive terminal detachment, not host reboot. Use `./scripts/agentctl status` to check them and `./scripts/agentctl stop --web` to stop them. Without `--web`, `start` and `stop` manage only the supervisor. To start the supervisor after reboot, adapt and install `orchestration/systemd/proof-platform-orchestrator.service` as a user service; the dashboard is not included in that unit.
 
 ## User-facing workflow
 

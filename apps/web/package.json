@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "lint": "eslint .",
+    "start": "next start --hostname 127.0.0.1",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },

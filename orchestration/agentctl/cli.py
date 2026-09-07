@@ -24,7 +24,7 @@ Idiot's guide:
   First run:
     1. ./scripts/agentctl doctor       Check Git, tmux, Codex, Node, and pnpm.
     2. ./scripts/agentctl init         Create the local task database (once).
-    3. ./scripts/agentctl start        Start the supervisor in the background.
+    3. ./scripts/agentctl start --web  Start the supervisor and dashboard.
 
   Get work done:
     4. ./scripts/agentctl ask "Describe the change you want"
@@ -36,7 +36,7 @@ Idiot's guide:
   If something goes wrong:
     ./scripts/agentctl logs TASK_ID    Show the latest worker or reviewer log.
     ./scripts/agentctl retry TASK_ID   Retry a failed or paused task.
-    ./scripts/agentctl stop            Stop the supervisor.
+    ./scripts/agentctl stop --web      Stop the supervisor and dashboard.
 
 Approval and integration are deliberately separate. Nothing is pushed remotely.
 """
@@ -96,31 +96,55 @@ def command_init(config: Config, _args: argparse.Namespace) -> int:
     return 0
 
 
-def command_start(config: Config, _args: argparse.Namespace) -> int:
+def _web_session_name(config: Config) -> str:
+    return f"{config.tmux_prefix}-web"
+
+
+def command_start(config: Config, args: argparse.Namespace) -> int:
     ensure_repository(config.root)
     state = _state(config)
     state.close()
     name = f"{config.tmux_prefix}-orchestrator"
     if has_session(config, name):
         print(f"orchestrator already running in tmux session {name}")
-        return 0
-    start_session(
-        config,
-        name,
-        [str(config.root / "scripts" / "orchestrator-supervise")],
-        cwd=config.root,
-    )
-    print(f"started orchestrator in tmux session {name}")
+    else:
+        start_session(
+            config,
+            name,
+            [str(config.root / "scripts" / "orchestrator-supervise")],
+            cwd=config.root,
+        )
+        print(f"started orchestrator in tmux session {name}")
+    if args.web:
+        web_name = _web_session_name(config)
+        if has_session(config, web_name):
+            print(f"web dashboard already running in tmux session {web_name}")
+        else:
+            start_session(
+                config,
+                web_name,
+                [str(config.root / "scripts" / "pnpmw"), "--filter", "@proof/web", "dev"],
+                cwd=config.root,
+            )
+            print(f"started web dashboard in tmux session {web_name}")
+        print("open http://127.0.0.1:3000/orchestrator")
     return 0
 
 
-def command_stop(config: Config, _args: argparse.Namespace) -> int:
+def command_stop(config: Config, args: argparse.Namespace) -> int:
     name = f"{config.tmux_prefix}-orchestrator"
     if has_session(config, name):
         stop_session(config, name)
         print(f"stopped {name}; task workers were left intact")
     else:
         print("orchestrator is not running")
+    if args.web:
+        web_name = _web_session_name(config)
+        if has_session(config, web_name):
+            stop_session(config, web_name)
+            print(f"stopped {web_name}")
+        else:
+            print("web dashboard is not running")
     return 0
 
 
@@ -365,6 +389,7 @@ def command_status(config: Config, args: argparse.Namespace) -> int:
         return 0
     sessions = set(list_sessions(config))
     print(f"orchestrator: {'running' if f'{config.tmux_prefix}-orchestrator' in sessions else 'stopped'}")
+    print(f"web dashboard: {'running' if _web_session_name(config) in sessions else 'stopped'}")
     print(
         "remote orchestrator: "
         f"{'running' if _remote_session_name(config) in sessions else 'stopped'}"
@@ -490,8 +515,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("doctor").set_defaults(handler=command_doctor)
     commands.add_parser("init").set_defaults(handler=command_init)
-    commands.add_parser("start").set_defaults(handler=command_start)
-    commands.add_parser("stop").set_defaults(handler=command_stop)
+    start_parser = commands.add_parser("start")
+    start_parser.add_argument(
+        "--web",
+        action="store_true",
+        help="also start the local web dashboard at http://127.0.0.1:3000/orchestrator",
+    )
+    start_parser.set_defaults(handler=command_start)
+    stop_parser = commands.add_parser("stop")
+    stop_parser.add_argument(
+        "--web",
+        action="store_true",
+        help="also stop the local web dashboard",
+    )
+    stop_parser.set_defaults(handler=command_stop)
     commands.add_parser("attach").set_defaults(handler=command_attach)
 
     remote_parser = commands.add_parser("remote")

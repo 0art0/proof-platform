@@ -11,7 +11,12 @@ The checked-in wrapper uses the system Node.js when it satisfies `.node-version`
 ./scripts/pnpmw verify
 ./scripts/agentctl doctor
 ./scripts/agentctl init
-./scripts/agentctl start
+./scripts/agentctl start --web
 ```
+
+This starts both the autonomous-work supervisor and the local dashboard. Open
+<http://127.0.0.1:3000/orchestrator>. Use `./scripts/agentctl stop --web` to stop
+both services. Run `./scripts/agentctl start` without `--web` when only the
+background supervisor is needed.
 
 See [orchestration/README.md](./orchestration/README.md) before submitting autonomous work. The supervisor never pushes changes and requires a human approval before integration by default.

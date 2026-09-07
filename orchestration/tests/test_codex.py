@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,6 +91,23 @@ class CodexCommandTests(unittest.TestCase):
         command = self.run_and_capture_command("implementer")
 
         self.assert_model_configuration(command, "legacy-model", "high")
+
+
+class CodexOutputSchemaTests(unittest.TestCase):
+    def test_orchestrator_nullable_consultation_uses_supported_any_of(self) -> None:
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "schemas"
+            / "orchestrator-result.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        consultation = schema["properties"]["consultation"]
+
+        self.assertNotIn("oneOf", consultation)
+        self.assertEqual(
+            [option["type"] for option in consultation["anyOf"]],
+            ["null", "object"],
+        )
 
 
 if __name__ == "__main__":
