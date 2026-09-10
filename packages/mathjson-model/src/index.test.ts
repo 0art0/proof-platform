@@ -18,6 +18,56 @@ describe("plain MathJSON", () => {
     expect(isPlainMathJson(Number.NaN)).toBe(false);
   });
 
+  it("rejects ambiguous, cyclic, sparse, and accessor-backed runtime values", () => {
+    expect(isPlainMathJson({ sym: "x", fn: ["Add", "x", 1] })).toBe(false);
+    expect(isPlainMathJson({ sym: "x", unexpected: true })).toBe(false);
+    expect(isPlainMathJson({ num: "not-a-number" })).toBe(false);
+    expect(isPlainMathJson({ num: "1(3)" })).toBe(false);
+    expect(isPlainMathJson({ num: "1.(3)" })).toBe(true);
+
+    const cyclic: { fn: unknown[] } = { fn: ["Identity"] };
+    cyclic.fn.push(cyclic);
+    expect(isPlainMathJson(cyclic)).toBe(false);
+
+    const sparse: unknown[] = new Array(4);
+    sparse[0] = "Add";
+    sparse[1] = "x";
+    sparse[3] = 1;
+    expect(isPlainMathJson(sparse)).toBe(false);
+
+    const accessor = Object.defineProperty({}, "sym", {
+      enumerable: true,
+      get: () => "x",
+    });
+    expect(isPlainMathJson(accessor)).toBe(false);
+
+    const sparseOffsets: unknown[] = new Array(2);
+    expect(isPlainMathJson({ sym: "x", sourceOffsets: sparseOffsets })).toBe(false);
+
+    let dictionaryGetterRead = false;
+    const dictionary = Object.defineProperty({}, "entry", {
+      enumerable: true,
+      get: () => {
+        dictionaryGetterRead = true;
+        return 1;
+      },
+    });
+    expect(isPlainMathJson({ dict: dictionary })).toBe(false);
+    expect(dictionaryGetterRead).toBe(false);
+  });
+
+  it("preserves supported object metadata without canonicalizing it", () => {
+    const expression = {
+      fn: ["Equal", { fn: ["Add", "x", 1], latex: "x+1" }, { fn: ["Add", 1, "x"] }],
+      comment: "keep operand order",
+      sourceOffsets: [4, 12],
+    } as const;
+
+    expect(isPlainMathJson(expression)).toBe(true);
+    const parsed = parsePlainMathJson(JSON.stringify(expression));
+    expect(parsed).toEqual(expression);
+  });
+
   it("parses only valid expression roots", () => {
     expect(parsePlainMathJson('["Add", "x", 1]')).toEqual(["Add", "x", 1]);
     expect(parsePlainMathJson("true")).toBeUndefined();

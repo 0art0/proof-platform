@@ -1,4 +1,21 @@
-import { mathJsonEquals, type PlainMathJson } from "@proof/mathjson-model";
+import {
+  createProofStateSchema,
+  mathJsonEquals,
+  operatorDeclarationsSchema,
+  proofStateIdSchema,
+  retrievalWildcardSchema,
+  stableIdentifierSchema,
+  statementIdSchema,
+  type Declaration,
+  type OperatorDeclaration,
+  type PlainMathJson,
+  type ProofState,
+  type ProofStateId,
+  type ProofStateSchemaOptions,
+  type RetrievalWildcard,
+  type Sort,
+  type StatementId,
+} from "@proof/mathjson-model";
 
 /** Zero-based operand indices. The operator stored at array index 0 is never part of a path. */
 export type OperandPath = readonly number[];
@@ -8,7 +25,7 @@ export type ExactSelection = Readonly<{
   kind: "exact";
   path: OperandPath;
   fragment: PlainMathJson;
-  displayRange?: DisplayRange;
+  displayRange?: DisplayRange | undefined;
 }>;
 
 export type AssociativeSelectionLens = Readonly<{
@@ -20,7 +37,7 @@ export type AssociativeSelectionLens = Readonly<{
   endOperand: number;
   coveredOperandPaths: readonly OperandPath[];
   fragment: PlainMathJson;
-  displayRange?: DisplayRange;
+  displayRange?: DisplayRange | undefined;
 }>;
 
 export type FallbackSelection = Readonly<{
@@ -29,7 +46,7 @@ export type FallbackSelection = Readonly<{
   fragment: PlainMathJson;
   requestedFragment: PlainMathJson;
   reason: string;
-  displayRange?: DisplayRange;
+  displayRange?: DisplayRange | undefined;
 }>;
 
 export type ResolvedSelection = ExactSelection | AssociativeSelectionLens | FallbackSelection;
@@ -39,7 +56,7 @@ export type SelectionHint = Readonly<{
   paths?: readonly OperandPath[];
   /** Used when equal expressions occur more than once and display metadata is unavailable. */
   occurrence?: number;
-  displayRange?: DisplayRange;
+  displayRange?: DisplayRange | undefined;
 }>;
 
 export type SelectionDiagnostic = Readonly<{
@@ -434,4 +451,786 @@ function containsCounts(
     if ((available.get(key) ?? 0) < count) return false;
   }
   return true;
+}
+
+export type StatementAnchor = Readonly<{
+  stateId: ProofStateId;
+  target: Readonly<{
+    kind: "goal" | "obligation";
+    id: StatementId;
+  }>;
+  statement: Readonly<{ kind: "conclusion" }> | Readonly<{ kind: "hypothesis"; id: StatementId }>;
+}>;
+
+export type AnchoredExactSelection = Readonly<{
+  kind: "exact";
+  anchor: StatementAnchor;
+  path: OperandPath;
+}>;
+
+export type AnchoredAssociativeSelection = Readonly<{
+  kind: "associative";
+  anchor: StatementAnchor;
+  containerPath: OperandPath;
+  startOperand: number;
+  endOperand: number;
+  displayRange?: DisplayRange | undefined;
+}>;
+
+export type AnchoredProofSelection = AnchoredExactSelection | AnchoredAssociativeSelection;
+
+export type LogicalPolarity = "positive" | "negative" | "mixed" | "neutral";
+export type SemanticRole = "proposition" | "term" | "binder";
+
+export type SelectionPosition = Readonly<{
+  polarity: LogicalPolarity;
+  role: SemanticRole;
+}>;
+
+export type ResolvedExactProofSelection = AnchoredExactSelection &
+  Readonly<{
+    /** Exact authoritative subtree, including its original representation and metadata. */
+    fragment: PlainMathJson;
+    declarations: readonly Declaration[];
+    position: SelectionPosition;
+  }>;
+
+export type ResolvedAssociativeProofSelection = AnchoredAssociativeSelection &
+  Omit<
+    AssociativeSelectionLens,
+    "kind" | "containerPath" | "startOperand" | "endOperand" | "displayRange"
+  > &
+  Readonly<{
+    declarations: readonly Declaration[];
+    position: SelectionPosition;
+  }>;
+
+export type ResolvedProofSelection =
+  ResolvedExactProofSelection | ResolvedAssociativeProofSelection;
+
+export const selectionSubjectIdSchema = stableIdentifierSchema.brand("SelectionSubjectId");
+export type SelectionSubjectId = ReturnType<typeof selectionSubjectIdSchema.parse>;
+
+export type ProofSelectionQuerySubject = Readonly<{
+  id: SelectionSubjectId;
+  selection: AnchoredProofSelection;
+  /** Query-only: the authoritative selected fragment remains unchanged. */
+  abstraction?: RetrievalWildcard | undefined;
+}>;
+
+export type ProofSelectionQuery = Readonly<{
+  kind: "selection-query";
+  selections: readonly ProofSelectionQuerySubject[];
+}>;
+
+export type ResolvedProofSelectionQuerySubject = Readonly<{
+  id: SelectionSubjectId;
+  selection: ResolvedProofSelection;
+  abstraction?: RetrievalWildcard | undefined;
+}>;
+
+export type ResolvedProofSelectionQuery = Readonly<{
+  kind: "selection-query";
+  stateId: ProofStateId;
+  selections: readonly ResolvedProofSelectionQuerySubject[];
+}>;
+
+export type ProofSelectionDiagnosticCode =
+  | "invalid-state"
+  | "invalid-selection"
+  | "stale-state"
+  | "target-not-found"
+  | "hypothesis-not-found"
+  | "invalid-path"
+  | "invalid-associative-range"
+  | "duplicate-selection"
+  | "overlapping-selection"
+  | "invalid-abstraction";
+
+export type ProofSelectionDiagnostic = Readonly<{
+  code: ProofSelectionDiagnosticCode;
+  message: string;
+}>;
+
+export type ProofSelectionFailure = Readonly<{
+  ok: false;
+  diagnostics: readonly [ProofSelectionDiagnostic];
+}>;
+
+export type ResolveProofSelectionResult =
+  | Readonly<{
+      ok: true;
+      selection: ResolvedProofSelection;
+      diagnostics: readonly [];
+    }>
+  | ProofSelectionFailure;
+
+export type ResolveProofSelectionQueryResult =
+  | Readonly<{
+      ok: true;
+      query: ResolvedProofSelectionQuery;
+      diagnostics: readonly [];
+    }>
+  | ProofSelectionFailure;
+
+/** Resolve a stable set of independent occurrences and optional query-only abstractions. */
+export function resolveProofSelectionQuery(
+  state: ProofState,
+  queryInput: unknown,
+  environment: ProofStateSchemaOptions = {},
+): ResolveProofSelectionQueryResult {
+  try {
+    const query = parseProofSelectionQuery(queryInput);
+    if (query === undefined) {
+      return proofSelectionFailure(
+        "invalid-selection",
+        "The selection query is not strict snapshot-anchored data.",
+      );
+    }
+    const resolved: ResolvedProofSelectionQuerySubject[] = [];
+    for (const subject of query.selections) {
+      const result = resolveProofSelection(state, subject.selection, environment);
+      if (!result.ok) return result;
+      if (subject.abstraction !== undefined && result.selection.position.role === "binder") {
+        return proofSelectionFailure(
+          "invalid-abstraction",
+          "Binder declarations cannot be replaced by ordinary retrieval wildcards.",
+        );
+      }
+      resolved.push({
+        id: subject.id,
+        selection: result.selection,
+        ...(subject.abstraction === undefined ? {} : { abstraction: subject.abstraction }),
+      });
+    }
+
+    const occurrenceKeys = resolved.map(({ selection }) => selectionOccurrenceKey(selection));
+    if (new Set(occurrenceKeys).size !== occurrenceKeys.length) {
+      return proofSelectionFailure(
+        "duplicate-selection",
+        "A selection query cannot contain the same occurrence more than once.",
+      );
+    }
+    for (let left = 0; left < resolved.length; left += 1) {
+      for (let right = left + 1; right < resolved.length; right += 1) {
+        if (selectionsOverlap(resolved[left]!.selection, resolved[right]!.selection)) {
+          return proofSelectionFailure(
+            "overlapping-selection",
+            "A selection query cannot contain overlapping occurrences.",
+          );
+        }
+      }
+    }
+    const wildcardById = new Map<string, RetrievalWildcard>();
+    const wildcardIdBySymbol = new Map<string, string>();
+    for (const { abstraction } of resolved) {
+      if (abstraction === undefined) continue;
+      const previous = wildcardById.get(abstraction.id);
+      if (previous !== undefined && !plainDataEquals(previous, abstraction)) {
+        return proofSelectionFailure(
+          "invalid-abstraction",
+          "Repeated retrieval-wildcard IDs must carry the same specification.",
+        );
+      }
+      const previousId = wildcardIdBySymbol.get(abstraction.symbol);
+      if (previousId !== undefined && previousId !== abstraction.id) {
+        return proofSelectionFailure(
+          "invalid-abstraction",
+          "Different retrieval wildcards cannot share one display symbol.",
+        );
+      }
+      wildcardById.set(abstraction.id, abstraction);
+      wildcardIdBySymbol.set(abstraction.symbol, abstraction.id);
+    }
+
+    const stateId = resolved[0]?.selection.anchor.stateId;
+    if (stateId === undefined) {
+      return proofSelectionFailure("invalid-selection", "A selection query cannot be empty.");
+    }
+    const detached = freezeDetached({
+      kind: "selection-query" as const,
+      stateId,
+      selections: resolved,
+    });
+    return detached === undefined
+      ? proofSelectionFailure("invalid-selection", "The selection query could not be detached.")
+      : { ok: true, query: detached, diagnostics: [] };
+  } catch {
+    return proofSelectionFailure(
+      "invalid-selection",
+      "The selection-query boundary could not inspect its input safely.",
+    );
+  }
+}
+
+/**
+ * Resolve an exact occurrence or deterministic associative lens from a proof-state snapshot.
+ * Caller-provided fragments, contexts, and polarity labels are not part of the input contract.
+ */
+export function resolveProofSelection(
+  state: ProofState,
+  selection: unknown,
+  environment: ProofStateSchemaOptions = {},
+): ResolveProofSelectionResult {
+  let parsedState: ProofState | undefined;
+  let operators: readonly OperatorDeclaration[] = [];
+  try {
+    operators = operatorDeclarationsSchema.parse(environment.operators ?? []);
+    const result = createProofStateSchema({ operators }).safeParse(state);
+    if (result.success) parsedState = result.data;
+  } catch {
+    parsedState = undefined;
+  }
+  if (parsedState === undefined) {
+    return proofSelectionFailure(
+      "invalid-state",
+      "The supplied value is not a valid draft proof state for this environment.",
+    );
+  }
+
+  let parsedSelection: AnchoredProofSelection | undefined;
+  try {
+    parsedSelection = parseAnchoredProofSelection(selection);
+  } catch {
+    parsedSelection = undefined;
+  }
+  if (parsedSelection === undefined) {
+    return proofSelectionFailure(
+      "invalid-selection",
+      "The selection is not a strict snapshot-anchored exact or associative selection.",
+    );
+  }
+  if (parsedSelection.anchor.stateId !== parsedState.id) {
+    return proofSelectionFailure(
+      "stale-state",
+      `Selection state ${parsedSelection.anchor.stateId} does not match proof state ${parsedState.id}.`,
+    );
+  }
+
+  try {
+    const targetCollection =
+      parsedSelection.anchor.target.kind === "goal" ? parsedState.goals : parsedState.obligations;
+    const target = targetCollection.find(
+      (candidate) => candidate.id === parsedSelection.anchor.target.id,
+    );
+    if (target === undefined) {
+      return proofSelectionFailure(
+        "target-not-found",
+        `The anchored ${parsedSelection.anchor.target.kind} does not exist.`,
+      );
+    }
+
+    const statement = parsedSelection.anchor.statement;
+    const expression =
+      statement.kind === "conclusion"
+        ? target.sequent.conclusion.expression
+        : target.sequent.context.hypotheses.find((candidate) => candidate.id === statement.id)
+            ?.statement.expression;
+    if (expression === undefined) {
+      return proofSelectionFailure(
+        "hypothesis-not-found",
+        "The anchored hypothesis does not exist in the target's local context.",
+      );
+    }
+
+    const rootPosition: SelectionPosition = {
+      polarity: statement.kind === "conclusion" ? "positive" : "negative",
+      role: "proposition",
+    };
+    if (parsedSelection.kind === "associative") {
+      const lens = createAssociativeSelection(
+        expression,
+        parsedSelection.containerPath,
+        parsedSelection.startOperand,
+        parsedSelection.endOperand,
+        parsedSelection.displayRange,
+      );
+      if (lens === undefined) {
+        return proofSelectionFailure(
+          "invalid-associative-range",
+          "The anchored range is not a supported contiguous associative selection.",
+        );
+      }
+      const position = positionAtPath(
+        expression,
+        [...parsedSelection.containerPath, parsedSelection.startOperand],
+        rootPosition,
+        target.sequent.context.declarations,
+        operators,
+      );
+      if (position === undefined) {
+        return proofSelectionFailure(
+          "invalid-associative-range",
+          "The anchored associative range has no valid semantic position.",
+        );
+      }
+      return {
+        ok: true,
+        selection: {
+          ...parsedSelection,
+          operator: lens.operator,
+          container: lens.container,
+          coveredOperandPaths: lens.coveredOperandPaths,
+          fragment: lens.fragment,
+          declarations: target.sequent.context.declarations,
+          position,
+        },
+        diagnostics: [],
+      };
+    }
+
+    const fragment = expressionAtPath(expression, parsedSelection.path);
+    if (fragment === undefined) {
+      return proofSelectionFailure(
+        "invalid-path",
+        `No expression exists at operand path ${formatOperandPath(parsedSelection.path)}.`,
+      );
+    }
+
+    const position = positionAtPath(
+      expression,
+      parsedSelection.path,
+      rootPosition,
+      target.sequent.context.declarations,
+      operators,
+    );
+    if (position === undefined) {
+      return proofSelectionFailure(
+        "invalid-path",
+        `No expression exists at operand path ${formatOperandPath(parsedSelection.path)}.`,
+      );
+    }
+
+    return {
+      ok: true,
+      selection: {
+        ...parsedSelection,
+        fragment,
+        declarations: target.sequent.context.declarations,
+        position,
+      },
+      diagnostics: [],
+    };
+  } catch {
+    return proofSelectionFailure(
+      "invalid-state",
+      "The proof state could not be traversed safely after validation.",
+    );
+  }
+}
+
+function proofSelectionFailure(
+  code: ProofSelectionDiagnosticCode,
+  message: string,
+): ProofSelectionFailure {
+  return { ok: false, diagnostics: [{ code, message }] };
+}
+
+function parseProofSelectionQuery(value: unknown): ProofSelectionQuery | undefined {
+  if (
+    !isStrictRecord(value, ["kind", "selections"]) ||
+    value.kind !== "selection-query" ||
+    !Array.isArray(value.selections) ||
+    !isDenseDataArray(value.selections) ||
+    value.selections.length < 1 ||
+    value.selections.length > 16
+  ) {
+    return undefined;
+  }
+  const selections: ProofSelectionQuerySubject[] = [];
+  const ids = new Set<string>();
+  for (const input of value.selections) {
+    if (!isDataRecord(input)) return undefined;
+    const hasAbstraction = Object.hasOwn(input, "abstraction");
+    if (
+      !hasExactKeys(
+        input,
+        hasAbstraction ? ["id", "selection", "abstraction"] : ["id", "selection"],
+      )
+    ) {
+      return undefined;
+    }
+    const id = selectionSubjectIdSchema.safeParse(input.id);
+    const selection = parseAnchoredProofSelection(input.selection);
+    const abstraction = hasAbstraction ? safeParseRetrievalWildcard(input.abstraction) : undefined;
+    if (
+      !id.success ||
+      ids.has(id.data) ||
+      selection === undefined ||
+      (hasAbstraction && abstraction === undefined)
+    ) {
+      return undefined;
+    }
+    ids.add(id.data);
+    selections.push({
+      id: id.data,
+      selection,
+      ...(abstraction === undefined ? {} : { abstraction }),
+    });
+  }
+  return { kind: "selection-query", selections };
+}
+
+function safeParseRetrievalWildcard(value: unknown): RetrievalWildcard | undefined {
+  if (!isDataRecord(value)) return undefined;
+  const parsed = retrievalWildcardSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function selectionOccurrenceKey(selection: ResolvedProofSelection): string {
+  return JSON.stringify(
+    selection.kind === "exact"
+      ? [selection.anchor, "exact", selection.path]
+      : [
+          selection.anchor,
+          "associative",
+          selection.containerPath,
+          selection.startOperand,
+          selection.endOperand,
+        ],
+  );
+}
+
+function selectionsOverlap(left: ResolvedProofSelection, right: ResolvedProofSelection): boolean {
+  if (!plainDataEquals(left.anchor, right.anchor)) return false;
+  const leftPaths = selectionCoveragePaths(left);
+  const rightPaths = selectionCoveragePaths(right);
+  return leftPaths.some((leftPath) =>
+    rightPaths.some(
+      (rightPath) =>
+        isOperandPathPrefix(leftPath, rightPath) || isOperandPathPrefix(rightPath, leftPath),
+    ),
+  );
+}
+
+function selectionCoveragePaths(selection: ResolvedProofSelection): readonly OperandPath[] {
+  return selection.kind === "exact" ? [selection.path] : selection.coveredOperandPaths;
+}
+
+function parseAnchoredProofSelection(value: unknown): AnchoredProofSelection | undefined {
+  if (!isDataRecord(value)) return undefined;
+  if (value.kind === "exact") return parseAnchoredExactSelection(value);
+  if (value.kind === "associative") return parseAnchoredAssociativeSelection(value);
+  return undefined;
+}
+
+function parseAnchoredExactSelection(value: unknown): AnchoredExactSelection | undefined {
+  if (!isStrictRecord(value, ["kind", "anchor", "path"]) || value.kind !== "exact") {
+    return undefined;
+  }
+  const anchor = parseStatementAnchor(value.anchor);
+  const path = parseOperandPath(value.path);
+  return anchor === undefined || path === undefined ? undefined : { kind: "exact", anchor, path };
+}
+
+function parseAnchoredAssociativeSelection(
+  value: unknown,
+): AnchoredAssociativeSelection | undefined {
+  if (!isDataRecord(value) || value.kind !== "associative") return undefined;
+  const keys = ["kind", "anchor", "containerPath", "startOperand", "endOperand"];
+  const hasDisplayRange = Object.hasOwn(value, "displayRange");
+  if (!hasExactKeys(value, hasDisplayRange ? [...keys, "displayRange"] : keys)) return undefined;
+  const anchor = parseStatementAnchor(value.anchor);
+  const containerPath = parseOperandPath(value.containerPath);
+  const startOperand = parseNonnegativeInteger(value.startOperand);
+  const endOperand = parseNonnegativeInteger(value.endOperand);
+  const displayRange = hasDisplayRange ? parseDisplayRange(value.displayRange) : undefined;
+  if (
+    anchor === undefined ||
+    containerPath === undefined ||
+    startOperand === undefined ||
+    endOperand === undefined ||
+    endOperand - startOperand < 2 ||
+    (hasDisplayRange && displayRange === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "associative",
+    anchor,
+    containerPath,
+    startOperand,
+    endOperand,
+    ...(displayRange === undefined ? {} : { displayRange }),
+  };
+}
+
+function parseStatementAnchor(value: unknown): StatementAnchor | undefined {
+  if (!isStrictRecord(value, ["stateId", "target", "statement"])) return undefined;
+  const stateId = proofStateIdSchema.safeParse(value.stateId);
+  if (!stateId.success) return undefined;
+  const target = parseTargetAnchor(value.target);
+  const statement = parseStatementReference(value.statement);
+  if (target === undefined || statement === undefined) return undefined;
+  return { stateId: stateId.data, target, statement };
+}
+
+function parseTargetAnchor(value: unknown): StatementAnchor["target"] | undefined {
+  if (!isStrictRecord(value, ["kind", "id"])) return undefined;
+  if (value.kind !== "goal" && value.kind !== "obligation") return undefined;
+  const id = statementIdSchema.safeParse(value.id);
+  return id.success ? { kind: value.kind, id: id.data } : undefined;
+}
+
+function parseStatementReference(value: unknown): StatementAnchor["statement"] | undefined {
+  if (!isDataRecord(value)) return undefined;
+  if (value.kind === "conclusion" && hasExactKeys(value, ["kind"])) {
+    return { kind: "conclusion" };
+  }
+  if (
+    value.kind === "hypothesis" &&
+    hasExactKeys(value, ["kind", "id"]) &&
+    statementIdSchema.safeParse(value.id).success
+  ) {
+    return { kind: "hypothesis", id: value.id as StatementId };
+  }
+  return undefined;
+}
+
+function parseOperandPath(value: unknown): OperandPath | undefined {
+  if (!Array.isArray(value) || !isDenseDataArray(value)) return undefined;
+  const path: number[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    const part = descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+    if (typeof part !== "number" || !Number.isInteger(part) || part < 0) return undefined;
+    path.push(part);
+  }
+  return path;
+}
+
+function parseNonnegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function parseDisplayRange(value: unknown): DisplayRange | undefined {
+  if (!Array.isArray(value) || !isDenseDataArray(value) || value.length !== 2) return undefined;
+  const start = parseNonnegativeInteger(value[0]);
+  const end = parseNonnegativeInteger(value[1]);
+  return start === undefined || end === undefined || end <= start ? undefined : [start, end];
+}
+
+function isStrictRecord(
+  value: unknown,
+  keys: readonly string[],
+): value is Readonly<Record<string, unknown>> {
+  return isDataRecord(value) && hasExactKeys(value, keys);
+}
+
+function isDataRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return Reflect.ownKeys(value).every((key) => {
+    if (typeof key !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && descriptor.enumerable && "value" in descriptor;
+  });
+}
+
+function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function isDenseDataArray(value: readonly unknown[]): boolean {
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== value.length + 1 ||
+    keys.some(
+      (key) => typeof key !== "string" || (key !== "length" && !/^(?:0|[1-9]\d*)$/.test(key)),
+    )
+  ) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function plainDataEquals(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => plainDataEquals(entry, right[index]))
+    );
+  }
+  if (!isDataRecord(left) || !isDataRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) => key === rightKeys[index] && plainDataEquals(left[key], right[key]),
+    )
+  );
+}
+
+function freezeDetached<Value>(value: Value): Value | undefined {
+  try {
+    return deepFreeze(structuredClone(value) as Value);
+  } catch {
+    return undefined;
+  }
+}
+
+function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  seen.add(value);
+  Reflect.ownKeys(value).forEach((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
+  });
+  return Object.freeze(value);
+}
+
+const RELATION_OPERATORS = new Set([
+  "Equal",
+  "NotEqual",
+  "Less",
+  "LessEqual",
+  "Greater",
+  "GreaterEqual",
+  "Element",
+  "NotElement",
+  "Subset",
+  "SubsetEqual",
+  "Superset",
+  "SupersetEqual",
+]);
+
+function positionAtPath(
+  expression: PlainMathJson,
+  path: OperandPath,
+  root: SelectionPosition,
+  declarations: readonly Declaration[],
+  operators: readonly OperatorDeclaration[],
+): SelectionPosition | undefined {
+  let currentExpression = expression;
+  let currentPosition = root;
+  let bindings = new Map(declarations.map((declaration) => [declaration.symbol, declaration.sort]));
+  for (const operandIndex of path) {
+    const parts = functionParts(currentExpression);
+    const operand = parts?.operands[operandIndex];
+    if (parts === undefined || operand === undefined) return undefined;
+    currentPosition = childPosition(
+      parts.operator,
+      operandIndex,
+      currentPosition,
+      bindings,
+      operators,
+    );
+    bindings = scopedBindings(parts, operandIndex, bindings, operators);
+    currentExpression = operand;
+  }
+  return currentPosition;
+}
+
+function childPosition(
+  operator: string,
+  operandIndex: number,
+  parent: SelectionPosition,
+  bindings: ReadonlyMap<string, Sort>,
+  operators: readonly OperatorDeclaration[],
+): SelectionPosition {
+  const local = localChildPosition(operator, operandIndex, parent.polarity, bindings, operators);
+  if (local.polarity === "neutral") return local;
+  if (parent.polarity === "neutral") return { ...local, polarity: "neutral" };
+  if (parent.polarity === "mixed") return { ...local, polarity: "mixed" };
+  return local;
+}
+
+function localChildPosition(
+  operator: string,
+  operandIndex: number,
+  parentPolarity: LogicalPolarity,
+  bindings: ReadonlyMap<string, Sort>,
+  operators: readonly OperatorDeclaration[],
+): SelectionPosition {
+  if (operator === "Not" && operandIndex === 0) {
+    return { polarity: flipPolarity(parentPolarity), role: "proposition" };
+  }
+  if (operator === "Implies" && operandIndex < 2) {
+    return {
+      polarity: operandIndex === 0 ? flipPolarity(parentPolarity) : parentPolarity,
+      role: "proposition",
+    };
+  }
+  if (operator === "Equivalent") return { polarity: "mixed", role: "proposition" };
+  if (operator === "And" || operator === "Or") {
+    return { polarity: parentPolarity, role: "proposition" };
+  }
+  if (operator === "ForAll" || operator === "Exists") {
+    return operandIndex === 0
+      ? { polarity: "neutral", role: "binder" }
+      : { polarity: parentPolarity, role: "proposition" };
+  }
+  if (RELATION_OPERATORS.has(operator)) return { polarity: "neutral", role: "term" };
+
+  const customOperator = operators.find((candidate) => candidate.symbol === operator);
+  if (customOperator?.binder?.boundOperands.includes(operandIndex) === true) {
+    return { polarity: "neutral", role: "binder" };
+  }
+  const declaredSort = bindings.get(operator);
+  const signature =
+    customOperator?.signature ??
+    (declaredSort?.kind === "function" ? declaredSort.signature : undefined);
+  const parameter = signature?.parameters[operandIndex];
+  return parameter !== undefined && isPropositionSort(parameter)
+    ? { polarity: "mixed", role: "proposition" }
+    : { polarity: "neutral", role: "term" };
+}
+
+function scopedBindings(
+  parts: FunctionParts,
+  selectedOperand: number,
+  bindings: ReadonlyMap<string, Sort>,
+  operators: readonly OperatorDeclaration[],
+): Map<string, Sort> {
+  const customOperator = operators.find((candidate) => candidate.symbol === parts.operator);
+  const builtinBinder =
+    parts.operator === "ForAll" || parts.operator === "Exists"
+      ? { boundOperands: [0], scopedOperands: [1] }
+      : undefined;
+  const binder = customOperator?.binder ?? builtinBinder;
+  if (binder === undefined || !binder.scopedOperands.includes(selectedOperand)) {
+    return new Map(bindings);
+  }
+
+  const next = new Map(bindings);
+  for (const boundOperand of binder.boundOperands) {
+    const boundExpression = parts.operands[boundOperand];
+    const symbol = boundExpression === undefined ? undefined : directSymbol(boundExpression);
+    const sort =
+      customOperator?.signature.parameters[boundOperand] ??
+      (symbol === undefined ? undefined : bindings.get(symbol));
+    if (symbol !== undefined && sort !== undefined) next.set(symbol, sort);
+  }
+  return next;
+}
+
+function directSymbol(expression: PlainMathJson): string | undefined {
+  if (typeof expression === "string") return expression;
+  if (typeof expression !== "object" || expression === null || Array.isArray(expression)) {
+    return undefined;
+  }
+  return "sym" in expression && typeof expression.sym === "string" ? expression.sym : undefined;
+}
+
+function isPropositionSort(sort: Sort): boolean {
+  return sort.kind === "proposition";
+}
+
+function flipPolarity(polarity: LogicalPolarity): LogicalPolarity {
+  if (polarity === "positive") return "negative";
+  if (polarity === "negative") return "positive";
+  return polarity;
 }

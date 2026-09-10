@@ -11,7 +11,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@proof/llm": "workspace:*",
+    "@proof/library": "workspace:*",
+    "@proof/moves": "workspace:*",
     "@proof/protocol": "workspace:*",
+    "@proof/retrieval": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "openai": "^7.8.0",
     "pg": "^8.23.0",

@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",
@@ -12,6 +15,7 @@
   "dependencies": {
     "@proof/library": "workspace:*",
     "@proof/mathjson-model": "workspace:*",
-    "@proof/moves": "workspace:*"
+    "@proof/moves": "workspace:*",
+    "@proof/selections": "workspace:*"
   }
 }

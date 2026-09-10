@@ -27,45 +27,153 @@ export type MathJsonRenderResult =
 const computeEngine = new ComputeEngine();
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
-function isJsonValue(value: unknown): boolean {
+const EXPRESSION_KEYS = ["fn", "sym", "str", "num", "dict"] as const;
+const STRING_METADATA_KEYS = new Set([
+  "comment",
+  "documentation",
+  "latex",
+  "wikidata",
+  "wikibase",
+  "openmathSymbol",
+  "openmathCd",
+  "sourceUrl",
+  "sourceContent",
+]);
+const METADATA_KEYS = new Set([...STRING_METADATA_KEYS, "sourceOffsets"]);
+const MATHJSON_NUMBER_PATTERN =
+  /^(?:NaN|-Infinity|\+Infinity|-?\d+(?:\.(?:\d+(?:\(\d+\))?|\(\d+\)))?(?:[eE][+-]?\d+)?)$/;
+
+function hasOnlyEnumerableDataProperties(record: Readonly<Record<string, unknown>>): boolean {
+  const keys = Reflect.ownKeys(record);
+  if (keys.some((key) => typeof key !== "string")) return false;
+  return keys.every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    return descriptor !== undefined && descriptor.enumerable && "value" in descriptor;
+  });
+}
+
+function hasValidMetadata(
+  record: Readonly<Record<string, unknown>>,
+  expressionKey: string,
+): boolean {
+  for (const [key, value] of Object.entries(record)) {
+    if (key === expressionKey) continue;
+    if (!METADATA_KEYS.has(key)) return false;
+    if (key === "sourceOffsets") {
+      if (
+        !Array.isArray(value) ||
+        !isDenseArray(value) ||
+        value.length !== 2 ||
+        !value.every(
+          (offset) => typeof offset === "number" && Number.isInteger(offset) && offset >= 0,
+        ) ||
+        (value[0] as number) > (value[1] as number)
+      ) {
+        return false;
+      }
+    } else if (typeof value !== "string") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isDenseArray(value: readonly unknown[]): boolean {
+  const ownKeys = Reflect.ownKeys(value);
   if (
-    value === null ||
+    ownKeys.length !== value.length + 1 ||
+    ownKeys.some(
+      (key) => typeof key !== "string" || (key !== "length" && !/^(?:0|[1-9]\d*)$/.test(key)),
+    )
+  ) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor))
+      return false;
+  }
+  return true;
+}
+
+function isDictionaryValue(value: unknown, ancestors: WeakSet<object>): boolean {
+  if (
     typeof value === "string" ||
     typeof value === "boolean" ||
     (typeof value === "number" && Number.isFinite(value))
   ) {
     return true;
   }
-
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (!isRecord(value)) return false;
-  return Object.values(value).every(isJsonValue);
+  if (Array.isArray(value)) {
+    if (!isDenseArray(value) || ancestors.has(value)) return false;
+    ancestors.add(value);
+    const valid = value.every((item) => isDictionaryValue(item, ancestors));
+    ancestors.delete(value);
+    return valid;
+  }
+  return isPlainMathJsonValue(value, ancestors, false);
 }
 
-/** Runtime guard for the serializable MathJSON forms accepted by the spike. */
-export function isPlainMathJson(value: unknown): value is PlainMathJson {
-  if (typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
-    return true;
-  }
+function isPlainMathJsonValue(
+  value: unknown,
+  ancestors: WeakSet<object>,
+  allowArrayExpression: boolean,
+): boolean {
+  if (typeof value === "string") return value.length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
 
   if (Array.isArray(value)) {
-    return (
-      value.length > 0 && typeof value[0] === "string" && value.slice(1).every(isPlainMathJson)
-    );
+    if (!allowArrayExpression || !isDenseArray(value) || ancestors.has(value)) return false;
+    if (value.length === 0 || typeof value[0] !== "string" || value[0].length === 0) return false;
+    ancestors.add(value);
+    const valid = value.slice(1).every((item) => isPlainMathJsonValue(item, ancestors, true));
+    ancestors.delete(value);
+    return valid;
   }
 
-  if (!isRecord(value) || !isJsonValue(value)) return false;
-
-  if ("fn" in value) {
-    return Array.isArray(value.fn) && isPlainMathJson(value.fn);
+  if (!isRecord(value) || ancestors.has(value) || !hasOnlyEnumerableDataProperties(value)) {
+    return false;
   }
-  if ("sym" in value) return typeof value.sym === "string";
-  if ("str" in value) return typeof value.str === "string";
-  if ("num" in value) return typeof value.num === "string";
-  return "dict" in value && isRecord(value.dict);
+  const discriminators = EXPRESSION_KEYS.filter((key) => key in value);
+  if (discriminators.length !== 1) return false;
+  const expressionKey = discriminators[0];
+  if (expressionKey === undefined || !hasValidMetadata(value, expressionKey)) return false;
+
+  ancestors.add(value);
+  let valid = false;
+  if (expressionKey === "sym") {
+    valid = typeof value.sym === "string" && value.sym.length > 0;
+  } else if (expressionKey === "str") {
+    valid = typeof value.str === "string";
+  } else if (expressionKey === "num") {
+    valid = typeof value.num === "string" && MATHJSON_NUMBER_PATTERN.test(value.num);
+  } else if (expressionKey === "fn") {
+    valid =
+      Array.isArray(value.fn) &&
+      isDenseArray(value.fn) &&
+      value.fn.length > 0 &&
+      typeof value.fn[0] === "string" &&
+      value.fn[0].length > 0 &&
+      value.fn.slice(1).every((item) => isPlainMathJsonValue(item, ancestors, true));
+  } else if (isRecord(value.dict) && hasOnlyEnumerableDataProperties(value.dict)) {
+    valid = Object.values(value.dict).every((item) => isDictionaryValue(item, ancestors));
+  }
+  ancestors.delete(value);
+  return valid;
+}
+
+/** Runtime guard for serializable, unboxed MathJSON. It never boxes or canonicalizes its input. */
+export function isPlainMathJson(value: unknown): value is PlainMathJson {
+  try {
+    return isPlainMathJsonValue(value, new WeakSet<object>(), true);
+  } catch {
+    return false;
+  }
 }
 
 export function parsePlainMathJson(source: string): PlainMathJson | undefined {
@@ -157,3 +265,6 @@ export function renderMathJson(expression: PlainMathJson): MathJsonRenderResult 
     };
   }
 }
+
+export * from "./contracts";
+export * from "./binding";

@@ -101,9 +101,21 @@ importers:
 
   apps/worker:
     dependencies:
+      '@proof/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
+      '@proof/library':
+        specifier: workspace:*
+        version: link:../../packages/library
+      '@proof/moves':
+        specifier: workspace:*
+        version: link:../../packages/moves
       '@proof/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@proof/retrieval':
+        specifier: workspace:*
+        version: link:../../packages/retrieval
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.23.1)(pg@8.23.0)
@@ -140,6 +152,9 @@ importers:
       '@proof/mathjson-model':
         specifier: workspace:*
         version: link:../mathjson-model
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
 
   packages/llm:
     dependencies:
@@ -173,15 +188,30 @@ importers:
       '@proof/mathjson-model':
         specifier: workspace:*
         version: link:../mathjson-model
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
 
   packages/protocol:
     dependencies:
       '@proof/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@proof/library':
+        specifier: workspace:*
+        version: link:../library
       '@proof/mathjson-model':
         specifier: workspace:*
         version: link:../mathjson-model
+      '@proof/moves':
+        specifier: workspace:*
+        version: link:../moves
+      '@proof/retrieval':
+        specifier: workspace:*
+        version: link:../retrieval
+      '@proof/selections':
+        specifier: workspace:*
+        version: link:../selections
       zod:
         specifier: ^4.5.4
         version: 4.5.4
@@ -197,6 +227,9 @@ importers:
       '@proof/moves':
         specifier: workspace:*
         version: link:../moves
+      '@proof/selections':
+        specifier: workspace:*
+        version: link:../selections
 
   packages/selections:
     dependencies:
