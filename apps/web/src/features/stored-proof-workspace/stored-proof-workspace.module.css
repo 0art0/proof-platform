@@ -1,0 +1,140 @@
+.storedWorkspace {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.sessionHeader,
+.suggestionPanel {
+  border: 1px solid #c4cac1;
+  border-radius: 1rem;
+  background: rgb(255 254 249 / 94%);
+  padding: 1rem 1.15rem;
+}
+
+.sessionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sessionHeader p,
+.suggestionPanel p {
+  margin: 0;
+}
+
+.sessionHeader strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.sessionHeader span,
+.suggestionMeta {
+  color: #627067;
+  font-size: 0.78rem;
+}
+
+.suggestionPanel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.suggestionHeading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.suggestionHeading h2 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.status {
+  border-left: 4px solid #77847b;
+  background: #f4f3ec;
+  padding: 0.7rem 0.8rem;
+  color: #536057;
+  line-height: 1.45;
+}
+
+.status[data-state="loading"] {
+  border-color: #4471a0;
+  background: #edf4fb;
+  color: #2d557b;
+}
+
+.status[data-state="rejected"],
+.status[data-state="stale"] {
+  border-color: #bb6a35;
+  background: #fff2e7;
+  color: #713b18;
+}
+
+.suggestions {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggestionCard {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid #d1d6ce;
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.85rem;
+}
+
+.suggestionCard header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.suggestionCard h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.suggestionCard code {
+  color: #66736a;
+  font-size: 0.7rem;
+}
+
+.suggestionCard ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #48564d;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.applicability {
+  width: fit-content;
+  border-radius: 999px;
+  background: #e8f3eb;
+  padding: 0.25rem 0.5rem;
+  color: #285c43;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.applicability[data-applicability="requires-input"] {
+  background: #fff0dc;
+  color: #7a431f;
+}
+
+@media (max-width: 42rem) {
+  .sessionHeader,
+  .suggestionHeading,
+  .suggestionCard header {
+    display: grid;
+  }
+}

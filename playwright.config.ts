@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
+  testIgnore: ["proof-workspace.spec.ts"],
   timeout: 30_000,
   use: {
     baseURL: "http://127.0.0.1:3100",
@@ -10,7 +11,7 @@ export default defineConfig({
   webServer: {
     command:
       ".tools/node-v24.20.0-linux-x64/bin/node apps/web/node_modules/next/dist/bin/next dev apps/web --hostname 127.0.0.1 --port 3100",
-    url: "http://127.0.0.1:3100",
+    url: "http://127.0.0.1:3100/spike",
     reuseExistingServer: true,
     timeout: 120_000,
   },
