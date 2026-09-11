@@ -10,6 +10,7 @@ import {
   prepareProofCommand,
   movePreviewIdSchema,
   proofNodeIdSchema,
+  suggestionSetMatchesNode,
   suggestionSetIdSchema,
   type ApplyKernelCommand,
   type DisplayedSuggestionSet,
@@ -65,6 +66,23 @@ export const proofSessionSchema: z.ZodType<ProofSession> = z
     operators: operatorEnvironmentSchema,
   })
   .strict();
+
+/** Relational identities are retained beside JSONB so both representations are checked. */
+export type StoredProofNodeRecord = Readonly<{
+  sessionId: ProofSessionId;
+  nodeId: ProofNode["id"];
+  stateId: ProofNode["state"]["id"];
+  node: unknown;
+}>;
+
+/** Relational identities are retained beside JSONB so both representations are checked. */
+export type StoredDisplayedSuggestionSetRecord = Readonly<{
+  sessionId: ProofSessionId;
+  suggestionSetId: SuggestionSetId;
+  nodeId: ProofNode["id"];
+  stateId: ProofNode["state"]["id"];
+  suggestionSet: unknown;
+}>;
 
 export interface ProofStoreTransaction {
   lockSession(sessionId: ProofSessionId): Promise<unknown | undefined>;
@@ -151,6 +169,9 @@ export type RepositoryFailure = Readonly<{
 export type InitializeProofSessionResult =
   Readonly<{ status: "committed"; session: ProofSession; node: ProofNode }> | RepositoryFailure;
 
+export type LoadCurrentProofSessionResult =
+  Readonly<{ status: "loaded"; session: ProofSession; node: ProofNode }> | RepositoryFailure;
+
 export type ExecuteProofCommandResult =
   | Readonly<{
       status: "committed";
@@ -166,6 +187,9 @@ export type RecordDisplayedSuggestionSetResult =
       replayed: boolean;
     }>
   | RepositoryFailure;
+
+export type ReadDisplayedSuggestionSetResult =
+  Readonly<{ status: "loaded"; suggestionSet: DisplayedSuggestionSet }> | RepositoryFailure;
 
 export type RecordMovePreviewResult =
   | Readonly<{
@@ -231,7 +255,104 @@ export async function initializeProofSession(
   }
 }
 
-/** Run retrieval once and atomically retain the exact ordered evidence that was displayed. */
+/** Load one session and its current immutable proof-node snapshot. */
+export async function loadCurrentProofSession(
+  store: ProofStore,
+  sessionIdInput: unknown,
+): Promise<LoadCurrentProofSessionResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  if (sessionId === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-session-record",
+      "The proof-session ID is invalid.",
+    );
+  }
+
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const loadedNode = await loadNode(
+        transaction,
+        loadedSession.session,
+        loadedSession.environment,
+        loadedSession.session.currentNodeId,
+        "current-node-not-found",
+        "invalid-current-node",
+      );
+      if (!loadedNode.ok) return loadedNode.failure;
+
+      return {
+        status: "loaded" as const,
+        session: loadedSession.session,
+        node: loadedNode.node,
+      };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The proof session could not be loaded.");
+  }
+}
+
+/** Read immutable displayed evidence against the historical node it records. */
+export async function readDisplayedSuggestionSet(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  suggestionSetIdInput: unknown,
+): Promise<ReadDisplayedSuggestionSetResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const suggestionSetId = safeParse(suggestionSetIdSchema, suggestionSetIdInput) as
+    SuggestionSetId | undefined;
+  if (sessionId === undefined || suggestionSetId === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "suggestion-set-rejected",
+      "The session ID or suggestion-set ID is invalid.",
+    );
+  }
+
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const loadedSuggestionSet = await loadSuggestionSet(
+        transaction,
+        loadedSession.session,
+        suggestionSetId,
+      );
+      if (!loadedSuggestionSet.ok) return loadedSuggestionSet.failure;
+      const loadedNode = await loadNode(
+        transaction,
+        loadedSession.session,
+        loadedSession.environment,
+        loadedSuggestionSet.suggestionSet.nodeId,
+        "current-node-not-found",
+        "invalid-current-node",
+      );
+      if (!loadedNode.ok) return loadedNode.failure;
+      if (
+        loadedSuggestionSet.suggestionSet.stateId !== loadedNode.node.state.id ||
+        !suggestionSetMatchesNode(
+          loadedSuggestionSet.suggestionSet,
+          loadedNode.node,
+          loadedSession.environment,
+        )
+      ) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-suggestion-set-record",
+          "The stored suggestion set does not match its historical proof-node snapshot.",
+        );
+      }
+
+      return { status: "loaded" as const, suggestionSet: loadedSuggestionSet.suggestionSet };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The displayed suggestion set could not be read.");
+  }
+}
+
+/** Run retrieval and atomically retain the exact ordered evidence; retries must reproduce it. */
 export async function recordDisplayedSuggestionSet(
   store: ProofStore,
   index: RetrievalIndex,
@@ -250,67 +371,20 @@ export async function recordDisplayedSuggestionSet(
 
   try {
     return await store.transaction(async (transaction) => {
-      const sessionInput = await transaction.lockSession(sessionId);
-      if (sessionInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "session-not-found",
-          "The proof session does not exist.",
-        );
-      }
-      const session = safeParse(proofSessionSchema, sessionInput);
-      if (session === undefined || session.id !== sessionId) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-session-record",
-          "The stored proof session failed runtime validation or identity checks.",
-        );
-      }
-      const environment = frozenEnvironment(session.operators);
-      if (environment === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-session-record",
-          "The stored operator environment could not be detached safely.",
-        );
-      }
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
 
-      const existingInput = await transaction.readSuggestionSet(session.id, suggestionSetId);
-      if (existingInput !== undefined) {
-        const existing = safeParse(displayedSuggestionSetSchema, existingInput);
-        if (existing === undefined || existing.id !== suggestionSetId) {
-          return repositoryFailure(
-            "rejected",
-            "invalid-suggestion-set-record",
-            "The stored suggestion set failed runtime validation or identity checks.",
-          );
-        }
-        const detached = freezeDetached(existing);
-        return detached === undefined
-          ? repositoryFailure(
-              "rejected",
-              "invalid-suggestion-set-record",
-              "The stored suggestion set could not be detached safely.",
-            )
-          : { status: "committed" as const, suggestionSet: detached, replayed: true };
-      }
-
-      const currentInput = await transaction.readNode(session.id, session.currentNodeId);
-      if (currentInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "current-node-not-found",
-          "The current proof node does not exist.",
-        );
-      }
-      const currentNode = safeParse(createProofNodeSchema(environment), currentInput);
-      if (currentNode === undefined || currentNode.id !== session.currentNodeId) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-current-node",
-          "The stored current proof node failed runtime validation or identity checks.",
-        );
-      }
+      const loadedCurrentNode = await loadNode(
+        transaction,
+        session,
+        environment,
+        session.currentNodeId,
+        "current-node-not-found",
+        "invalid-current-node",
+      );
+      if (!loadedCurrentNode.ok) return loadedCurrentNode.failure;
+      const currentNode = loadedCurrentNode.node;
 
       const prepared = prepareDisplayedSuggestionSet(index, currentNode, requestInput, environment);
       if (!prepared.ok) {
@@ -320,6 +394,30 @@ export async function recordDisplayedSuggestionSet(
           prepared.diagnostics[0]?.message ?? "The suggestion request was rejected.",
         );
       }
+
+      const existingInput = await transaction.readSuggestionSet(session.id, suggestionSetId);
+      if (existingInput !== undefined) {
+        const loadedExisting = parseSuggestionSetRecord(existingInput, session, suggestionSetId);
+        if (
+          loadedExisting === undefined ||
+          !suggestionSetMatchesNode(loadedExisting, currentNode, environment)
+        ) {
+          return repositoryFailure(
+            "rejected",
+            "invalid-suggestion-set-record",
+            "The stored suggestion set failed runtime validation or snapshot identity checks.",
+          );
+        }
+        if (!jsonEquals(loadedExisting, prepared.suggestionSet)) {
+          return repositoryFailure(
+            "rejected",
+            "suggestion-set-rejected",
+            "The suggestion-set ID is already anchored to a different request or result.",
+          );
+        }
+        return { status: "committed" as const, suggestionSet: loadedExisting, replayed: true };
+      }
+
       await transaction.insertSuggestionSet(session.id, prepared.suggestionSet);
       return {
         status: "committed" as const,
@@ -404,8 +502,8 @@ export async function recordMovePreview(
           "The preview references a suggestion set that does not exist in this session.",
         );
       }
-      const suggestionSet = safeParse(displayedSuggestionSetSchema, suggestionSetInput);
-      if (suggestionSet === undefined || suggestionSet.id !== suggestionSetId) {
+      const suggestionSet = parseSuggestionSetRecord(suggestionSetInput, session, suggestionSetId);
+      if (suggestionSet === undefined) {
         return repositoryFailure(
           "rejected",
           "invalid-suggestion-set-record",
@@ -421,8 +519,13 @@ export async function recordMovePreview(
           "The current proof node does not exist.",
         );
       }
-      const currentNode = safeParse(createProofNodeSchema(environment), currentInput);
-      if (currentNode === undefined || currentNode.id !== session.currentNodeId) {
+      const currentNode = parseNodeRecord(
+        currentInput,
+        session,
+        environment,
+        session.currentNodeId,
+      );
+      if (currentNode === undefined) {
         return repositoryFailure(
           "rejected",
           "invalid-current-node",
@@ -521,13 +624,10 @@ export async function executeProofCommand(
         );
       }
       const suggestionSet =
-        suggestionSetInput === undefined
+        suggestionSetInput === undefined || suggestionSetId === undefined
           ? undefined
-          : safeParse(displayedSuggestionSetSchema, suggestionSetInput);
-      if (
-        suggestionSetInput !== undefined &&
-        (suggestionSet === undefined || suggestionSet.id !== suggestionSetId)
-      ) {
+          : parseSuggestionSetRecord(suggestionSetInput, session, suggestionSetId);
+      if (suggestionSetInput !== undefined && suggestionSet === undefined) {
         return repositoryFailure(
           "rejected",
           "invalid-suggestion-set-record",
@@ -564,8 +664,13 @@ export async function executeProofCommand(
           "The current proof node does not exist.",
         );
       }
-      const currentNode = safeParse(createProofNodeSchema(environment), currentInput);
-      if (currentNode === undefined || currentNode.id !== session.currentNodeId) {
+      const currentNode = parseNodeRecord(
+        currentInput,
+        session,
+        environment,
+        session.currentNodeId,
+      );
+      if (currentNode === undefined) {
         return repositoryFailure(
           "rejected",
           "invalid-current-node",
@@ -659,6 +764,174 @@ function frozenEnvironment(
   }
 }
 
+type LoadedSession =
+  | Readonly<{ ok: true; session: ProofSession; environment: ProtocolEnvironment }>
+  | Readonly<{ ok: false; failure: RepositoryFailure }>;
+
+async function loadSession(
+  transaction: ProofStoreTransaction,
+  expectedSessionId: ProofSessionId,
+): Promise<LoadedSession> {
+  const sessionInput = await transaction.lockSession(expectedSessionId);
+  if (sessionInput === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        "session-not-found",
+        "The proof session does not exist.",
+      ),
+    };
+  }
+  const parsed = safeParse(proofSessionSchema, sessionInput);
+  if (parsed === undefined || parsed.id !== expectedSessionId) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        "invalid-session-record",
+        "The stored proof session failed runtime validation or identity checks.",
+      ),
+    };
+  }
+  const environment = frozenEnvironment(parsed.operators);
+  const session = freezeDetached(parsed);
+  if (environment === undefined || session === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        "invalid-session-record",
+        "The stored session or operator environment could not be detached safely.",
+      ),
+    };
+  }
+  return { ok: true, session, environment };
+}
+
+type LoadedNode =
+  Readonly<{ ok: true; node: ProofNode }> | Readonly<{ ok: false; failure: RepositoryFailure }>;
+
+async function loadNode(
+  transaction: ProofStoreTransaction,
+  session: ProofSession,
+  environment: ProtocolEnvironment,
+  nodeId: ProofNode["id"],
+  missingCode: RepositoryDiagnosticCode,
+  invalidCode: RepositoryDiagnosticCode,
+): Promise<LoadedNode> {
+  const input = await transaction.readNode(session.id, nodeId);
+  if (input === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure("rejected", missingCode, "The proof node does not exist."),
+    };
+  }
+  const node = parseNodeRecord(input, session, environment, nodeId);
+  if (node === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        invalidCode,
+        "The stored proof node failed runtime validation or relational identity checks.",
+      ),
+    };
+  }
+  return { ok: true, node };
+}
+
+type LoadedSuggestionSet =
+  | Readonly<{ ok: true; suggestionSet: DisplayedSuggestionSet }>
+  | Readonly<{ ok: false; failure: RepositoryFailure }>;
+
+async function loadSuggestionSet(
+  transaction: ProofStoreTransaction,
+  session: ProofSession,
+  suggestionSetId: SuggestionSetId,
+): Promise<LoadedSuggestionSet> {
+  const input = await transaction.readSuggestionSet(session.id, suggestionSetId);
+  if (input === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        "suggestion-set-not-found",
+        "The displayed suggestion set does not exist in this session.",
+      ),
+    };
+  }
+  const suggestionSet = parseSuggestionSetRecord(input, session, suggestionSetId);
+  if (suggestionSet === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        "invalid-suggestion-set-record",
+        "The stored suggestion set failed runtime validation or relational identity checks.",
+      ),
+    };
+  }
+  return { ok: true, suggestionSet };
+}
+
+function parseNodeRecord(
+  input: unknown,
+  session: ProofSession,
+  environment: ProtocolEnvironment,
+  expectedNodeId: ProofNode["id"],
+): ProofNode | undefined {
+  if (!isStrictDataRecord(input, ["sessionId", "nodeId", "stateId", "node"])) return undefined;
+  const recordSessionId = safeParse(proofSessionIdSchema, input.sessionId);
+  const recordNodeId = safeParse(proofNodeIdSchema, input.nodeId);
+  const recordStateId = safeParse(stableStorageIdentifierSchema, input.stateId);
+  const node = safeParse(createProofNodeSchema(environment), input.node);
+  if (
+    recordSessionId !== session.id ||
+    recordNodeId !== expectedNodeId ||
+    node === undefined ||
+    node.id !== recordNodeId ||
+    node.state.id !== recordStateId
+  ) {
+    return undefined;
+  }
+  return freezeDetached(node);
+}
+
+function parseSuggestionSetRecord(
+  input: unknown,
+  session: ProofSession,
+  expectedSuggestionSetId: SuggestionSetId,
+): DisplayedSuggestionSet | undefined {
+  if (
+    !isStrictDataRecord(input, [
+      "sessionId",
+      "suggestionSetId",
+      "nodeId",
+      "stateId",
+      "suggestionSet",
+    ])
+  ) {
+    return undefined;
+  }
+  const recordSessionId = safeParse(proofSessionIdSchema, input.sessionId);
+  const recordSuggestionSetId = safeParse(suggestionSetIdSchema, input.suggestionSetId);
+  const recordNodeId = safeParse(proofNodeIdSchema, input.nodeId);
+  const recordStateId = safeParse(stableStorageIdentifierSchema, input.stateId);
+  const suggestionSet = safeParse(displayedSuggestionSetSchema, input.suggestionSet);
+  if (
+    recordSessionId !== session.id ||
+    recordSuggestionSetId !== expectedSuggestionSetId ||
+    suggestionSet === undefined ||
+    suggestionSet.id !== recordSuggestionSetId ||
+    suggestionSet.nodeId !== recordNodeId ||
+    suggestionSet.stateId !== recordStateId
+  ) {
+    return undefined;
+  }
+  return freezeDetached(suggestionSet);
+}
+
 function transactionFailure(error: unknown, fallbackMessage: string): RepositoryFailure {
   if (error instanceof SerializedStaleCommandError) {
     return repositoryFailure("rejected", "serialized-stale-command", error.message);
@@ -704,6 +977,37 @@ function isDataRecord(value: unknown): value is Readonly<Record<string, unknown>
   if (prototype !== Object.prototype && prototype !== null) return false;
   return Object.values(Object.getOwnPropertyDescriptors(value)).every(
     (descriptor) => descriptor.enumerable && "value" in descriptor,
+  );
+}
+
+function isStrictDataRecord(
+  value: unknown,
+  expectedKeys: readonly string[],
+): value is Readonly<Record<string, unknown>> {
+  if (!isDataRecord(value)) return false;
+  const keys = Reflect.ownKeys(value);
+  return (
+    keys.length === expectedKeys.length &&
+    keys.every((key) => typeof key === "string" && expectedKeys.includes(key))
+  );
+}
+
+function jsonEquals(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonEquals(value, right[index]))
+    );
+  }
+  if (!isDataRecord(left) || !isDataRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && jsonEquals(left[key], right[key]))
   );
 }
 

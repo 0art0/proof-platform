@@ -63,7 +63,7 @@ async function selectMathJsonRange(
 test("real MathLive ranges recover exact, duplicate, and associative selections", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/spike");
   await expect(page.getByText("MathLive ready")).toBeVisible();
   const field = page.locator("math-field");
 
@@ -82,7 +82,7 @@ test("real MathLive ranges recover exact, duplicate, and associative selections"
 });
 
 test("replacement changes plain MathJSON and the MathLive projection", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/spike");
   await expect(page.getByText("MathLive ready")).toBeVisible();
   await page.getByRole("button", { name: "Select 3y + z" }).click();
   await page.getByRole("button", { name: "Replace selection" }).click();

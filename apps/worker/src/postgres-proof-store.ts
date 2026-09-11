@@ -116,13 +116,20 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
 
   async readNode(sessionId: ProofSessionId, nodeId: ProofNode["id"]): Promise<unknown | undefined> {
     const result = await this.client.query(
-      `SELECT id, state
+      `SELECT session_id, id, state_id, state
        FROM proof_nodes
        WHERE session_id = $1 AND id = $2`,
       [sessionId, nodeId],
     );
     const row = result.rows[0];
-    return row === undefined ? undefined : { id: row.id, state: row.state };
+    return row === undefined
+      ? undefined
+      : {
+          sessionId: row.session_id,
+          nodeId: row.id,
+          stateId: row.state_id,
+          node: { id: row.id, state: row.state },
+        };
   }
 
   async readCommand(
@@ -143,12 +150,21 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     suggestionSetId: SuggestionSetId,
   ): Promise<unknown | undefined> {
     const result = await this.client.query(
-      `SELECT record
+      `SELECT session_id, id, node_id, state_id, record
        FROM proof_suggestion_sets
        WHERE session_id = $1 AND id = $2`,
       [sessionId, suggestionSetId],
     );
-    return result.rows[0]?.record;
+    const row = result.rows[0];
+    return row === undefined
+      ? undefined
+      : {
+          sessionId: row.session_id,
+          suggestionSetId: row.id,
+          nodeId: row.node_id,
+          stateId: row.state_id,
+          suggestionSet: row.record,
+        };
   }
 
   async readPreview(

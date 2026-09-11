@@ -17,6 +17,8 @@ import {
   ProofStoreTransactionError,
   executeProofCommand,
   initializeProofSession,
+  loadCurrentProofSession,
+  readDisplayedSuggestionSet,
   recordDisplayedSuggestionSet,
   recordMovePreview,
   type ProofSession,
@@ -94,6 +96,8 @@ class MemoryProofStore implements ProofStore {
   events = new Map<string, TransitionEvent>();
   commands = new Map<string, PrepareProofCommandSuccess>();
   failAt: FailurePoint | undefined;
+  nodeRecordOverride: unknown | undefined;
+  suggestionSetRecordOverride: unknown | undefined;
   log: string[] = [];
   private queue: Promise<void> = Promise.resolve();
 
@@ -126,7 +130,11 @@ class MemoryProofStore implements ProofStore {
       },
       readNode: async (sessionId, nodeId) => {
         this.log.push("readNode");
-        return staged.nodes.get(key(sessionId, nodeId));
+        if (this.nodeRecordOverride !== undefined) return this.nodeRecordOverride;
+        const node = staged.nodes.get(key(sessionId, nodeId));
+        return node === undefined
+          ? undefined
+          : { sessionId, nodeId: node.id, stateId: node.state.id, node };
       },
       readCommand: async (sessionId, commandId) => {
         this.log.push("readCommand");
@@ -134,7 +142,19 @@ class MemoryProofStore implements ProofStore {
       },
       readSuggestionSet: async (sessionId, suggestionSetId) => {
         this.log.push("readSuggestionSet");
-        return staged.suggestionSets.get(key(sessionId, suggestionSetId));
+        if (this.suggestionSetRecordOverride !== undefined) {
+          return this.suggestionSetRecordOverride;
+        }
+        const suggestionSet = staged.suggestionSets.get(key(sessionId, suggestionSetId));
+        return suggestionSet === undefined
+          ? undefined
+          : {
+              sessionId,
+              suggestionSetId: suggestionSet.id,
+              nodeId: suggestionSet.nodeId,
+              stateId: suggestionSet.stateId,
+              suggestionSet,
+            };
       },
       readPreview: async (sessionId, previewId) => {
         this.log.push("readPreview");
@@ -242,7 +262,7 @@ async function initializedStore(root: ProofNode = rawNode()): Promise<MemoryProo
 }
 
 describe("proof repository workflow", () => {
-  it("persists a displayed suggestion snapshot once and replays it without retrieval", async () => {
+  it("persists once and deterministically revalidates an identical replay", async () => {
     const store = await initializedStore();
     const baseIndex = retrievalIndex();
     let queryCount = 0;
@@ -283,7 +303,7 @@ describe("proof repository workflow", () => {
       suggestionRequest(),
     );
     expect(replay).toMatchObject({ status: "committed", replayed: true });
-    expect(queryCount).toBe(1);
+    expect(queryCount).toBe(2);
     expect(store.suggestionSets.get(key("session:one", "suggestion-set:one"))).toEqual(
       storedBeforeReplay,
     );
@@ -321,7 +341,160 @@ describe("proof repository workflow", () => {
     });
   });
 
-  it("persists and replays multiselection abstraction evidence without rerunning retrieval", async () => {
+  it("loads one detached current session and preserves independent sequent contexts", async () => {
+    const node = createProofNodeSchema().parse({
+      id: "node:root",
+      state: {
+        id: "state:root",
+        goals: [
+          {
+            id: "goal:main",
+            sequent: {
+              context: {
+                declarations: [
+                  {
+                    id: "declaration:goal-p",
+                    symbol: "p",
+                    sort: { kind: "proposition" },
+                    role: "universal-parameter",
+                  },
+                ],
+                hypotheses: [{ id: "hypothesis:goal-p", statement: { expression: "p" } }],
+              },
+              conclusion: { expression: "p" },
+            },
+          },
+        ],
+        obligations: [
+          {
+            id: "obligation:main",
+            sequent: {
+              context: {
+                declarations: [
+                  {
+                    id: "declaration:obligation-q",
+                    symbol: "q",
+                    sort: { kind: "proposition" },
+                    role: "universal-parameter",
+                  },
+                ],
+                hypotheses: [{ id: "hypothesis:obligation-q", statement: { expression: "q" } }],
+              },
+              conclusion: { expression: "q" },
+            },
+          },
+        ],
+      },
+    });
+    const store = await initializedStore(node);
+    const loaded = await loadCurrentProofSession(store, "session:one");
+
+    expect(loaded).toMatchObject({
+      status: "loaded",
+      session: { id: "session:one", currentNodeId: "node:root" },
+      node: {
+        state: {
+          goals: [{ sequent: { context: { declarations: [{ symbol: "p" }] } } }],
+          obligations: [{ sequent: { context: { declarations: [{ symbol: "q" }] } } }],
+        },
+      },
+    });
+    if (loaded.status === "loaded") {
+      expect(loaded.node.state.goals[0]?.sequent.context).not.toBe(
+        loaded.node.state.obligations[0]?.sequent.context,
+      );
+      expect(Object.isFrozen(loaded.session)).toBe(true);
+      expect(Object.isFrozen(loaded.node.state.goals[0]?.sequent.context)).toBe(true);
+    }
+  });
+
+  it("checks redundant node and suggestion-set row identities", async () => {
+    const store = await initializedStore();
+    store.nodeRecordOverride = {
+      sessionId: "session:other",
+      nodeId: "node:root",
+      stateId: "state:root",
+      node: rawNode(),
+    };
+    expect(await loadCurrentProofSession(store, "session:one")).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "invalid-current-node" }],
+    });
+
+    store.nodeRecordOverride = undefined;
+    const recorded = await recordDisplayedSuggestionSet(
+      store,
+      retrievalIndex(),
+      "session:one",
+      suggestionRequest(),
+    );
+    if (recorded.status !== "committed") throw new Error(recorded.diagnostics[0].message);
+    store.suggestionSetRecordOverride = {
+      sessionId: "session:one",
+      suggestionSetId: "suggestion-set:one",
+      nodeId: "node:root",
+      stateId: "state:other",
+      suggestionSet: store.suggestionSets.get(key("session:one", "suggestion-set:one")),
+    };
+    expect(
+      await readDisplayedSuggestionSet(store, "session:one", "suggestion-set:one"),
+    ).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "invalid-suggestion-set-record" }],
+    });
+  });
+
+  it("reads persisted suggestions from their historical node after the session advances", async () => {
+    const store = await initializedStore();
+    const recorded = await recordDisplayedSuggestionSet(
+      store,
+      retrievalIndex(),
+      "session:one",
+      suggestionRequest(),
+    );
+    if (recorded.status !== "committed") throw new Error(recorded.diagnostics[0].message);
+    expect(await executeProofCommand(store, "session:one", command(), human)).toMatchObject({
+      status: "committed",
+    });
+
+    const read = await readDisplayedSuggestionSet(store, "session:one", "suggestion-set:one");
+    expect(read).toEqual({ status: "loaded", suggestionSet: recorded.suggestionSet });
+  });
+
+  it("rejects a stale or conflicting request that reuses a suggestion-set ID", async () => {
+    const store = await initializedStore(rawNode(["And", "True", "True"]));
+    const request = {
+      ...suggestionRequest(),
+      selection: { ...suggestionRequest().selection, path: [0] },
+    };
+    expect(
+      await recordDisplayedSuggestionSet(store, retrievalIndex(), "session:one", request),
+    ).toMatchObject({ status: "committed", replayed: false });
+
+    expect(
+      await recordDisplayedSuggestionSet(store, retrievalIndex(), "session:one", {
+        ...request,
+        selection: { ...request.selection, path: [1] },
+      }),
+    ).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "suggestion-set-rejected" }],
+    });
+    expect(
+      await recordDisplayedSuggestionSet(store, retrievalIndex(), "session:one", {
+        ...request,
+        selection: {
+          ...request.selection,
+          anchor: { ...request.selection.anchor, stateId: "state:stale" },
+        },
+      }),
+    ).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "suggestion-set-rejected" }],
+    });
+  });
+
+  it("persists and revalidates multiselection abstraction evidence without rewriting it", async () => {
     const root = createProofNodeSchema().parse({
       id: "node:root",
       state: {
@@ -434,7 +607,7 @@ describe("proof repository workflow", () => {
 
     const replay = await recordDisplayedSuggestionSet(store, countingIndex, "session:one", request);
     expect(replay).toMatchObject({ status: "committed", replayed: true });
-    expect(queryCount).toBe(1);
+    expect(queryCount).toBe(2);
     expect(store.suggestionSets.get(key("session:one", "suggestion-set:multiple"))).toEqual(stored);
   });
 

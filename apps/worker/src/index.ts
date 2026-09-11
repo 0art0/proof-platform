@@ -7,3 +7,5 @@ export * from "./postgres-proof-store";
 export * from "./proof-repository";
 export * from "./llm-call-repository";
 export * from "./postgres-llm-call-store";
+export * from "./proof-http";
+export * from "./development-session";

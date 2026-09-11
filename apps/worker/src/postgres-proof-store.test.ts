@@ -49,7 +49,14 @@ class RecordingClient implements SqlClient {
     }
     if (text.includes("FROM proof_nodes")) {
       return {
-        rows: [{ id: "node:root", state: rootNode().state }],
+        rows: [
+          {
+            session_id: "session:one",
+            id: "node:root",
+            state_id: "state:root",
+            state: rootNode().state,
+          },
+        ],
         rowCount: 1,
       };
     }
@@ -57,7 +64,18 @@ class RecordingClient implements SqlClient {
       return { rows: [{ result: { ok: true } }], rowCount: 1 };
     }
     if (text.includes("FROM proof_suggestion_sets")) {
-      return { rows: [{ record: { id: "suggestion-set:one" } }], rowCount: 1 };
+      return {
+        rows: [
+          {
+            session_id: "session:one",
+            id: "suggestion-set:one",
+            node_id: "node:root",
+            state_id: "state:root",
+            record: { id: "suggestion-set:one" },
+          },
+        ],
+        rowCount: 1,
+      };
     }
     if (text.includes("FROM proof_previews")) {
       return { rows: [{ record: { id: "preview:one" } }], rowCount: 1 };
@@ -112,7 +130,12 @@ describe("PostgresProofStore", () => {
 
     expect(result).toMatchObject({
       session: { id: "session:one", currentNodeId: "node:root" },
-      node: { id: "node:root" },
+      node: {
+        sessionId: "session:one",
+        nodeId: "node:root",
+        stateId: "state:root",
+        node: { id: "node:root" },
+      },
       previous: { ok: true },
     });
     expect(client.calls.map(({ text }) => text.trim().split(/\s+/)[0])).toEqual([
@@ -181,7 +204,13 @@ describe("PostgresProofStore", () => {
       return existing;
     });
 
-    expect(read).toEqual({ id: "suggestion-set:one" });
+    expect(read).toEqual({
+      sessionId: "session:one",
+      suggestionSetId: "suggestion-set:one",
+      nodeId: "node:root",
+      stateId: "state:root",
+      suggestionSet: { id: "suggestion-set:one" },
+    });
     const select = client.calls.find(({ text }) => text.includes("FROM proof_suggestion_sets"));
     expect(select?.values).toEqual(["session:one", "suggestion-set:one"]);
     const insert = client.calls.find(({ text }) => text.includes("INTO proof_suggestion_sets"));

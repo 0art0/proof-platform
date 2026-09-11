@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { PlainMathJson } from "@proof/mathjson-model";
+import { proofStateIdSchema, statementIdSchema, type PlainMathJson } from "@proof/mathjson-model";
+import type { StatementAnchor } from "@proof/selections";
 import {
   operandPathFromElementData,
+  readAnchoredMathLiveSelection,
   readMathLiveSelection,
   renderInteractiveLatex,
   type MathLiveSelectionPort,
@@ -63,6 +65,20 @@ describe("MathLive selection interpretation", () => {
     ).toMatchObject({ kind: "exact", path: [0, 3], fragment: "y" });
   });
 
+  it("snaps stale collapsed metadata to a visible root fallback", () => {
+    expect(
+      readMathLiveSelection(
+        selectionPort({ collapsed: true, position: 8, pathsByOffset: { 8: "9.2" } }),
+        INITIAL_STATEMENT,
+      ),
+    ).toMatchObject({
+      kind: "fallback",
+      path: [],
+      fragment: INITIAL_STATEMENT,
+      reason: expect.stringContaining("snapped to the statement root"),
+    });
+  });
+
   it("recovers an exact nested subtree from its endpoint paths", () => {
     expect(
       readMathLiveSelection(
@@ -101,5 +117,63 @@ describe("MathLive selection interpretation", () => {
         INITIAL_STATEMENT,
       ),
     ).toMatchObject({ kind: "fallback", path: [0], fragment: INITIAL_STATEMENT[1] });
+  });
+
+  it("retains the complete statement anchor for exact and associative occurrences", () => {
+    const anchor: StatementAnchor = {
+      stateId: proofStateIdSchema.parse("state:workspace"),
+      target: { kind: "obligation", id: statementIdSchema.parse("obligation:local") },
+      statement: { kind: "hypothesis", id: statementIdSchema.parse("hypothesis:bound") },
+    };
+
+    expect(
+      readAnchoredMathLiveSelection(
+        selectionPort({ collapsed: true, position: 8, pathsByOffset: { 8: "0.3" } }),
+        INITIAL_STATEMENT,
+        anchor,
+      ),
+    ).toMatchObject({
+      selection: { kind: "exact", anchor, path: [0, 3] },
+      interpretation: { kind: "exact", fragment: "y" },
+    });
+
+    expect(
+      readAnchoredMathLiveSelection(
+        selectionPort({ pathsByOffset: { 4: "0.1.0", 9: "0.2" } }),
+        INITIAL_STATEMENT,
+        anchor,
+      ),
+    ).toMatchObject({
+      selection: {
+        kind: "associative",
+        anchor,
+        containerPath: [0],
+        startOperand: 1,
+        endOperand: 3,
+        displayRange: [4, 9],
+      },
+    });
+  });
+
+  it("anchors a visible fallback as the exact subtree actually selected", () => {
+    const anchor: StatementAnchor = {
+      stateId: proofStateIdSchema.parse("state:workspace"),
+      target: { kind: "goal", id: statementIdSchema.parse("goal:local") },
+      statement: { kind: "conclusion" },
+    };
+    expect(
+      readAnchoredMathLiveSelection(
+        selectionPort({
+          json: ["Add", 2, ["Multiply", 3, "y"]],
+          pathsByOffset: { 3: "0.0.1", 8: "0.1.1" },
+          range: [3, 8],
+        }),
+        INITIAL_STATEMENT,
+        anchor,
+      ),
+    ).toMatchObject({
+      selection: { kind: "exact", anchor, path: [0] },
+      interpretation: { kind: "fallback", path: [0] },
+    });
   });
 });
