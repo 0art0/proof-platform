@@ -38,7 +38,7 @@ export function validateSameOriginJsonRequest(request: Request): Response | unde
   } catch {
     return proofApiFailure(
       "forbidden_origin",
-      "Suggestion requests are accepted only from this application origin.",
+      "Proof mutations are accepted only from this application origin.",
       403,
     );
   }
@@ -48,7 +48,7 @@ export function validateSameOriginJsonRequest(request: Request): Response | unde
   ) {
     return proofApiFailure(
       "forbidden_origin",
-      "Suggestion requests are accepted only from this application origin.",
+      "Proof mutations are accepted only from this application origin.",
       403,
     );
   }
@@ -57,7 +57,7 @@ export function validateSameOriginJsonRequest(request: Request): Response | unde
   if (mediaType !== "application/json") {
     return proofApiFailure(
       "unsupported_media_type",
-      "Suggestion requests require an application/json body.",
+      "Proof mutations require an application/json body.",
       415,
     );
   }

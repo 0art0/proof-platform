@@ -80,6 +80,24 @@ class RecordingClient implements SqlClient {
     if (text.includes("FROM proof_previews")) {
       return { rows: [{ record: { id: "preview:one" } }], rowCount: 1 };
     }
+    if (text.includes("FROM proof_edges")) {
+      return {
+        rows: [
+          {
+            session_id: "session:one",
+            id: "edge:one",
+            parent_node_id: "node:root",
+            child_node_id: "node:child",
+            command_id: "command:one",
+            suggestion_set_id: "suggestion-set:one",
+            chosen_suggestion_id: "suggestion:one",
+            preview_id: "preview:one",
+            record: { id: "edge:one" },
+          },
+        ],
+        rowCount: 1,
+      };
+    }
     return { rows: [], rowCount: text.includes("UPDATE proof_sessions") ? 1 : 0 };
   }
 
@@ -311,6 +329,42 @@ describe("PostgresProofStore", () => {
       "preview:one",
       JSON.stringify(event),
     ]);
+  });
+
+  it("lists session-scoped edge envelopes and compare-and-swap repoints the cursor", async () => {
+    const client = new RecordingClient();
+    const store = new PostgresProofStore(poolFor(client));
+    const result = await store.transaction(async (transaction) => ({
+      edges: await transaction.listEdges(sessionId),
+      repointed: await transaction.repointCurrentNode(
+        sessionId,
+        "node:child" as ProofNode["id"],
+        "node:root" as ProofNode["id"],
+      ),
+    }));
+
+    expect(result).toEqual({
+      edges: [
+        {
+          sessionId: "session:one",
+          edgeId: "edge:one",
+          parentNodeId: "node:root",
+          childNodeId: "node:child",
+          commandId: "command:one",
+          suggestionSetId: "suggestion-set:one",
+          chosenSuggestionId: "suggestion:one",
+          previewId: "preview:one",
+          edge: { id: "edge:one" },
+        },
+      ],
+      repointed: true,
+    });
+    const select = client.calls.find(({ text }) => text.includes("FROM proof_edges"));
+    expect(select?.text).toContain("WHERE session_id = $1");
+    expect(select?.text).toContain("ORDER BY id");
+    expect(select?.values).toEqual(["session:one"]);
+    const update = client.calls.find(({ text }) => text.includes("UPDATE proof_sessions"));
+    expect(update?.values).toEqual(["session:one", "node:child", "node:root"]);
   });
 
   it("rolls back work failures and releases the client", async () => {

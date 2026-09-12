@@ -180,6 +180,28 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     return result.rows[0]?.record;
   }
 
+  async listEdges(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    const result = await this.client.query(
+      `SELECT session_id, id, parent_node_id, child_node_id, command_id,
+              suggestion_set_id, chosen_suggestion_id, preview_id, record
+       FROM proof_edges
+       WHERE session_id = $1
+       ORDER BY id`,
+      [sessionId],
+    );
+    return result.rows.map((row) => ({
+      sessionId: row.session_id,
+      edgeId: row.id,
+      parentNodeId: row.parent_node_id,
+      childNodeId: row.child_node_id,
+      commandId: row.command_id,
+      suggestionSetId: row.suggestion_set_id,
+      chosenSuggestionId: row.chosen_suggestion_id,
+      previewId: row.preview_id,
+      edge: row.record,
+    }));
+  }
+
   async insertSession(session: ProofSession): Promise<void> {
     await this.client.query(
       `INSERT INTO proof_sessions (id, root_node_id, current_node_id, operators)
@@ -299,6 +321,20 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
        SET current_node_id = $3
        WHERE id = $1 AND current_node_id = $2`,
       [sessionId, expectedNodeId, nextNodeId],
+    );
+    return result.rowCount === 1;
+  }
+
+  async repointCurrentNode(
+    sessionId: ProofSessionId,
+    expectedNodeId: ProofNode["id"],
+    targetNodeId: ProofNode["id"],
+  ): Promise<boolean> {
+    const result = await this.client.query(
+      `UPDATE proof_sessions
+       SET current_node_id = $3
+       WHERE id = $1 AND current_node_id = $2`,
+      [sessionId, expectedNodeId, targetNodeId],
     );
     return result.rowCount === 1;
   }

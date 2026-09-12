@@ -157,8 +157,8 @@ describe("deterministic structural retrieval", () => {
     });
     expect(result.suggestions.every(({ reasons }) => reasons.length >= 3)).toBe(true);
     expect(
-      result.suggestions.some(({ unresolvedParameters }) => unresolvedParameters.length > 0),
-    ).toBe(true);
+      result.suggestions.find(({ artifactId }) => artifactId === "move:split-goal-conjunction"),
+    ).toMatchObject({ unresolvedParameters: [], applicability: "applicable" });
     expect(Object.isFrozen(result)).toBe(true);
 
     const wrapped = index.query(
@@ -386,8 +386,8 @@ describe("deterministic structural retrieval", () => {
         },
       ],
       unresolvedSelectionSlots: [],
-      unresolvedParameters: ["hypothesisId"],
-      applicability: "requires-input",
+      unresolvedParameters: [],
+      applicability: "applicable",
       abstractionFit: "not-used",
     });
 

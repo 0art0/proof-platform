@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createProofNodeSchema,
@@ -66,7 +66,12 @@ const node = createProofNodeSchema().parse({
   },
 });
 
-const session = { id: "session:test", currentNodeId: node.id, operators: [] } as const;
+const session = {
+  id: "session:test",
+  rootNodeId: node.id,
+  currentNodeId: node.id,
+  operators: [],
+} as const;
 let uuid = 0;
 
 beforeEach(() => {
@@ -145,6 +150,64 @@ function suggestionSet(id: string, name: string, artifactId: string): DisplayedS
   });
 }
 
+function moveSuggestionSet(
+  id: string,
+  applicability: "applicable" | "requires-input" = "applicable",
+): DisplayedSuggestionSet {
+  return displayedSuggestionSetSchema.parse({
+    ...suggestionSet(id, "Split goal conjunction", "result:placeholder"),
+    suggestions: [
+      {
+        id: "suggestion:split-goal",
+        source: "move",
+        artifactId: "move:split-goal-conjunction",
+        patternId: "move-pattern:split-goal-conjunction",
+        name: "Split goal conjunction",
+        exactRepresentationMatch: true,
+        substitutions: [],
+        rank: [0],
+        reasons: ["The selected goal is a conjunction.", "The target slot is fully matched."],
+        selectionMatches: [
+          {
+            selectionId: "selection:primary",
+            patternId: "move-pattern:split-goal-conjunction",
+            selectionSlotId: "target",
+          },
+        ],
+        unresolvedSelectionSlots: [],
+        unresolvedParameters: applicability === "applicable" ? [] : ["choice"],
+        applicability,
+        abstractionFit: "not-used",
+      },
+    ],
+  });
+}
+
+function previewFor(commandId: string) {
+  const afterState = { ...node.state, id: `state:${commandId}`, goals: [] };
+  return {
+    id: `preview:${commandId}`,
+    nodeId: node.id,
+    stateId: node.state.id,
+    suggestionSetId: "suggestion-set:move",
+    chosenSuggestionId: "suggestion:split-goal",
+    moveId: "move:split-goal-conjunction",
+    operation: {
+      kind: "close-true",
+      expectedStateId: node.state.id,
+      resultStateId: afterState.id,
+      target: { kind: "goal", id: "goal:test" },
+    },
+    transitionClass: "equivalence",
+    beforeState: node.state,
+    afterState,
+    delta: {
+      goals: { added: [], removed: ["goal:test"], updated: [] },
+      obligations: { added: [], removed: [], updated: [] },
+    },
+  };
+}
+
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
   const promise = new Promise<Value>((done) => {
@@ -160,9 +223,27 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+function historyResponse(
+  historyNode = node,
+  historySession: typeof session | Readonly<Record<string, unknown>> = session,
+): Response {
+  return jsonResponse({
+    ok: true,
+    data: { session: historySession, nodes: [historyNode], edges: [] },
+  });
+}
+
+function mockWithHistory(
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response,
+) {
+  return vi.fn<typeof fetch>(async (input, init) =>
+    String(input).endsWith("/history") ? historyResponse() : handler(input, init),
+  );
+}
+
 describe("StoredProofWorkspace", () => {
   it("rejects malformed anchors and marks stale anchors without making a request", async () => {
-    const fetchMock = vi.fn();
+    const fetchMock = mockWithHistory(() => Promise.reject(new Error("Unexpected request")));
     vi.stubGlobal("fetch", fetchMock);
     render(<StoredProofWorkspace session={session} node={node} />);
 
@@ -171,7 +252,9 @@ describe("StoredProofWorkspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select stale" }));
     expect(screen.getByRole("status")).toHaveTextContent("Stale selection");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.filter((call) => !String(call[0]).endsWith("/history")),
+    ).toHaveLength(0);
   });
 
   it("retains server order and reasons without client-side reranking", async () => {
@@ -192,8 +275,11 @@ describe("StoredProofWorkspace", () => {
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        jsonResponse({ ok: true, data: { suggestionSet: ordered, replayed: false } }),
+      mockWithHistory(async () =>
+        jsonResponse({
+          ok: true,
+          data: { suggestionSet: ordered, replayed: false, transitionClasses: [] },
+        }),
       ),
     );
     render(<StoredProofWorkspace session={session} node={node} />);
@@ -210,7 +296,7 @@ describe("StoredProofWorkspace", () => {
   it("shows a stale state when the service rejects an outdated snapshot anchor", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
+      mockWithHistory(async () =>
         jsonResponse(
           {
             ok: false,
@@ -232,28 +318,32 @@ describe("StoredProofWorkspace", () => {
   it("ignores a delayed superseded success that arrives after the newer response", async () => {
     const first = deferred<Response>();
     const second = deferred<Response>();
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise);
+    let suggestionCalls = 0;
+    const fetchMock = mockWithHistory(() =>
+      suggestionCalls++ === 0 ? first.promise : second.promise,
+    );
     vi.stubGlobal("fetch", fetchMock);
     render(<StoredProofWorkspace session={session} node={node} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     fireEvent.click(screen.getByRole("button", { name: "Select pair" }));
-    const secondRequest = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { id: string };
+    const suggestionRequests = fetchMock.mock.calls.filter(
+      (call) => !String(call[0]).endsWith("/history"),
+    );
+    const secondRequest = JSON.parse(String(suggestionRequests[1]?.[1]?.body)) as { id: string };
     second.resolve(
       jsonResponse({
         ok: true,
         data: {
           suggestionSet: suggestionSet(secondRequest.id, "New response", "result:new"),
           replayed: false,
+          transitionClasses: [],
         },
       }),
     );
     await screen.findByText("New response");
 
-    const firstRequest = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { id: string };
+    const firstRequest = JSON.parse(String(suggestionRequests[0]?.[1]?.body)) as { id: string };
     await act(async () => {
       first.resolve(
         jsonResponse({
@@ -261,6 +351,7 @@ describe("StoredProofWorkspace", () => {
           data: {
             suggestionSet: suggestionSet(firstRequest.id, "Old response", "result:old"),
             replayed: false,
+            transitionClasses: [],
           },
         }),
       );
@@ -274,7 +365,7 @@ describe("StoredProofWorkspace", () => {
     const pending = deferred<Response>();
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => pending.promise),
+      mockWithHistory(() => pending.promise),
     );
     const { rerender } = render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
@@ -300,5 +391,232 @@ describe("StoredProofWorkspace", () => {
       await pending.promise;
     });
     await waitFor(() => expect(screen.getByRole("status")).not.toHaveTextContent("Late rejection"));
+  });
+
+  it("renders provenance, matches, applicability, and transition class as an actionable card", async () => {
+    const applicable = moveSuggestionSet("suggestion-set:move");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() =>
+        jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: applicable,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        }),
+      ),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+
+    const card = await screen.findByText("Split goal conjunction");
+    const container = card.closest("[data-suggestion-id]");
+    expect(container).toHaveAttribute("data-applicability", "applicable");
+    expect(screen.getByText("The selected goal is a conjunction.")).toBeVisible();
+    expect(screen.getByText("The target slot is fully matched.")).toBeVisible();
+    expect(screen.getByText("selection:primary → target")).toBeVisible();
+    expect(screen.getByText("equivalence")).toBeVisible();
+  });
+
+  it("makes requires-input suggestions visibly non-actionable and names the missing input", async () => {
+    const requiresInput = moveSuggestionSet("suggestion-set:move", "requires-input");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() =>
+        jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: requiresInput,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        }),
+      ),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    expect(within(card).getByText("Additional input required")).toBeVisible();
+    expect(within(card).getByText("choice")).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Preview" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Apply" })).toBeDisabled();
+  });
+
+  it("previews without advancing, then applies and clears transient evidence", async () => {
+    const applicable = moveSuggestionSet("suggestion-set:move");
+    const fetchMock = mockWithHistory((_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { commandId: string };
+      if (String(_input).endsWith("/move-previews")) {
+        return jsonResponse(
+          { ok: true, data: { preview: previewFor(body.commandId), replayed: false } },
+          201,
+        );
+      }
+      if (String(_input).endsWith("/commands")) {
+        const preview = previewFor(body.commandId);
+        const nextNode = { id: `node:${body.commandId}`, state: preview.afterState };
+        return jsonResponse(
+          {
+            ok: true,
+            data: {
+              session: { ...session, currentNodeId: nextNode.id },
+              node: nextNode,
+              receipt: {
+                commandId: body.commandId,
+                nodeId: nextNode.id,
+                edgeId: `edge:${body.commandId}`,
+                eventId: `event:${body.commandId}`,
+                resultStateId: preview.afterState.id,
+                transitionClass: "equivalence",
+              },
+              replayed: false,
+            },
+          },
+          201,
+        );
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          suggestionSet: applicable,
+          replayed: false,
+          transitionClasses: [
+            { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+          ],
+        },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+
+    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    await within(card).findByLabelText("Move preview");
+    expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
+    expect(within(card).getByText("Goals").nextSibling).toHaveTextContent("+0 −1 ~0");
+
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    await screen.findByText(/advanced to node:command:web/);
+    expect(screen.queryByTestId("suggestion-list")).not.toBeInTheDocument();
+    const previewRequest = fetchMock.mock.calls.find((call) =>
+      String(call[0]).endsWith("/move-previews"),
+    );
+    const commandRequest = fetchMock.mock.calls.find((call) =>
+      String(call[0]).endsWith("/commands"),
+    );
+    expect(JSON.parse(String(previewRequest?.[1]?.body)).commandId).toBe(
+      JSON.parse(String(commandRequest?.[1]?.body)).commandId,
+    );
+  });
+
+  it("keeps the displayed node intact when apply is rejected", async () => {
+    const applicable = moveSuggestionSet("suggestion-set:move");
+    const commandBodies: Array<{ commandId: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory((input, init) => {
+        if (String(input).endsWith("/move-previews")) {
+          const body = JSON.parse(String(init?.body)) as { commandId: string };
+          return jsonResponse(
+            { ok: true, data: { preview: previewFor(body.commandId), replayed: false } },
+            201,
+          );
+        }
+        if (String(input).endsWith("/commands")) {
+          commandBodies.push(JSON.parse(String(init?.body)) as { commandId: string });
+          return jsonResponse(
+            {
+              ok: false,
+              error: { code: "serialized-stale-command", message: "The parent is stale." },
+            },
+            400,
+          );
+        }
+        return jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: applicable,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        });
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    await within(card).findByLabelText("Move preview");
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+
+    await screen.findByText("Apply rejected: The parent is stale.");
+    expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
+    expect(within(card).getByLabelText("Move preview")).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Apply" })).toBeEnabled();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(commandBodies).toHaveLength(2));
+    expect(commandBodies[1]?.commandId).toBe(commandBodies[0]?.commandId);
+  });
+
+  it("backtracks to a retained ancestor and replaces the rendered current snapshot", async () => {
+    const child = createProofNodeSchema().parse({
+      ...node,
+      id: "node:child",
+      state: { ...node.state, id: "state:child" },
+    });
+    const childSession = { ...session, currentNodeId: child.id };
+    const edge = {
+      id: "edge:child",
+      commandId: "command:child",
+      parentNodeId: node.id,
+      childNodeId: child.id,
+      moveId: "move:split-goal-conjunction",
+      operation: {
+        kind: "close-true",
+        expectedStateId: node.state.id,
+        resultStateId: child.state.id,
+        target: { kind: "goal", id: "goal:test" },
+      },
+      transitionClass: "equivalence",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        if (String(input).endsWith("/history")) {
+          return jsonResponse({
+            ok: true,
+            data: {
+              session: childSession,
+              nodes: [node, child],
+              edges: [{ edge, name: "Split goal conjunction" }],
+            },
+          });
+        }
+        if (String(input).endsWith("/backtrack")) {
+          return jsonResponse({
+            ok: true,
+            data: { session, node, replayed: false },
+          });
+        }
+        throw new Error("Unexpected request");
+      }),
+    );
+    render(<StoredProofWorkspace session={childSession} node={child} />);
+
+    const rootButton = await screen.findByRole("button", { name: /Root.*node:test/ });
+    fireEvent.click(rootButton);
+
+    await screen.findByText("Backtracked to node:test.");
+    expect(screen.getByText("Current node node:test")).toBeVisible();
   });
 });

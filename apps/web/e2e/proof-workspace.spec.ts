@@ -97,6 +97,30 @@ async function waitForWorkspace(page: Page) {
   await expect(page.getByLabel("Obligation 1 conclusion")).toBeVisible();
 }
 
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  const reset = await page.evaluate(async () => {
+    const historyResponse = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+      cache: "no-store",
+    });
+    const history = await historyResponse.json();
+    if (!history.ok) return history;
+    const { session } = history.data;
+    if (session.currentNodeId === session.rootNodeId) return { ok: true };
+    const response = await fetch("/api/proof-sessions/session%3Adevelopment/backtrack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedCurrentNodeId: session.currentNodeId,
+        targetNodeId: session.rootNodeId,
+      }),
+    });
+    return response.json();
+  });
+  expect(reset).toMatchObject({ ok: true });
+  await page.reload();
+});
+
 test("the stored session and each contextual sequent survive reload", async ({ page }) => {
   await page.goto("/");
   await waitForWorkspace(page);
@@ -221,4 +245,117 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
       ({ id, reasons }: { id: string; reasons: string[] }) => ({ id, reasons }),
     ),
   ).toEqual(displayed);
+});
+
+test("preview, apply, rejection, backtracking, and a second child preserve the discovery tree", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await waitForWorkspace(page);
+
+  const initialHistory = await page.evaluate(async () => {
+    const response = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+      cache: "no-store",
+    });
+    return response.json();
+  });
+  expect(initialHistory).toMatchObject({ ok: true });
+  const rootNodeId = initialHistory.data.session.rootNodeId as string;
+  const initialEdgeCount = initialHistory.data.edges.length as number;
+
+  const goal = page.getByLabel("Goal 1 conclusion");
+  expect((await selectRange(goal, ["And", "p", "p", "q"])).selected).toBeDefined();
+  const splitCard = page.locator('[data-artifact-id="move:split-goal-conjunction"]');
+  await expect(splitCard).toBeVisible();
+  await expect(splitCard.locator('[data-applicability="applicable"]')).toBeVisible();
+  await expect(splitCard.locator('[data-transition-class="equivalence"]')).toBeVisible();
+  expect(
+    await splitCard.getByLabel("Reasons for Split goal conjunction").locator("li").count(),
+  ).toBeGreaterThan(0);
+  await expect(splitCard.getByText("selection:primary → target", { exact: true })).toBeVisible();
+
+  const splitSuggestionSetId = await page.getByTestId("suggestion-set-id").textContent();
+  const splitSuggestionId = await splitCard.getAttribute("data-suggestion-id");
+  expect(splitSuggestionSetId).toBeTruthy();
+  expect(splitSuggestionId).toBeTruthy();
+
+  await splitCard.getByRole("button", { name: "Preview" }).click();
+  const preview = splitCard.getByLabel("Move preview");
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText("Expected proof-state difference")).toBeVisible();
+  await expect(preview.getByText("None.", { exact: true })).toBeVisible();
+  await expect(page.getByText(`Current node ${rootNodeId}`, { exact: true })).toBeVisible();
+
+  const afterPreview = await page.evaluate(async () => {
+    const response = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+      cache: "no-store",
+    });
+    return response.json();
+  });
+  expect(afterPreview.data.session.currentNodeId).toBe(rootNodeId);
+  expect(afterPreview.data.edges).toHaveLength(initialEdgeCount);
+
+  await splitCard.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByText(/advanced to node:/)).toBeVisible();
+  const firstChildId = await page
+    .locator('[data-history-node-id][data-current="true"]')
+    .getAttribute("data-history-node-id");
+  expect(firstChildId).toBeTruthy();
+  expect(firstChildId).not.toBe(rootNodeId);
+  await expect(
+    page.getByText("Select one or more anchored occurrences to retrieve suggestions."),
+  ).toBeVisible();
+
+  const staleApply = await page.evaluate(
+    async ({ suggestionSetId, suggestionId }) => {
+      const response = await fetch("/api/proof-sessions/session%3Adevelopment/commands", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          commandId: `command:e2e-stale-${crypto.randomUUID()}`,
+          suggestionSetId,
+          chosenSuggestionId: suggestionId,
+        }),
+      });
+      return { status: response.status, body: await response.json() };
+    },
+    { suggestionSetId: splitSuggestionSetId!, suggestionId: splitSuggestionId! },
+  );
+  expect(staleApply.status).toBeGreaterThanOrEqual(400);
+  expect(staleApply.body).toMatchObject({ ok: false });
+  await expect(page.getByText(`Current node ${firstChildId}`, { exact: true })).toBeVisible();
+
+  await page.locator(`[data-history-node-id="${rootNodeId}"]`).click();
+  await expect(page.getByText(`Backtracked to ${rootNodeId}.`, { exact: true })).toBeVisible();
+  await expect(page.getByText(`Current node ${rootNodeId}`, { exact: true })).toBeVisible();
+
+  const restoredGoal = page.getByLabel("Goal 1 conclusion");
+  const conjunction = page.getByLabel("Goal 1 hypothesis 1");
+  expect((await selectRange(restoredGoal, ["And", "p", "p", "q"])).selected).toBeDefined();
+  expect(
+    (await selectRange(conjunction, ["And", "p", "q"], { modifier: true })).selected,
+  ).toBeDefined();
+  const expandCard = page.locator('[data-artifact-id="move:expand-hypothesis-conjunction"]');
+  await expect(expandCard.locator('[data-applicability="applicable"]')).toBeVisible();
+  await expandCard.getByRole("button", { name: "Preview" }).click();
+  await expect(expandCard.getByLabel("Move preview")).toBeVisible();
+  await expandCard.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByText(/advanced to node:/)).toBeVisible();
+
+  const branched = await page.evaluate(async () => {
+    const response = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+      cache: "no-store",
+    });
+    return response.json();
+  });
+  expect(branched).toMatchObject({ ok: true });
+  const children = branched.data.edges.filter(
+    ({ edge }: { edge: { parentNodeId: string } }) => edge.parentNodeId === rootNodeId,
+  );
+  expect(
+    new Set(children.map(({ edge }: { edge: { childNodeId: string } }) => edge.childNodeId)).size,
+  ).toBeGreaterThanOrEqual(2);
+  expect(children.map(({ name }: { name: string }) => name)).toEqual(
+    expect.arrayContaining(["Split goal conjunction", "Expand hypothesis conjunction"]),
+  );
 });

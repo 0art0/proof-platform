@@ -3,6 +3,7 @@ import { CORE_LOGIC_RESULTS } from "@proof/library";
 import { HAND_AUTHORED_MOVES } from "@proof/moves";
 import {
   actorSchema,
+  commandIdSchema,
   createProofNodeSchema,
   type DisplayedSuggestionSet,
   type MovePreview,
@@ -14,10 +15,14 @@ import {
 } from "@proof/protocol";
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import {
+  backtrackProofSession,
+  derivedMoveRecordIds,
   ProofStoreTransactionError,
   executeProofCommand,
   initializeProofSession,
+  loadProofHistory,
   loadCurrentProofSession,
+  materializeMoveChoice,
   readDisplayedSuggestionSet,
   recordDisplayedSuggestionSet,
   recordMovePreview,
@@ -160,6 +165,20 @@ class MemoryProofStore implements ProofStore {
         this.log.push("readPreview");
         return staged.previews.get(key(sessionId, previewId));
       },
+      listEdges: async (sessionId) =>
+        [...staged.edges.values()]
+          .filter((edge) => staged.nodes.has(key(sessionId, edge.parentNodeId)))
+          .map((edge) => ({
+            sessionId,
+            edgeId: edge.id,
+            parentNodeId: edge.parentNodeId,
+            childNodeId: edge.childNodeId,
+            commandId: edge.commandId,
+            suggestionSetId: edge.suggestionSetId ?? null,
+            chosenSuggestionId: edge.chosenSuggestionId ?? null,
+            previewId: edge.previewId ?? null,
+            edge,
+          })),
       insertSession: async (session) => {
         fail("insertSession");
         staged.sessions.set(session.id, structuredClone(session));
@@ -197,6 +216,12 @@ class MemoryProofStore implements ProofStore {
         const session = staged.sessions.get(sessionId);
         if (session === undefined || session.currentNodeId !== expectedNodeId) return false;
         staged.sessions.set(sessionId, { ...session, currentNodeId: nextNodeId });
+        return true;
+      },
+      repointCurrentNode: async (sessionId, expectedNodeId, targetNodeId) => {
+        const session = staged.sessions.get(sessionId);
+        if (session === undefined || session.currentNodeId !== expectedNodeId) return false;
+        staged.sessions.set(sessionId, { ...session, currentNodeId: targetNodeId });
         return true;
       },
     };
@@ -262,6 +287,199 @@ async function initializedStore(root: ProofNode = rawNode()): Promise<MemoryProo
 }
 
 describe("proof repository workflow", () => {
+  it("materializes generated IDs and preserves two children after backtracking", async () => {
+    const root = createProofNodeSchema().parse({
+      id: "node:root",
+      state: {
+        id: "state:root",
+        goals: [
+          {
+            id: "goal:main",
+            sequent: {
+              context: {
+                declarations: [
+                  {
+                    id: "declaration:p",
+                    symbol: "p",
+                    sort: { kind: "proposition" },
+                    role: "universal-parameter",
+                  },
+                  {
+                    id: "declaration:q",
+                    symbol: "q",
+                    sort: { kind: "proposition" },
+                    role: "universal-parameter",
+                  },
+                ],
+                hypotheses: [
+                  {
+                    id: "hypothesis:conjunction",
+                    statement: { expression: ["And", "p", "q"] },
+                  },
+                ],
+              },
+              conclusion: { expression: ["And", "p", "q"] },
+            },
+          },
+        ],
+        obligations: [],
+      },
+    });
+    const store = await initializedStore(root);
+    const targetSelection = {
+      kind: "exact" as const,
+      anchor: {
+        stateId: "state:root",
+        target: { kind: "goal" as const, id: "goal:main" },
+        statement: { kind: "conclusion" as const },
+      },
+      path: [],
+    };
+    const firstSuggestions = await recordDisplayedSuggestionSet(
+      store,
+      retrievalIndex(),
+      "session:one",
+      { id: "suggestion-set:first", selection: targetSelection, options: { limit: 100 } },
+    );
+    if (firstSuggestions.status !== "committed") {
+      throw new Error(firstSuggestions.diagnostics[0].message);
+    }
+    const split = firstSuggestions.suggestionSet.suggestions.find(
+      ({ artifactId }) => artifactId === "move:split-goal-conjunction",
+    );
+    expect(split).toMatchObject({ applicability: "applicable", unresolvedParameters: [] });
+    if (split === undefined) throw new Error("Expected the split move.");
+
+    const firstCommandId = commandIdSchema.parse("command:first");
+    const firstChoice = {
+      commandId: firstCommandId,
+      suggestionSetId: firstSuggestions.suggestionSet.id,
+      chosenSuggestionId: split.id,
+    };
+    const firstMaterialized = await materializeMoveChoice(store, "session:one", firstChoice);
+    expect(firstMaterialized).toMatchObject({
+      status: "materialized",
+      request: {
+        operation: {
+          kind: "split-goal-conjunction",
+          childIds: ["statement:command:first:child:1", "statement:command:first:child:2"],
+        },
+      },
+    });
+    if (firstMaterialized.status !== "materialized") return;
+    const firstPreview = await recordMovePreview(store, "session:one", firstMaterialized.request);
+    if (firstPreview.status !== "committed") return;
+    const firstIds = derivedMoveRecordIds(firstCommandId);
+    const firstApplied = await executeProofCommand(
+      store,
+      "session:one",
+      {
+        commandId: firstChoice.commandId,
+        kind: "apply-kernel-operation",
+        actor: human,
+        parentNodeId: firstPreview.preview.nodeId,
+        resultNodeId: firstIds.resultNodeId,
+        edgeId: firstIds.edgeId,
+        eventId: firstIds.eventId,
+        moveId: firstPreview.preview.moveId,
+        suggestionSetId: firstPreview.preview.suggestionSetId,
+        chosenSuggestionId: firstPreview.preview.chosenSuggestionId,
+        previewId: firstPreview.preview.id,
+        operation: firstPreview.preview.operation,
+      },
+      human,
+    );
+    expect(firstApplied).toMatchObject({ status: "committed", replayed: false });
+
+    expect(
+      await backtrackProofSession(store, "session:one", {
+        expectedCurrentNodeId: firstIds.resultNodeId,
+        targetNodeId: "node:root",
+      }),
+    ).toMatchObject({ status: "committed", session: { currentNodeId: "node:root" } });
+
+    const secondSuggestions = await recordDisplayedSuggestionSet(
+      store,
+      retrievalIndex(),
+      "session:one",
+      {
+        id: "suggestion-set:second",
+        selection: {
+          kind: "selection-query",
+          selections: [
+            { id: "selection:target", selection: targetSelection },
+            {
+              id: "selection:hypothesis",
+              selection: {
+                ...targetSelection,
+                anchor: {
+                  ...targetSelection.anchor,
+                  statement: { kind: "hypothesis", id: "hypothesis:conjunction" },
+                },
+              },
+            },
+          ],
+        },
+        options: { limit: 100 },
+      },
+    );
+    if (secondSuggestions.status !== "committed") return;
+    const expand = secondSuggestions.suggestionSet.suggestions.find(
+      ({ artifactId }) => artifactId === "move:expand-hypothesis-conjunction",
+    );
+    expect(expand).toMatchObject({ applicability: "applicable", unresolvedParameters: [] });
+    if (expand === undefined) return;
+    const secondCommandId = commandIdSchema.parse("command:second");
+    const secondChoice = {
+      commandId: secondCommandId,
+      suggestionSetId: secondSuggestions.suggestionSet.id,
+      chosenSuggestionId: expand.id,
+    };
+    const secondMaterialized = await materializeMoveChoice(store, "session:one", secondChoice);
+    if (secondMaterialized.status !== "materialized") return;
+    const secondPreview = await recordMovePreview(store, "session:one", secondMaterialized.request);
+    if (secondPreview.status !== "committed") return;
+    const secondIds = derivedMoveRecordIds(secondCommandId);
+    expect(
+      await executeProofCommand(
+        store,
+        "session:one",
+        {
+          commandId: secondChoice.commandId,
+          kind: "apply-kernel-operation",
+          actor: human,
+          parentNodeId: secondPreview.preview.nodeId,
+          resultNodeId: secondIds.resultNodeId,
+          edgeId: secondIds.edgeId,
+          eventId: secondIds.eventId,
+          moveId: secondPreview.preview.moveId,
+          suggestionSetId: secondPreview.preview.suggestionSetId,
+          chosenSuggestionId: secondPreview.preview.chosenSuggestionId,
+          previewId: secondPreview.preview.id,
+          operation: secondPreview.preview.operation,
+        },
+        human,
+      ),
+    ).toMatchObject({ status: "committed", replayed: false });
+
+    const siblings = [...store.edges.values()].filter(
+      ({ parentNodeId }) => parentNodeId === "node:root",
+    );
+    expect(siblings.map(({ childNodeId }) => childNodeId).sort()).toEqual(
+      [firstIds.resultNodeId, secondIds.resultNodeId].sort(),
+    );
+    expect(new Set(siblings.map(({ childNodeId }) => childNodeId)).size).toBe(2);
+    expect(await loadProofHistory(store, "session:one")).toMatchObject({
+      status: "loaded",
+      session: { currentNodeId: secondIds.resultNodeId },
+      nodes: [{ id: "node:root" }, {}, {}],
+      edges: [
+        { edge: { parentNodeId: "node:root" }, name: expect.any(String) },
+        { edge: { parentNodeId: "node:root" }, name: expect.any(String) },
+      ],
+    });
+  });
+
   it("persists once and deterministically revalidates an identical replay", async () => {
     const store = await initializedStore();
     const baseIndex = retrievalIndex();
@@ -868,6 +1086,47 @@ describe("proof repository workflow", () => {
       sizes,
     );
     expect(store.log.indexOf("lockSession")).toBeLessThan(store.log.indexOf("readCommand"));
+  });
+
+  it("rejects an idempotent command replay after navigation supersedes its result node", async () => {
+    const store = await initializedStore();
+    expect(await executeProofCommand(store, "session:one", command(), human)).toMatchObject({
+      status: "committed",
+      replayed: false,
+    });
+    expect(
+      await backtrackProofSession(store, "session:one", {
+        expectedCurrentNodeId: "node:child",
+        targetNodeId: "node:root",
+      }),
+    ).toMatchObject({ status: "committed", replayed: false });
+
+    expect(await executeProofCommand(store, "session:one", command(), human)).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "serialized-stale-command" }],
+    });
+    expect(store.sessions.get("session:one")?.currentNodeId).toBe("node:root");
+  });
+
+  it("rejects history whose edge state identities do not link its retained snapshots", async () => {
+    const store = await initializedStore();
+    expect(await executeProofCommand(store, "session:one", command(), human)).toMatchObject({
+      status: "committed",
+    });
+    const edge = store.edges.get(key("session:one", "edge:one"));
+    if (edge === undefined) throw new Error("Expected the committed edge.");
+    store.edges.set(key("session:one", edge.id), {
+      ...edge,
+      operation: {
+        ...edge.operation,
+        resultStateId: "state:unrelated" as ProofNode["state"]["id"],
+      },
+    });
+
+    expect(await loadProofHistory(store, "session:one")).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "invalid-proof-history" }],
+    });
   });
 
   it("commits validated move provenance and rejects a mismatched move atomically", async () => {

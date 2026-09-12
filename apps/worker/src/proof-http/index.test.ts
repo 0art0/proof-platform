@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createProofNodeSchema,
   type DisplayedSuggestionSet,
+  type MovePreview,
+  type PrepareProofCommandSuccess,
+  type ProofEdge,
   type ProofNode,
 } from "@proof/protocol";
 import {
@@ -9,13 +12,21 @@ import {
   DEVELOPMENT_ROOT_NODE,
   ensureDevelopmentProofSession,
 } from "../development-session";
-import type { ProofSession, ProofStore, ProofStoreTransaction } from "../proof-repository";
+import {
+  initializeProofSession,
+  type ProofSession,
+  type ProofStore,
+  type ProofStoreTransaction,
+} from "../proof-repository";
 import { createProofHttpService, type ProofHttpService } from ".";
 
 class MemoryProofStore implements ProofStore {
   readonly sessions = new Map<string, ProofSession>();
   readonly nodes = new Map<string, ProofNode>();
   readonly suggestionSets = new Map<string, DisplayedSuggestionSet>();
+  readonly previews = new Map<string, MovePreview>();
+  readonly edges = new Map<string, ProofEdge>();
+  readonly commands = new Map<string, PrepareProofCommandSuccess>();
 
   async transaction<Result>(
     work: (transaction: ProofStoreTransaction) => Promise<Result>,
@@ -28,7 +39,7 @@ class MemoryProofStore implements ProofStore {
           ? undefined
           : { sessionId, nodeId: node.id, stateId: node.state.id, node };
       },
-      readCommand: async () => undefined,
+      readCommand: async (sessionId, commandId) => this.commands.get(key(sessionId, commandId)),
       readSuggestionSet: async (sessionId, suggestionSetId) => {
         const suggestionSet = this.suggestionSets.get(key(sessionId, suggestionSetId));
         return suggestionSet === undefined
@@ -41,7 +52,21 @@ class MemoryProofStore implements ProofStore {
               suggestionSet,
             };
       },
-      readPreview: async () => undefined,
+      readPreview: async (sessionId, previewId) => this.previews.get(key(sessionId, previewId)),
+      listEdges: async (sessionId) =>
+        [...this.edges.values()]
+          .filter((edge) => this.nodes.has(key(sessionId, edge.parentNodeId)))
+          .map((edge) => ({
+            sessionId,
+            edgeId: edge.id,
+            parentNodeId: edge.parentNodeId,
+            childNodeId: edge.childNodeId,
+            commandId: edge.commandId,
+            suggestionSetId: edge.suggestionSetId ?? null,
+            chosenSuggestionId: edge.chosenSuggestionId ?? null,
+            previewId: edge.previewId ?? null,
+            edge,
+          })),
       insertSession: async (session) => {
         this.sessions.set(session.id, structuredClone(session));
       },
@@ -51,14 +76,29 @@ class MemoryProofStore implements ProofStore {
       insertSuggestionSet: async (sessionId, suggestionSet) => {
         this.suggestionSets.set(key(sessionId, suggestionSet.id), structuredClone(suggestionSet));
       },
-      insertPreview: async () => undefined,
-      insertEdge: async () => undefined,
+      insertPreview: async (sessionId, preview) => {
+        this.previews.set(key(sessionId, preview.id), structuredClone(preview));
+      },
+      insertEdge: async (sessionId, edge) => {
+        this.edges.set(key(sessionId, edge.id), structuredClone(edge));
+      },
       insertEvent: async () => undefined,
-      insertCommand: async () => undefined,
+      insertCommand: async (sessionId, result) => {
+        this.commands.set(
+          key(sessionId, result.prepared.command.commandId),
+          structuredClone(result),
+        );
+      },
       advanceCurrentNode: async (sessionId, expectedNodeId, nextNodeId) => {
         const session = this.sessions.get(sessionId);
         if (session?.currentNodeId !== expectedNodeId) return false;
         this.sessions.set(sessionId, { ...session, currentNodeId: nextNodeId });
+        return true;
+      },
+      repointCurrentNode: async (sessionId, expectedNodeId, targetNodeId) => {
+        const session = this.sessions.get(sessionId);
+        if (session?.currentNodeId !== expectedNodeId) return false;
+        this.sessions.set(sessionId, { ...session, currentNodeId: targetNodeId });
         return true;
       },
     };
@@ -309,6 +349,206 @@ describe("proof HTTP service", () => {
     );
     expect(readResponse.status).toBe(200);
     const read = await json(readResponse);
-    expect(read).toEqual({ suggestionSet: recorded.suggestionSet });
+    expect(read).toEqual({
+      suggestionSet: recorded.suggestionSet,
+      transitionClasses: recorded.transitionClasses,
+    });
+  });
+
+  it("previews without advancing, applies, rejects stale apply, and retains sibling branches", async () => {
+    const store = new MemoryProofStore();
+    const binaryRoot = createProofNodeSchema().parse({
+      ...DEVELOPMENT_ROOT_NODE,
+      state: {
+        ...DEVELOPMENT_ROOT_NODE.state,
+        goals: [
+          {
+            ...DEVELOPMENT_ROOT_NODE.state.goals[0],
+            sequent: {
+              ...DEVELOPMENT_ROOT_NODE.state.goals[0]?.sequent,
+              conclusion: { expression: ["And", "p", "q"] },
+            },
+          },
+        ],
+      },
+    });
+    expect(
+      await initializeProofSession(store, {
+        sessionId: DEVELOPMENT_PROOF_SESSION_ID,
+        rootNode: binaryRoot,
+      }),
+    ).toMatchObject({ status: "committed" });
+    const origin = await runningService(store);
+    const sessionUrl = `${origin}/proof-sessions/${DEVELOPMENT_PROOF_SESSION_ID}`;
+    const suggestionsUrl = `${sessionUrl}/suggestion-sets`;
+    const firstResponse = await fetch(suggestionsUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "suggestion-set:http-first-branch",
+        selections: [exactGoal()],
+      }),
+    });
+    expect(firstResponse.status).toBe(201);
+    const firstBody = await json(firstResponse);
+    const firstSet = firstBody.suggestionSet as DisplayedSuggestionSet;
+    const split = firstSet.suggestions.find(
+      ({ artifactId }) => artifactId === "move:split-goal-conjunction",
+    );
+    if (split === undefined) {
+      throw new Error(
+        `Expected split; received ${JSON.stringify(firstSet.suggestions.map(({ artifactId, applicability }) => ({ artifactId, applicability })))}`,
+      );
+    }
+    expect(split).toMatchObject({ applicability: "applicable", reasons: expect.any(Array) });
+    expect(firstBody.transitionClasses).toEqual(
+      expect.arrayContaining([{ suggestionId: split.id, transitionClass: "equivalence" }]),
+    );
+    const firstChoice = {
+      commandId: "command:http-first-branch",
+      suggestionSetId: firstSet.id,
+      chosenSuggestionId: split.id,
+    };
+
+    const previewResponse = await fetch(`${sessionUrl}/move-previews`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(firstChoice),
+    });
+    expect(previewResponse.status).toBe(201);
+    expect(await json(previewResponse)).toMatchObject({
+      replayed: false,
+      preview: {
+        id: "preview:command:http-first-branch",
+        nodeId: "node:development-root",
+        transitionClass: "equivalence",
+        operation: {
+          kind: "split-goal-conjunction",
+          childIds: [
+            "statement:command:http-first-branch:child:1",
+            "statement:command:http-first-branch:child:2",
+          ],
+        },
+      },
+    });
+    expect(await json(await fetch(sessionUrl))).toMatchObject({
+      session: { currentNodeId: "node:development-root" },
+      node: { id: "node:development-root" },
+    });
+
+    const applyResponse = await fetch(`${sessionUrl}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(firstChoice),
+    });
+    expect(applyResponse.status).toBe(201);
+    const applied = await json(applyResponse);
+    expect(applied).toMatchObject({
+      replayed: false,
+      session: { currentNodeId: "node:command:http-first-branch" },
+      node: { id: "node:command:http-first-branch" },
+      receipt: { commandId: firstChoice.commandId },
+    });
+
+    const applyReplay = await fetch(`${sessionUrl}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(firstChoice),
+    });
+    expect(applyReplay.status).toBe(200);
+    expect(await json(applyReplay)).toMatchObject({
+      replayed: true,
+      session: { currentNodeId: "node:command:http-first-branch" },
+    });
+
+    const stalePreviewReplay = await fetch(`${sessionUrl}/move-previews`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(firstChoice),
+    });
+    expect(stalePreviewReplay.status).toBe(409);
+    expect(await json(stalePreviewReplay)).toMatchObject({
+      diagnostics: [{ code: "preview-rejected" }],
+    });
+
+    const staleApply = await fetch(`${sessionUrl}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...firstChoice, commandId: "command:http-stale" }),
+    });
+    expect(staleApply.status).toBe(400);
+    expect(await json(await fetch(sessionUrl))).toMatchObject({
+      session: { currentNodeId: "node:command:http-first-branch" },
+    });
+
+    const backtrack = await fetch(`${sessionUrl}/backtrack`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedCurrentNodeId: "node:command:http-first-branch",
+        targetNodeId: "node:development-root",
+      }),
+    });
+    expect(backtrack.status).toBe(200);
+    expect(await json(backtrack)).toMatchObject({
+      session: { currentNodeId: "node:development-root" },
+      node: { id: "node:development-root" },
+    });
+
+    const secondResponse = await fetch(suggestionsUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "suggestion-set:http-second-branch",
+        selections: [
+          exactGoal(),
+          {
+            kind: "exact",
+            anchor: {
+              ...goalAnchor(),
+              statement: {
+                kind: "hypothesis",
+                id: "hypothesis:development-conjunction",
+              },
+            },
+            path: [],
+          },
+        ],
+      }),
+    });
+    expect(secondResponse.status).toBe(201);
+    const secondSet = (await json(secondResponse)).suggestionSet as DisplayedSuggestionSet;
+    const expand = secondSet.suggestions.find(
+      ({ artifactId }) => artifactId === "move:expand-hypothesis-conjunction",
+    );
+    expect(expand).toMatchObject({ applicability: "applicable" });
+    if (expand === undefined) throw new Error("Expected an applicable hypothesis expansion.");
+    const secondChoice = {
+      commandId: "command:http-second-branch",
+      suggestionSetId: secondSet.id,
+      chosenSuggestionId: expand.id,
+    };
+    const secondApply = await fetch(`${sessionUrl}/commands`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(secondChoice),
+    });
+    expect(secondApply.status).toBe(201);
+    expect(await json(secondApply)).toMatchObject({
+      session: { currentNodeId: "node:command:http-second-branch" },
+    });
+
+    const historyResponse = await fetch(`${sessionUrl}/history`);
+    expect(historyResponse.status).toBe(200);
+    const history = await json(historyResponse);
+    expect(history).toMatchObject({
+      session: { currentNodeId: "node:command:http-second-branch" },
+      nodes: [{ id: "node:development-root" }, {}, {}],
+    });
+    const rootEdges = (history.edges as Array<{ edge: ProofEdge }>).filter(
+      ({ edge }) => edge.parentNodeId === "node:development-root",
+    );
+    expect(rootEdges).toHaveLength(2);
+    expect(new Set(rootEdges.map(({ edge }) => edge.childNodeId)).size).toBe(2);
   });
 });

@@ -46,6 +46,7 @@ describe("POST /api/proof-sessions/:sessionId/suggestion-sets", () => {
     mocks.createStoredSuggestionSet.mockResolvedValue({
       suggestionSet: { id: "suggestion-set:test" },
       replayed: false,
+      transitionClasses: [],
     });
 
     const response = await POST(incoming, context);
@@ -54,7 +55,11 @@ describe("POST /api/proof-sessions/:sessionId/suggestion-sets", () => {
     expect(response.headers.get("cache-control")).toBe("no-store, max-age=0");
     expect(await response.json()).toEqual({
       ok: true,
-      data: { suggestionSet: { id: "suggestion-set:test" }, replayed: false },
+      data: {
+        suggestionSet: { id: "suggestion-set:test" },
+        replayed: false,
+        transitionClasses: [],
+      },
     });
     expect(mocks.createStoredSuggestionSet).toHaveBeenCalledExactlyOnceWith("session:test", body, {
       signal: incoming.signal,
@@ -65,6 +70,7 @@ describe("POST /api/proof-sessions/:sessionId/suggestion-sets", () => {
     mocks.createStoredSuggestionSet.mockResolvedValue({
       suggestionSet: { id: "suggestion-set:test" },
       replayed: true,
+      transitionClasses: [],
     });
 
     const response = await POST(

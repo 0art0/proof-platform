@@ -420,6 +420,7 @@ function buildSuggestionsForMatch(
         .map(({ id }) => id)
         .sort(compareStrings);
       const unresolvedParameters = candidate.artifact.parameters
+        .filter(({ source }) => source === "menu" || source === "term-input")
         .map(({ id }) => id)
         .sort(compareStrings);
       const applicability =

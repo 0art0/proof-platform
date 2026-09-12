@@ -25,7 +25,7 @@ describe("GET /api/proof-sessions/:sessionId/suggestion-sets/:suggestionSetId", 
         { id: "suggestion:second", reasons: ["second reason"] },
       ],
     };
-    mocks.readStoredSuggestionSet.mockResolvedValue({ suggestionSet });
+    mocks.readStoredSuggestionSet.mockResolvedValue({ suggestionSet, transitionClasses: [] });
 
     const response = await GET(request, {
       params: Promise.resolve({
@@ -36,7 +36,10 @@ describe("GET /api/proof-sessions/:sessionId/suggestion-sets/:suggestionSetId", 
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store, max-age=0");
-    expect(await response.json()).toEqual({ ok: true, data: { suggestionSet } });
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: { suggestionSet, transitionClasses: [] },
+    });
     expect(mocks.readStoredSuggestionSet).toHaveBeenCalledExactlyOnceWith(
       "session:test",
       "suggestion-set:test",

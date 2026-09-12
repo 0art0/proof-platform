@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { displayedSuggestionSetSchema, proofNodeSchema } from "@proof/protocol";
+import {
+  displayedSuggestionSetSchema,
+  movePreviewSchema,
+  proofEdgeSchema,
+  proofNodeSchema,
+} from "@proof/protocol";
 
 vi.mock("server-only", () => ({}));
 
 import {
+  backtrackProofSession,
+  createStoredMovePreview,
   createStoredSuggestionSet,
+  executeStoredProofCommand,
   ProofServiceError,
   readCurrentProofSession,
+  readProofHistory,
   readStoredSuggestionSet,
 } from ".";
 
@@ -69,6 +78,84 @@ const suggestionSet = displayedSuggestionSetSchema.parse({
   },
   suggestions: [],
   variantGroups: [],
+});
+
+const moveSuggestionSet = displayedSuggestionSetSchema.parse({
+  ...suggestionSet,
+  suggestions: [
+    {
+      id: "suggestion:move",
+      source: "move",
+      artifactId: "move:split-goal-conjunction",
+      patternId: "pattern:split-goal-conjunction",
+      name: "Split conjunction goal",
+      exactRepresentationMatch: true,
+      substitutions: [],
+      rank: [0],
+      reasons: ["The selected goal is a conjunction."],
+      selectionMatches: [
+        {
+          selectionId: "selection:primary",
+          patternId: "pattern:split-goal-conjunction",
+          selectionSlotId: "slot:goal",
+        },
+      ],
+      unresolvedSelectionSlots: [],
+      unresolvedParameters: [],
+      applicability: "applicable",
+      abstractionFit: "not-used",
+    },
+  ],
+});
+
+const choice = {
+  commandId: "command:test",
+  suggestionSetId: suggestionSet.id,
+  chosenSuggestionId: "suggestion:test",
+} as const;
+
+const preview = movePreviewSchema.parse({
+  id: "preview:test",
+  nodeId: NODE_ID,
+  stateId: STATE_ID,
+  suggestionSetId: choice.suggestionSetId,
+  chosenSuggestionId: choice.chosenSuggestionId,
+  moveId: "move:close-true",
+  operation: {
+    kind: "close-true",
+    expectedStateId: STATE_ID,
+    resultStateId: "state:after",
+    target: { kind: "goal", id: "goal:test" },
+  },
+  transitionClass: "equivalence",
+  beforeState: node.state,
+  afterState: { id: "state:after", goals: [], obligations: [] },
+  delta: {
+    goals: { added: [], removed: ["goal:test"], updated: [] },
+    obligations: { added: [], removed: [], updated: [] },
+  },
+});
+
+const appliedNode = proofNodeSchema.parse({ id: "node:after", state: preview.afterState });
+const receipt = {
+  commandId: choice.commandId,
+  nodeId: appliedNode.id,
+  edgeId: "edge:test",
+  eventId: "event:test",
+  resultStateId: appliedNode.state.id,
+  transitionClass: "equivalence" as const,
+};
+const historyEdge = proofEdgeSchema.parse({
+  id: receipt.edgeId,
+  commandId: choice.commandId,
+  parentNodeId: node.id,
+  childNodeId: appliedNode.id,
+  moveId: preview.moveId,
+  suggestionSetId: choice.suggestionSetId,
+  chosenSuggestionId: choice.chosenSuggestionId,
+  previewId: preview.id,
+  operation: preview.operation,
+  transitionClass: preview.transitionClass,
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -178,7 +265,9 @@ describe("proof-service adapter", () => {
   it("proxies only the exact descriptor and verifies the complete returned identity", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(jsonResponse({ suggestionSet, replayed: false }, 201));
+      .mockResolvedValue(
+        jsonResponse({ suggestionSet, replayed: false, transitionClasses: [] }, 201),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
@@ -186,13 +275,60 @@ describe("proof-service adapter", () => {
         id: suggestionSet.id,
         selections: [exactDescriptor],
       }),
-    ).resolves.toEqual({ suggestionSet, replayed: false });
+    ).resolves.toEqual({ suggestionSet, replayed: false, transitionClasses: [] });
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(init.body))).toEqual({
       id: suggestionSet.id,
       selections: [exactDescriptor],
     });
     expect(init).toMatchObject({ method: "POST", cache: "no-store" });
+  });
+
+  it("accepts transition classifications only for every move in persisted order", async () => {
+    const classification = {
+      suggestionId: moveSuggestionSet.suggestions[0]!.id,
+      transitionClass: "equivalence" as const,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            suggestionSet: moveSuggestionSet,
+            replayed: false,
+            transitionClasses: [classification],
+          },
+          201,
+        ),
+      ),
+    );
+
+    await expect(
+      createStoredSuggestionSet(SESSION_ID, {
+        id: moveSuggestionSet.id,
+        selections: [exactDescriptor],
+      }),
+    ).resolves.toMatchObject({ transitionClasses: [classification] });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            suggestionSet: moveSuggestionSet,
+            replayed: false,
+            transitionClasses: [{ ...classification, suggestionId: "suggestion:other" }],
+          },
+          201,
+        ),
+      ),
+    );
+    await expect(
+      createStoredSuggestionSet(SESSION_ID, {
+        id: moveSuggestionSet.id,
+        selections: [exactDescriptor],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_upstream_response" });
   });
 
   it("rejects resolved fields and unsupported descriptor kinds before contacting the worker", async () => {
@@ -271,7 +407,10 @@ describe("proof-service adapter", () => {
       vi
         .fn()
         .mockResolvedValue(
-          jsonResponse({ suggestionSet: multiselectionSet, replayed: false }, 201),
+          jsonResponse(
+            { suggestionSet: multiselectionSet, replayed: false, transitionClasses: [] },
+            201,
+          ),
         ),
     );
 
@@ -280,7 +419,11 @@ describe("proof-service adapter", () => {
         id: multiselectionSet.id,
         selections: [exactDescriptor, secondDescriptor],
       }),
-    ).resolves.toEqual({ suggestionSet: multiselectionSet, replayed: false });
+    ).resolves.toEqual({
+      suggestionSet: multiselectionSet,
+      replayed: false,
+      transitionClasses: [],
+    });
 
     vi.stubGlobal(
       "fetch",
@@ -298,6 +441,7 @@ describe("proof-service adapter", () => {
               },
             },
             replayed: false,
+            transitionClasses: [],
           },
           201,
         ),
@@ -321,7 +465,11 @@ describe("proof-service adapter", () => {
   ])("rejects a returned set with mismatched %s", async (_label, returnedSet) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ suggestionSet: returnedSet, replayed: false }, 201)),
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ suggestionSet: returnedSet, replayed: false, transitionClasses: [] }, 201),
+        ),
     );
 
     await expect(
@@ -335,7 +483,11 @@ describe("proof-service adapter", () => {
   it("requires POST status and replay identity to agree", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ suggestionSet, replayed: false }, 200)),
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ suggestionSet, replayed: false, transitionClasses: [] }, 200),
+        ),
     );
 
     await expect(
@@ -349,11 +501,12 @@ describe("proof-service adapter", () => {
   it("reads back only the exact requested persisted suggestion-set ID", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse({ suggestionSet: { ...suggestionSet, id: "suggestion-set:other" } }),
-        ),
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          suggestionSet: { ...suggestionSet, id: "suggestion-set:other" },
+          transitionClasses: [],
+        }),
+      ),
     );
 
     await expect(readStoredSuggestionSet(SESSION_ID, suggestionSet.id)).rejects.toMatchObject({
@@ -362,11 +515,171 @@ describe("proof-service adapter", () => {
   });
 
   it("returns a valid persisted suggestion set without reranking or rewriting it", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ suggestionSet })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ suggestionSet, transitionClasses: [] })),
+    );
 
     await expect(readStoredSuggestionSet(SESSION_ID, suggestionSet.id)).resolves.toEqual({
       suggestionSet,
+      transitionClasses: [],
     });
+  });
+
+  it("previews exactly one displayed choice and requires status/idempotency agreement", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(sessionEnvelope()))
+      .mockResolvedValueOnce(jsonResponse({ preview, replayed: false }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createStoredMovePreview(SESSION_ID, choice)).resolves.toEqual({
+      preview,
+      replayed: false,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      new URL("http://127.0.0.1:8787/proof-sessions/session%3Atest/move-previews"),
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify(choice),
+      }),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(sessionEnvelope()))
+        .mockResolvedValueOnce(jsonResponse({ preview, replayed: false }, 200)),
+    );
+    await expect(createStoredMovePreview(SESSION_ID, choice)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+  });
+
+  it("rejects a preview that does not identify the exact chosen suggestion", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(sessionEnvelope()))
+        .mockResolvedValueOnce(
+          jsonResponse(
+            {
+              preview: { ...preview, chosenSuggestionId: "suggestion:other" },
+              replayed: false,
+            },
+            201,
+          ),
+        ),
+    );
+
+    await expect(createStoredMovePreview(SESSION_ID, choice)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+  });
+
+  it("executes an exact choice and validates the returned receipt and current node", async () => {
+    const responseBody = {
+      session: sessionEnvelopeSession({ currentNodeId: appliedNode.id }),
+      node: appliedNode,
+      receipt,
+      replayed: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(responseBody, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeStoredProofCommand(SESSION_ID, choice)).resolves.toEqual(responseBody);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init).toMatchObject({ method: "POST", body: JSON.stringify(choice) });
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { ...responseBody, receipt: { ...receipt, commandId: "command:other" } },
+            201,
+          ),
+        ),
+    );
+    await expect(executeStoredProofCommand(SESSION_ID, choice)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+  });
+
+  it("reads only a complete rooted discovery tree with retained edge names", async () => {
+    const history = {
+      session: sessionEnvelopeSession({ currentNodeId: appliedNode.id }),
+      nodes: [node, appliedNode],
+      edges: [{ edge: historyEdge, name: "Close true goal" }],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(history)));
+
+    await expect(readProofHistory(SESSION_ID)).resolves.toEqual(history);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          ...history,
+          nodes: [...history.nodes, { ...node, id: "node:orphan" }],
+        }),
+      ),
+    );
+    await expect(readProofHistory(SESSION_ID)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+  });
+
+  it("backtracks with an expected pointer and validates the returned target snapshot", async () => {
+    const request = { expectedCurrentNodeId: appliedNode.id, targetNodeId: node.id };
+    const responseBody = {
+      session: sessionEnvelopeSession(),
+      node,
+      replayed: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(responseBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(backtrackProofSession(SESSION_ID, request)).resolves.toEqual(responseBody);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init).toMatchObject({ method: "POST", body: JSON.stringify(request) });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          ...responseBody,
+          session: sessionEnvelopeSession({ currentNodeId: appliedNode.id }),
+        }),
+      ),
+    );
+    await expect(backtrackProofSession(SESSION_ID, request)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+  });
+
+  it("rejects malformed mutation DTOs before contacting the worker", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createStoredMovePreview(SESSION_ID, { ...choice, operation: preview.operation }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(
+      executeStoredProofCommand(SESSION_ID, { ...choice, commandId: "not a stable ID" }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(
+      backtrackProofSession(SESSION_ID, {
+        expectedCurrentNodeId: appliedNode.id,
+        targetNodeId: "not a stable ID",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects non-JSON, malformed JSON, oversized, and unreachable upstream responses", async () => {
@@ -391,11 +704,12 @@ describe("proof-service adapter", () => {
   });
 });
 
-function sessionEnvelopeSession() {
+function sessionEnvelopeSession(overrides: Record<string, unknown> = {}) {
   return {
     id: SESSION_ID,
     rootNodeId: NODE_ID,
     currentNodeId: NODE_ID,
     operators: [],
+    ...overrides,
   };
 }

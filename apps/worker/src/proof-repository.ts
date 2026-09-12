@@ -3,13 +3,16 @@ import {
   commandIdSchema,
   createPrepareProofCommandSuccessSchema,
   createMovePreviewSchema,
+  createProofEdgeSchema,
   createProofNodeSchema,
   displayedSuggestionSetSchema,
   prepareDisplayedSuggestionSet,
   prepareMovePreview,
   prepareProofCommand,
   movePreviewIdSchema,
+  kernelOperationAdapterSchema,
   proofNodeIdSchema,
+  suggestionIdSchema,
   suggestionSetMatchesNode,
   suggestionSetIdSchema,
   type ApplyKernelCommand,
@@ -23,6 +26,7 @@ import {
   type SuggestionSetId,
   type TransitionEvent,
 } from "@proof/protocol";
+import { HAND_AUTHORED_MOVES, type MoveDefinition } from "@proof/moves";
 import type { RetrievalIndex } from "@proof/retrieval";
 import { z } from "zod";
 
@@ -84,6 +88,19 @@ export type StoredDisplayedSuggestionSetRecord = Readonly<{
   suggestionSet: unknown;
 }>;
 
+/** Relational identities are retained beside JSONB so both representations are checked. */
+export type StoredProofEdgeRecord = Readonly<{
+  sessionId: ProofSessionId;
+  edgeId: ProofEdge["id"];
+  parentNodeId: ProofNode["id"];
+  childNodeId: ProofNode["id"];
+  commandId: ApplyKernelCommand["commandId"];
+  suggestionSetId: SuggestionSetId | null;
+  chosenSuggestionId: string | null;
+  previewId: MovePreviewId | null;
+  edge: unknown;
+}>;
+
 export interface ProofStoreTransaction {
   lockSession(sessionId: ProofSessionId): Promise<unknown | undefined>;
   readNode(sessionId: ProofSessionId, nodeId: ProofNode["id"]): Promise<unknown | undefined>;
@@ -96,6 +113,7 @@ export interface ProofStoreTransaction {
     suggestionSetId: SuggestionSetId,
   ): Promise<unknown | undefined>;
   readPreview(sessionId: ProofSessionId, previewId: MovePreviewId): Promise<unknown | undefined>;
+  listEdges(sessionId: ProofSessionId): Promise<readonly unknown[]>;
   insertSession(session: ProofSession): Promise<void>;
   insertNode(sessionId: ProofSessionId, node: ProofNode): Promise<void>;
   insertSuggestionSet(
@@ -110,6 +128,11 @@ export interface ProofStoreTransaction {
     sessionId: ProofSessionId,
     expectedNodeId: ProofNode["id"],
     nextNodeId: ProofNode["id"],
+  ): Promise<boolean>;
+  repointCurrentNode(
+    sessionId: ProofSessionId,
+    expectedNodeId: ProofNode["id"],
+    targetNodeId: ProofNode["id"],
   ): Promise<boolean>;
 }
 
@@ -151,6 +174,10 @@ export type RepositoryDiagnosticCode =
   | "invalid-preview-record"
   | "preview-not-found"
   | "preview-rejected"
+  | "invalid-edge-record"
+  | "invalid-proof-history"
+  | "backtrack-rejected"
+  | "serialized-stale-backtrack"
   | "command-rejected"
   | "serialized-stale-command"
   | "storage-failure"
@@ -198,6 +225,52 @@ export type RecordMovePreviewResult =
       replayed: boolean;
     }>
   | RepositoryFailure;
+
+export type MaterializeMoveChoiceResult =
+  Readonly<{ status: "materialized"; request: MaterializedMovePreviewRequest }> | RepositoryFailure;
+
+export type ProofHistoryEdge = Readonly<{ edge: ProofEdge; name: string }>;
+
+export type LoadProofHistoryResult =
+  | Readonly<{
+      status: "loaded";
+      session: ProofSession;
+      nodes: readonly ProofNode[];
+      edges: readonly ProofHistoryEdge[];
+    }>
+  | RepositoryFailure;
+
+export type BacktrackProofSessionResult =
+  | Readonly<{
+      status: "committed";
+      session: ProofSession;
+      node: ProofNode;
+      replayed: boolean;
+    }>
+  | RepositoryFailure;
+
+export const moveChoiceSchema = z
+  .object({
+    commandId: commandIdSchema,
+    suggestionSetId: suggestionSetIdSchema,
+    chosenSuggestionId: suggestionIdSchema,
+  })
+  .strict();
+
+export const backtrackProofSessionSchema = z
+  .object({
+    expectedCurrentNodeId: proofNodeIdSchema,
+    targetNodeId: proofNodeIdSchema,
+  })
+  .strict();
+
+export type MaterializedMovePreviewRequest = Readonly<{
+  id: MovePreviewId;
+  suggestionSetId: SuggestionSetId;
+  chosenSuggestionId: z.infer<typeof suggestionIdSchema>;
+  moveId: MovePreview["moveId"];
+  operation: MovePreview["operation"];
+}>;
 
 const initializeInputSchema = z
   .object({
@@ -430,6 +503,138 @@ export async function recordDisplayedSuggestionSet(
   }
 }
 
+/**
+ * Resolve a persisted applicable move choice to its trusted primitive request.
+ * IDs and operation parameters that require no user judgment are derived from the command ID.
+ */
+export async function materializeMoveChoice(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  choiceInput: unknown,
+): Promise<MaterializeMoveChoiceResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const choice = safeParse(moveChoiceSchema, choiceInput);
+  if (sessionId === undefined || choice === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "preview-rejected",
+      "The session ID or persisted move choice is invalid.",
+    );
+  }
+
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
+      const previewId = derivedPreviewId(choice.commandId);
+      const existingInput = await transaction.readPreview(session.id, previewId);
+
+      const loadedSuggestionSet = await loadSuggestionSet(
+        transaction,
+        session,
+        choice.suggestionSetId,
+      );
+      if (!loadedSuggestionSet.ok) return loadedSuggestionSet.failure;
+      const suggestionSet = loadedSuggestionSet.suggestionSet;
+      const chosen = suggestionSet.suggestions.find(
+        (suggestion) => suggestion.id === choice.chosenSuggestionId,
+      );
+      if (chosen === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "preview-rejected",
+          "The chosen suggestion was not present in the persisted displayed suggestion set.",
+        );
+      }
+      if (chosen.source !== "move" || chosen.applicability !== "applicable") {
+        return repositoryFailure(
+          "rejected",
+          "preview-rejected",
+          chosen.source !== "move"
+            ? "Only displayed move suggestions can be previewed as kernel operations."
+            : "This move still requires user input and cannot be previewed yet.",
+        );
+      }
+
+      const loadedParentNode = await loadNode(
+        transaction,
+        session,
+        environment,
+        suggestionSet.nodeId,
+        "current-node-not-found",
+        "invalid-current-node",
+      );
+      if (!loadedParentNode.ok) return loadedParentNode.failure;
+      if (
+        !suggestionSetMatchesNode(suggestionSet, loadedParentNode.node, environment) ||
+        (existingInput === undefined && session.currentNodeId !== loadedParentNode.node.id)
+      ) {
+        return repositoryFailure(
+          "rejected",
+          "preview-rejected",
+          "The displayed move suggestion is stale for the current proof node.",
+        );
+      }
+
+      const move = HAND_AUTHORED_MOVES.find((definition) => definition.id === chosen.artifactId);
+      if (move === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "preview-rejected",
+          "The displayed move is not available in the approved deterministic move catalog.",
+        );
+      }
+      const operation = materializeKernelOperation(
+        loadedParentNode.node,
+        suggestionSet,
+        chosen,
+        move,
+        choice.commandId,
+      );
+      if (operation === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "preview-rejected",
+          "The persisted choice could not be converted to a complete trusted kernel operation.",
+        );
+      }
+      const chosenSuggestionId = safeParse(suggestionIdSchema, chosen.id) as
+        z.infer<typeof suggestionIdSchema> | undefined;
+      if (chosenSuggestionId === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-suggestion-set-record",
+          "The chosen suggestion has an invalid persistent identity.",
+        );
+      }
+      const request: MaterializedMovePreviewRequest = {
+        id: previewId,
+        suggestionSetId: suggestionSet.id,
+        chosenSuggestionId,
+        moveId: move.id,
+        operation,
+      };
+      if (existingInput !== undefined) {
+        const existing = safeParse(createMovePreviewSchema(environment), existingInput);
+        if (existing === undefined || !movePreviewRequestMatches(existing, request)) {
+          return repositoryFailure(
+            "rejected",
+            "preview-rejected",
+            "The command ID is already linked to different or invalid move-preview evidence.",
+          );
+        }
+      }
+      return {
+        status: "materialized" as const,
+        request,
+      };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The move choice could not be materialized.");
+  }
+}
+
 /** Persist one concrete move preview without advancing the proof session. */
 export async function recordMovePreview(
   store: ProofStore,
@@ -477,11 +682,15 @@ export async function recordMovePreview(
       const existingInput = await transaction.readPreview(session.id, previewId);
       if (existingInput !== undefined) {
         const existing = safeParse(createMovePreviewSchema(environment), existingInput);
-        if (existing === undefined || existing.id !== previewId) {
+        if (
+          existing === undefined ||
+          existing.id !== previewId ||
+          !movePreviewRequestMatches(existing, requestInput)
+        ) {
           return repositoryFailure(
             "rejected",
             "invalid-preview-record",
-            "The stored move preview failed runtime validation or identity checks.",
+            "The stored move preview failed validation or the preview ID was reused for a different request.",
           );
         }
         const detached = freezeDetached(existing);
@@ -546,6 +755,106 @@ export async function recordMovePreview(
     });
   } catch (error: unknown) {
     return transactionFailure(error, "The move-preview transaction failed.");
+  }
+}
+
+/** Load the complete validated rooted discovery tree using only retained records. */
+export async function loadProofHistory(
+  store: ProofStore,
+  sessionIdInput: unknown,
+): Promise<LoadProofHistoryResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  if (sessionId === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-session-record",
+      "The proof-session ID is invalid.",
+    );
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      return loadProofHistoryInTransaction(
+        transaction,
+        loadedSession.session,
+        loadedSession.environment,
+      );
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The proof-discovery tree could not be loaded.");
+  }
+}
+
+/** Repoint the current-node cursor to a node in the retained rooted tree without a kernel move. */
+export async function backtrackProofSession(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  requestInput: unknown,
+): Promise<BacktrackProofSessionResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const request = safeParse(backtrackProofSessionSchema, requestInput);
+  if (sessionId === undefined || request === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "backtrack-rejected",
+      "The session ID or backtrack request is invalid.",
+    );
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
+      if (session.currentNodeId !== request.expectedCurrentNodeId) {
+        return repositoryFailure(
+          "rejected",
+          "serialized-stale-backtrack",
+          "The current proof node changed before the backtrack request was applied.",
+        );
+      }
+      const history = await loadProofHistoryInTransaction(transaction, session, environment);
+      if (history.status !== "loaded") return history;
+      const target = history.nodes.find((node) => node.id === request.targetNodeId);
+      if (target === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "backtrack-rejected",
+          "The requested node is not reachable from this session's root.",
+        );
+      }
+      if (target.id === session.currentNodeId) {
+        return { status: "committed" as const, session, node: target, replayed: true };
+      }
+      const repointed = await transaction.repointCurrentNode(
+        session.id,
+        session.currentNodeId,
+        target.id,
+      );
+      if (!repointed) {
+        return repositoryFailure(
+          "rejected",
+          "serialized-stale-backtrack",
+          "The current proof node changed before the backtrack request was applied.",
+        );
+      }
+      const updatedSession = freezeDetached({ ...session, currentNodeId: target.id });
+      if (updatedSession === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-session-record",
+          "The updated proof session could not be detached safely.",
+        );
+      }
+      return {
+        status: "committed" as const,
+        session: updatedSession,
+        node: target,
+        replayed: false,
+      };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The proof session could not be backtracked atomically.");
   }
 }
 
@@ -697,6 +1006,13 @@ export async function executeProofCommand(
         );
       }
       if (previous !== undefined) {
+        if (session.currentNodeId !== previous.prepared.node.id) {
+          return repositoryFailure(
+            "rejected",
+            "serialized-stale-command",
+            "The recorded command was superseded by navigation or a different branch.",
+          );
+        }
         return { status: "committed" as const, result: prepared, replayed: true };
       }
 
@@ -717,6 +1033,403 @@ export async function executeProofCommand(
   } catch (error: unknown) {
     return transactionFailure(error, "The proof command transaction failed.");
   }
+}
+
+type DisplayedSuggestion = DisplayedSuggestionSet["suggestions"][number];
+type ResolvedSelection = DisplayedSuggestionSet["selection"] extends infer Selection
+  ? Selection extends { kind: "selection-query"; selections: readonly (infer Subject)[] }
+    ? Subject extends { selection: infer Item }
+      ? Item
+      : never
+    : Selection
+  : never;
+
+function materializeKernelOperation(
+  node: ProofNode,
+  suggestionSet: DisplayedSuggestionSet,
+  suggestion: DisplayedSuggestion,
+  move: MoveDefinition,
+  commandId: ApplyKernelCommand["commandId"],
+): MovePreview["operation"] | undefined {
+  const selectionsBySlot = new Map<string, ResolvedSelection>();
+  for (const match of suggestion.selectionMatches) {
+    if (match.selectionSlotId === undefined) continue;
+    const selection = resolvedSelectionById(suggestionSet, match.selectionId);
+    if (selection === undefined || selectionsBySlot.has(match.selectionSlotId)) return undefined;
+    selectionsBySlot.set(match.selectionSlotId, selection);
+  }
+  const targetSelection = selectionsBySlot.get("target");
+  if (targetSelection === undefined) return undefined;
+  const common = {
+    expectedStateId: node.state.id,
+    resultStateId: derivedStateId(commandId),
+    target: targetSelection.anchor.target,
+  };
+  const hypothesisId = (slotId: string): string | undefined => {
+    const statement = selectionsBySlot.get(slotId)?.anchor.statement;
+    return statement?.kind === "hypothesis" ? statement.id : undefined;
+  };
+  const operandCount = (slotId: string): number | undefined =>
+    mathJsonOperandCount(selectionsBySlot.get(slotId)?.fragment);
+  const generatedIds = (label: string, count: number): readonly string[] =>
+    Array.from(
+      { length: count },
+      (_unused, index) => `statement:${commandId}:${label}:${index + 1}`,
+    );
+
+  let candidate: unknown;
+  switch (move.implementation.operationKind) {
+    case "close-by-hypothesis": {
+      const factId = hypothesisId("fact");
+      if (factId === undefined) return undefined;
+      candidate = { ...common, kind: "close-by-hypothesis", hypothesisId: factId };
+      break;
+    }
+    case "close-true":
+      candidate = { ...common, kind: "close-true" };
+      break;
+    case "close-false-hypothesis": {
+      const falseId = hypothesisId("false");
+      if (falseId === undefined) return undefined;
+      candidate = { ...common, kind: "close-false-hypothesis", hypothesisId: falseId };
+      break;
+    }
+    case "introduce-implication":
+      candidate = {
+        ...common,
+        kind: "introduce-implication",
+        hypothesisId: generatedIds("hypothesis", 1)[0],
+      };
+      break;
+    case "introduce-negation":
+      candidate = {
+        ...common,
+        kind: "introduce-negation",
+        hypothesisId: generatedIds("hypothesis", 1)[0],
+      };
+      break;
+    case "split-goal-conjunction": {
+      const count = mathJsonOperandCount(selectedStatementExpression(node, targetSelection));
+      if (count === undefined) return undefined;
+      candidate = {
+        ...common,
+        kind: "split-goal-conjunction",
+        childIds: generatedIds("child", count),
+      };
+      break;
+    }
+    case "expand-hypothesis-conjunction": {
+      const sourceId = hypothesisId("conjunction");
+      const count = operandCount("conjunction");
+      if (sourceId === undefined || count === undefined) return undefined;
+      candidate = {
+        ...common,
+        kind: "expand-hypothesis-conjunction",
+        hypothesisId: sourceId,
+        expandedHypothesisIds: generatedIds("expanded-hypothesis", count),
+      };
+      break;
+    }
+    case "split-hypothesis-disjunction": {
+      const sourceId = hypothesisId("disjunction");
+      const count = operandCount("disjunction");
+      if (sourceId === undefined || count === undefined) return undefined;
+      candidate = {
+        ...common,
+        kind: "split-hypothesis-disjunction",
+        hypothesisId: sourceId,
+        childIds: generatedIds("child", count),
+        branchHypothesisIds: generatedIds("branch-hypothesis", count),
+      };
+      break;
+    }
+    case "apply-implication-hypothesis": {
+      const implicationId = hypothesisId("implication");
+      const antecedentId = hypothesisId("antecedent");
+      if (implicationId === undefined || antecedentId === undefined) return undefined;
+      candidate = {
+        ...common,
+        kind: "apply-implication-hypothesis",
+        implicationHypothesisId: implicationId,
+        antecedentHypothesisId: antecedentId,
+        resultHypothesisId: generatedIds("result-hypothesis", 1)[0],
+      };
+      break;
+    }
+    case "introduce-universal":
+      candidate = { ...common, kind: "introduce-universal" };
+      break;
+    case "unpack-existential-hypothesis": {
+      const sourceId = hypothesisId("existential");
+      if (sourceId === undefined) return undefined;
+      candidate = {
+        ...common,
+        kind: "unpack-existential-hypothesis",
+        hypothesisId: sourceId,
+        resultHypothesisId: generatedIds("result-hypothesis", 1)[0],
+      };
+      break;
+    }
+    case "choose-goal-disjunct":
+    case "instantiate-universal-hypothesis":
+    case "choose-existential-witness":
+    case "rewrite-with-equality":
+      return undefined;
+  }
+  return safeParse(kernelOperationAdapterSchema, candidate);
+}
+
+function resolvedSelectionById(
+  suggestionSet: DisplayedSuggestionSet,
+  selectionId: string,
+): ResolvedSelection | undefined {
+  if (suggestionSet.selection.kind !== "selection-query") {
+    return selectionId === "selection:primary"
+      ? (suggestionSet.selection as ResolvedSelection)
+      : undefined;
+  }
+  return suggestionSet.selection.selections.find(({ id }) => id === selectionId)?.selection as
+    ResolvedSelection | undefined;
+}
+
+function mathJsonOperandCount(value: unknown): number | undefined {
+  const fn = Array.isArray(value)
+    ? value
+    : isDataRecord(value) && Array.isArray(value.fn)
+      ? value.fn
+      : undefined;
+  return fn !== undefined && fn.length >= 3 ? fn.length - 1 : undefined;
+}
+
+function selectedStatementExpression(
+  node: ProofNode,
+  selection: ResolvedSelection,
+): unknown | undefined {
+  const target =
+    selection.anchor.target.kind === "goal"
+      ? node.state.goals.find(({ id }) => id === selection.anchor.target.id)
+      : node.state.obligations.find(({ id }) => id === selection.anchor.target.id);
+  if (target === undefined) return undefined;
+  const statement = selection.anchor.statement;
+  if (statement.kind === "conclusion") {
+    return target.sequent.conclusion.expression;
+  }
+  return target.sequent.context.hypotheses.find(({ id }) => id === statement.id)?.statement
+    .expression;
+}
+
+export function derivedMoveRecordIds(commandId: ApplyKernelCommand["commandId"]): Readonly<{
+  previewId: MovePreviewId;
+  resultStateId: ProofNode["state"]["id"];
+  resultNodeId: ProofNode["id"];
+  edgeId: ProofEdge["id"];
+  eventId: TransitionEvent["id"];
+}> {
+  return {
+    previewId: derivedPreviewId(commandId),
+    resultStateId: derivedStateId(commandId),
+    resultNodeId: `node:${commandId}` as ProofNode["id"],
+    edgeId: `edge:${commandId}` as ProofEdge["id"],
+    eventId: `event:${commandId}` as TransitionEvent["id"],
+  };
+}
+
+function derivedPreviewId(commandId: ApplyKernelCommand["commandId"]): MovePreviewId {
+  return `preview:${commandId}` as MovePreviewId;
+}
+
+function derivedStateId(commandId: ApplyKernelCommand["commandId"]): ProofNode["state"]["id"] {
+  return `state:${commandId}` as ProofNode["state"]["id"];
+}
+
+function movePreviewRequestMatches(preview: MovePreview, request: unknown): boolean {
+  return (
+    isStrictDataRecord(request, [
+      "id",
+      "suggestionSetId",
+      "chosenSuggestionId",
+      "moveId",
+      "operation",
+    ]) &&
+    request.id === preview.id &&
+    request.suggestionSetId === preview.suggestionSetId &&
+    request.chosenSuggestionId === preview.chosenSuggestionId &&
+    request.moveId === preview.moveId &&
+    jsonEquals(request.operation, preview.operation)
+  );
+}
+
+async function loadProofHistoryInTransaction(
+  transaction: ProofStoreTransaction,
+  session: ProofSession,
+  environment: ProtocolEnvironment,
+): Promise<LoadProofHistoryResult> {
+  const inputs = await transaction.listEdges(session.id);
+  if (!Array.isArray(inputs)) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-edge-record",
+      "The stored proof-edge collection is invalid.",
+    );
+  }
+  const edges: ProofEdge[] = [];
+  for (const input of inputs) {
+    const edge = parseEdgeRecord(input, session, environment);
+    if (edge === undefined) {
+      return repositoryFailure(
+        "rejected",
+        "invalid-edge-record",
+        "A stored proof edge failed runtime validation or relational identity checks.",
+      );
+    }
+    edges.push(edge);
+  }
+  edges.sort((left, right) => left.id.localeCompare(right.id));
+  if (
+    new Set(edges.map(({ id }) => id)).size !== edges.length ||
+    new Set(edges.map(({ childNodeId }) => childNodeId)).size !== edges.length ||
+    edges.some(({ childNodeId }) => childNodeId === session.rootNodeId)
+  ) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-proof-history",
+      "The retained discovery history is not a rooted tree.",
+    );
+  }
+
+  const byParent = new Map<string, ProofEdge[]>();
+  for (const edge of edges) {
+    const children = byParent.get(edge.parentNodeId) ?? [];
+    children.push(edge);
+    byParent.set(edge.parentNodeId, children);
+  }
+  byParent.forEach((children) => children.sort((left, right) => left.id.localeCompare(right.id)));
+  const reachableNodeIds: string[] = [session.rootNodeId];
+  const visitedNodes = new Set<string>(reachableNodeIds);
+  const visitedEdges = new Set<string>();
+  for (let index = 0; index < reachableNodeIds.length; index += 1) {
+    const parent = reachableNodeIds[index];
+    if (parent === undefined) continue;
+    for (const edge of byParent.get(parent) ?? []) {
+      if (visitedNodes.has(edge.childNodeId)) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-proof-history",
+          "The retained discovery history contains a cycle or repeated child.",
+        );
+      }
+      visitedEdges.add(edge.id);
+      visitedNodes.add(edge.childNodeId);
+      reachableNodeIds.push(edge.childNodeId);
+    }
+  }
+  if (visitedEdges.size !== edges.length || !visitedNodes.has(session.currentNodeId)) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-proof-history",
+      "The retained discovery history contains a disconnected edge or current node.",
+    );
+  }
+
+  const nodes: ProofNode[] = [];
+  for (const nodeId of reachableNodeIds) {
+    const parsedNodeId = safeParse(proofNodeIdSchema, nodeId) as ProofNode["id"] | undefined;
+    if (parsedNodeId === undefined) {
+      return repositoryFailure(
+        "rejected",
+        "invalid-proof-history",
+        "The retained discovery history contains an invalid node ID.",
+      );
+    }
+    const loaded = await loadNode(
+      transaction,
+      session,
+      environment,
+      parsedNodeId,
+      "current-node-not-found",
+      "invalid-current-node",
+    );
+    if (!loaded.ok) return loaded.failure;
+    nodes.push(loaded.node);
+  }
+
+  const historyEdges: ProofHistoryEdge[] = [];
+  for (const edge of edges) {
+    const parent = nodes.find(({ id }) => id === edge.parentNodeId);
+    const child = nodes.find(({ id }) => id === edge.childNodeId);
+    if (
+      parent === undefined ||
+      child === undefined ||
+      edge.operation.expectedStateId !== parent.state.id ||
+      edge.operation.resultStateId !== child.state.id
+    ) {
+      return repositoryFailure(
+        "rejected",
+        "invalid-proof-history",
+        "A proof edge does not link its retained parent and child snapshots.",
+      );
+    }
+    let name: string = edge.moveId ?? edge.operation.kind;
+    if (edge.suggestionSetId !== undefined && edge.chosenSuggestionId !== undefined) {
+      const loaded = await loadSuggestionSet(transaction, session, edge.suggestionSetId);
+      if (!loaded.ok) return loaded.failure;
+      const chosen = loaded.suggestionSet.suggestions.find(
+        ({ id }) => id === edge.chosenSuggestionId,
+      );
+      if (
+        chosen === undefined ||
+        loaded.suggestionSet.nodeId !== edge.parentNodeId ||
+        !suggestionSetMatchesNode(loaded.suggestionSet, parent, environment) ||
+        (edge.moveId !== undefined && chosen.artifactId !== edge.moveId)
+      ) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-proof-history",
+          "A proof edge does not match its retained chosen-suggestion evidence.",
+        );
+      }
+      name = chosen.name;
+    }
+    historyEdges.push({ edge, name });
+  }
+  return { status: "loaded", session, nodes, edges: historyEdges };
+}
+
+function parseEdgeRecord(
+  input: unknown,
+  session: ProofSession,
+  environment: ProtocolEnvironment,
+): ProofEdge | undefined {
+  if (
+    !isStrictDataRecord(input, [
+      "sessionId",
+      "edgeId",
+      "parentNodeId",
+      "childNodeId",
+      "commandId",
+      "suggestionSetId",
+      "chosenSuggestionId",
+      "previewId",
+      "edge",
+    ])
+  ) {
+    return undefined;
+  }
+  const edge = safeParse(createProofEdgeSchema(environment), input.edge);
+  if (
+    edge === undefined ||
+    safeParse(proofSessionIdSchema, input.sessionId) !== session.id ||
+    input.edgeId !== edge.id ||
+    input.parentNodeId !== edge.parentNodeId ||
+    input.childNodeId !== edge.childNodeId ||
+    input.commandId !== edge.commandId ||
+    input.suggestionSetId !== (edge.suggestionSetId ?? null) ||
+    input.chosenSuggestionId !== (edge.chosenSuggestionId ?? null) ||
+    input.previewId !== (edge.previewId ?? null)
+  ) {
+    return undefined;
+  }
+  return freezeDetached(edge);
 }
 
 function commandIdFromUnknown(value: unknown): ApplyKernelCommand["commandId"] | undefined {
