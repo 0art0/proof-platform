@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# codex-loop — run one Codex task to completion, sleeping through usage limits.
+#
+#   scripts/codex-loop "Implement capture-avoiding substitution with tests"
+#
+# Talk to Claude and let Claude run this. On a rate/usage limit it parses the
+# reset time from Codex's own message, sleeps until then, and resumes the SAME
+# Codex session with "continue". Ctrl-C to stop. No other infrastructure.
+set -uo pipefail
+
+prompt="${1:?usage: codex-loop \"task description\"}"
+log="$(mktemp -t codex-loop.XXXXXX)"
+sid=""
+
+# Prints seconds to wait if the last run was rate limited, nothing otherwise.
+cooldown() {
+  python3 - "$log" <<'PY'
+import re, sys
+from datetime import datetime, timedelta
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+if not re.search(r"rate.?limit|usage limit|quota|overloaded|\b429\b", text, re.I):
+    sys.exit(0)
+m = re.search(r"in (\d+)\s*(hour|hr|minute|min|second|sec)", text, re.I)
+if m:
+    n, u = int(m.group(1)), m.group(2).lower()
+    print(max(30, n * 3600 if u[0] == "h" else n * 60 if u.startswith("min") else n)); sys.exit(0)
+m = re.search(r"\bat (\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text, re.I)
+if m:
+    h, mm, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+    h += 12 if ap == "pm" and h < 12 else 0
+    h = 0 if ap == "am" and h == 12 else h
+    now = datetime.now()
+    tgt = now.replace(hour=h % 24, minute=mm, second=0, microsecond=0)
+    if tgt <= now:
+        tgt += timedelta(days=1)
+    print(max(30, int((tgt - now).total_seconds()))); sys.exit(0)
+print(900)  # rate limited, no time given: retry in 15 min
+PY
+}
+
+while :; do
+  if [[ -z "$sid" ]]; then
+    printf '%s\n' "$prompt" |
+      codex --sandbox workspace-write --ask-for-approval never \
+        exec --json --skip-git-repo-check - | tee "$log"
+  else
+    echo ">> resuming Codex session $sid" >&2
+    printf 'continue where you left off\n' |
+      codex --sandbox workspace-write --ask-for-approval never \
+        exec resume --json --skip-git-repo-check "$sid" - | tee "$log"
+  fi
+
+  sid="$(grep -o '"thread_id":"[^"]*"' "$log" | head -1 | cut -d'"' -f4)"
+  wait_s="$(cooldown)"
+  [[ -z "$wait_s" ]] && break
+  echo ">> Codex rate limited — sleeping ${wait_s}s, then resuming $sid" >&2
+  sleep "$wait_s"
+done
+
+echo ">> done (session $sid); transcript: $log" >&2
