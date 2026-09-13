@@ -44,6 +44,10 @@ class Config:
         return self.root / str(self.raw["paths"]["worktreeDirectory"])
 
     @property
+    def pnpm_store_dir(self) -> Path:
+        return self.root / ".tools" / "pnpm-home" / "store"
+
+    @property
     def database_path(self) -> Path:
         return self.state_dir / "state.sqlite3"
 

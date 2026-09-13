@@ -120,6 +120,7 @@ def run_codex(
     sandbox: str,
     timeout: float,
     resume_thread_id: str | None = None,
+    extra_writable_dirs: tuple[Path, ...] = (),
 ) -> CodexOutcome:
     result_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -131,6 +132,8 @@ def run_codex(
         "--ask-for-approval",
         str(config.raw["codex"]["approvalPolicy"]),
     ]
+    for extra_dir in extra_writable_dirs:
+        command.extend(["--add-dir", str(extra_dir)])
     model = config.codex_model(role)
     if model:
         command.extend(["--model", model])
