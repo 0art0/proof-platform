@@ -29,7 +29,10 @@ class CodexCommandTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def run_and_capture_command(
-        self, role: str, resume_thread_id: str | None = None
+        self,
+        role: str,
+        resume_thread_id: str | None = None,
+        extra_writable_dirs: tuple[Path, ...] = (),
     ) -> list[str]:
         with patch("agentctl.codex.subprocess.Popen", return_value=_CompletedProcess()) as popen:
             run_codex(
@@ -43,6 +46,7 @@ class CodexCommandTests(unittest.TestCase):
                 sandbox="workspace-write",
                 timeout=5,
                 resume_thread_id=resume_thread_id,
+                extra_writable_dirs=extra_writable_dirs,
             )
         return popen.call_args.args[0]
 
@@ -91,6 +95,40 @@ class CodexCommandTests(unittest.TestCase):
         command = self.run_and_capture_command("implementer")
 
         self.assert_model_configuration(command, "legacy-model", "high")
+
+    def test_no_extra_writable_dirs_by_default(self) -> None:
+        command = self.run_and_capture_command("implementer")
+
+        self.assertNotIn("--add-dir", command)
+
+    def test_extra_writable_dirs_are_added_before_exec(self) -> None:
+        store_dir = self.root / ".tools" / "pnpm-home" / "store"
+
+        command = self.run_and_capture_command(
+            "implementer", extra_writable_dirs=(store_dir,)
+        )
+
+        add_dir_index = command.index("--add-dir")
+        exec_index = command.index("exec")
+        self.assertLess(add_dir_index, exec_index)
+        self.assertEqual(command[add_dir_index + 1], str(store_dir))
+
+    def test_extra_writable_dirs_apply_to_resumed_sessions_too(self) -> None:
+        store_dir = self.root / ".tools" / "pnpm-home" / "store"
+
+        command = self.run_and_capture_command(
+            "implementer", "existing-thread", extra_writable_dirs=(store_dir,)
+        )
+
+        add_dir_index = command.index("--add-dir")
+        resume_index = command.index("resume")
+        self.assertLess(add_dir_index, resume_index)
+        self.assertEqual(command[add_dir_index + 1], str(store_dir))
+
+    def test_reviewer_does_not_receive_extra_writable_dirs_by_default(self) -> None:
+        command = self.run_and_capture_command("reviewer")
+
+        self.assertNotIn("--add-dir", command)
 
 
 class CodexOutputSchemaTests(unittest.TestCase):

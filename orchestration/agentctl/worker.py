@@ -180,6 +180,7 @@ def execute(root: Path, task_id: str, token: str, phase: str) -> int:
             sandbox=str(config.raw["codex"]["implementerSandbox"]),
             timeout=config.worker_timeout,
             resume_thread_id=str(task.get("thread_id") or "") or None,
+            extra_writable_dirs=(config.pnpm_store_dir,),
         )
         state.update_task(
             task_id,
