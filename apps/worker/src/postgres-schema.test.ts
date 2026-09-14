@@ -7,11 +7,7 @@ const migration = readFileSync(
 );
 
 function normalizedSql(sql: string): string {
-  return sql
-    .replace(/--.*$/gm, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return sql.replace(/--.*$/gm, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 describe("proof event provenance migration", () => {
@@ -21,12 +17,8 @@ describe("proof event provenance migration", () => {
     "( array[suggestion_set_id, chosen_suggestion_id, preview_id] ) stored not null";
 
   it("stores the ordered null-safe provenance tuple on edges and events", () => {
-    expect(sql).toContain(
-      `alter table proof_edges add column ${generatedProvenanceKey};`,
-    );
-    expect(sql).toContain(
-      `alter table proof_events add column ${generatedProvenanceKey};`,
-    );
+    expect(sql).toContain(`alter table proof_edges add column ${generatedProvenanceKey};`);
+    expect(sql).toContain(`alter table proof_events add column ${generatedProvenanceKey};`);
     expect(sql.split("generated always as")).toHaveLength(3);
   });
 
