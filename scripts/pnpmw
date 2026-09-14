@@ -30,4 +30,42 @@ export PATH="$PNPM_HOME:$node_bin:$PATH"
 export NEXT_TELEMETRY_DISABLED=1
 export TURBO_TELEMETRY_DISABLED=1
 
+pnpm_command=""
+pnpm_args=("$@")
+arg_index=0
+
+while ((arg_index < ${#pnpm_args[@]})); do
+  arg="${pnpm_args[$arg_index]}"
+  case "$arg" in
+    -C | --dir | -F | --filter | --filter-prod | --config-dir | --reporter | --loglevel | --workspace-concurrency)
+      arg_index=$((arg_index + 2))
+      ;;
+    --dir=* | --filter=* | --filter-prod=* | --config-dir=* | --reporter=* | --loglevel=* | --workspace-concurrency=*)
+      arg_index=$((arg_index + 1))
+      ;;
+    --)
+      arg_index=$((arg_index + 1))
+      if ((arg_index < ${#pnpm_args[@]})); then
+        pnpm_command="${pnpm_args[$arg_index]}"
+      fi
+      break
+      ;;
+    -*)
+      arg_index=$((arg_index + 1))
+      ;;
+    *)
+      pnpm_command="$arg"
+      break
+      ;;
+  esac
+done
+
+case "$pnpm_command" in
+  "" | help | i | install | c | config)
+    ;;
+  *)
+    corepack pnpm --dir "$repo_root" install --frozen-lockfile
+    ;;
+esac
+
 exec corepack pnpm "$@"

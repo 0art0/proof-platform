@@ -6,6 +6,7 @@ allowBuilds:
   esbuild: true
 
 engineStrict: true
+enableGlobalVirtualStore: false
 saveExact: false
 sharedWorkspaceLockfile: true
 strictPeerDependencies: true
