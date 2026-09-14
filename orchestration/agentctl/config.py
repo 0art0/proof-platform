@@ -48,6 +48,10 @@ class Config:
         return self.root / ".tools" / "pnpm-home" / "store"
 
     @property
+    def tools_dir(self) -> Path:
+        return self.root / ".tools"
+
+    @property
     def database_path(self) -> Path:
         return self.state_dir / "state.sqlite3"
 
