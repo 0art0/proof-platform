@@ -25,14 +25,15 @@ type QueryCall = Readonly<{ text: string; values: readonly unknown[] | undefined
 
 class RecordingClient implements SqlClient {
   calls: QueryCall[] = [];
-  released = false;
+  releases: (Error | boolean | undefined)[] = [];
   failOn: "BEGIN" | "COMMIT" | "ROLLBACK" | undefined;
+  failureCause: unknown = new Error("forced control-statement failure");
 
   async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
     this.calls.push({ text, values });
     const normalized = text.trim();
     if (this.failOn !== undefined && normalized === this.failOn) {
-      throw new Error(`forced ${this.failOn} failure`);
+      throw this.failureCause;
     }
     if (text.includes("FROM proof_sessions")) {
       return {
@@ -101,8 +102,8 @@ class RecordingClient implements SqlClient {
     return { rows: [], rowCount: text.includes("UPDATE proof_sessions") ? 1 : 0 };
   }
 
-  release(): void {
-    this.released = true;
+  release(error?: Error | boolean): void {
+    this.releases.push(error);
   }
 }
 
@@ -164,7 +165,7 @@ describe("PostgresProofStore", () => {
       "COMMIT",
     ]);
     expect(client.calls[1]?.text).toContain("FOR UPDATE");
-    expect(client.released).toBe(true);
+    expect(client.releases).toEqual([undefined]);
   });
 
   it("keeps identifiers and JSONB payloads in parameters", async () => {
@@ -367,36 +368,47 @@ describe("PostgresProofStore", () => {
     expect(update?.values).toEqual(["session:one", "node:child", "node:root"]);
   });
 
-  it("rolls back work failures and releases the client", async () => {
+  it("rolls back work failures and releases the client normally exactly once", async () => {
     const client = new RecordingClient();
     const store = new PostgresProofStore(poolFor(client));
+    const cause = new Error("insert failed");
 
-    await expect(
-      store.transaction(async () => {
-        throw new Error("insert failed");
-      }),
-    ).rejects.toMatchObject({ outcome: "rolled-back" });
+    const error = await store
+      .transaction(async () => {
+        throw cause;
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProofStoreTransactionError);
+    expect(error).toMatchObject({ outcome: "rolled-back" });
+    expect((error as ProofStoreTransactionError).cause).toBe(cause);
     expect(client.calls.map(({ text }) => text.trim())).toEqual(["BEGIN", "ROLLBACK"]);
-    expect(client.released).toBe(true);
+    expect(client.releases).toEqual([undefined]);
   });
 
   it("rolls back even when the callback throws an uncertainty-shaped error", async () => {
     const client = new RecordingClient();
     const store = new PostgresProofStore(poolFor(client));
+    const cause = new ProofStoreTransactionError("commit-unknown", "untrusted callback outcome");
 
-    await expect(
-      store.transaction(async () => {
-        throw new ProofStoreTransactionError("commit-unknown", "untrusted callback outcome");
-      }),
-    ).rejects.toMatchObject({ outcome: "rolled-back" });
+    const error = await store
+      .transaction(async () => {
+        throw cause;
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ outcome: "rolled-back" });
+    expect((error as ProofStoreTransactionError).cause).toBe(cause);
     expect(client.calls.map(({ text }) => text.trim())).toEqual(["BEGIN", "ROLLBACK"]);
-    expect(client.released).toBe(true);
+    expect(client.releases).toEqual([undefined]);
   });
 
-  it("reports commit and rollback connection failures as uncertain", async () => {
+  it("reports commit and rollback connection failures as uncertain and evicts once", async () => {
     for (const failure of ["COMMIT", "ROLLBACK"] as const) {
       const client = new RecordingClient();
       client.failOn = failure;
+      const cause = new Error(`forced ${failure} failure`);
+      client.failureCause = cause;
       const store = new PostgresProofStore(poolFor(client));
       const operation =
         failure === "COMMIT"
@@ -408,20 +420,33 @@ describe("PostgresProofStore", () => {
       const error = await operation.catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(ProofStoreTransactionError);
       expect(error).toMatchObject({ outcome: "commit-unknown" });
-      expect(client.released).toBe(true);
+      expect((error as ProofStoreTransactionError).cause).toBe(cause);
+      expect(client.releases).toEqual([true]);
       if (failure === "COMMIT") {
         expect(client.calls.some(({ text }) => text.trim() === "ROLLBACK")).toBe(false);
       }
     }
   });
 
-  it("releases the client when BEGIN itself fails", async () => {
+  it("evicts the client exactly once when BEGIN itself fails", async () => {
     const client = new RecordingClient();
     client.failOn = "BEGIN";
-    await expect(
-      new PostgresProofStore(poolFor(client)).transaction(async () => true),
-    ).rejects.toMatchObject({ outcome: "rolled-back" });
+    const cause = new Error("forced BEGIN failure");
+    client.failureCause = cause;
+    let worked = false;
+
+    const error = await new PostgresProofStore(poolFor(client))
+      .transaction(async () => {
+        worked = true;
+        return true;
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProofStoreTransactionError);
+    expect(error).toMatchObject({ outcome: "rolled-back" });
+    expect((error as ProofStoreTransactionError).cause).toBe(cause);
     expect(client.calls.map(({ text }) => text.trim())).toEqual(["BEGIN"]);
-    expect(client.released).toBe(true);
+    expect(worked).toBe(false);
+    expect(client.releases).toEqual([true]);
   });
 });

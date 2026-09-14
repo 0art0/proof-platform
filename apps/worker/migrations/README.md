@@ -7,11 +7,24 @@ unrelated.
 
 Apply migrations with the deployment environment's normal PostgreSQL migration runner.
 The worker does not connect to a database or run migrations automatically at startup.
-The migration has not been exercised against a live PostgreSQL instance by the unit suite.
+The migrations are not exercised against a live PostgreSQL instance by the unit suite.
 
 `0002_llm_call_evidence.sql` adds owner-scoped immutable LLM request/outcome records and explicit
 topic-manifest review decisions. A `dispatching` record deliberately remains ambiguous after a
 worker crash: retry reads it as uncertain and does not silently dispatch the provider again.
+
+`0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
+events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
+as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so
+the no-evidence, suggestion-without-preview, and suggestion-with-preview shapes all compare
+positionally without sentinel values. The migration validates existing rows and deliberately
+fails instead of rewriting inconsistent provenance.
+
+Migration `0003` requires PostgreSQL 12 or later because it uses stored generated columns. Adding
+the stored columns computes and stores a value for every existing edge and event and can rewrite
+both tables. The table alterations, unique-index construction, and foreign-key validation also
+take locks that can block concurrent reads or writes. Plan enough time and disk space and run the
+migration during a suitable low-traffic or maintenance window.
 
 ## Proof HTTP service and live verification
 

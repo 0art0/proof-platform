@@ -9,20 +9,21 @@ import {
 import type { LlmCallOwner, StoredLlmCall, TopicProposalDecision } from "./llm-call-repository";
 import { PostgresLlmCallStore } from "./postgres-llm-call-store";
 import type { SqlClient, SqlPool, SqlQueryResult } from "./postgres-proof-store";
-import type { ProofStoreTransactionError } from "./proof-repository";
+import { ProofStoreTransactionError } from "./proof-repository";
 
 type QueryCall = Readonly<{ text: string; values: readonly unknown[] | undefined }>;
 
 class RecordingClient implements SqlClient {
   readonly calls: QueryCall[] = [];
-  released = false;
+  readonly releases: (Error | boolean | undefined)[] = [];
   callRecord: unknown;
   decisionRecord: unknown;
-  failCommit = false;
+  failOn: "BEGIN" | "COMMIT" | "ROLLBACK" | undefined;
+  failureCause: unknown = new Error("forced control-statement failure");
 
   async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
     this.calls.push({ text, values });
-    if (this.failCommit && text.trim() === "COMMIT") throw new Error("commit failed");
+    if (this.failOn !== undefined && text.trim() === this.failOn) throw this.failureCause;
     if (text.includes("FROM llm_calls")) {
       return {
         rows: this.callRecord === undefined ? [] : [{ record: this.callRecord }],
@@ -38,8 +39,8 @@ class RecordingClient implements SqlClient {
     return { rows: [], rowCount: text.includes("UPDATE llm_calls") ? 1 : 0 };
   }
 
-  release(): void {
-    this.released = true;
+  release(error?: Error | boolean): void {
+    this.releases.push(error);
   }
 }
 
@@ -146,16 +147,72 @@ describe("PostgresLlmCallStore", () => {
       "manifest:approved",
     ]);
     expect(client.calls.at(-1)?.text.trim()).toBe("COMMIT");
-    expect(client.released).toBe(true);
+    expect(client.releases).toEqual([undefined]);
   });
 
-  it("reports an unknown commit and always releases the client", async () => {
+  it("rolls back callback failures and releases the client normally exactly once", async () => {
     const client = new RecordingClient();
-    client.failCommit = true;
     const store = new PostgresLlmCallStore(poolFor(client));
-    await expect(store.transaction(async () => "result")).rejects.toMatchObject({
-      outcome: "commit-unknown",
-    } satisfies Partial<ProofStoreTransactionError>);
-    expect(client.released).toBe(true);
+    const cause = new Error("write failed");
+
+    const error = await store
+      .transaction(async () => {
+        throw cause;
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProofStoreTransactionError);
+    expect(error).toMatchObject({ outcome: "rolled-back" });
+    expect((error as ProofStoreTransactionError).cause).toBe(cause);
+    expect(client.calls.map(({ text }) => text.trim())).toEqual(["BEGIN", "ROLLBACK"]);
+    expect(client.releases).toEqual([undefined]);
+  });
+
+  it("reports failed COMMIT and ROLLBACK as uncertain and evicts the client exactly once", async () => {
+    for (const failure of ["COMMIT", "ROLLBACK"] as const) {
+      const client = new RecordingClient();
+      client.failOn = failure;
+      const cause = new Error(`forced ${failure} failure`);
+      client.failureCause = cause;
+      const store = new PostgresLlmCallStore(poolFor(client));
+      const operation =
+        failure === "COMMIT"
+          ? store.transaction(async () => "result")
+          : store.transaction(async () => {
+              throw new Error("write failed");
+            });
+
+      const error = await operation.catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ProofStoreTransactionError);
+      expect(error).toMatchObject({ outcome: "commit-unknown" });
+      expect((error as ProofStoreTransactionError).cause).toBe(cause);
+      expect(client.releases).toEqual([true]);
+      if (failure === "COMMIT") {
+        expect(client.calls.some(({ text }) => text.trim() === "ROLLBACK")).toBe(false);
+      }
+    }
+  });
+
+  it("reports failed BEGIN as rolled back and evicts the client exactly once", async () => {
+    const client = new RecordingClient();
+    client.failOn = "BEGIN";
+    const cause = new Error("forced BEGIN failure");
+    client.failureCause = cause;
+    let worked = false;
+
+    const error = await new PostgresLlmCallStore(poolFor(client))
+      .transaction(async () => {
+        worked = true;
+        return "result";
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProofStoreTransactionError);
+    expect(error).toMatchObject({ outcome: "rolled-back" });
+    expect((error as ProofStoreTransactionError).cause).toBe(cause);
+    expect(client.calls.map(({ text }) => text.trim())).toEqual(["BEGIN"]);
+    expect(worked).toBe(false);
+    expect(client.releases).toEqual([true]);
   });
 });
