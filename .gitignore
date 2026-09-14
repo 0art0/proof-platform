@@ -21,6 +21,9 @@
 /.agent-state/
 /.worktrees/
 
+# Claude Code interactive-session worktrees
+/.claude/
+
 # Local configuration and credentials
 .env
 .env.*
