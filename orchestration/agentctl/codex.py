@@ -27,6 +27,11 @@ RELATIVE_RETRY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ISO_RETRY_PATTERN = re.compile(r"20\d\d-\d\d-\d\d[T ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-]\d\d:\d\d)")
+ABSOLUTE_DATE_RETRY_PATTERN = re.compile(
+    r"try again at\s+([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})\s+"
+    r"(\d{1,2}):(\d{2})\s*(AM|PM)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,16 @@ def classify_rate_limit(output: str, fallback_seconds: float) -> tuple[bool, flo
             return True, max(epoch_now() + 1, parsed.timestamp())
         except ValueError:
             pass
+    absolute = ABSOLUTE_DATE_RETRY_PATTERN.search(output)
+    if absolute:
+        month_name, day, year, hour, minute, meridiem = absolute.groups()
+        candidate_text = f"{month_name} {day} {year} {hour}:{minute} {meridiem.upper()}"
+        for date_format in ("%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p"):
+            try:
+                parsed_naive = datetime.strptime(candidate_text, date_format)
+            except ValueError:
+                continue
+            return True, max(epoch_now() + 1, parsed_naive.replace(tzinfo=UTC).timestamp())
     retry_after = re.search(r"retry-after\s*[:=]\s*([^\r\n,;]+)", output, re.IGNORECASE)
     if retry_after:
         raw = retry_after.group(1).strip()
