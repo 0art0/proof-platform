@@ -11,3 +11,6 @@ export * from "./proof-http";
 export * from "./development-session";
 export * from "./memory-proof-store";
 export * from "./proof-worker-startup";
+export * from "./library-repository";
+export * from "./postgres-library-store";
+export * from "./memory-library-store";

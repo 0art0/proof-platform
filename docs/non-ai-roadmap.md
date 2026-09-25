@@ -165,7 +165,7 @@ that archive.
 
 ## Phase 3 — Library, moves, retrieval
 
-- [ ] **N12 Library store, layers, admission, derived results (§12.4).** Add a `LibraryRepository` (memory +
+- [x] **N12 Library store, layers, admission, derived results (§12.4).** Add a `LibraryRepository` (memory +
       Postgres, migration `0003`) for artifacts, variant families, layers (global / initial-problem /
       proof-time-background / derived / move-discovery-draft), and the global persistent operator registry.
   - Library-addition events record the artifact, layer, origin, background classification and approval.

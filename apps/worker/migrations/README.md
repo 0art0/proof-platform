@@ -2,8 +2,7 @@
 
 `0001_proof_commands.sql` creates the initial PostgreSQL proof-session, immutable-node,
 displayed-suggestion, concrete-preview, edge, event, and idempotent-command tables. Mathematical
-state and documentary records are stored as JSONB; orchestration SQLite state is deliberately
-unrelated.
+state and documentary records are stored as JSONB.
 
 Apply migrations with the deployment environment's normal PostgreSQL migration runner.
 The worker does not connect to a database or run migrations automatically at startup.
@@ -17,6 +16,21 @@ worker crash: retry reads it as uncertain and does not silently dispatch the pro
 protocol `ProofSessionMetadata` (problem title and statement, background profile, preferences and
 active library layer IDs). Existing sessions keep `NULL` and load without metadata. The column is
 written only when a session is initialized and is never part of proof state.
+
+`0004_library.sql` adds the library store (design plan §12.4):
+
+- `library_addition_events`: append-only addition events keyed by `(scope_key, id)`, where
+  `scope_key` is `global` or `session:<id>`. Every gate decision is recorded, including rejections.
+  Only `global`-layer events are outside a session.
+- `library_artifacts`: admitted artifacts keyed by `(scope_key, id)`. Each row references its
+  admitting event by artifact ID, layer, sequence, and an `admitted` decision.
+- `library_background_revisions`: append-only session background revisions. Recording one also
+  rewrites `proof_sessions.metadata.background` in the same transaction.
+- `library_operators`: the global registry of approved operator declarations, with a unique symbol.
+
+Sequences are allocated per scope under the session row lock (or a global advisory lock). Stored
+suggestion sets are never touched, so earlier menus stay exactly as displayed. `MemoryLibraryStore`
+mirrors these constraints for database-free runs.
 
 ## Proof HTTP service and live verification
 

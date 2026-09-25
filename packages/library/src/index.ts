@@ -586,3 +586,5 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
 
 export * from "./background";
 export * from "./variants";
+export * from "./additions";
+export * from "./derived";
