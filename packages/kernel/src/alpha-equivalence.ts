@@ -142,7 +142,7 @@ function sameSymbolReference(
 }
 
 /** Compare a node's form and every field except the one holding its name or operands. */
-function sameNodeMetadata(
+export function sameNodeMetadata(
   left: PlainMathJson,
   right: PlainMathJson,
   structuralKey: "sym" | "fn",

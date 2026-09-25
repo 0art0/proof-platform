@@ -23,8 +23,33 @@ import {
 } from "@proof/mathjson-model";
 import { alphaEquivalentWithOperators } from "./alpha-equivalence";
 import { binderFor, functionParts, operatorOperands, symbolValue } from "./expression";
+import {
+  instantiateResultInContext,
+  kernelResultIdSchema,
+  parseKernelResultCatalog,
+  type KernelResult,
+  type KernelResultId,
+  type ResultInstantiation,
+} from "./results";
+import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 
 export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equivalence";
+export {
+  RESULT_APPLICATION_DIRECTIONS,
+  freeResultParameters,
+  kernelResultIdSchema,
+  matchResultConclusion,
+  parseKernelResultCatalog,
+  type KernelResult,
+  type KernelResultId,
+  type KernelResultParameter,
+  type ResultApplicationDirection,
+  type ResultCatalogIssue,
+  type ResultCatalogParseResult,
+  type ResultInstantiation,
+  type ResultMatch,
+  type ResultMatchDiagnostic,
+} from "./results";
 
 /**
  * Logical direction of a transition from state S to state T (design plan §10):
@@ -39,10 +64,17 @@ export type TransitionClass = "equivalence" | "strengthening" | "weakening";
  * How a transition's logical direction is supported (refinement §9). This is
  * orthogonal to the transition class. `structural` means the kernel checked
  * the step itself; `background-inference` means the kernel only recorded an
- * external attestation reference and did not judge it. Later evidence kinds
- * (for example approved-result application and sorry) extend this list.
+ * external attestation reference and did not judge it. `library-result` means
+ * the kernel checked the instantiation and matching of an approved result from
+ * `KernelEnvironment.results`, whose truth it takes from the catalog; the
+ * transition result then also carries that result's `resultId`. Later
+ * evidence kinds (for example sorry) extend this list.
  */
-export const TRANSITION_EVIDENCE_KINDS = ["structural", "background-inference"] as const;
+export const TRANSITION_EVIDENCE_KINDS = [
+  "structural",
+  "background-inference",
+  "library-result",
+] as const;
 export type TransitionEvidence = (typeof TRANSITION_EVIDENCE_KINDS)[number];
 
 /** Opaque reference to an externally recorded attestation. The kernel never dereferences it. */
@@ -62,7 +94,9 @@ export type TransitionStatementTarget =
  * `split-classical-cases` (roadmap "case-split") splits on an arbitrary
  * proposition by excluded middle, in contrast to `split-hypothesis-disjunction`.
  * `assume-hypothesis` adds an unproved hypothesis; it is a weakening, so the
- * assumption is never silently treated as established.
+ * assumption is never silently treated as established. `apply-result-backward`
+ * and `apply-result-forward` instantiate an approved result from the
+ * environment's catalog.
  */
 export const KERNEL_OPERATION_KINDS = [
   "close-by-hypothesis",
@@ -88,6 +122,8 @@ export const KERNEL_OPERATION_KINDS = [
   "choose-existential-witness",
   "unpack-existential-hypothesis",
   "rewrite-with-equality",
+  "apply-result-backward",
+  "apply-result-forward",
 ] as const;
 export type KernelOperationKind = (typeof KERNEL_OPERATION_KINDS)[number];
 
@@ -173,6 +209,24 @@ export type KernelOperation =
         statement: TransitionStatementTarget;
         path: readonly number[];
         direction: "forward" | "backward";
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "apply-result-backward";
+        resultId: KernelResultId;
+        instantiation: ResultInstantiation;
+        premiseTargetIds: readonly StatementId[];
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "apply-result-forward";
+        resultId: KernelResultId;
+        instantiation: ResultInstantiation;
+        /** One entry per premise: a matching local hypothesis, or null to create an obligation. */
+        premiseHypothesisIds: readonly (StatementId | null)[];
+        resultHypothesisId: StatementId;
+        /** One fresh obligation ID per null premise entry, in premise order. */
+        obligationIds: readonly StatementId[];
       }>);
 
 type RuntimeIssue = Readonly<{ message: string; path: readonly PropertyKey[] }>;
@@ -193,6 +247,8 @@ export const kernelOperationSchema: RuntimeSchema<KernelOperation> =
 
 export type KernelEnvironment = Readonly<{
   operators?: readonly OperatorDeclaration[];
+  /** Approved results that `apply-result-*` operations may instantiate. */
+  results?: readonly KernelResult[];
 }>;
 
 export type KernelDiagnosticCode =
@@ -210,7 +266,13 @@ export type KernelDiagnosticCode =
   | "invalid-proposition"
   | "replacement-failed"
   | "rule-not-applicable"
-  | "invalid-result-state";
+  | "invalid-result-state"
+  | "result-not-found"
+  | "direction-not-permitted"
+  | "missing-instantiation"
+  | "invalid-instantiation"
+  | "conclusion-mismatch"
+  | "premise-mismatch";
 
 export type KernelDiagnostic = Readonly<{
   code: KernelDiagnosticCode;
@@ -224,6 +286,8 @@ export type KernelTransitionResult =
       state: ExecutableProofState;
       transitionClass: TransitionClass;
       evidence: TransitionEvidence;
+      /** Present exactly when `evidence` is `library-result`. */
+      resultId?: KernelResultId;
       diagnostics: readonly [];
     }>
   | Readonly<{
@@ -251,6 +315,17 @@ export function applyTransition(
     stateSchema = createExecutableProofStateSchema({ operators });
   } catch (error: unknown) {
     return failure(state, "invalid-environment", errorMessage(error));
+  }
+  let results: readonly KernelResult[] = [];
+  if (environment.results !== undefined) {
+    const catalog = parseKernelResultCatalog(environment.results, operators);
+    if (!catalog.ok) {
+      return failure(state, "invalid-environment", catalog.issue.message, [
+        "results",
+        ...catalog.issue.path,
+      ]);
+    }
+    results = catalog.results;
   }
 
   const inputState = stateSchema.safeParse(state);
@@ -300,7 +375,7 @@ export function applyTransition(
     return failure(state, "target-not-found", "The target does not exist in that collection.");
   }
 
-  const transition = applyValidatedOperation(working, located, operation, operators);
+  const transition = applyValidatedOperation(working, located, operation, operators, results);
   if (!transition.ok) return { ...transition, state };
 
   const candidate: ProofState = { ...transition.state, id: operation.resultStateId };
@@ -319,6 +394,7 @@ export function applyTransition(
     state: outputState.data,
     transitionClass: transition.transitionClass,
     evidence: transition.evidence,
+    ...(transition.resultId === undefined ? {} : { resultId: transition.resultId }),
     diagnostics: [],
   };
 }
@@ -329,6 +405,7 @@ type InternalResult =
       state: ProofState;
       transitionClass: TransitionClass;
       evidence: TransitionEvidence;
+      resultId?: KernelResultId;
     }>
   | Readonly<{ ok: false; state: ProofState; diagnostics: readonly KernelDiagnostic[] }>;
 
@@ -337,6 +414,7 @@ function applyValidatedOperation(
   target: LocatedTarget,
   operation: KernelOperation,
   operators: readonly OperatorDeclaration[],
+  results: readonly KernelResult[],
 ): InternalResult {
   switch (operation.kind) {
     case "close-by-hypothesis": {
@@ -826,7 +904,156 @@ function applyValidatedOperation(
     case "rewrite-with-equality": {
       return rewriteWithEquality(state, target, operation, operators);
     }
+    case "apply-result-backward":
+      return applyResultBackward(state, target, operation, operators, results);
+    case "apply-result-forward":
+      return applyResultForward(state, target, operation, operators, results);
   }
+}
+
+/**
+ * Backward application: the instantiated conclusion must match the target
+ * conclusion up to alpha-equivalence, and each instantiated premise replaces
+ * the target as a new target of the same kind in the same local context. A
+ * result without premises closes the target. Proving the premises proves the
+ * target, so the transition is a strengthening.
+ */
+function applyResultBackward(
+  state: ProofState,
+  target: LocatedTarget,
+  operation: Extract<KernelOperation, { kind: "apply-result-backward" }>,
+  operators: readonly OperatorDeclaration[],
+  results: readonly KernelResult[],
+): InternalResult {
+  const instance = instantiateResultInContext(
+    results,
+    operation.resultId,
+    "backward",
+    operation.instantiation,
+    target.entry.sequent,
+    operators,
+  );
+  if (!instance.ok) return internalFailure(state, instance.code, instance.message);
+  if (
+    !alphaEquivalentWithOperators(
+      instance.conclusion,
+      target.entry.sequent.conclusion.expression,
+      operators,
+    )
+  ) {
+    return internalFailure(
+      state,
+      "conclusion-mismatch",
+      "The instantiated result conclusion does not match the target conclusion up to renaming of bound symbols.",
+    );
+  }
+  if (operation.premiseTargetIds.length !== instance.premises.length) {
+    return internalFailure(
+      state,
+      "arity-mismatch",
+      "The supplied premise target IDs must correspond one-for-one with the result premises.",
+    );
+  }
+  const collision = targetIdCollision(state, operation.premiseTargetIds);
+  if (collision !== undefined) return idCollision(state, collision);
+  const replacements = instance.premises.map((premise, index): TargetEntry => ({
+    id: operation.premiseTargetIds[index] as StatementId,
+    sequent: {
+      context: structuredClone(target.entry.sequent.context),
+      conclusion: { expression: premise },
+    },
+  }));
+  return success(
+    replaceTarget(state, operation.target, target.index, replacements),
+    "strengthening",
+    "library-result",
+    operation.resultId,
+  );
+}
+
+/**
+ * Forward application: each instantiated premise is either matched up to
+ * alpha-equivalence by the named local hypothesis or, for a null entry,
+ * becomes an obligation in the target's local context. The instantiated
+ * conclusion is appended to the target as a derived hypothesis. The kernel
+ * classifies this as equivalence: the derived fact adds nothing unprovable,
+ * and unmet premises remain as required obligations. Obligations follow an
+ * obligation target directly and are appended after existing obligations for
+ * a goal target, as with `suffices`.
+ */
+function applyResultForward(
+  state: ProofState,
+  target: LocatedTarget,
+  operation: Extract<KernelOperation, { kind: "apply-result-forward" }>,
+  operators: readonly OperatorDeclaration[],
+  results: readonly KernelResult[],
+): InternalResult {
+  const instance = instantiateResultInContext(
+    results,
+    operation.resultId,
+    "forward",
+    operation.instantiation,
+    target.entry.sequent,
+    operators,
+  );
+  if (!instance.ok) return internalFailure(state, instance.code, instance.message);
+  if (operation.premiseHypothesisIds.length !== instance.premises.length) {
+    return internalFailure(
+      state,
+      "arity-mismatch",
+      "The premise hypothesis list must have one entry per result premise.",
+    );
+  }
+  const unmet: PlainMathJson[] = [];
+  for (const [index, premise] of instance.premises.entries()) {
+    const hypothesisId = operation.premiseHypothesisIds[index];
+    if (hypothesisId === null || hypothesisId === undefined) {
+      unmet.push(premise);
+      continue;
+    }
+    const selected = findHypothesis(target.entry.sequent, hypothesisId);
+    if (selected === undefined) return missingHypothesis(state);
+    if (!alphaEquivalentWithOperators(selected.statement.expression, premise, operators)) {
+      return internalFailure(
+        state,
+        "premise-mismatch",
+        `Hypothesis ${hypothesisId} does not match result premise ${index} up to renaming of bound symbols.`,
+      );
+    }
+  }
+  if (operation.obligationIds.length !== unmet.length) {
+    return internalFailure(
+      state,
+      "arity-mismatch",
+      "The supplied obligation IDs must correspond one-for-one with the unmatched premises.",
+    );
+  }
+  const obligationCollision = targetIdCollision(state, operation.obligationIds);
+  if (obligationCollision !== undefined) return idCollision(state, obligationCollision);
+  const hypothesisCollision = hypothesisIdCollision(target.entry.sequent, [
+    operation.resultHypothesisId,
+  ]);
+  if (hypothesisCollision !== undefined) return idCollision(state, hypothesisCollision);
+
+  const obligations = unmet.map((premise, index): Obligation => ({
+    id: operation.obligationIds[index] as StatementId,
+    sequent: {
+      context: structuredClone(target.entry.sequent.context),
+      conclusion: { expression: premise },
+    },
+  }));
+  const derived = appendHypothesis(
+    target.entry,
+    hypothesis(operation.resultHypothesisId, instance.conclusion),
+  );
+  const next =
+    operation.target.kind === "obligation"
+      ? replaceTarget(state, operation.target, target.index, [derived, ...obligations])
+      : {
+          ...replaceTarget(state, operation.target, target.index, [derived]),
+          obligations: [...state.obligations, ...obligations],
+        };
+  return success(next, "equivalence", "library-result", operation.resultId);
 }
 
 function locateTarget(state: ProofState, target: TransitionTarget): LocatedTarget | undefined {
@@ -1131,8 +1358,15 @@ function success(
   state: ProofState,
   transitionClass: TransitionClass,
   evidence: TransitionEvidence = "structural",
+  resultId?: KernelResultId,
 ): Extract<InternalResult, { ok: true }> {
-  return { ok: true, state, transitionClass, evidence };
+  return {
+    ok: true,
+    state,
+    transitionClass,
+    evidence,
+    ...(resultId === undefined ? {} : { resultId }),
+  };
 }
 
 function failure(
@@ -1291,6 +1525,14 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     "choose-existential-witness": ["witness"],
     "unpack-existential-hypothesis": ["hypothesisId", "resultHypothesisId"],
     "rewrite-with-equality": ["equalityHypothesisId", "statement", "path", "direction"],
+    "apply-result-backward": ["resultId", "instantiation", "premiseTargetIds"],
+    "apply-result-forward": [
+      "resultId",
+      "instantiation",
+      "premiseHypothesisIds",
+      "resultHypothesisId",
+      "obligationIds",
+    ],
   };
   if (!(KERNEL_OPERATION_KINDS as readonly string[]).includes(value.kind)) {
     return runtimeFailure("The kernel operation kind is unknown.", ["kind"]);
@@ -1331,6 +1573,24 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     if (field in value && !isStatementIdArray(value[field])) {
       return runtimeFailure("An ID list requires at least two stable, dense IDs.", [field]);
     }
+  }
+  if ("resultId" in value && !kernelResultIdSchema.safeParse(value.resultId).success) {
+    return runtimeFailure("The result ID is invalid.", ["resultId"]);
+  }
+  if ("instantiation" in value && !isInstantiation(value.instantiation)) {
+    return runtimeFailure("An instantiation must map parameter symbols to plain MathJSON terms.", [
+      "instantiation",
+    ]);
+  }
+  for (const field of ["premiseTargetIds", "obligationIds"] as const) {
+    if (field in value && !isStatementIdArray(value[field], 0)) {
+      return runtimeFailure("An ID list must contain stable, dense IDs.", [field]);
+    }
+  }
+  if ("premiseHypothesisIds" in value && !isOptionalStatementIdArray(value.premiseHypothesisIds)) {
+    return runtimeFailure("Premise hypothesis entries must be stable IDs or null.", [
+      "premiseHypothesisIds",
+    ]);
   }
   if (
     value.kind === "split-classical-cases" &&
@@ -1525,6 +1785,30 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
           direction: value.direction as "forward" | "backward",
         },
       };
+    case "apply-result-backward":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          resultId: kernelResultIdSchema.parse(value.resultId),
+          instantiation: copyInstantiation(value.instantiation),
+          premiseTargetIds: copyStatementIds(value.premiseTargetIds),
+        },
+      };
+    case "apply-result-forward":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          resultId: kernelResultIdSchema.parse(value.resultId),
+          instantiation: copyInstantiation(value.instantiation),
+          premiseHypothesisIds: copyOptionalStatementIds(value.premiseHypothesisIds),
+          resultHypothesisId: statementIdSchema.parse(value.resultHypothesisId),
+          obligationIds: copyStatementIds(value.obligationIds),
+        },
+      };
   }
   return runtimeFailure("The kernel operation kind is unknown.", ["kind"]);
 }
@@ -1593,8 +1877,37 @@ function copyStatementIdPair(value: unknown): readonly [StatementId, StatementId
   return [ids[0] as StatementId, ids[1] as StatementId];
 }
 
-function isStatementIdArray(value: unknown): value is readonly StatementId[] {
-  if (!Array.isArray(value) || value.length < 2) return false;
+function isInstantiation(value: unknown): value is ResultInstantiation {
+  return (
+    isStrictRecord(value) &&
+    Reflect.ownKeys(value).every((key) => typeof key === "string" && key.length > 0) &&
+    Object.values(value).every((term) => plainMathJsonSchema.safeParse(term).success)
+  );
+}
+
+function copyInstantiation(value: unknown): ResultInstantiation {
+  if (!isStrictRecord(value)) throw new Error("Expected a validated instantiation.");
+  return Object.fromEntries(
+    Object.entries(value).map(([symbol, term]) => [symbol, copyPlainMathJson(term)]),
+  );
+}
+
+function isOptionalStatementIdArray(value: unknown): value is readonly (StatementId | null)[] {
+  const entries = denseArrayValues(value);
+  return (
+    entries !== undefined &&
+    entries.every((entry) => entry === null || statementIdSchema.safeParse(entry).success)
+  );
+}
+
+function copyOptionalStatementIds(value: unknown): readonly (StatementId | null)[] {
+  const entries = denseArrayValues(value);
+  if (entries === undefined) throw new Error("Expected a validated premise hypothesis list.");
+  return entries.map((entry) => (entry === null ? null : statementIdSchema.parse(entry)));
+}
+
+function isStatementIdArray(value: unknown, minimumLength = 2): value is readonly StatementId[] {
+  if (!Array.isArray(value) || value.length < minimumLength) return false;
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const ownKeys = Reflect.ownKeys(value);
   if (
@@ -1615,23 +1928,6 @@ function isStatementIdArray(value: unknown): value is readonly StatementId[] {
     if (!statementIdSchema.safeParse(descriptor.value).success) return false;
   }
   return true;
-}
-
-function isStrictRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  return Object.values(Object.getOwnPropertyDescriptors(value)).every(
-    (descriptor) => descriptor.enumerable && "value" in descriptor,
-  );
-}
-
-function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
-  const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.some((key) => typeof key !== "string")) return false;
-  const actual = (ownKeys as string[]).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 function runtimeFailure<T>(message: string, path: readonly PropertyKey[]): RuntimeParseResult<T> {

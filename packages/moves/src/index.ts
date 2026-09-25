@@ -160,6 +160,8 @@ export const PRIMITIVE_TRANSITION_CLASSES: Readonly<Record<KernelOperationKind, 
     "choose-existential-witness": "strengthening",
     "unpack-existential-hypothesis": "equivalence",
     "rewrite-with-equality": "equivalence",
+    "apply-result-backward": "strengthening",
+    "apply-result-forward": "equivalence",
   });
 
 export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, string>> = Object.freeze(
@@ -187,13 +189,15 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, strin
     "choose-existential-witness": "target",
     "unpack-existential-hypothesis": "existential",
     "rewrite-with-equality": "equality",
+    "apply-result-backward": "target",
+    "apply-result-forward": "target",
   },
 );
 
 /**
- * Evidence each primitive's kernel transition reports. Only an accepted
- * inference rests on an external attestation; every other primitive is
- * structurally checked by the kernel. The record is exhaustive so a new
+ * Evidence each primitive's kernel transition reports. An accepted inference
+ * rests on an external attestation and a result application on an approved
+ * library result; every other primitive is structurally checked by the kernel. The record is exhaustive so a new
  * primitive must choose its evidence explicitly.
  */
 export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
@@ -222,6 +226,8 @@ export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
   "choose-existential-witness": "structural",
   "unpack-existential-hypothesis": "structural",
   "rewrite-with-equality": "structural",
+  "apply-result-backward": "library-result",
+  "apply-result-forward": "library-result",
 });
 
 type MoveCatalogInput = Readonly<{
@@ -576,6 +582,42 @@ const catalogInputs: readonly MoveCatalogInput[] = [
       "Rewrite inside another hypothesis while retaining the equality.",
     ],
     "The replacement would capture a free symbol under a binder.",
+  ),
+  catalogEntry(
+    "apply-result-backward",
+    "Apply result backward",
+    "Reduce a target matching an approved result's conclusion to that result's instantiated premises.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("resultId", "Result", "menu"),
+      parameter("instantiation", "Instantiation", "menu"),
+      parameter("premiseTargetIds", "Premise target IDs", "generated-id"),
+    ],
+    [
+      "Prove x < z from transitivity by proving x < y and y < z.",
+      "Close an obligation that is an instance of a premise-free approved result.",
+    ],
+    "The instantiated conclusion differs from the target conclusion.",
+  ),
+  catalogEntry(
+    "apply-result-forward",
+    "Apply result forward",
+    "Derive an approved result's instantiated conclusion from local facts; unmet premises become obligations.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("resultId", "Result", "menu"),
+      parameter("instantiation", "Instantiation", "menu"),
+      parameter("premiseHypothesisIds", "Premise hypotheses", "selection"),
+      parameter("resultHypothesisId", "Derived hypothesis ID", "generated-id"),
+      parameter("obligationIds", "Premise obligation IDs", "generated-id"),
+    ],
+    [
+      "Derive q by modus ponens from local facts p implies q and p.",
+      "Derive a conclusion now and leave its missing premise as an obligation.",
+    ],
+    "A selected hypothesis does not match the instantiated premise.",
   ),
 ];
 

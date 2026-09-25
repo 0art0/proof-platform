@@ -86,7 +86,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
 
 ## Phase 2 — Kernel completion (packages/kernel)
 
-- [ ] **N06 Apply approved library results (§9, §12).** Add a `KernelEnvironment.results` catalog of
+- [x] **N06 Apply approved library results (§9, §12).** Add a `KernelEnvironment.results` catalog of
       structurally described results (parameters, premises, conclusion, directions). Add kernel operations:
   - `apply-result-backward`: instantiate a result so its conclusion matches a goal or obligation
     conclusion (exactly, up to alpha-equivalence). Its premises and side conditions become new goals or
@@ -377,3 +377,21 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
   - Protocol edges do not store `evidence` yet.
   - Retrieval still matches `close-by-hypothesis` exactly rather than up to alpha-equivalence.
   - The worker needs menu materialization (N14) for the new input-driven moves.
+
+- 2026-09-26 — N00 — memory store, `PROOF_STORE=memory`, and `test:e2e:workspace`. Two of the five e2e
+  tests fail at this point. Addressed in N29/N38.
+- 2026-09-26 — N02–N04 — `createPresentation`, `parseLatex`, and the natural-language renderer.
+  - `Limit` in its bare MathJSON form serializes badly; N01 should pick binder shapes the Compute Engine
+    understands.
+  - `mathlive-selection.ts` depends on the LaTeX strings produced by `renderMathJson`.
+- 2026-09-26 — N13 — `generateVariants`.
+  - Callers must index `output.source`, the family-tagged copy, and merge any existing family members.
+  - Renderings are placeholders until they are wired to `packages/language`.
+- 2026-09-26 — N06 — adds `apply-result-backward` (strengthening), `apply-result-forward` (equivalence),
+  `matchResultConclusion`, and `KernelResult`. Open design points:
+  - (a) Forward application that creates obligations is strictly a strengthening. Reclassify it or split
+    the kind; decide in N14.
+  - (b) Built-in `ForAll`/`Exists` take their bound symbol's sort from context declarations, so a capture
+    rename fails unless the renamed symbol is declared. N01 must give quantifiers self-contained typed
+    binders.
+  - (c) The catalog is revalidated on every call; callers should narrow or cache it.

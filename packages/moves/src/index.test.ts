@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { KERNEL_OPERATION_KINDS, type KernelOperation } from "@proof/kernel";
+import {
+  KERNEL_OPERATION_KINDS,
+  type KernelEnvironment,
+  type KernelResult,
+  type KernelOperation,
+} from "@proof/kernel";
 import {
   PROPOSITION_SORT,
   executableProofStateSchema,
@@ -214,7 +219,84 @@ describe("deterministic move planning", () => {
     );
     expect(
       KERNEL_OPERATION_KINDS.filter((kind) => PRIMITIVE_TRANSITION_EVIDENCE[kind] !== "structural"),
-    ).toEqual(["close-by-accepted-inference"]);
+    ).toEqual(["close-by-accepted-inference", "apply-result-backward", "apply-result-forward"]);
+  });
+
+  it("previews approved-result applications with library-result evidence", () => {
+    const propositions = ["a", "b"].map((symbol) => ({ symbol, sort: PROPOSITION_SORT }));
+    const environment: KernelEnvironment = {
+      results: [
+        {
+          id: "result:conjunction-introduction",
+          parameters: propositions,
+          premises: [{ expression: "a" }, { expression: "b" }],
+          conclusion: { expression: ["And", "a", "b"] },
+          directions: ["backward"],
+        },
+        {
+          id: "result:modus-ponens",
+          parameters: propositions,
+          premises: [{ expression: ["Implies", "a", "b"] }, { expression: "a" }],
+          conclusion: { expression: "b" },
+          directions: ["forward"],
+        },
+      ] as unknown as readonly KernelResult[],
+    };
+    const cases: readonly (readonly [
+      ExecutableProofState,
+      KernelOperation["kind"],
+      Readonly<Record<string, unknown>>,
+    ])[] = [
+      [
+        state(["And", "p", "q"]),
+        "apply-result-backward",
+        {
+          resultId: "result:conjunction-introduction",
+          instantiation: { a: "p", b: "q" },
+          premiseTargetIds: ["goal:p", "goal:q"],
+        },
+      ],
+      [
+        state("q", [{ id: "hypothesis:implication", expression: ["Implies", "p", "q"] }]),
+        "apply-result-forward",
+        {
+          resultId: "result:modus-ponens",
+          instantiation: { a: "p", b: "q" },
+          premiseHypothesisIds: ["hypothesis:implication", null],
+          resultHypothesisId: "hypothesis:q",
+          obligationIds: ["obligation:p"],
+        },
+      ],
+    ];
+    for (const [input, kind, fields] of cases) {
+      expect(
+        planMove(
+          input,
+          { moveId: `move:${kind}`, operation: operation(kind, fields) },
+          environment,
+        ),
+      ).toMatchObject({
+        ok: true,
+        preview: {
+          transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind],
+          evidence: "library-result",
+        },
+      });
+    }
+    expect(
+      planMove(
+        state(["And", "p", "q"]),
+        {
+          moveId: "move:apply-result-backward",
+          operation: operation("apply-result-backward", {
+            resultId: "result:missing",
+            instantiation: {},
+            premiseTargetIds: [],
+          }),
+        },
+        environment,
+      ),
+    ).toMatchObject({ ok: false, diagnostics: [{ code: "kernel-rejected" }] });
   });
 
   it("rejects unknown moves, mismatched primitives, and inapplicable operations", () => {
