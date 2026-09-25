@@ -47,6 +47,21 @@ export const backgroundClassificationSchema = z
   });
 export type BackgroundClassification = z.infer<typeof backgroundClassificationSchema>;
 
+/**
+ * Deterministic, equivalence-preserving reshapings applied by `generateVariants`. Forward/backward
+ * restriction is deliberately absent: see the module comment in `variants.ts`.
+ */
+export const variantTransformationSchema = z.enum([
+  "contrapositive",
+  "converse",
+  "symmetric-equality",
+  "uncurry",
+  "curry",
+  "bundle-premises",
+  "unbundle-premises",
+]);
+export type VariantTransformation = z.infer<typeof variantTransformationSchema>;
+
 export const libraryProvenanceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("curated"), source: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("imported"), source: z.string().min(1) }).strict(),
@@ -62,6 +77,13 @@ export const libraryProvenanceSchema = z.discriminatedUnion("kind", [
       kind: z.literal("derived"),
       sessionId: stableIdentifierSchema,
       proofNodeId: stableIdentifierSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("derived-variant"),
+      sourceId: libraryArtifactIdSchema,
+      transformation: variantTransformationSchema,
     })
     .strict(),
 ]);
@@ -569,3 +591,5 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
   });
   return Object.freeze(value);
 }
+
+export * from "./variants";

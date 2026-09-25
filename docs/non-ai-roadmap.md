@@ -172,7 +172,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
   _Accept:_ repository tests with the fake SQL client and a test that the gate rejects out-of-background
   results.
 
-- [ ] **N13 Deterministic variant generation (§12.3).** Generate contrapositive, converse (for
+- [x] **N13 Deterministic variant generation (§12.3).** Generate contrapositive, converse (for
       equivalences), symmetric equality orientation, curried/uncurried premise bundling, and
       forward/backward forms as separate indexed artifacts in one variant family, with provenance
       `derived-variant`. _Accept:_ each generated variant is validated, and the family groups it.
