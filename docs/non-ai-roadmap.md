@@ -44,7 +44,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
 
 ## Phase 0 — Local operability
 
-- [ ] **N00 In-memory proof store and worker mode.** Promote the test-only `MemoryProofStore` to a
+- [~] **N00 In-memory proof store and worker mode.** Promote the test-only `MemoryProofStore` to a
       production `ProofStore` implementation in `apps/worker`. Select it with `PROOF_STORE=memory`, and seed
       the development session on startup. Add a Playwright config that runs `proof-workspace.spec.ts`
       against the memory worker, so e2e tests run without Postgres. _Accept:_ the worker starts with no
@@ -59,18 +59,18 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
       through `BinderSpecification`. Higher-order sort checking includes quantification over function and
       predicate sorts. Substitution and free-name analysis must honour the new binders. _Accept:_ fast-check
       properties for capture avoidance under every binder kind, plus golden validation cases.
-- [ ] **N02 Custom operator presentation metadata (§5.5).** Add optional presentation metadata to
+- [~] **N02 Custom operator presentation metadata (§5.5).** Add optional presentation metadata to
       `OperatorDeclaration`: display name, LaTeX serialization template with a precedence/fixity class,
       optional LaTeX parse trigger, natural-language template(s), and domain/notation tags. Validate that
       template placeholders match arity and binder slots. Existing declarations without metadata stay
       valid. _Accept:_ schema tests for good and bad templates.
-- [ ] **N03 Deterministic LaTeX dictionary (§6.1).** `packages/language`: a MathJSON→LaTeX serializer that
+- [~] **N03 Deterministic LaTeX dictionary (§6.1).** `packages/language`: a MathJSON→LaTeX serializer that
       handles precedence and parenthesization for logical and relational constructors, arithmetic,
       quantifiers and the new binders, and delegates unknown standard heads to the Compute Engine (raw form).
       It renders custom operators from their N02 templates. Add a central registry used by the web app
       in place of the bare `renderMathJson`. _Accept:_ golden tests and a round-trip parse test for
       operators with parse triggers.
-- [ ] **N04 Deterministic natural-language renderer (§6.2).** Compositional renderer covering statement
+- [~] **N04 Deterministic natural-language renderer (§6.2).** Compositional renderer covering statement
       constructors, relations, quantifier phrasing with sort nouns ("for every real number x"), binder naming
       and referring expressions, plurality and article agreement, and precedence-aware grouping. Add exact
       MathJSON→text entries, pattern templates with wildcards, operator templates (N02), domain terminology
@@ -109,7 +109,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
   Evidence kind is `sorry`. _Accept:_ fast-check properties that the closure is closed (no free symbols)
   and minimal under the dependency rule, plus golden cases.
 
-- [ ] **N08 Classical case split, contradiction, accepted inference (§9, §16.3).** Add these operations:
+- [x] **N08 Classical case split, contradiction, accepted inference (§9, §16.3).** Add these operations:
   - `case-split`: split on any well-formed proposition `P` over the target's context. Produce two targets
     with hypotheses `P` and `Not P`. The transition is equivalence.
   - `close-by-contradiction`: close from hypotheses `P` and `Not P`.
@@ -119,7 +119,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
 
   _Accept:_ tests for each operation and for stale/invalid inputs.
 
-- [ ] **N09 Weakening and strengthening primitives (§10).** Add these operations:
+- [x] **N09 Weakening and strengthening primitives (§10).** Add these operations:
   - `assume-hypothesis`: add an arbitrary proposition as an unproved hypothesis. The transition is weakening.
   - `replace-goal`: replace the conclusion with an arbitrary proposition. The transition is weakening
     unless the operation is `suffices`.
@@ -359,3 +359,21 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
 ## Progress log
 
 Entries are appended as tasks complete: `date — task — commit — notes`.
+
+- 2026-09-25 — N08, N09 — kernel naming:
+  - Kept `split-classical-cases`, not `case-split`.
+  - `assume-hypothesis` is renamed from agentctl's `add-temporary-hypothesis`.
+
+  New operations and API:
+  - `close-by-contradiction`.
+  - `close-by-accepted-inference`, with evidence `background-inference`.
+  - `replace-goal`, which is weakening.
+  - `suffices`, which is strengthening and adds a `P ⇒ G` obligation.
+  - `drop-hypothesis`, which is strengthening.
+  - `alphaEquivalent`.
+  - `TransitionEvidence`, now returned by `applyTransition`.
+
+  Follow-ups:
+  - Protocol edges do not store `evidence` yet.
+  - Retrieval still matches `close-by-hypothesis` exactly rather than up to alpha-equivalence.
+  - The worker needs menu materialization (N14) for the new input-driven moves.

@@ -127,7 +127,7 @@ function suggestionIds(
 describe("deterministic structural retrieval", () => {
   it("indexes every theorem variant and move pattern", () => {
     const index = indexFor();
-    expect(index).toMatchObject({ resultCount: 3, moveCount: 15, patternCount: 19 });
+    expect(index).toMatchObject({ resultCount: 3, moveCount: 23, patternCount: 27 });
   });
 
   it("matches representation variants and ranks exact, obligation-free results deterministically", () => {

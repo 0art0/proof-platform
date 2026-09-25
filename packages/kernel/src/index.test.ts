@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import fc from "fast-check";
 import {
   PROPOSITION_SORT,
   executableProofStateSchema,
+  operatorDeclarationsSchema,
   type ExecutableProofState,
   type PlainMathJson,
 } from "@proof/mathjson-model";
@@ -53,7 +55,7 @@ const base = {
 };
 
 describe("propositional kernel transitions", () => {
-  it("closes a target only with an exact hypothesis in its local context", () => {
+  it("closes a target only with a matching hypothesis in its local context", () => {
     const input = executableProofStateSchema.parse({
       ...state(["p"], ["q"]),
       goals: [{ id: "goal:0", sequent: sequent("p", [{ id: "hypothesis:p", expression: "p" }]) }],
@@ -412,6 +414,63 @@ describe("propositional kernel transitions", () => {
 });
 
 describe("quantifier and equality kernel transitions", () => {
+  it("closes exact binary reflexive equalities in either target collection", () => {
+    const operand: PlainMathJson = {
+      fn: ["Not", "p"],
+      comment: "preserve exact source form",
+    };
+    const equality: PlainMathJson = {
+      fn: ["Equal", operand, structuredClone(operand)],
+      comment: "outer",
+    };
+    const input = state([equality, "q"], [equality, "r"]);
+
+    const closedGoal = applyTransition(input, {
+      ...base,
+      kind: "close-reflexive-equality",
+    });
+    expect(closedGoal).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      state: {
+        goals: [{ id: "goal:1" }],
+        obligations: [{ id: "obligation:0" }, { id: "obligation:1" }],
+      },
+    });
+    expect(input.goals).toHaveLength(2);
+
+    const closedObligation = applyTransition(input, {
+      ...base,
+      target: { kind: "obligation", id: "obligation:0" },
+      kind: "close-reflexive-equality",
+    });
+    expect(closedObligation).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      state: {
+        goals: [{ id: "goal:0" }, { id: "goal:1" }],
+        obligations: [{ id: "obligation:1" }],
+      },
+    });
+  });
+
+  it("does not close non-reflexive or merely symbol-equivalent equalities", () => {
+    for (const equality of [
+      ["Equal", "p", "q"],
+      ["Equal", "p", { sym: "p" }],
+      ["Equal", { sym: "p", comment: "left" }, { sym: "p", comment: "right" }],
+      ["Equal", "p", "p", "p"],
+    ] as const) {
+      const input = state([equality]);
+      const result = applyTransition(input, { ...base, kind: "close-reflexive-equality" });
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "rule-not-applicable" }],
+      });
+      expect(result.state).toBe(input);
+    }
+  });
+
   it("introduces a universal goal only for a parameter independent of local assumptions", () => {
     const input = state([["ForAll", "p", ["Implies", "p", "p"]]]);
     expect(applyTransition(input, { ...base, kind: "introduce-universal" })).toMatchObject({
@@ -644,6 +703,765 @@ describe("quantifier and equality kernel transitions", () => {
   });
 });
 
+describe("classical case splits and assumed hypotheses", () => {
+  it("splits a goal into independent P and not-P branches while preserving local context", () => {
+    const proposition = { fn: ["Or", "p", "q"], comment: "case proposition" };
+    const conclusion = { sym: "r", comment: "unchanged conclusion" } as const;
+    const existing = { sym: "p", comment: "existing hypothesis" } as const;
+    const input = deepFreeze(
+      executableProofStateSchema.parse({
+        id: "state:before",
+        goals: [
+          {
+            id: "goal:0",
+            sequent: sequent(conclusion, [{ id: "hypothesis:existing", expression: existing }]),
+          },
+          { id: "goal:sibling", sequent: sequent("q") },
+        ],
+        obligations: [{ id: "obligation:bystander", sequent: sequent("p") }],
+      }),
+    );
+    const result = applyTransition(input, {
+      ...base,
+      kind: "split-classical-cases",
+      proposition,
+      childIds: ["case:positive", "case:negative"],
+      branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      state: {
+        goals: [
+          {
+            id: "case:positive",
+            sequent: {
+              context: {
+                declarations,
+                hypotheses: [
+                  { id: "hypothesis:existing", statement: { expression: existing } },
+                  { id: "hypothesis:positive", statement: { expression: proposition } },
+                ],
+              },
+              conclusion: { expression: conclusion },
+            },
+          },
+          {
+            id: "case:negative",
+            sequent: {
+              context: {
+                declarations,
+                hypotheses: [
+                  { id: "hypothesis:existing", statement: { expression: existing } },
+                  {
+                    id: "hypothesis:negative",
+                    statement: { expression: ["Not", proposition] },
+                  },
+                ],
+              },
+              conclusion: { expression: conclusion },
+            },
+          },
+          { id: "goal:sibling" },
+        ],
+        obligations: [{ id: "obligation:bystander" }],
+      },
+    });
+    if (!result.ok) throw new Error("Expected a successful classical case split.");
+    const positive = result.state.goals[0];
+    const negative = result.state.goals[1];
+    if (positive === undefined || negative === undefined) throw new Error("Expected two branches.");
+    expect(positive.sequent.context).not.toBe(negative.sequent.context);
+    expect(positive.sequent.context.declarations).not.toBe(negative.sequent.context.declarations);
+    expect(positive.sequent.context.hypotheses).not.toBe(negative.sequent.context.hypotheses);
+    expect(positive.sequent.conclusion.expression).not.toBe(negative.sequent.conclusion.expression);
+    const positiveExpression = positive.sequent.context.hypotheses[1]?.statement.expression;
+    const negativeExpression = negative.sequent.context.hypotheses[1]?.statement.expression;
+    if (!Array.isArray(negativeExpression)) throw new Error("Expected the negative case.");
+    expect(positiveExpression).not.toBe(proposition);
+    expect(negativeExpression[1]).not.toBe(positiveExpression);
+    expect(result.state.goals[2]).toEqual(input.goals[1]);
+    expect(result.state.obligations[0]).toEqual(input.obligations[0]);
+    proposition.comment = "mutated after transition";
+    expect(positive.sequent.context.hypotheses[1]?.statement.expression).toMatchObject({
+      comment: "case proposition",
+    });
+  });
+
+  it("splits an obligation in place without moving its branches into goals", () => {
+    const input = state(["p"], ["r", "q"]);
+    const result = applyTransition(input, {
+      ...base,
+      target: { kind: "obligation", id: "obligation:0" },
+      kind: "split-classical-cases",
+      proposition: "q",
+      childIds: ["obligation:q", "obligation:not-q"],
+      branchHypothesisIds: ["hypothesis:q", "hypothesis:not-q"],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      state: {
+        goals: [{ id: "goal:0" }],
+        obligations: [
+          {
+            id: "obligation:q",
+            sequent: {
+              context: {
+                hypotheses: [{ id: "hypothesis:q", statement: { expression: "q" } }],
+              },
+              conclusion: { expression: "r" },
+            },
+          },
+          {
+            id: "obligation:not-q",
+            sequent: {
+              context: {
+                hypotheses: [{ id: "hypothesis:not-q", statement: { expression: ["Not", "q"] } }],
+              },
+              conclusion: { expression: "r" },
+            },
+          },
+          { id: "obligation:1" },
+        ],
+      },
+    });
+  });
+
+  it("assumes a detached target-local hypothesis as weakening in either collection", () => {
+    const proposition = { fn: ["Implies", "p", "q"], comment: "assumed" };
+    const input = deepFreeze(
+      executableProofStateSchema.parse({
+        id: "state:before",
+        goals: [
+          {
+            id: "goal:0",
+            sequent: sequent("r", [{ id: "hypothesis:existing", expression: "p" }]),
+          },
+          { id: "goal:sibling", sequent: sequent("q") },
+        ],
+        obligations: [{ id: "obligation:0", sequent: sequent("p") }],
+      }),
+    );
+    const addedToGoal = applyTransition(input, {
+      ...base,
+      kind: "assume-hypothesis",
+      proposition,
+      hypothesisId: "hypothesis:assumed",
+    });
+
+    expect(addedToGoal).toMatchObject({
+      ok: true,
+      transitionClass: "weakening",
+      state: {
+        goals: [
+          {
+            id: "goal:0",
+            sequent: {
+              context: {
+                hypotheses: [
+                  { id: "hypothesis:existing", statement: { expression: "p" } },
+                  { id: "hypothesis:assumed", statement: { expression: proposition } },
+                ],
+              },
+              conclusion: { expression: "r" },
+            },
+          },
+          { id: "goal:sibling" },
+        ],
+        obligations: [{ id: "obligation:0" }],
+      },
+    });
+    if (!addedToGoal.ok) throw new Error("Expected a successful assumed hypothesis.");
+    expect(addedToGoal.state).not.toBe(input);
+    expect(addedToGoal.state.goals[1]).toEqual(input.goals[1]);
+    expect(addedToGoal.state.obligations[0]).toEqual(input.obligations[0]);
+    proposition.comment = "mutated after transition";
+    expect(
+      addedToGoal.state.goals[0]?.sequent.context.hypotheses[1]?.statement.expression,
+    ).toMatchObject({ comment: "assumed" });
+
+    const addedToObligation = applyTransition(input, {
+      ...base,
+      target: { kind: "obligation", id: "obligation:0" },
+      kind: "assume-hypothesis",
+      proposition: "q",
+      hypothesisId: "hypothesis:obligation-assumed",
+    });
+    expect(addedToObligation).toMatchObject({
+      ok: true,
+      transitionClass: "weakening",
+      state: {
+        goals: [{ id: "goal:0" }, { id: "goal:sibling" }],
+        obligations: [
+          {
+            id: "obligation:0",
+            sequent: {
+              context: {
+                hypotheses: [
+                  {
+                    id: "hypothesis:obligation-assumed",
+                    statement: { expression: "q" },
+                  },
+                ],
+              },
+              conclusion: { expression: "p" },
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  it("rejects malformed, out-of-scope, and wrongly sorted propositions atomically", () => {
+    const withTerm = [
+      ...declarations,
+      {
+        id: "declaration:n",
+        symbol: "n",
+        sort: { kind: "named", id: "sort:natural" },
+        role: "universal-parameter",
+      },
+    ];
+    const input = executableProofStateSchema.parse({
+      id: "state:before",
+      goals: [{ id: "goal:0", sequent: sequent("r", [], withTerm) }],
+      obligations: [],
+    });
+    const invalidPropositions: readonly [unknown, string][] = [
+      [{ fn: [] }, "invalid-operation"],
+      [["Add", 1, 2], "invalid-proposition"],
+      ["n", "invalid-proposition"],
+      ["undeclared", "invalid-proposition"],
+      [["And", "p", "undeclared"], "invalid-proposition"],
+    ];
+
+    for (const [proposition, code] of invalidPropositions) {
+      for (const operation of propositionOperations(proposition)) {
+        const before = JSON.stringify(input);
+        const result = applyTransition(input, operation);
+        expect(result).toMatchObject({ ok: false, diagnostics: [{ code }] });
+        expect(result.state).toBe(input);
+        expect(JSON.stringify(input)).toBe(before);
+      }
+    }
+    for (const operation of propositionOperations(["Equal", "n", "n"])) {
+      expect(applyTransition(input, operation)).toMatchObject({ ok: true });
+    }
+  });
+
+  it("validates supplied propositions against the configured operator environment", () => {
+    const [customOperator] = operatorDeclarationsSchema.parse([
+      {
+        id: "operator:is-accepted",
+        symbol: "IsAccepted",
+        signature: { parameters: [PROPOSITION_SORT], result: PROPOSITION_SORT },
+      },
+    ]);
+    if (customOperator === undefined) throw new Error("Expected a custom operator.");
+    const input = state(["r"]);
+
+    for (const operation of propositionOperations(["IsAccepted", "p"])) {
+      expect(applyTransition(input, operation, { operators: [customOperator] })).toMatchObject({
+        ok: true,
+      });
+      const rejected = applyTransition(input, operation);
+      expect(rejected).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "invalid-proposition" }],
+      });
+      expect(rejected.state).toBe(input);
+    }
+  });
+
+  it("closes both classical cases from one shared hypothesis set, leaving only bystanders", () => {
+    const expression = fc.letrec<{ proposition: PlainMathJson }>((tie) => ({
+      proposition: fc.oneof(
+        { depthSize: "small", withCrossShrink: true },
+        fc.constantFrom<PlainMathJson>("p", "q", "r", "True", "False"),
+        fc.tuple(fc.constant("Not"), tie("proposition")),
+        fc.tuple(fc.constantFrom("And", "Or", "Implies"), tie("proposition"), tie("proposition")),
+      ),
+    })).proposition;
+
+    fc.assert(
+      fc.property(
+        fc.array(expression, { minLength: 1, maxLength: 4 }),
+        fc.array(expression, { maxLength: 3 }),
+        fc.nat(),
+        expression,
+        fc.array(expression, { maxLength: 3 }),
+        (goalExpressions, obligationExpressions, rawIndex, proposition, extraHypotheses) => {
+          const targetIndex = rawIndex % goalExpressions.length;
+          const conclusion = goalExpressions[targetIndex] as PlainMathJson;
+          const hypotheses = [
+            ...extraHypotheses.map((hypothesisExpression, index) => ({
+              id: `hypothesis:extra:${index}`,
+              expression: hypothesisExpression,
+            })),
+            { id: "hypothesis:fact", expression: conclusion },
+          ];
+          const input = executableProofStateSchema.parse({
+            id: "state:before",
+            goals: goalExpressions.map((goalExpression, index) => ({
+              id: `goal:${index}`,
+              sequent:
+                index === targetIndex
+                  ? sequent(goalExpression, hypotheses)
+                  : sequent(goalExpression),
+            })),
+            obligations: obligationExpressions.map((obligationExpression, index) => ({
+              id: `obligation:${index}`,
+              sequent: sequent(obligationExpression),
+            })),
+          });
+          const split = applyTransition(input, {
+            ...base,
+            target: { kind: "goal", id: `goal:${targetIndex}` },
+            kind: "split-classical-cases",
+            proposition,
+            childIds: ["case:positive", "case:negative"],
+            branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+          });
+          if (!split.ok) throw new Error("Expected a classical case split.");
+          expect(split.transitionClass).toBe("equivalence");
+
+          let current = split.state;
+          for (const [index, caseId] of ["case:positive", "case:negative"].entries()) {
+            const closed = applyTransition(current, {
+              expectedStateId: current.id,
+              resultStateId: `state:closed:${index}`,
+              target: { kind: "goal", id: caseId },
+              kind: "close-by-hypothesis",
+              hypothesisId: "hypothesis:fact",
+            });
+            if (!closed.ok) throw new Error("Expected each case to close from the shared fact.");
+            expect(closed.transitionClass).toBe("equivalence");
+            current = closed.state;
+          }
+
+          expect(current.goals).toEqual(
+            input.goals.filter((_goal, index) => index !== targetIndex),
+          );
+          expect(current.obligations).toEqual(input.obligations);
+        },
+      ),
+    );
+  });
+});
+
+describe("contradiction, accepted inference, and alpha-equivalent closing", () => {
+  const universal = (bound: string, free: string): PlainMathJson => [
+    "ForAll",
+    bound,
+    ["Implies", bound, free],
+  ];
+
+  function withHypotheses(
+    hypotheses: readonly Readonly<{ id: string; expression: PlainMathJson }>[],
+    conclusion: PlainMathJson = "q",
+  ): ExecutableProofState {
+    return executableProofStateSchema.parse({
+      id: "state:before",
+      goals: [
+        { id: "goal:0", sequent: sequent(conclusion, hypotheses) },
+        { id: "goal:sibling", sequent: sequent("r") },
+      ],
+      obligations: [{ id: "obligation:0", sequent: sequent(conclusion, hypotheses) }],
+    });
+  }
+
+  it("closes a target by an alpha-equivalent hypothesis but never by capture", () => {
+    const accepted = withHypotheses(
+      [{ id: "hypothesis:universal", expression: universal("p", "r") }],
+      universal("q", "r"),
+    );
+    for (const targetRef of [target, { kind: "obligation", id: "obligation:0" }] as const) {
+      const result = applyTransition(accepted, {
+        ...base,
+        target: targetRef,
+        kind: "close-by-hypothesis",
+        hypothesisId: "hypothesis:universal",
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        transitionClass: "equivalence",
+        evidence: "structural",
+      });
+    }
+
+    for (const [hypothesisExpression, conclusion] of [
+      [universal("p", "q"), universal("q", "q")],
+      [universal("p", "q"), universal("p", "r")],
+      [universal("p", "r"), ["ForAll", { sym: "q" }, ["Implies", { sym: "q" }, "r"]]],
+    ] as const) {
+      const input = withHypotheses(
+        [{ id: "hypothesis:universal", expression: hypothesisExpression }],
+        conclusion,
+      );
+      const result = applyTransition(input, {
+        ...base,
+        kind: "close-by-hypothesis",
+        hypothesisId: "hypothesis:universal",
+      });
+      expect(result).toMatchObject({ ok: false, diagnostics: [{ code: "rule-not-applicable" }] });
+      expect(result.state).toBe(input);
+    }
+  });
+
+  it("closes a target from P and an alpha-equivalent not-P in either collection", () => {
+    const input = withHypotheses([
+      { id: "hypothesis:positive", expression: universal("p", "r") },
+      { id: "hypothesis:negative", expression: ["Not", universal("q", "r")] },
+    ]);
+    const closedGoal = applyTransition(input, {
+      ...base,
+      kind: "close-by-contradiction",
+      hypothesisId: "hypothesis:positive",
+      negationHypothesisId: "hypothesis:negative",
+    });
+    expect(closedGoal).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      evidence: "structural",
+      state: {
+        id: "state:after",
+        goals: [{ id: "goal:sibling" }],
+        obligations: [{ id: "obligation:0" }],
+      },
+    });
+    expect(input.goals).toHaveLength(2);
+
+    expect(
+      applyTransition(input, {
+        ...base,
+        target: { kind: "obligation", id: "obligation:0" },
+        kind: "close-by-contradiction",
+        hypothesisId: "hypothesis:positive",
+        negationHypothesisId: "hypothesis:negative",
+      }),
+    ).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      state: { goals: [{ id: "goal:0" }, { id: "goal:sibling" }], obligations: [] },
+    });
+  });
+
+  it("rejects contradictions that are missing, stale, swapped, or captured", () => {
+    const input = withHypotheses([
+      { id: "hypothesis:positive", expression: universal("p", "q") },
+      { id: "hypothesis:negative", expression: ["Not", universal("q", "q")] },
+      { id: "hypothesis:matching-negative", expression: ["Not", universal("r", "q")] },
+    ]);
+    const operation = (fields: Readonly<Record<string, unknown>>) => ({
+      ...base,
+      kind: "close-by-contradiction",
+      hypothesisId: "hypothesis:positive",
+      negationHypothesisId: "hypothesis:matching-negative",
+      ...fields,
+    });
+    expect(applyTransition(input, operation({}))).toMatchObject({ ok: true });
+
+    for (const [fields, code] of [
+      [{ negationHypothesisId: "hypothesis:negative" }, "rule-not-applicable"],
+      [
+        {
+          hypothesisId: "hypothesis:matching-negative",
+          negationHypothesisId: "hypothesis:positive",
+        },
+        "rule-not-applicable",
+      ],
+      [{ negationHypothesisId: "hypothesis:missing" }, "hypothesis-not-found"],
+      [{ hypothesisId: "hypothesis:missing" }, "hypothesis-not-found"],
+      [{ expectedStateId: "state:stale" }, "stale-state"],
+      [{ negationHypothesisId: "not a stable id" }, "invalid-operation"],
+    ] as const) {
+      const before = JSON.stringify(input);
+      const result = applyTransition(input, operation(fields));
+      expect(result).toMatchObject({ ok: false, diagnostics: [{ code }] });
+      expect(result.state).toBe(input);
+      expect(JSON.stringify(input)).toBe(before);
+    }
+
+    const sibling = applyTransition(
+      input,
+      operation({ target: { kind: "goal", id: "goal:sibling" } }),
+    );
+    expect(sibling).toMatchObject({ ok: false, diagnostics: [{ code: "hypothesis-not-found" }] });
+  });
+
+  it("records an accepted inference as background evidence without judging the target", () => {
+    const input = state(["p", "q"], ["False"]);
+    const operation = {
+      ...base,
+      kind: "close-by-accepted-inference",
+      attestationId: "attestation:quick-check:1",
+    };
+    expect(kernelOperationSchema.parse(operation)).toMatchObject({
+      attestationId: "attestation:quick-check:1",
+    });
+    expect(applyTransition(input, operation)).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+      evidence: "background-inference",
+      state: { goals: [{ id: "goal:1" }], obligations: [{ id: "obligation:0" }] },
+    });
+    expect(
+      applyTransition(input, {
+        ...operation,
+        target: { kind: "obligation", id: "obligation:0" },
+      }),
+    ).toMatchObject({
+      ok: true,
+      evidence: "background-inference",
+      state: { goals: [{ id: "goal:0" }, { id: "goal:1" }], obligations: [] },
+    });
+
+    for (const [invalid, code] of [
+      [{ ...operation, attestationId: "" }, "invalid-operation"],
+      [{ ...operation, attestationId: 7 }, "invalid-operation"],
+      [{ kind: operation.kind, ...base }, "invalid-operation"],
+      [{ ...operation, expectedStateId: "state:stale" }, "stale-state"],
+      [{ ...operation, target: { kind: "goal", id: "goal:missing" } }, "target-not-found"],
+    ] as const) {
+      const result = applyTransition(input, invalid);
+      expect(result).toMatchObject({ ok: false, diagnostics: [{ code }] });
+      expect(result.state).toBe(input);
+    }
+  });
+});
+
+describe("weakening and strengthening primitives", () => {
+  const withContext = (conclusion: PlainMathJson) =>
+    deepFreeze(
+      executableProofStateSchema.parse({
+        id: "state:before",
+        goals: [
+          {
+            id: "goal:0",
+            sequent: sequent(conclusion, [
+              { id: "hypothesis:p", expression: "p" },
+              { id: "hypothesis:q", expression: { sym: "q", comment: "kept" } },
+            ]),
+          },
+          { id: "goal:sibling", sequent: sequent("r") },
+        ],
+        obligations: [{ id: "obligation:0", sequent: sequent("q") }],
+      }),
+    );
+
+  it("replaces a conclusion with a detached arbitrary proposition as weakening", () => {
+    const input = withContext(["And", "p", "q"]);
+    const proposition = { fn: ["Or", "p", "r"], comment: "replacement" };
+    const result = applyTransition(input, { ...base, kind: "replace-goal", proposition });
+    expect(result).toMatchObject({
+      ok: true,
+      transitionClass: "weakening",
+      evidence: "structural",
+      state: {
+        goals: [
+          {
+            id: "goal:0",
+            sequent: {
+              context: input.goals[0]?.sequent.context,
+              conclusion: { expression: proposition },
+            },
+          },
+          { id: "goal:sibling" },
+        ],
+        obligations: [{ id: "obligation:0" }],
+      },
+    });
+    proposition.comment = "mutated";
+    if (!result.ok) throw new Error("Expected a replaced goal.");
+    expect(result.state.goals[0]?.sequent.conclusion.expression).toMatchObject({
+      comment: "replacement",
+    });
+
+    expect(
+      applyTransition(input, {
+        ...base,
+        target: { kind: "obligation", id: "obligation:0" },
+        kind: "replace-goal",
+        proposition: "p",
+      }),
+    ).toMatchObject({
+      ok: true,
+      transitionClass: "weakening",
+      state: {
+        obligations: [{ id: "obligation:0", sequent: { conclusion: { expression: "p" } } }],
+      },
+    });
+
+    for (const [operation, code] of [
+      [{ ...base, kind: "replace-goal", proposition: ["And", "p", "q"] }, "rule-not-applicable"],
+      [{ ...base, kind: "replace-goal", proposition: "p", extra: 1 }, "invalid-operation"],
+      [{ ...base, kind: "replace-goal" }, "invalid-operation"],
+      [
+        { ...base, kind: "replace-goal", proposition: "p", expectedStateId: "state:stale" },
+        "stale-state",
+      ],
+    ] as const) {
+      const rejected = applyTransition(input, operation);
+      expect(rejected).toMatchObject({ ok: false, diagnostics: [{ code }] });
+      expect(rejected.state).toBe(input);
+    }
+  });
+
+  it("reduces a goal to a sufficient proposition plus a contextual implication obligation", () => {
+    const input = withContext("r");
+    const proposition = ["And", "p", "q"];
+    const result = applyTransition(input, {
+      ...base,
+      kind: "suffices",
+      proposition,
+      obligationId: "obligation:sufficiency",
+    });
+    const context = input.goals[0]?.sequent.context;
+    expect(result).toMatchObject({
+      ok: true,
+      transitionClass: "strengthening",
+      evidence: "structural",
+      state: {
+        goals: [
+          { id: "goal:0", sequent: { context, conclusion: { expression: proposition } } },
+          { id: "goal:sibling" },
+        ],
+        obligations: [
+          { id: "obligation:0" },
+          {
+            id: "obligation:sufficiency",
+            sequent: { context, conclusion: { expression: ["Implies", proposition, "r"] } },
+          },
+        ],
+      },
+    });
+    if (!result.ok) throw new Error("Expected a sufficiency reduction.");
+    const [reduced] = result.state.goals;
+    const sufficiency = result.state.obligations[1];
+    expect(reduced?.sequent.context).not.toBe(sufficiency?.sequent.context);
+
+    expect(
+      applyTransition(input, {
+        ...base,
+        target: { kind: "obligation", id: "obligation:0" },
+        kind: "suffices",
+        proposition: "p",
+        obligationId: "obligation:sufficiency",
+      }),
+    ).toMatchObject({
+      ok: true,
+      transitionClass: "strengthening",
+      state: {
+        goals: [{ id: "goal:0" }, { id: "goal:sibling" }],
+        obligations: [
+          { id: "obligation:0", sequent: { conclusion: { expression: "p" } } },
+          {
+            id: "obligation:sufficiency",
+            sequent: { conclusion: { expression: ["Implies", "p", "q"] } },
+          },
+        ],
+      },
+    });
+
+    for (const obligationId of ["goal:sibling", "obligation:0", "goal:0"]) {
+      const rejected = applyTransition(input, {
+        ...base,
+        kind: "suffices",
+        proposition: "p",
+        obligationId,
+      });
+      expect(rejected).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "identifier-collision" }],
+      });
+      expect(rejected.state).toBe(input);
+    }
+    expect(applyTransition(input, { ...base, kind: "suffices", proposition: "p" })).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "invalid-operation" }],
+    });
+  });
+
+  it("drops one local hypothesis as strengthening and rejects unknown hypotheses", () => {
+    const input = withContext("r");
+    const result = applyTransition(input, {
+      ...base,
+      kind: "drop-hypothesis",
+      hypothesisId: "hypothesis:p",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      transitionClass: "strengthening",
+      evidence: "structural",
+      state: {
+        goals: [
+          {
+            id: "goal:0",
+            sequent: {
+              context: {
+                declarations,
+                hypotheses: [
+                  { id: "hypothesis:q", statement: { expression: { sym: "q", comment: "kept" } } },
+                ],
+              },
+              conclusion: { expression: "r" },
+            },
+          },
+          { id: "goal:sibling" },
+        ],
+      },
+    });
+    expect(input.goals[0]?.sequent.context.hypotheses).toHaveLength(2);
+
+    for (const [operation, code] of [
+      [
+        { ...base, kind: "drop-hypothesis", hypothesisId: "hypothesis:missing" },
+        "hypothesis-not-found",
+      ],
+      [
+        {
+          ...base,
+          target: { kind: "goal", id: "goal:sibling" },
+          kind: "drop-hypothesis",
+          hypothesisId: "hypothesis:p",
+        },
+        "hypothesis-not-found",
+      ],
+      [
+        {
+          ...base,
+          expectedStateId: "state:stale",
+          kind: "drop-hypothesis",
+          hypothesisId: "hypothesis:p",
+        },
+        "stale-state",
+      ],
+    ] as const) {
+      const rejected = applyTransition(input, operation);
+      expect(rejected).toMatchObject({ ok: false, diagnostics: [{ code }] });
+      expect(rejected.state).toBe(input);
+    }
+  });
+});
+
+function propositionOperations(proposition: unknown): readonly Readonly<Record<string, unknown>>[] {
+  return [
+    {
+      ...base,
+      kind: "split-classical-cases",
+      proposition,
+      childIds: ["case:positive", "case:negative"],
+      branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+    },
+    { ...base, kind: "assume-hypothesis", proposition, hypothesisId: "hypothesis:assumed" },
+    { ...base, kind: "replace-goal", proposition },
+    { ...base, kind: "suffices", proposition, obligationId: "obligation:sufficiency" },
+  ];
+}
+
 describe("kernel rejection and atomicity", () => {
   it.each([
     ["stale state", { ...base, expectedStateId: "state:stale", kind: "close-true" }, "stale-state"],
@@ -702,6 +1520,101 @@ describe("kernel rejection and atomicity", () => {
         childIds: ["child:0", "child:0", "obligation:0"],
       }),
     ).toMatchObject({ ok: false, diagnostics: [{ code: "identifier-collision" }] });
+  });
+
+  it("requires exactly two classical branch IDs and rejects all fresh-ID collisions atomically", () => {
+    for (const operation of [
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:only"],
+        branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+      },
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:one", "case:two", "case:three"],
+        branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+      },
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:positive", "case:negative"],
+        branchHypothesisIds: ["hypothesis:one", "hypothesis:two", "hypothesis:three"],
+      },
+    ]) {
+      expect(kernelOperationSchema.safeParse(operation)).toMatchObject({ success: false });
+      expect(applyTransition(state(["r"]), operation)).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "invalid-operation" }],
+      });
+    }
+
+    const input = executableProofStateSchema.parse({
+      id: "state:before",
+      goals: [
+        {
+          id: "goal:0",
+          sequent: sequent("r", [{ id: "hypothesis:existing", expression: "q" }]),
+        },
+      ],
+      obligations: [{ id: "obligation:0", sequent: sequent("p") }],
+    });
+    for (const operation of [
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:duplicate", "case:duplicate"],
+        branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+      },
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["goal:0", "case:negative"],
+        branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+      },
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:positive", "obligation:0"],
+        branchHypothesisIds: ["hypothesis:positive", "hypothesis:negative"],
+      },
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:positive", "case:negative"],
+        branchHypothesisIds: ["hypothesis:duplicate", "hypothesis:duplicate"],
+      },
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:positive", "case:negative"],
+        branchHypothesisIds: ["hypothesis:positive", "hypothesis:existing"],
+      },
+      {
+        ...base,
+        kind: "assume-hypothesis",
+        proposition: "p",
+        hypothesisId: "hypothesis:existing",
+      },
+    ]) {
+      const before = JSON.stringify(input);
+      const result = applyTransition(input, operation);
+      expect(result).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "identifier-collision" }],
+      });
+      expect(result.state).toBe(input);
+      expect(JSON.stringify(input)).toBe(before);
+    }
   });
 
   it("rejects malformed and unresolved input states before applying an operation", () => {
@@ -790,9 +1703,12 @@ describe("kernel rejection and atomicity", () => {
     expect(invoked).toBe(false);
   });
 
-  it("normalizes term and path payloads into detached operation data", () => {
+  it("normalizes expression, ID-list, term, and path payloads into detached operation data", () => {
     const term = { sym: "q", comment: "original" };
     const path = [0];
+    const proposition = { fn: ["Or", "p", "q"], comment: "original proposition" };
+    const childIds = ["case:positive", "case:negative"];
+    const branchHypothesisIds = ["hypothesis:positive", "hypothesis:negative"];
     const parsed = kernelOperationSchema.safeParse({
       ...base,
       kind: "rewrite-with-equality",
@@ -808,16 +1724,38 @@ describe("kernel rejection and atomicity", () => {
       term,
       resultHypothesisId: "hypothesis:instance",
     });
+    const split = kernelOperationSchema.safeParse({
+      ...base,
+      kind: "split-classical-cases",
+      proposition,
+      childIds,
+      branchHypothesisIds,
+    });
 
     expect(parsed.success).toBe(true);
     expect(instantiated.success).toBe(true);
+    expect(split.success).toBe(true);
     path[0] = 4;
     term.comment = "mutated";
+    proposition.comment = "mutated";
+    childIds[0] = "case:mutated";
+    branchHypothesisIds[1] = "hypothesis:mutated";
     if (parsed.success && parsed.data.kind === "rewrite-with-equality") {
       expect(parsed.data.path).toEqual([0]);
     }
     if (instantiated.success && instantiated.data.kind === "instantiate-universal-hypothesis") {
       expect(instantiated.data.term).toEqual({ sym: "q", comment: "original" });
+    }
+    if (split.success && split.data.kind === "split-classical-cases") {
+      expect(split.data.proposition).toEqual({
+        fn: ["Or", "p", "q"],
+        comment: "original proposition",
+      });
+      expect(split.data.childIds).toEqual(["case:positive", "case:negative"]);
+      expect(split.data.branchHypothesisIds).toEqual([
+        "hypothesis:positive",
+        "hypothesis:negative",
+      ]);
     }
   });
 
@@ -858,32 +1796,51 @@ describe("kernel rejection and atomicity", () => {
 describe("transition classifications", () => {
   it("agree with exhaustive Boolean semantics for representative uses of all rules", () => {
     const transitions = representativeTransitions();
+    let witnessedStrictStrengthening = false;
+    let witnessedStrictWeakening = false;
     for (const [before, operation, expectedClass] of transitions) {
       const result = applyTransition(before, operation);
       expect(result.ok).toBe(true);
       if (!result.ok) continue;
       expect(result.transitionClass).toBe(expectedClass);
+      expect(result.evidence).toBe(
+        (operation as { kind: string }).kind === "close-by-accepted-inference"
+          ? "background-inference"
+          : "structural",
+      );
       for (const valuation of valuations(["p", "q", "r"])) {
         const beforeValue = evaluateState(before, valuation);
         const afterValue = evaluateState(result.state, valuation);
         if (expectedClass === "equivalence") expect(afterValue).toBe(beforeValue);
-        else expect(!afterValue || beforeValue).toBe(true);
+        else if (expectedClass === "strengthening") {
+          expect(!afterValue || beforeValue).toBe(true);
+          witnessedStrictStrengthening ||= beforeValue && !afterValue;
+        } else {
+          expect(!beforeValue || afterValue).toBe(true);
+          witnessedStrictWeakening ||= !beforeValue && afterValue;
+        }
       }
     }
+    expect(witnessedStrictStrengthening).toBe(true);
+    expect(witnessedStrictWeakening).toBe(true);
   });
 });
 
 function representativeTransitions(): readonly [
   ExecutableProofState,
   unknown,
-  "equivalence" | "strengthening",
+  "equivalence" | "strengthening" | "weakening",
 ][] {
   const withHypothesis = (conclusion: PlainMathJson, id: string, expression: PlainMathJson) =>
     executableProofStateSchema.parse({
       ...state([conclusion]),
       goals: [{ id: "goal:0", sequent: sequent(conclusion, [{ id, expression }]) }],
     });
-  const transitions: readonly [ExecutableProofState, unknown, "equivalence" | "strengthening"][] = [
+  const transitions: readonly [
+    ExecutableProofState,
+    unknown,
+    "equivalence" | "strengthening" | "weakening",
+  ][] = [
     [
       withHypothesis("p", "hypothesis:p", "p"),
       { ...base, kind: "close-by-hypothesis", hypothesisId: "hypothesis:p" },
@@ -903,6 +1860,7 @@ function representativeTransitions(): readonly [
       { ...base, kind: "close-false-hypothesis", hypothesisId: "hypothesis:false" },
       "equivalence",
     ],
+    [state([["Equal", "p", "p"]]), { ...base, kind: "close-reflexive-equality" }, "equivalence"],
     [
       state([["Implies", "p", "q"]]),
       { ...base, kind: "introduce-implication", hypothesisId: "hypothesis:p" },
@@ -942,6 +1900,69 @@ function representativeTransitions(): readonly [
         childIds: ["case:p", "case:q"],
         branchHypothesisIds: ["case-hypothesis:p", "case-hypothesis:q"],
       },
+      "equivalence",
+    ],
+    [
+      state(["q"]),
+      {
+        ...base,
+        kind: "split-classical-cases",
+        proposition: "p",
+        childIds: ["case:p", "case:not-p"],
+        branchHypothesisIds: ["hypothesis:p", "hypothesis:not-p"],
+      },
+      "equivalence",
+    ],
+    [
+      state(["q"]),
+      {
+        ...base,
+        kind: "assume-hypothesis",
+        proposition: "p",
+        hypothesisId: "hypothesis:p",
+      },
+      "weakening",
+    ],
+    [state([["And", "p", "q"]]), { ...base, kind: "replace-goal", proposition: "p" }, "weakening"],
+    [
+      state(["q"]),
+      {
+        ...base,
+        kind: "suffices",
+        proposition: ["And", "p", "q"],
+        obligationId: "obligation:sufficiency",
+      },
+      "strengthening",
+    ],
+    [
+      withHypothesis("p", "hypothesis:p", "p"),
+      { ...base, kind: "drop-hypothesis", hypothesisId: "hypothesis:p" },
+      "strengthening",
+    ],
+    [
+      executableProofStateSchema.parse({
+        ...state(["r"]),
+        goals: [
+          {
+            id: "goal:0",
+            sequent: sequent("r", [
+              { id: "hypothesis:p", expression: "p" },
+              { id: "hypothesis:not-p", expression: ["Not", "p"] },
+            ]),
+          },
+        ],
+      }),
+      {
+        ...base,
+        kind: "close-by-contradiction",
+        hypothesisId: "hypothesis:p",
+        negationHypothesisId: "hypothesis:not-p",
+      },
+      "equivalence",
+    ],
+    [
+      state([["Implies", "p", ["Or", "p", "q"]]]),
+      { ...base, kind: "close-by-accepted-inference", attestationId: "attestation:valid" },
       "equivalence",
     ],
     [
@@ -1000,8 +2021,8 @@ function representativeTransitions(): readonly [
 function addBystanders(input: ExecutableProofState): ExecutableProofState {
   return executableProofStateSchema.parse({
     ...input,
-    goals: [...input.goals, { id: "goal:sibling", sequent: sequent("q") }],
-    obligations: [...input.obligations, { id: "obligation:sibling", sequent: sequent("r") }],
+    goals: [...input.goals, { id: "goal:sibling", sequent: sequent("True") }],
+    obligations: [...input.obligations, { id: "obligation:sibling", sequent: sequent("True") }],
   });
 }
 

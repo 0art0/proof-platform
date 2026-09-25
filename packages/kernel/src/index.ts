@@ -1,11 +1,12 @@
 import {
-  BUILTIN_BINDER_SPECIFICATIONS,
   createExecutableProofStateSchema,
+  createStatementViewSchema,
   freeSymbolNames,
   mathJsonEquals,
   operatorDeclarationsSchema,
   plainMathJsonSchema,
   proofStateIdSchema,
+  stableIdentifierSchema,
   statementIdSchema,
   substituteMathJson,
   type ContextualSequent,
@@ -20,8 +21,33 @@ import {
   type ProofStateId,
   type StatementId,
 } from "@proof/mathjson-model";
+import { alphaEquivalentWithOperators } from "./alpha-equivalence";
+import { binderFor, functionParts, operatorOperands, symbolValue } from "./expression";
 
+export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equivalence";
+
+/**
+ * Logical direction of a transition from state S to state T (design plan §10):
+ * equivalence (S provable iff T provable), strengthening (proving T proves S),
+ * and weakening (T is not claimed to establish S; it never counts toward a
+ * provability route). Weakening is the conservative label for any primitive
+ * whose result the kernel does not relate to its input, such as `replace-goal`.
+ */
 export type TransitionClass = "equivalence" | "strengthening" | "weakening";
+
+/**
+ * How a transition's logical direction is supported (refinement §9). This is
+ * orthogonal to the transition class. `structural` means the kernel checked
+ * the step itself; `background-inference` means the kernel only recorded an
+ * external attestation reference and did not judge it. Later evidence kinds
+ * (for example approved-result application and sorry) extend this list.
+ */
+export const TRANSITION_EVIDENCE_KINDS = ["structural", "background-inference"] as const;
+export type TransitionEvidence = (typeof TRANSITION_EVIDENCE_KINDS)[number];
+
+/** Opaque reference to an externally recorded attestation. The kernel never dereferences it. */
+export const attestationIdSchema = stableIdentifierSchema.brand("AttestationId");
+export type AttestationId = ReturnType<typeof attestationIdSchema.parse>;
 
 export type TransitionTarget = Readonly<{
   kind: "goal" | "obligation";
@@ -31,16 +57,31 @@ export type TransitionTarget = Readonly<{
 export type TransitionStatementTarget =
   Readonly<{ kind: "conclusion" }> | Readonly<{ kind: "hypothesis"; id: StatementId }>;
 
+/**
+ * Trusted primitive names are verb-first and name the construct they act on.
+ * `split-classical-cases` (roadmap "case-split") splits on an arbitrary
+ * proposition by excluded middle, in contrast to `split-hypothesis-disjunction`.
+ * `assume-hypothesis` adds an unproved hypothesis; it is a weakening, so the
+ * assumption is never silently treated as established.
+ */
 export const KERNEL_OPERATION_KINDS = [
   "close-by-hypothesis",
   "close-true",
   "close-false-hypothesis",
+  "close-reflexive-equality",
+  "close-by-contradiction",
+  "close-by-accepted-inference",
   "introduce-implication",
   "introduce-negation",
   "split-goal-conjunction",
   "choose-goal-disjunct",
   "expand-hypothesis-conjunction",
   "split-hypothesis-disjunction",
+  "split-classical-cases",
+  "assume-hypothesis",
+  "replace-goal",
+  "suffices",
+  "drop-hypothesis",
   "apply-implication-hypothesis",
   "introduce-universal",
   "instantiate-universal-hypothesis",
@@ -60,6 +101,15 @@ export type KernelOperation =
   | (OperationBase & Readonly<{ kind: "close-by-hypothesis"; hypothesisId: StatementId }>)
   | (OperationBase & Readonly<{ kind: "close-true" }>)
   | (OperationBase & Readonly<{ kind: "close-false-hypothesis"; hypothesisId: StatementId }>)
+  | (OperationBase & Readonly<{ kind: "close-reflexive-equality" }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "close-by-contradiction";
+        hypothesisId: StatementId;
+        negationHypothesisId: StatementId;
+      }>)
+  | (OperationBase &
+      Readonly<{ kind: "close-by-accepted-inference"; attestationId: AttestationId }>)
   | (OperationBase & Readonly<{ kind: "introduce-implication"; hypothesisId: StatementId }>)
   | (OperationBase & Readonly<{ kind: "introduce-negation"; hypothesisId: StatementId }>)
   | (OperationBase & Readonly<{ kind: "split-goal-conjunction"; childIds: readonly StatementId[] }>)
@@ -77,6 +127,23 @@ export type KernelOperation =
         childIds: readonly StatementId[];
         branchHypothesisIds: readonly StatementId[];
       }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "split-classical-cases";
+        proposition: PlainMathJson;
+        childIds: readonly [StatementId, StatementId];
+        branchHypothesisIds: readonly [StatementId, StatementId];
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "assume-hypothesis";
+        proposition: PlainMathJson;
+        hypothesisId: StatementId;
+      }>)
+  | (OperationBase & Readonly<{ kind: "replace-goal"; proposition: PlainMathJson }>)
+  | (OperationBase &
+      Readonly<{ kind: "suffices"; proposition: PlainMathJson; obligationId: StatementId }>)
+  | (OperationBase & Readonly<{ kind: "drop-hypothesis"; hypothesisId: StatementId }>)
   | (OperationBase &
       Readonly<{
         kind: "apply-implication-hypothesis";
@@ -140,6 +207,7 @@ export type KernelDiagnosticCode =
   | "arity-mismatch"
   | "index-out-of-range"
   | "invalid-path"
+  | "invalid-proposition"
   | "replacement-failed"
   | "rule-not-applicable"
   | "invalid-result-state";
@@ -155,6 +223,7 @@ export type KernelTransitionResult =
       ok: true;
       state: ExecutableProofState;
       transitionClass: TransitionClass;
+      evidence: TransitionEvidence;
       diagnostics: readonly [];
     }>
   | Readonly<{
@@ -249,12 +318,18 @@ export function applyTransition(
     ok: true,
     state: outputState.data,
     transitionClass: transition.transitionClass,
+    evidence: transition.evidence,
     diagnostics: [],
   };
 }
 
 type InternalResult =
-  | Readonly<{ ok: true; state: ProofState; transitionClass: TransitionClass }>
+  | Readonly<{
+      ok: true;
+      state: ProofState;
+      transitionClass: TransitionClass;
+      evidence: TransitionEvidence;
+    }>
   | Readonly<{ ok: false; state: ProofState; diagnostics: readonly KernelDiagnostic[] }>;
 
 function applyValidatedOperation(
@@ -268,11 +343,15 @@ function applyValidatedOperation(
       const selected = findHypothesis(target.entry.sequent, operation.hypothesisId);
       if (selected === undefined) return missingHypothesis(state);
       if (
-        !mathJsonEquals(selected.statement.expression, target.entry.sequent.conclusion.expression)
+        !alphaEquivalentWithOperators(
+          selected.statement.expression,
+          target.entry.sequent.conclusion.expression,
+          operators,
+        )
       ) {
         return notApplicable(
           state,
-          "The selected hypothesis does not exactly match the conclusion.",
+          "The selected hypothesis does not match the conclusion up to renaming of bound symbols.",
         );
       }
       return success(replaceTarget(state, operation.target, target.index, []), "equivalence");
@@ -291,6 +370,53 @@ function applyValidatedOperation(
       }
       return success(replaceTarget(state, operation.target, target.index, []), "equivalence");
     }
+    case "close-reflexive-equality": {
+      const operands = operatorOperands(target.entry.sequent.conclusion.expression, "Equal");
+      if (
+        operands === undefined ||
+        operands.length !== 2 ||
+        !alphaEquivalentWithOperators(
+          operands[0] as PlainMathJson,
+          operands[1] as PlainMathJson,
+          operators,
+        )
+      ) {
+        return notApplicable(
+          state,
+          "The target conclusion is not a binary equality between alpha-equivalent sides.",
+        );
+      }
+      return success(replaceTarget(state, operation.target, target.index, []), "equivalence");
+    }
+    case "close-by-contradiction": {
+      const positive = findHypothesis(target.entry.sequent, operation.hypothesisId);
+      const negation = findHypothesis(target.entry.sequent, operation.negationHypothesisId);
+      if (positive === undefined || negation === undefined) return missingHypothesis(state);
+      const negated = operatorOperands(negation.statement.expression, "Not");
+      if (negated === undefined || negated.length !== 1) {
+        return notApplicable(state, "The negation hypothesis is not a unary negation.");
+      }
+      if (
+        !alphaEquivalentWithOperators(
+          positive.statement.expression,
+          negated[0] as PlainMathJson,
+          operators,
+        )
+      ) {
+        return notApplicable(
+          state,
+          "The negation hypothesis does not negate the selected hypothesis up to renaming of bound symbols.",
+        );
+      }
+      return success(replaceTarget(state, operation.target, target.index, []), "equivalence");
+    }
+    case "close-by-accepted-inference":
+      // The attestation is recorded in the operation; the kernel does not judge it.
+      return success(
+        replaceTarget(state, operation.target, target.index, []),
+        "equivalence",
+        "background-inference",
+      );
     case "introduce-implication": {
       const operands = logicalOperands(target.entry.sequent.conclusion.expression, "Implies");
       if (operands === undefined || operands.length !== 2) {
@@ -438,6 +564,113 @@ function applyValidatedOperation(
       return success(
         replaceTarget(state, operation.target, target.index, replacements),
         "equivalence",
+      );
+    }
+    case "split-classical-cases": {
+      if (!isPropositionInContext(operation.proposition, target.entry.sequent, operators)) {
+        return invalidProposition(state, "case-split proposition");
+      }
+      const childCollision = targetIdCollision(state, operation.childIds);
+      if (childCollision !== undefined) return idCollision(state, childCollision);
+      const hypothesisCollision = hypothesisIdCollision(
+        target.entry.sequent,
+        operation.branchHypothesisIds,
+      );
+      if (hypothesisCollision !== undefined) return idCollision(state, hypothesisCollision);
+
+      const branchExpressions: readonly PlainMathJson[] = [
+        operation.proposition,
+        ["Not", operation.proposition],
+      ];
+      const replacements = branchExpressions.map((expression, index): TargetEntry => {
+        const branch = structuredClone(target.entry);
+        return {
+          ...appendHypothesis(
+            branch,
+            hypothesis(operation.branchHypothesisIds[index] as StatementId, expression),
+          ),
+          id: operation.childIds[index] as StatementId,
+        };
+      });
+      return success(
+        replaceTarget(state, operation.target, target.index, replacements),
+        "equivalence",
+      );
+    }
+    case "assume-hypothesis": {
+      if (!isPropositionInContext(operation.proposition, target.entry.sequent, operators)) {
+        return invalidProposition(state, "assumed hypothesis");
+      }
+      const collision = hypothesisIdCollision(target.entry.sequent, [operation.hypothesisId]);
+      if (collision !== undefined) return idCollision(state, collision);
+      const replacement = appendHypothesis(
+        target.entry,
+        hypothesis(operation.hypothesisId, operation.proposition),
+      );
+      return success(
+        replaceTarget(state, operation.target, target.index, [replacement]),
+        "weakening",
+      );
+    }
+    case "replace-goal": {
+      if (!isPropositionInContext(operation.proposition, target.entry.sequent, operators)) {
+        return invalidProposition(state, "replacement conclusion");
+      }
+      if (
+        alphaEquivalentWithOperators(
+          operation.proposition,
+          target.entry.sequent.conclusion.expression,
+          operators,
+        )
+      ) {
+        return notApplicable(state, "The replacement conclusion is the current conclusion.");
+      }
+      return success(
+        replaceTarget(state, operation.target, target.index, [
+          withConclusion(target.entry, operation.proposition),
+        ]),
+        "weakening",
+      );
+    }
+    case "suffices": {
+      if (!isPropositionInContext(operation.proposition, target.entry.sequent, operators)) {
+        return invalidProposition(state, "sufficient proposition");
+      }
+      const collision = targetIdCollision(state, [operation.obligationId]);
+      if (collision !== undefined) return idCollision(state, collision);
+      const implication: Obligation = {
+        id: operation.obligationId,
+        sequent: {
+          context: structuredClone(target.entry.sequent.context),
+          conclusion: {
+            expression: [
+              "Implies",
+              structuredClone(operation.proposition),
+              structuredClone(target.entry.sequent.conclusion.expression),
+            ],
+          },
+        },
+      };
+      const replaced = withConclusion(target.entry, operation.proposition);
+      // An obligation target keeps its sufficiency obligation adjacent; a goal
+      // target appends it to the obligation collection.
+      const next =
+        operation.target.kind === "obligation"
+          ? replaceTarget(state, operation.target, target.index, [replaced, implication])
+          : {
+              ...replaceTarget(state, operation.target, target.index, [replaced]),
+              obligations: [...state.obligations, implication],
+            };
+      return success(next, "strengthening");
+    }
+    case "drop-hypothesis": {
+      const hypothesisIndex = findHypothesisIndex(target.entry.sequent, operation.hypothesisId);
+      if (hypothesisIndex < 0) return missingHypothesis(state);
+      return success(
+        replaceTarget(state, operation.target, target.index, [
+          replaceHypothesis(target.entry, hypothesisIndex, []),
+        ]),
+        "strengthening",
       );
     }
     case "apply-implication-hypothesis": {
@@ -648,6 +881,13 @@ function appendHypothesis(target: TargetEntry, appended: Hypothesis): TargetEntr
   };
 }
 
+function withConclusion(target: TargetEntry, expression: PlainMathJson): TargetEntry {
+  return {
+    ...target,
+    sequent: { ...target.sequent, conclusion: { expression: structuredClone(expression) } },
+  };
+}
+
 function hypothesis(id: StatementId, expression: PlainMathJson): Hypothesis {
   return { id, statement: { expression: structuredClone(expression) } };
 }
@@ -662,6 +902,22 @@ function findHypothesisIndex(sequent: ContextualSequent, id: StatementId): numbe
 
 function findDeclaration(sequent: ContextualSequent, symbol: string): Declaration | undefined {
   return sequent.context.declarations.find((candidate) => candidate.symbol === symbol);
+}
+
+/** Scope and sort check for a user-supplied proposition against the target's local context. */
+function isPropositionInContext(
+  expression: PlainMathJson,
+  sequent: ContextualSequent,
+  operators: readonly OperatorDeclaration[],
+): boolean {
+  try {
+    return createStatementViewSchema({
+      declarations: sequent.context.declarations,
+      operators,
+    }).safeParse({ expression }).success;
+  } catch {
+    return false;
+  }
 }
 
 function readBuiltinQuantifier(
@@ -795,10 +1051,7 @@ function occurrenceAtPath(
   for (const operandIndex of path) {
     const parts = functionParts(current);
     if (parts === undefined) return undefined;
-    const binder =
-      parts.operator === "ForAll" || parts.operator === "Exists"
-        ? BUILTIN_BINDER_SPECIFICATIONS[parts.operator]
-        : operators.find((candidate) => candidate.symbol === parts.operator)?.binder;
+    const binder = binderFor(parts.operator, operators);
     if (binder?.boundOperands.includes(operandIndex)) return undefined;
     if (binder?.scopedOperands.includes(operandIndex)) {
       binder.boundOperands.forEach((boundIndex) => {
@@ -836,55 +1089,6 @@ function logicalOperands(
   operator: "And" | "Or" | "Implies",
 ): readonly PlainMathJson[] | undefined {
   return operatorOperands(expression, operator);
-}
-
-type FunctionParts = Readonly<{
-  operator: string;
-  operands: readonly PlainMathJson[];
-  rebuild: (operands: readonly PlainMathJson[]) => PlainMathJson;
-}>;
-
-function functionParts(expression: PlainMathJson): FunctionParts | undefined {
-  if (Array.isArray(expression)) {
-    const operator = expression[0];
-    return typeof operator === "string"
-      ? {
-          operator,
-          operands: expression.slice(1) as readonly PlainMathJson[],
-          rebuild: (operands) => [operator, ...operands],
-        }
-      : undefined;
-  }
-  if (typeof expression !== "object" || expression === null || !("fn" in expression)) {
-    return undefined;
-  }
-  const fn = expression.fn;
-  const operator = fn[0];
-  return typeof operator === "string"
-    ? {
-        operator,
-        operands: fn.slice(1),
-        rebuild: (operands) => ({ ...expression, fn: [operator, ...operands] }),
-      }
-    : undefined;
-}
-
-function operatorOperands(
-  expression: PlainMathJson,
-  operator: string,
-): readonly PlainMathJson[] | undefined {
-  const parts = functionParts(expression);
-  return parts?.operator === operator ? parts.operands : undefined;
-}
-
-function symbolValue(expression: PlainMathJson): string | undefined {
-  if (typeof expression === "string") return expression;
-  return typeof expression === "object" &&
-    expression !== null &&
-    !Array.isArray(expression) &&
-    "sym" in expression
-    ? expression.sym
-    : undefined;
 }
 
 function isSymbol(expression: PlainMathJson, expected: "True" | "False"): boolean {
@@ -926,8 +1130,9 @@ function firstCollision(
 function success(
   state: ProofState,
   transitionClass: TransitionClass,
+  evidence: TransitionEvidence = "structural",
 ): Extract<InternalResult, { ok: true }> {
-  return { ok: true, state, transitionClass };
+  return { ok: true, state, transitionClass, evidence };
 }
 
 function failure(
@@ -983,6 +1188,17 @@ function replacementFailed(state: ProofState): Extract<InternalResult, { ok: fal
     state,
     "replacement-failed",
     "The requested capture-safe replacement could not be constructed.",
+  );
+}
+
+function invalidProposition(
+  state: ProofState,
+  label: string,
+): Extract<InternalResult, { ok: false }> {
+  return internalFailure(
+    state,
+    "invalid-proposition",
+    `The ${label} is not a well-scoped, well-sorted proposition in the target's local context.`,
   );
 }
 
@@ -1051,12 +1267,20 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     "close-by-hypothesis": ["hypothesisId"],
     "close-true": [],
     "close-false-hypothesis": ["hypothesisId"],
+    "close-reflexive-equality": [],
+    "close-by-contradiction": ["hypothesisId", "negationHypothesisId"],
+    "close-by-accepted-inference": ["attestationId"],
     "introduce-implication": ["hypothesisId"],
     "introduce-negation": ["hypothesisId"],
     "split-goal-conjunction": ["childIds"],
     "choose-goal-disjunct": ["disjunctIndex"],
     "expand-hypothesis-conjunction": ["hypothesisId", "expandedHypothesisIds"],
     "split-hypothesis-disjunction": ["hypothesisId", "childIds", "branchHypothesisIds"],
+    "split-classical-cases": ["proposition", "childIds", "branchHypothesisIds"],
+    "assume-hypothesis": ["proposition", "hypothesisId"],
+    "replace-goal": ["proposition"],
+    suffices: ["proposition", "obligationId"],
+    "drop-hypothesis": ["hypothesisId"],
     "apply-implication-hypothesis": [
       "implicationHypothesisId",
       "antecedentHypothesisId",
@@ -1093,15 +1317,27 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     "antecedentHypothesisId",
     "resultHypothesisId",
     "equalityHypothesisId",
+    "negationHypothesisId",
+    "obligationId",
   ] as const) {
     if (field in value && !statementIdSchema.safeParse(value[field]).success) {
-      return runtimeFailure("The hypothesis ID is invalid.", [field]);
+      return runtimeFailure("The statement ID is invalid.", [field]);
     }
+  }
+  if ("attestationId" in value && !attestationIdSchema.safeParse(value.attestationId).success) {
+    return runtimeFailure("The attestation ID is invalid.", ["attestationId"]);
   }
   for (const field of ["childIds", "expandedHypothesisIds", "branchHypothesisIds"] as const) {
     if (field in value && !isStatementIdArray(value[field])) {
       return runtimeFailure("An ID list requires at least two stable, dense IDs.", [field]);
     }
+  }
+  if (
+    value.kind === "split-classical-cases" &&
+    ((value.childIds as readonly unknown[]).length !== 2 ||
+      (value.branchHypothesisIds as readonly unknown[]).length !== 2)
+  ) {
+    return runtimeFailure("A classical case split requires exactly two IDs in each list.", []);
   }
   if (
     "disjunctIndex" in value &&
@@ -1111,9 +1347,9 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
   ) {
     return runtimeFailure("A disjunct index must be a nonnegative integer.", ["disjunctIndex"]);
   }
-  for (const field of ["term", "witness"] as const) {
+  for (const field of ["term", "witness", "proposition"] as const) {
     if (field in value && !plainMathJsonSchema.safeParse(value[field]).success) {
-      return runtimeFailure("A term must be serializable plain MathJSON.", [field]);
+      return runtimeFailure("An expression must be serializable plain MathJSON.", [field]);
     }
   }
   if ("path" in value && !isOperandPath(value.path)) {
@@ -1138,6 +1374,7 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     case "close-false-hypothesis":
     case "introduce-implication":
     case "introduce-negation":
+    case "drop-hypothesis":
       return {
         success: true,
         data: {
@@ -1147,8 +1384,28 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
         },
       };
     case "close-true":
+    case "close-reflexive-equality":
     case "introduce-universal":
       return { success: true, data: { ...common, kind: value.kind } };
+    case "close-by-contradiction":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          hypothesisId: statementIdSchema.parse(value.hypothesisId),
+          negationHypothesisId: statementIdSchema.parse(value.negationHypothesisId),
+        },
+      };
+    case "close-by-accepted-inference":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          attestationId: attestationIdSchema.parse(value.attestationId),
+        },
+      };
     case "split-goal-conjunction":
       return {
         success: true,
@@ -1178,6 +1435,42 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
           hypothesisId: statementIdSchema.parse(value.hypothesisId),
           childIds: copyStatementIds(value.childIds),
           branchHypothesisIds: copyStatementIds(value.branchHypothesisIds),
+        },
+      };
+    case "split-classical-cases":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          proposition: copyPlainMathJson(value.proposition),
+          childIds: copyStatementIdPair(value.childIds),
+          branchHypothesisIds: copyStatementIdPair(value.branchHypothesisIds),
+        },
+      };
+    case "replace-goal":
+      return {
+        success: true,
+        data: { ...common, kind: value.kind, proposition: copyPlainMathJson(value.proposition) },
+      };
+    case "suffices":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          proposition: copyPlainMathJson(value.proposition),
+          obligationId: statementIdSchema.parse(value.obligationId),
+        },
+      };
+    case "assume-hypothesis":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          proposition: copyPlainMathJson(value.proposition),
+          hypothesisId: statementIdSchema.parse(value.hypothesisId),
         },
       };
     case "apply-implication-hypothesis":
@@ -1292,6 +1585,12 @@ function copyStatementIds(value: unknown): readonly StatementId[] {
     }
     return statementIdSchema.parse(descriptor.value);
   });
+}
+
+function copyStatementIdPair(value: unknown): readonly [StatementId, StatementId] {
+  const ids = copyStatementIds(value);
+  if (ids.length !== 2) throw new Error("Expected exactly two validated statement IDs.");
+  return [ids[0] as StatementId, ids[1] as StatementId];
 }
 
 function isStatementIdArray(value: unknown): value is readonly StatementId[] {

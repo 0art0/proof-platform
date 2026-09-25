@@ -8,7 +8,9 @@ import {
 } from "@proof/mathjson-model";
 import {
   HAND_AUTHORED_MOVES,
+  PRIMITIVE_PATTERN_SLOTS,
   PRIMITIVE_TRANSITION_CLASSES,
+  PRIMITIVE_TRANSITION_EVIDENCE,
   moveDefinitionSchema,
   planMove,
 } from "./index";
@@ -72,6 +74,9 @@ describe("hand-authored move catalog", () => {
       expect(Object.isFrozen(move)).toBe(true);
       expect(move.transitionClass).toBe(
         PRIMITIVE_TRANSITION_CLASSES[move.implementation.operationKind],
+      );
+      expect(move.selectionContract.slots.map(({ id }) => id)).toContain(
+        PRIMITIVE_PATTERN_SLOTS[move.implementation.operationKind],
       );
     });
   });
@@ -154,6 +159,62 @@ describe("deterministic move planning", () => {
         preview: { transitionClass: "strengthening" },
       });
     }
+  });
+
+  it("previews every classical, weakening, and strengthening primitive with its declared class", () => {
+    const withFacts = state("q", [
+      { id: "hypothesis:p", expression: "p" },
+      { id: "hypothesis:not-p", expression: ["Not", "p"] },
+    ]);
+    const cases: readonly (readonly [
+      ExecutableProofState,
+      KernelOperation["kind"],
+      Readonly<Record<string, unknown>>,
+    ])[] = [
+      [state(["Equal", "p", "p"]), "close-reflexive-equality", {}],
+      [
+        withFacts,
+        "close-by-contradiction",
+        { hypothesisId: "hypothesis:p", negationHypothesisId: "hypothesis:not-p" },
+      ],
+      [state("q"), "close-by-accepted-inference", { attestationId: "attestation:1" }],
+      [
+        state("q"),
+        "split-classical-cases",
+        {
+          proposition: "p",
+          childIds: ["case:p", "case:not-p"],
+          branchHypothesisIds: ["hypothesis:case-p", "hypothesis:case-not-p"],
+        },
+      ],
+      [state("q"), "assume-hypothesis", { proposition: "p", hypothesisId: "hypothesis:new" }],
+      [state("q"), "replace-goal", { proposition: "p" }],
+      [state("q"), "suffices", { proposition: "p", obligationId: "obligation:sufficiency" }],
+      [withFacts, "drop-hypothesis", { hypothesisId: "hypothesis:p" }],
+    ];
+    for (const [input, kind, fields] of cases) {
+      const result = planMove(input, {
+        moveId: `move:${kind}`,
+        operation: operation(kind, fields),
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        preview: {
+          transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind],
+          evidence: PRIMITIVE_TRANSITION_EVIDENCE[kind],
+        },
+      });
+    }
+    expect(PRIMITIVE_TRANSITION_CLASSES["assume-hypothesis"]).toBe("weakening");
+    expect(PRIMITIVE_TRANSITION_CLASSES["replace-goal"]).toBe("weakening");
+    expect(PRIMITIVE_TRANSITION_CLASSES.suffices).toBe("strengthening");
+    expect(PRIMITIVE_TRANSITION_CLASSES["drop-hypothesis"]).toBe("strengthening");
+    expect(PRIMITIVE_TRANSITION_EVIDENCE["close-by-accepted-inference"]).toBe(
+      "background-inference",
+    );
+    expect(
+      KERNEL_OPERATION_KINDS.filter((kind) => PRIMITIVE_TRANSITION_EVIDENCE[kind] !== "structural"),
+    ).toEqual(["close-by-accepted-inference"]);
   });
 
   it("rejects unknown moves, mismatched primitives, and inapplicable operations", () => {
