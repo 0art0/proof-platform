@@ -9,3 +9,5 @@ export * from "./llm-call-repository";
 export * from "./postgres-llm-call-store";
 export * from "./proof-http";
 export * from "./development-session";
+export * from "./memory-proof-store";
+export * from "./proof-worker-startup";

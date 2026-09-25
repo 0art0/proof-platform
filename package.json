@@ -16,6 +16,7 @@
     "lint": "./scripts/turbow run lint",
     "test": "./scripts/turbow run test",
     "test:e2e": "playwright test",
+    "test:e2e:workspace": "playwright test --config playwright.proof-workspace-memory.config.ts",
     "typecheck": "./scripts/turbow run typecheck",
     "verify": "prettier --check . && PYTHONPATH=orchestration python3 -m unittest discover -s orchestration/tests -v && ./scripts/turbow run lint typecheck test build",
     "agents": "./scripts/agentctl",

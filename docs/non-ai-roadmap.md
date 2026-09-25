@@ -44,7 +44,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
 
 ## Phase 0 — Local operability
 
-- [~] **N00 In-memory proof store and worker mode.** Promote the test-only `MemoryProofStore` to a
+- [x] **N00 In-memory proof store and worker mode.** Promote the test-only `MemoryProofStore` to a
       production `ProofStore` implementation in `apps/worker`. Select it with `PROOF_STORE=memory`, and seed
       the development session on startup. Add a Playwright config that runs `proof-workspace.spec.ts`
       against the memory worker, so e2e tests run without Postgres. _Accept:_ the worker starts with no

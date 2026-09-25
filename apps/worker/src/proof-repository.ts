@@ -1646,6 +1646,16 @@ function parseSuggestionSetRecord(
 }
 
 function transactionFailure(error: unknown, fallbackMessage: string): RepositoryFailure {
+  // Stores wrap callback failures in a rolled-back error; the stale-pointer cause stays meaningful.
+  const staleCause =
+    error instanceof ProofStoreTransactionError &&
+    error.outcome === "rolled-back" &&
+    error.cause instanceof SerializedStaleCommandError
+      ? error.cause
+      : undefined;
+  if (staleCause !== undefined) {
+    return repositoryFailure("rejected", "serialized-stale-command", staleCause.message);
+  }
   if (error instanceof SerializedStaleCommandError) {
     return repositoryFailure("rejected", "serialized-stale-command", error.message);
   }

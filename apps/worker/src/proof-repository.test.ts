@@ -6,12 +6,9 @@ import {
   commandIdSchema,
   createProofNodeSchema,
   type DisplayedSuggestionSet,
-  type MovePreview,
   type PrepareProofCommandSuccess,
-  type ProofEdge,
   type ProofNode,
   type ProtocolEnvironment,
-  type TransitionEvent,
 } from "@proof/protocol";
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import {
@@ -28,8 +25,8 @@ import {
   recordMovePreview,
   type ProofSession,
   type ProofStore,
-  type ProofStoreTransaction,
 } from "./proof-repository";
+import { InspectableMemoryProofStore as MemoryProofStore, key } from "./memory-proof-store.testing";
 
 const human = actorSchema.parse({ kind: "human", id: "actor:human" });
 
@@ -80,174 +77,6 @@ function command(
     },
     ...overrides,
   };
-}
-
-type FailurePoint =
-  | "insertSession"
-  | "insertNode"
-  | "insertSuggestionSet"
-  | "insertPreview"
-  | "insertEdge"
-  | "insertEvent"
-  | "insertCommand"
-  | "advance";
-
-class MemoryProofStore implements ProofStore {
-  sessions = new Map<string, ProofSession>();
-  nodes = new Map<string, ProofNode>();
-  suggestionSets = new Map<string, DisplayedSuggestionSet>();
-  previews = new Map<string, MovePreview>();
-  edges = new Map<string, ProofEdge>();
-  events = new Map<string, TransitionEvent>();
-  commands = new Map<string, PrepareProofCommandSuccess>();
-  failAt: FailurePoint | undefined;
-  nodeRecordOverride: unknown | undefined;
-  suggestionSetRecordOverride: unknown | undefined;
-  log: string[] = [];
-  private queue: Promise<void> = Promise.resolve();
-
-  async transaction<Result>(
-    work: (transaction: ProofStoreTransaction) => Promise<Result>,
-  ): Promise<Result> {
-    const previous = this.queue;
-    let release: (() => void) | undefined;
-    this.queue = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-
-    const staged = {
-      sessions: cloneMap(this.sessions),
-      nodes: cloneMap(this.nodes),
-      suggestionSets: cloneMap(this.suggestionSets),
-      previews: cloneMap(this.previews),
-      edges: cloneMap(this.edges),
-      events: cloneMap(this.events),
-      commands: cloneMap(this.commands),
-    };
-    const fail = (point: FailurePoint): void => {
-      if (this.failAt === point) throw new Error(`forced ${point} failure`);
-    };
-    const transaction: ProofStoreTransaction = {
-      lockSession: async (sessionId) => {
-        this.log.push("lockSession");
-        return staged.sessions.get(sessionId);
-      },
-      readNode: async (sessionId, nodeId) => {
-        this.log.push("readNode");
-        if (this.nodeRecordOverride !== undefined) return this.nodeRecordOverride;
-        const node = staged.nodes.get(key(sessionId, nodeId));
-        return node === undefined
-          ? undefined
-          : { sessionId, nodeId: node.id, stateId: node.state.id, node };
-      },
-      readCommand: async (sessionId, commandId) => {
-        this.log.push("readCommand");
-        return staged.commands.get(key(sessionId, commandId));
-      },
-      readSuggestionSet: async (sessionId, suggestionSetId) => {
-        this.log.push("readSuggestionSet");
-        if (this.suggestionSetRecordOverride !== undefined) {
-          return this.suggestionSetRecordOverride;
-        }
-        const suggestionSet = staged.suggestionSets.get(key(sessionId, suggestionSetId));
-        return suggestionSet === undefined
-          ? undefined
-          : {
-              sessionId,
-              suggestionSetId: suggestionSet.id,
-              nodeId: suggestionSet.nodeId,
-              stateId: suggestionSet.stateId,
-              suggestionSet,
-            };
-      },
-      readPreview: async (sessionId, previewId) => {
-        this.log.push("readPreview");
-        return staged.previews.get(key(sessionId, previewId));
-      },
-      listEdges: async (sessionId) =>
-        [...staged.edges.values()]
-          .filter((edge) => staged.nodes.has(key(sessionId, edge.parentNodeId)))
-          .map((edge) => ({
-            sessionId,
-            edgeId: edge.id,
-            parentNodeId: edge.parentNodeId,
-            childNodeId: edge.childNodeId,
-            commandId: edge.commandId,
-            suggestionSetId: edge.suggestionSetId ?? null,
-            chosenSuggestionId: edge.chosenSuggestionId ?? null,
-            previewId: edge.previewId ?? null,
-            edge,
-          })),
-      insertSession: async (session) => {
-        fail("insertSession");
-        staged.sessions.set(session.id, structuredClone(session));
-      },
-      insertNode: async (sessionId, node) => {
-        fail("insertNode");
-        staged.nodes.set(key(sessionId, node.id), structuredClone(node));
-      },
-      insertSuggestionSet: async (sessionId, suggestionSet) => {
-        fail("insertSuggestionSet");
-        staged.suggestionSets.set(key(sessionId, suggestionSet.id), structuredClone(suggestionSet));
-      },
-      insertPreview: async (sessionId, preview) => {
-        fail("insertPreview");
-        staged.previews.set(key(sessionId, preview.id), structuredClone(preview));
-      },
-      insertEdge: async (sessionId, edge) => {
-        fail("insertEdge");
-        staged.edges.set(key(sessionId, edge.id), structuredClone(edge));
-      },
-      insertEvent: async (sessionId, event) => {
-        fail("insertEvent");
-        staged.events.set(key(sessionId, event.id), structuredClone(event));
-      },
-      insertCommand: async (sessionId, result) => {
-        fail("insertCommand");
-        staged.commands.set(
-          key(sessionId, result.prepared.command.commandId),
-          structuredClone(result),
-        );
-      },
-      advanceCurrentNode: async (sessionId, expectedNodeId, nextNodeId) => {
-        this.log.push("advanceCurrentNode");
-        if (this.failAt === "advance") return false;
-        const session = staged.sessions.get(sessionId);
-        if (session === undefined || session.currentNodeId !== expectedNodeId) return false;
-        staged.sessions.set(sessionId, { ...session, currentNodeId: nextNodeId });
-        return true;
-      },
-      repointCurrentNode: async (sessionId, expectedNodeId, targetNodeId) => {
-        const session = staged.sessions.get(sessionId);
-        if (session === undefined || session.currentNodeId !== expectedNodeId) return false;
-        staged.sessions.set(sessionId, { ...session, currentNodeId: targetNodeId });
-        return true;
-      },
-    };
-
-    try {
-      const result = await work(transaction);
-      this.sessions = staged.sessions;
-      this.nodes = staged.nodes;
-      this.suggestionSets = staged.suggestionSets;
-      this.previews = staged.previews;
-      this.edges = staged.edges;
-      this.events = staged.events;
-      this.commands = staged.commands;
-      return result;
-    } finally {
-      release?.();
-    }
-  }
-}
-
-function cloneMap<Value>(source: ReadonlyMap<string, Value>): Map<string, Value> {
-  return new Map([...source].map(([entryKey, value]) => [entryKey, structuredClone(value)]));
-}
-
-function key(sessionId: string, recordId: string): string {
-  return `${sessionId}\u0000${recordId}`;
 }
 
 function retrievalIndex(): RetrievalIndex {

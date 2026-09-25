@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
+    "start": "tsx src/main.ts",
+    "start:memory": "PROOF_STORE=memory tsx src/main.ts",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
