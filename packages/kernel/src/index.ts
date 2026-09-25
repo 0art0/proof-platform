@@ -22,7 +22,16 @@ import {
   type StatementId,
 } from "@proof/mathjson-model";
 import { alphaEquivalentWithOperators } from "./alpha-equivalence";
-import { binderFor, functionParts, operatorOperands, symbolValue } from "./expression";
+import {
+  copyRewriteLens,
+  isRewriteLens,
+  locateRewriteOccurrence,
+  parseRewriteSource,
+  rewriteCaptures,
+  type RewriteLens,
+  type RewriteSource,
+} from "./deep-rewrite";
+import { operatorOperands, symbolValue } from "./expression";
 import {
   instantiateResultInContext,
   kernelResultIdSchema,
@@ -34,6 +43,7 @@ import {
 import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 
 export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equivalence";
+export type { RewriteLens, RewriteSource } from "./deep-rewrite";
 export {
   RESULT_APPLICATION_DIRECTIONS,
   freeResultParameters,
@@ -96,7 +106,10 @@ export type TransitionStatementTarget =
  * `assume-hypothesis` adds an unproved hypothesis; it is a weakening, so the
  * assumption is never silently treated as established. `apply-result-backward`
  * and `apply-result-forward` instantiate an approved result from the
- * environment's catalog.
+ * environment's catalog. `rewrite-with-equivalence` and `rewrite-with-implication`
+ * rewrite one proposition occurrence, possibly deep inside a statement, with an
+ * `Equivalent` or `Implies` statement from a hypothesis or an instantiated
+ * premise-free result; see `rewriteStatement` for the polarity rules.
  */
 export const KERNEL_OPERATION_KINDS = [
   "close-by-hypothesis",
@@ -122,6 +135,8 @@ export const KERNEL_OPERATION_KINDS = [
   "choose-existential-witness",
   "unpack-existential-hypothesis",
   "rewrite-with-equality",
+  "rewrite-with-equivalence",
+  "rewrite-with-implication",
   "apply-result-backward",
   "apply-result-forward",
 ] as const;
@@ -208,7 +223,28 @@ export type KernelOperation =
         equalityHypothesisId: StatementId;
         statement: TransitionStatementTarget;
         path: readonly number[];
+        /** Optional associative lens: `path` then addresses the associative container. */
+        lens?: RewriteLens;
         direction: "forward" | "backward";
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "rewrite-with-equivalence";
+        statement: TransitionStatementTarget;
+        path: readonly number[];
+        lens?: RewriteLens;
+        source: RewriteSource;
+        /** Forward replaces the left side of `A ⇔ B` by the right side; backward the reverse. */
+        direction: "forward" | "backward";
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "rewrite-with-implication";
+        statement: TransitionStatementTarget;
+        path: readonly number[];
+        lens?: RewriteLens;
+        /** The rewrite direction of `A ⇒ B` is determined by the occurrence's polarity. */
+        source: RewriteSource;
       }>)
   | (OperationBase &
       Readonly<{
@@ -272,7 +308,8 @@ export type KernelDiagnosticCode =
   | "missing-instantiation"
   | "invalid-instantiation"
   | "conclusion-mismatch"
-  | "premise-mismatch";
+  | "premise-mismatch"
+  | "polarity-not-permitted";
 
 export type KernelDiagnostic = Readonly<{
   code: KernelDiagnosticCode;
@@ -901,9 +938,10 @@ function applyValidatedOperation(
         "equivalence",
       );
     }
-    case "rewrite-with-equality": {
-      return rewriteWithEquality(state, target, operation, operators);
-    }
+    case "rewrite-with-equality":
+    case "rewrite-with-equivalence":
+    case "rewrite-with-implication":
+      return rewriteStatement(state, target, operation, operators, results);
     case "apply-result-backward":
       return applyResultBackward(state, target, operation, operators, results);
     case "apply-result-forward":
@@ -1194,121 +1232,200 @@ function contextDependsOnSymbol(
   );
 }
 
-function rewriteWithEquality(
+type RewriteOperation = Extract<
+  KernelOperation,
+  { kind: "rewrite-with-equality" | "rewrite-with-equivalence" | "rewrite-with-implication" }
+>;
+
+const REWRITE_SOURCE_OPERATORS = {
+  "rewrite-with-equality": ["Equal", "equality"],
+  "rewrite-with-equivalence": ["Equivalent", "equivalence"],
+  "rewrite-with-implication": ["Implies", "implication"],
+} as const;
+
+/**
+ * Rewrite one occurrence, addressed by an operand path or by an associative
+ * lens under that path, in the conclusion or a hypothesis of the target.
+ * Polarity is the overall polarity from the selection resolver's
+ * `positionAtPath`: a conclusion is positive and a hypothesis negative, so the
+ * rule reads the sequent as `∧hypotheses ⇒ conclusion`.
+ *
+ * - `rewrite-with-equality` replaces an exact occurrence of one side of a
+ *   local binary equality by the other side (equivalence).
+ * - `rewrite-with-equivalence` replaces a proposition occurrence
+ *   alpha-equivalent to one side of `A ⇔ B` by the other side at any
+ *   polarity (equivalence).
+ * - `rewrite-with-implication` uses `A ⇒ B` monotonically. At a positive
+ *   position an occurrence of `B` becomes `A`; at a negative position an
+ *   occurrence of `A` becomes `B`. In both cases the new sequent entails the
+ *   old one given `A ⇒ B`, so proving it suffices (strengthening). Mixed and
+ *   neutral positions are rejected with `polarity-not-permitted`.
+ *
+ * A match whose free symbols, or a replacement whose free symbols, are bound
+ * by a binder enclosing the occurrence is rejected as capture. A hypothesis
+ * source is retained and cannot rewrite itself. A result source must be
+ * premise-free; it is instantiated for backward application when the
+ * conclusion is rewritten and for forward application when a hypothesis is.
+ */
+function rewriteStatement(
   state: ProofState,
   target: LocatedTarget,
-  operation: Extract<KernelOperation, { kind: "rewrite-with-equality" }>,
+  operation: RewriteOperation,
   operators: readonly OperatorDeclaration[],
+  results: readonly KernelResult[],
 ): InternalResult {
-  const equality = findHypothesis(target.entry.sequent, operation.equalityHypothesisId);
-  if (equality === undefined) return missingHypothesis(state);
-  const equalityOperands = operatorOperands(equality.statement.expression, "Equal");
-  if (equalityOperands === undefined || equalityOperands.length !== 2) {
-    return notApplicable(state, "The selected hypothesis is not a binary equality.");
+  const sequent = target.entry.sequent;
+  const sourceReference: RewriteSource =
+    operation.kind === "rewrite-with-equality"
+      ? { kind: "hypothesis", hypothesisId: operation.equalityHypothesisId }
+      : operation.source;
+  const source = resolveRewriteSource(
+    sourceReference,
+    operation.statement,
+    sequent,
+    operators,
+    results,
+  );
+  if (!source.ok) return internalFailure(state, source.code, source.message);
+  const [sourceOperator, sourceLabel] = REWRITE_SOURCE_OPERATORS[operation.kind];
+  const sides = operatorOperands(source.expression, sourceOperator);
+  if (sides === undefined || sides.length !== 2) {
+    return notApplicable(state, `The rewrite source is not a binary ${sourceLabel}.`);
   }
   if (
+    sourceReference.kind === "hypothesis" &&
     operation.statement.kind === "hypothesis" &&
-    operation.statement.id === operation.equalityHypothesisId
+    operation.statement.id === sourceReference.hypothesisId
   ) {
-    return notApplicable(state, "An equality cannot consume itself as its own rewrite target.");
+    return notApplicable(state, "A rewrite source cannot consume itself as its own target.");
   }
 
   const statementHypothesisIndex =
     operation.statement.kind === "hypothesis"
-      ? findHypothesisIndex(target.entry.sequent, operation.statement.id)
+      ? findHypothesisIndex(sequent, operation.statement.id)
       : -1;
   if (operation.statement.kind === "hypothesis" && statementHypothesisIndex < 0) {
     return missingHypothesis(state);
   }
   const expression =
     operation.statement.kind === "conclusion"
-      ? target.entry.sequent.conclusion.expression
-      : (target.entry.sequent.context.hypotheses[statementHypothesisIndex] as Hypothesis).statement
-          .expression;
-  const source = equalityOperands[operation.direction === "forward" ? 0 : 1] as PlainMathJson;
-  const replacement = equalityOperands[operation.direction === "forward" ? 1 : 0] as PlainMathJson;
-  if (mathJsonEquals(source, replacement)) {
-    return notApplicable(state, "The equality does not provide a distinct replacement.");
+      ? sequent.conclusion.expression
+      : (sequent.context.hypotheses[statementHypothesisIndex] as Hypothesis).statement.expression;
+  const [left, right] = sides as readonly [PlainMathJson, PlainMathJson];
+  const exact = operation.kind === "rewrite-with-equality";
+  const same = (first: PlainMathJson, second: PlainMathJson): boolean =>
+    exact ? mathJsonEquals(first, second) : alphaEquivalentWithOperators(first, second, operators);
+  if (same(left, right)) {
+    return notApplicable(state, `The ${sourceLabel} does not provide a distinct replacement.`);
   }
 
-  const occurrence = occurrenceAtPath(expression, operation.path, operators);
+  const occurrence = locateRewriteOccurrence(
+    expression,
+    operation.path,
+    operation.lens,
+    operation.statement.kind === "conclusion" ? "positive" : "negative",
+    sequent.context.declarations,
+    operators,
+  );
   if (occurrence === undefined) {
-    return internalFailure(state, "invalid-path", "The rewrite path is not a term occurrence.");
+    return internalFailure(
+      state,
+      "invalid-path",
+      "The rewrite path or lens does not address an occurrence.",
+    );
   }
-  if (!mathJsonEquals(occurrence.fragment, source)) {
-    return notApplicable(state, "The selected occurrence does not match the equality source.");
+  if (!exact && occurrence.role !== "proposition") {
+    return internalFailure(
+      state,
+      "invalid-path",
+      "The rewrite occurrence is not in a proposition position.",
+    );
   }
-  const replacementFree = new Set(freeSymbolNames(replacement, { operators }));
-  if ([...occurrence.boundSymbols].some((symbol) => replacementFree.has(symbol))) {
+
+  let matched: PlainMathJson;
+  let replacement: PlainMathJson;
+  let transitionClass: TransitionClass = "equivalence";
+  if (operation.kind === "rewrite-with-implication") {
+    if (occurrence.polarity === "positive") {
+      [matched, replacement] = [right, left];
+    } else if (occurrence.polarity === "negative") {
+      [matched, replacement] = [left, right];
+    } else {
+      return internalFailure(
+        state,
+        "polarity-not-permitted",
+        `An implication cannot rewrite at a ${occurrence.polarity} position; only positive and negative positions are monotone.`,
+      );
+    }
+    transitionClass = "strengthening";
+  } else {
+    [matched, replacement] = operation.direction === "forward" ? [left, right] : [right, left];
+  }
+
+  if (!same(occurrence.fragment, matched)) {
+    return notApplicable(state, `The selected occurrence does not match the ${sourceLabel} side.`);
+  }
+  if (rewriteCaptures(occurrence, [matched, replacement], operators)) {
     return notApplicable(
       state,
       "The rewrite would capture a free symbol under an enclosing binder.",
     );
   }
-  const rewritten = replaceExpressionAtPath(expression, operation.path, replacement);
+  const rewritten = occurrence.replace(replacement);
   if (rewritten === undefined) return replacementFailed(state);
 
   const replacementTarget: TargetEntry =
     operation.statement.kind === "conclusion"
-      ? {
-          ...target.entry,
-          sequent: { ...target.entry.sequent, conclusion: { expression: rewritten } },
-        }
+      ? withConclusion(target.entry, rewritten)
       : replaceHypothesis(target.entry, statementHypothesisIndex, [
           hypothesis(operation.statement.id, rewritten),
         ]);
   return success(
     replaceTarget(state, operation.target, target.index, [replacementTarget]),
-    "equivalence",
+    transitionClass,
+    source.resultId === undefined ? "structural" : "library-result",
+    source.resultId,
   );
 }
 
-type ExpressionOccurrence = Readonly<{
-  fragment: PlainMathJson;
-  boundSymbols: ReadonlySet<string>;
-}>;
+type ResolvedRewriteSource =
+  | Readonly<{ ok: true; expression: PlainMathJson; resultId?: KernelResultId }>
+  | Readonly<{ ok: false; code: KernelDiagnosticCode; message: string }>;
 
-function occurrenceAtPath(
-  expression: PlainMathJson,
-  path: readonly number[],
+function resolveRewriteSource(
+  source: RewriteSource,
+  statement: TransitionStatementTarget,
+  sequent: ContextualSequent,
   operators: readonly OperatorDeclaration[],
-): ExpressionOccurrence | undefined {
-  let current = expression;
-  const boundSymbols = new Set<string>();
-  for (const operandIndex of path) {
-    const parts = functionParts(current);
-    if (parts === undefined) return undefined;
-    const binder = binderFor(parts.operator, operators);
-    if (binder?.boundOperands.includes(operandIndex)) return undefined;
-    if (binder?.scopedOperands.includes(operandIndex)) {
-      binder.boundOperands.forEach((boundIndex) => {
-        const name = symbolValue(parts.operands[boundIndex] as PlainMathJson);
-        if (name !== undefined) boundSymbols.add(name);
-      });
-    }
-    const next = parts.operands[operandIndex];
-    if (next === undefined) return undefined;
-    current = next;
+  results: readonly KernelResult[],
+): ResolvedRewriteSource {
+  if (source.kind === "hypothesis") {
+    const selected = findHypothesis(sequent, source.hypothesisId);
+    return selected === undefined
+      ? {
+          ok: false,
+          code: "hypothesis-not-found",
+          message: "The hypothesis does not exist in the target's local context.",
+        }
+      : { ok: true, expression: selected.statement.expression };
   }
-  return { fragment: current, boundSymbols };
-}
-
-function replaceExpressionAtPath(
-  expression: PlainMathJson,
-  path: readonly number[],
-  replacement: PlainMathJson,
-): PlainMathJson | undefined {
-  if (path.length === 0) return structuredClone(replacement);
-  const [operandIndex, ...rest] = path;
-  if (operandIndex === undefined) return undefined;
-  const parts = functionParts(expression);
-  const operand = parts?.operands[operandIndex];
-  if (parts === undefined || operand === undefined) return undefined;
-  const replacedOperand = replaceExpressionAtPath(operand, rest, replacement);
-  if (replacedOperand === undefined) return undefined;
-  const operands = [...parts.operands];
-  operands[operandIndex] = replacedOperand;
-  return parts.rebuild(operands);
+  const instance = instantiateResultInContext(
+    results,
+    source.resultId,
+    statement.kind === "conclusion" ? "backward" : "forward",
+    source.instantiation,
+    sequent,
+    operators,
+  );
+  if (!instance.ok) return { ok: false, code: instance.code, message: instance.message };
+  if (instance.premises.length > 0) {
+    return {
+      ok: false,
+      code: "rule-not-applicable",
+      message: "Only a premise-free result can be used as a rewrite source.",
+    };
+  }
+  return { ok: true, expression: instance.conclusion, resultId: source.resultId };
 }
 
 function logicalOperands(
@@ -1492,6 +1609,12 @@ function parseTransitionStatementTarget(
     : runtimeFailure("A hypothesis statement target requires a stable ID.", ["id"]);
 }
 
+const LENS_OPERATION_KINDS: ReadonlySet<string> = new Set<KernelOperationKind>([
+  "rewrite-with-equality",
+  "rewrite-with-equivalence",
+  "rewrite-with-implication",
+]);
+
 function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperation> {
   if (!isStrictRecord(value) || typeof value.kind !== "string") {
     return runtimeFailure("A kernel operation must be a strict discriminated object.", []);
@@ -1525,6 +1648,8 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     "choose-existential-witness": ["witness"],
     "unpack-existential-hypothesis": ["hypothesisId", "resultHypothesisId"],
     "rewrite-with-equality": ["equalityHypothesisId", "statement", "path", "direction"],
+    "rewrite-with-equivalence": ["statement", "path", "source", "direction"],
+    "rewrite-with-implication": ["statement", "path", "source"],
     "apply-result-backward": ["resultId", "instantiation", "premiseTargetIds"],
     "apply-result-forward": [
       "resultId",
@@ -1538,7 +1663,18 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     return runtimeFailure("The kernel operation kind is unknown.", ["kind"]);
   }
   const extras = extraKeys[value.kind as KernelOperationKind];
-  if (!hasExactKeys(value, ["kind", "expectedStateId", "resultStateId", "target", ...extras])) {
+  // Rewrites accept one optional field: an associative lens under `path`.
+  const hasLens = LENS_OPERATION_KINDS.has(value.kind) && Object.hasOwn(value, "lens");
+  if (
+    !hasExactKeys(value, [
+      "kind",
+      "expectedStateId",
+      "resultStateId",
+      "target",
+      ...extras,
+      ...(hasLens ? ["lens"] : []),
+    ])
+  ) {
     return runtimeFailure("The kernel operation contains missing or unknown fields.", []);
   }
 
@@ -1622,6 +1758,25 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     "statement" in value ? transitionStatementTargetSchema.safeParse(value.statement) : undefined;
   if (statement !== undefined && !statement.success) {
     return runtimeFailure("The rewrite statement target is invalid.", ["statement"]);
+  }
+  if (hasLens && !isRewriteLens(value.lens)) {
+    return runtimeFailure(
+      "A rewrite lens must contain exactly startOperand and endOperand covering at least two operands.",
+      ["lens"],
+    );
+  }
+  const lens: Readonly<{ lens?: RewriteLens }> = hasLens
+    ? { lens: copyRewriteLens(value.lens) }
+    : {};
+  const source =
+    "source" in value
+      ? parseRewriteSource(value.source, isInstantiation, copyInstantiation)
+      : undefined;
+  if ("source" in value && source === undefined) {
+    return runtimeFailure(
+      "A rewrite source must be a hypothesis ID or a result ID with an instantiation.",
+      ["source"],
+    );
   }
 
   const common: OperationBase = {
@@ -1782,9 +1937,33 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
           equalityHypothesisId: statementIdSchema.parse(value.equalityHypothesisId),
           statement: statement.data,
           path: copyOperandPath(value.path),
+          ...lens,
           direction: value.direction as "forward" | "backward",
         },
       };
+    case "rewrite-with-equivalence":
+    case "rewrite-with-implication": {
+      if (statement === undefined || !statement.success || source === undefined) {
+        return runtimeFailure("The rewrite statement target or source is invalid.", []);
+      }
+      const rewrite = {
+        ...common,
+        statement: statement.data,
+        path: copyOperandPath(value.path),
+        ...lens,
+        source,
+      };
+      return value.kind === "rewrite-with-implication"
+        ? { success: true, data: { ...rewrite, kind: value.kind } }
+        : {
+            success: true,
+            data: {
+              ...rewrite,
+              kind: value.kind,
+              direction: value.direction as "forward" | "backward",
+            },
+          };
+    }
     case "apply-result-backward":
       return {
         success: true,

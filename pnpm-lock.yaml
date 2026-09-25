@@ -143,6 +143,9 @@ importers:
       '@proof/mathjson-model':
         specifier: workspace:*
         version: link:../mathjson-model
+      '@proof/selections':
+        specifier: workspace:*
+        version: link:../selections
 
   packages/language:
     dependencies:

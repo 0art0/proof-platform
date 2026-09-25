@@ -160,6 +160,8 @@ export const PRIMITIVE_TRANSITION_CLASSES: Readonly<Record<KernelOperationKind, 
     "choose-existential-witness": "strengthening",
     "unpack-existential-hypothesis": "equivalence",
     "rewrite-with-equality": "equivalence",
+    "rewrite-with-equivalence": "equivalence",
+    "rewrite-with-implication": "strengthening",
     "apply-result-backward": "strengthening",
     "apply-result-forward": "equivalence",
   });
@@ -189,45 +191,55 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, strin
     "choose-existential-witness": "target",
     "unpack-existential-hypothesis": "existential",
     "rewrite-with-equality": "equality",
+    "rewrite-with-equivalence": "equivalence",
+    "rewrite-with-implication": "implication",
     "apply-result-backward": "target",
     "apply-result-forward": "target",
   },
 );
 
 /**
- * Evidence each primitive's kernel transition reports. An accepted inference
- * rests on an external attestation and a result application on an approved
- * library result; every other primitive is structurally checked by the kernel. The record is exhaustive so a new
+ * Evidence each primitive's kernel transition may report. An accepted
+ * inference rests on an external attestation and a result application on an
+ * approved library result; every other primitive is structurally checked by
+ * the kernel. The deep rewrites take their `Equivalent`/`Implies` statement
+ * either from a local hypothesis (structural) or from an instantiated approved
+ * result (library-result), so their entry lists both; the kernel reports the
+ * one its operation's `source` determines. A set per kind keeps one move per
+ * kernel rule rather than splitting each rewrite into source-specific kinds
+ * with duplicated operations and moves. The record is exhaustive so a new
  * primitive must choose its evidence explicitly.
  */
 export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
-  Record<KernelOperationKind, TransitionEvidence>
-> = Object.freeze({
-  "close-by-hypothesis": "structural",
-  "close-true": "structural",
-  "close-false-hypothesis": "structural",
-  "close-reflexive-equality": "structural",
-  "close-by-contradiction": "structural",
-  "close-by-accepted-inference": "background-inference",
-  "introduce-implication": "structural",
-  "introduce-negation": "structural",
-  "split-goal-conjunction": "structural",
-  "choose-goal-disjunct": "structural",
-  "expand-hypothesis-conjunction": "structural",
-  "split-hypothesis-disjunction": "structural",
-  "split-classical-cases": "structural",
-  "assume-hypothesis": "structural",
-  "replace-goal": "structural",
-  suffices: "structural",
-  "drop-hypothesis": "structural",
-  "apply-implication-hypothesis": "structural",
-  "introduce-universal": "structural",
-  "instantiate-universal-hypothesis": "structural",
-  "choose-existential-witness": "structural",
-  "unpack-existential-hypothesis": "structural",
-  "rewrite-with-equality": "structural",
-  "apply-result-backward": "library-result",
-  "apply-result-forward": "library-result",
+  Record<KernelOperationKind, readonly TransitionEvidence[]>
+> = deepFreeze({
+  "close-by-hypothesis": ["structural"],
+  "close-true": ["structural"],
+  "close-false-hypothesis": ["structural"],
+  "close-reflexive-equality": ["structural"],
+  "close-by-contradiction": ["structural"],
+  "close-by-accepted-inference": ["background-inference"],
+  "introduce-implication": ["structural"],
+  "introduce-negation": ["structural"],
+  "split-goal-conjunction": ["structural"],
+  "choose-goal-disjunct": ["structural"],
+  "expand-hypothesis-conjunction": ["structural"],
+  "split-hypothesis-disjunction": ["structural"],
+  "split-classical-cases": ["structural"],
+  "assume-hypothesis": ["structural"],
+  "replace-goal": ["structural"],
+  suffices: ["structural"],
+  "drop-hypothesis": ["structural"],
+  "apply-implication-hypothesis": ["structural"],
+  "introduce-universal": ["structural"],
+  "instantiate-universal-hypothesis": ["structural"],
+  "choose-existential-witness": ["structural"],
+  "unpack-existential-hypothesis": ["structural"],
+  "rewrite-with-equality": ["structural"],
+  "rewrite-with-equivalence": ["structural", "library-result"],
+  "rewrite-with-implication": ["structural", "library-result"],
+  "apply-result-backward": ["library-result"],
+  "apply-result-forward": ["library-result"],
 });
 
 type MoveCatalogInput = Readonly<{
@@ -584,6 +596,51 @@ const catalogInputs: readonly MoveCatalogInput[] = [
     "The replacement would capture a free symbol under a binder.",
   ),
   catalogEntry(
+    "rewrite-with-equivalence",
+    "Rewrite with equivalence",
+    "Replace one proposition occurrence at any position using a local or approved A iff B.",
+    [
+      slot("target", "target-conclusion", "any"),
+      // Optional: the source may instead be an approved result chosen from the menu.
+      slot("equivalence", "hypothesis", "proposition", false),
+      slot("occurrence", "rewrite-occurrence", "proposition"),
+    ],
+    ["Equivalent", "p", "q"],
+    [
+      parameter("statement", "Statement", "selection"),
+      parameter("path", "Occurrence", "selection"),
+      parameter("source", "Equivalence source", "menu"),
+      parameter("direction", "Direction", "menu"),
+    ],
+    [
+      "Rewrite p to q under a negation from p iff q.",
+      "Rewrite a double negation inside a hypothesis with an approved equivalence.",
+    ],
+    "The selected occurrence is not alpha-equivalent to the chosen side.",
+  ),
+  catalogEntry(
+    "rewrite-with-implication",
+    "Rewrite with implication",
+    "Strengthen by replacing B with A at a positive position, or A with B at a negative position, using A implies B.",
+    [
+      slot("target", "target-conclusion", "any"),
+      // Optional: the source may instead be an approved result chosen from the menu.
+      slot("implication", "hypothesis", "proposition", false),
+      slot("occurrence", "rewrite-occurrence", "proposition"),
+    ],
+    ["Implies", "p", "q"],
+    [
+      parameter("statement", "Statement", "selection"),
+      parameter("path", "Occurrence", "selection"),
+      parameter("source", "Implication source", "menu"),
+    ],
+    [
+      "Reduce goal q or r to p or r using p implies q.",
+      "Weaken an assumption p and r to q and r, making the goal harder.",
+    ],
+    "The occurrence is an operand of an equivalence, where polarity is mixed.",
+  ),
+  catalogEntry(
     "apply-result-backward",
     "Apply result backward",
     "Reduce a target matching an approved result's conclusion to that result's instantiated premises.",
@@ -726,7 +783,9 @@ export function planMove(
     }
     if (
       transition.transitionClass !== move.transitionClass ||
-      transition.evidence !== PRIMITIVE_TRANSITION_EVIDENCE[move.implementation.operationKind]
+      !PRIMITIVE_TRANSITION_EVIDENCE[move.implementation.operationKind].includes(
+        transition.evidence,
+      )
     ) {
       return moveFailure(
         "invalid-move-definition",
@@ -779,8 +838,9 @@ function slot(
   id: string,
   role: MoveSelectionSlot["role"],
   semanticRole: MoveSelectionSlot["semanticRole"],
+  required = true,
 ): MoveSelectionSlot {
-  return moveSelectionSlotSchema.parse({ id, role, semanticRole, required: true });
+  return moveSelectionSlotSchema.parse({ id, role, semanticRole, required });
 }
 
 function parameter(id: string, label: string, source: MoveParameter["source"]): MoveParameter {

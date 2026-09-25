@@ -206,7 +206,7 @@ describe("deterministic move planning", () => {
         ok: true,
         preview: {
           transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind],
-          evidence: PRIMITIVE_TRANSITION_EVIDENCE[kind],
+          evidence: PRIMITIVE_TRANSITION_EVIDENCE[kind][0],
         },
       });
     }
@@ -214,12 +214,26 @@ describe("deterministic move planning", () => {
     expect(PRIMITIVE_TRANSITION_CLASSES["replace-goal"]).toBe("weakening");
     expect(PRIMITIVE_TRANSITION_CLASSES.suffices).toBe("strengthening");
     expect(PRIMITIVE_TRANSITION_CLASSES["drop-hypothesis"]).toBe("strengthening");
-    expect(PRIMITIVE_TRANSITION_EVIDENCE["close-by-accepted-inference"]).toBe(
+    expect(PRIMITIVE_TRANSITION_EVIDENCE["close-by-accepted-inference"]).toEqual([
       "background-inference",
-    );
+    ]);
     expect(
-      KERNEL_OPERATION_KINDS.filter((kind) => PRIMITIVE_TRANSITION_EVIDENCE[kind] !== "structural"),
-    ).toEqual(["close-by-accepted-inference", "apply-result-backward", "apply-result-forward"]);
+      KERNEL_OPERATION_KINDS.filter(
+        (kind) =>
+          PRIMITIVE_TRANSITION_EVIDENCE[kind].length !== 1 ||
+          PRIMITIVE_TRANSITION_EVIDENCE[kind][0] !== "structural",
+      ),
+    ).toEqual([
+      "close-by-accepted-inference",
+      "rewrite-with-equivalence",
+      "rewrite-with-implication",
+      "apply-result-backward",
+      "apply-result-forward",
+    ]);
+    expect(PRIMITIVE_TRANSITION_EVIDENCE["rewrite-with-implication"]).toEqual([
+      "structural",
+      "library-result",
+    ]);
   });
 
   it("previews approved-result applications with library-result evidence", () => {
@@ -297,6 +311,100 @@ describe("deterministic move planning", () => {
         environment,
       ),
     ).toMatchObject({ ok: false, diagnostics: [{ code: "kernel-rejected" }] });
+  });
+
+  it("previews deep rewrites with source-dependent evidence and polarity-checked classes", () => {
+    const environment: KernelEnvironment = {
+      results: [
+        {
+          id: "result:double-negation",
+          parameters: [{ symbol: "a", sort: PROPOSITION_SORT }],
+          premises: [],
+          conclusion: { expression: ["Equivalent", ["Not", ["Not", "a"]], "a"] },
+          directions: ["backward"],
+        },
+      ] as unknown as readonly KernelResult[],
+    };
+    const cases: readonly (readonly [
+      ExecutableProofState,
+      KernelOperation["kind"],
+      Readonly<Record<string, unknown>>,
+      "structural" | "library-result",
+    ])[] = [
+      [
+        state(["Not", "p"], [{ id: "hypothesis:iff", expression: ["Equivalent", "p", "q"] }]),
+        "rewrite-with-equivalence",
+        {
+          statement: { kind: "conclusion" },
+          path: [0],
+          source: { kind: "hypothesis", hypothesisId: "hypothesis:iff" },
+          direction: "forward",
+        },
+        "structural",
+      ],
+      [
+        state(["Or", ["Not", ["Not", "p"]], "q"]),
+        "rewrite-with-equivalence",
+        {
+          statement: { kind: "conclusion" },
+          path: [0],
+          source: {
+            kind: "result",
+            resultId: "result:double-negation",
+            instantiation: { a: "p" },
+          },
+          direction: "forward",
+        },
+        "library-result",
+      ],
+      [
+        state(["Or", "q", "q"], [{ id: "hypothesis:implies", expression: ["Implies", "p", "q"] }]),
+        "rewrite-with-implication",
+        {
+          statement: { kind: "conclusion" },
+          path: [1],
+          source: { kind: "hypothesis", hypothesisId: "hypothesis:implies" },
+        },
+        "structural",
+      ],
+    ];
+    for (const [input, kind, fields, evidence] of cases) {
+      expect(
+        planMove(
+          input,
+          { moveId: `move:${kind}`, operation: operation(kind, fields) },
+          environment,
+        ),
+      ).toMatchObject({
+        ok: true,
+        preview: { transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind], evidence },
+      });
+    }
+    expect(PRIMITIVE_TRANSITION_CLASSES["rewrite-with-implication"]).toBe("strengthening");
+    expect(
+      planMove(
+        state(
+          ["Equivalent", "q", "p"],
+          [{ id: "hypothesis:implies", expression: ["Implies", "p", "q"] }],
+        ),
+        {
+          moveId: "move:rewrite-with-implication",
+          operation: operation("rewrite-with-implication", {
+            statement: { kind: "conclusion" },
+            path: [0],
+            source: { kind: "hypothesis", hypothesisId: "hypothesis:implies" },
+          }),
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "kernel-rejected",
+          message: "The kernel rejected the move: polarity-not-permitted.",
+        },
+      ],
+    });
   });
 
   it("rejects unknown moves, mismatched primitives, and inapplicable operations", () => {
