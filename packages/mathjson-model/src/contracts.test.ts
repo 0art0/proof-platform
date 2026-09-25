@@ -8,6 +8,8 @@ import {
   declarationSchema,
   executableProofStateSchema,
   operatorDeclarationSchema,
+  operatorDeclarationsSchema,
+  operatorTemplateSegments,
   parseStatementView,
   proofContextSchema,
   proofStateSchema,
@@ -636,5 +638,172 @@ describe("contextual proof-state invariants", () => {
       obligations: [],
     };
     expect(executableProofStateSchema.safeParse(boundShadow).success).toBe(true);
+  });
+});
+
+describe("operator presentation metadata", () => {
+  const integerSort = { kind: "named", id: "sort:integer" } as const;
+  const gcdBase = {
+    id: "operator:gcd",
+    symbol: "Gcd",
+    signature: { parameters: [integerSort, integerSort], result: integerSort },
+  } as const;
+  const dividesBase = {
+    id: "operator:divides",
+    symbol: "Divides",
+    signature: { parameters: [integerSort, integerSort], result: PROPOSITION_SORT },
+  } as const;
+
+  function withPresentation(base: object, presentation: unknown) {
+    return operatorDeclarationSchema.safeParse({ ...base, presentation });
+  }
+
+  it("keeps declarations without presentation valid", () => {
+    expect(operatorDeclarationSchema.safeParse(gcdBase).success).toBe(true);
+  });
+
+  it("accepts complete templates, parse triggers and tags", () => {
+    const parsed = withPresentation(gcdBase, {
+      displayName: "greatest common divisor",
+      latex: {
+        template: "\\operatorname{gcd}\\left(#1, #2\\right)",
+        precedence: "atom",
+        parse: { trigger: "\\operatorname{gcd}", notation: "function" },
+      },
+      naturalLanguage: [
+        { template: "the greatest common divisor of #1 and #2" },
+        { template: "$\\gcd(#1, #2)$", proposition: false },
+      ],
+      domains: ["number-theory"],
+      notations: ["function-application"],
+    });
+    expect(parsed.success).toBe(true);
+
+    expect(
+      withPresentation(dividesBase, {
+        displayName: "divides",
+        latex: {
+          template: "#1 \\divides #2",
+          precedence: "relation",
+          parse: { trigger: "\\divides", notation: "infix" },
+        },
+        naturalLanguage: [
+          { template: "#1 divides #2", proposition: true, negated: "#1 does not divide #2" },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["an out-of-range placeholder", { template: "#1 \\divides #3", precedence: "relation" }],
+    ["a missing operand", { template: "\\operatorname{dv}(#1)", precedence: "atom" }],
+    ["a malformed placeholder", { template: "#1 \\divides #x #2", precedence: "relation" }],
+    ["a zero placeholder", { template: "#0 \\divides #1 #2", precedence: "relation" }],
+    ["an unknown precedence", { template: "#1 \\divides #2", precedence: "tight" }],
+    [
+      "a trigger absent from the template",
+      {
+        template: "#1 \\mid #2",
+        precedence: "relation",
+        parse: { trigger: "\\divides", notation: "infix" },
+      },
+    ],
+    [
+      "a non-command trigger",
+      { template: "#1 | #2", precedence: "relation", parse: { trigger: "|", notation: "infix" } },
+    ],
+    [
+      "a prefix trigger on a binary operator",
+      {
+        template: "\\divides #1 #2",
+        precedence: "prefix",
+        parse: { trigger: "\\divides", notation: "prefix" },
+      },
+    ],
+  ])("rejects a LaTeX template with %s", (_label, latex) => {
+    expect(withPresentation(dividesBase, { displayName: "divides", latex }).success).toBe(false);
+  });
+
+  it("validates natural-language templates against arity and result sort", () => {
+    const nl = (naturalLanguage: unknown) =>
+      withPresentation(gcdBase, { displayName: "gcd", naturalLanguage }).success;
+    expect(nl([{ template: "the gcd of #1 and #2" }])).toBe(true);
+    expect(nl([])).toBe(false);
+    expect(nl([{ template: "the gcd of #1" }])).toBe(false);
+    expect(nl([{ template: "the gcd of #1, #2 and #3" }])).toBe(false);
+    expect(nl([{ template: "the gcd of #1 and #2", proposition: true }])).toBe(false);
+    expect(nl([{ template: "the gcd of #1 and #2", negated: "not the gcd of #1 and #2" }])).toBe(
+      false,
+    );
+    expect(
+      withPresentation(dividesBase, {
+        displayName: "divides",
+        naturalLanguage: [{ template: "#1 divides #2", negated: "#1 does not divide" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      withPresentation(gcdBase, { latex: { template: "#1#2", precedence: "atom" } }).success,
+    ).toBe(false);
+  });
+
+  it("requires binder templates to render bound and scoped operands", () => {
+    const sumOver = {
+      id: "operator:sum-over",
+      symbol: "SumOver",
+      signature: { parameters: [integerSort, integerSort, integerSort], result: integerSort },
+      binder: { kind: "direct-symbols", boundOperands: [0], scopedOperands: [2] },
+    };
+    const latex = (template: string) =>
+      withPresentation(sumOver, {
+        displayName: "sum",
+        latex: { template, precedence: "additive" },
+      }).success;
+    expect(latex("\\sum_{#1 \\mid #2} #3")).toBe(true);
+    expect(latex("\\sum_{#2} #3")).toBe(false);
+  });
+
+  it("rejects duplicate parse triggers in one operator environment", () => {
+    const presentation = (displayName: string) => ({
+      displayName,
+      latex: {
+        template: "\\operatorname{g}\\left(#1, #2\\right)",
+        precedence: "atom",
+        parse: { trigger: "\\operatorname{g}", notation: "function" },
+      },
+    });
+    expect(
+      operatorDeclarationsSchema.safeParse([
+        { ...gcdBase, presentation: presentation("A") },
+        { ...gcdBase, id: "operator:gcd-2", symbol: "Gcd2", presentation: presentation("B") },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it("splits templates into segments that reassemble the template", () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.oneof(
+            fc.stringMatching(/^[a-z {}()]{1,6}$/),
+            fc.integer({ min: 1, max: 12 }).map((index) => `#${index}`),
+            fc.constant("\\#"),
+          ),
+        ),
+        (parts) => {
+          const template = parts.join("");
+          const segments = operatorTemplateSegments(template);
+          expect(segments).toBeDefined();
+          const rebuilt = (segments ?? [])
+            .map((segment) => (segment.kind === "text" ? segment.text : `#${segment.index + 1}`))
+            .join("");
+          expect(rebuilt).toBe(template);
+        },
+      ),
+    );
+    expect(operatorTemplateSegments("#1 and #")).toBeUndefined();
+    expect(operatorTemplateSegments("\\#1 and #2")).toEqual([
+      { kind: "text", text: "\\#1 and " },
+      { kind: "operand", index: 1 },
+    ]);
   });
 });

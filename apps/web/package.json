@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@cortex-js/compute-engine": "^0.120.0",
+    "@proof/language": "workspace:*",
     "@proof/mathjson-model": "workspace:*",
     "@proof/protocol": "workspace:*",
     "@proof/selections": "workspace:*",

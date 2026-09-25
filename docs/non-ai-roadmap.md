@@ -59,18 +59,18 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
       through `BinderSpecification`. Higher-order sort checking includes quantification over function and
       predicate sorts. Substitution and free-name analysis must honour the new binders. _Accept:_ fast-check
       properties for capture avoidance under every binder kind, plus golden validation cases.
-- [~] **N02 Custom operator presentation metadata (§5.5).** Add optional presentation metadata to
+- [x] **N02 Custom operator presentation metadata (§5.5).** Add optional presentation metadata to
       `OperatorDeclaration`: display name, LaTeX serialization template with a precedence/fixity class,
       optional LaTeX parse trigger, natural-language template(s), and domain/notation tags. Validate that
       template placeholders match arity and binder slots. Existing declarations without metadata stay
       valid. _Accept:_ schema tests for good and bad templates.
-- [~] **N03 Deterministic LaTeX dictionary (§6.1).** `packages/language`: a MathJSON→LaTeX serializer that
+- [x] **N03 Deterministic LaTeX dictionary (§6.1).** `packages/language`: a MathJSON→LaTeX serializer that
       handles precedence and parenthesization for logical and relational constructors, arithmetic,
       quantifiers and the new binders, and delegates unknown standard heads to the Compute Engine (raw form).
       It renders custom operators from their N02 templates. Add a central registry used by the web app
       in place of the bare `renderMathJson`. _Accept:_ golden tests and a round-trip parse test for
       operators with parse triggers.
-- [~] **N04 Deterministic natural-language renderer (§6.2).** Compositional renderer covering statement
+- [x] **N04 Deterministic natural-language renderer (§6.2).** Compositional renderer covering statement
       constructors, relations, quantifier phrasing with sort nouns ("for every real number x"), binder naming
       and referring expressions, plurality and article agreement, and precedence-aware grouping. Add exact
       MathJSON→text entries, pattern templates with wildcards, operator templates (N02), domain terminology

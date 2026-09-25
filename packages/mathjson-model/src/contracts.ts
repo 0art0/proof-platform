@@ -297,12 +297,229 @@ function addDuplicateIndexIssues(
   });
 }
 
+/**
+ * Precedence/fixity classes for operator LaTeX templates, from tightest to loosest. An `atom`
+ * template delimits its own operands (for example `\operatorname{gcd}\left(#1, #2\right)`), so
+ * operands are never parenthesized; every other class parenthesizes operands that bind no tighter.
+ */
+export const OPERATOR_LATEX_PRECEDENCES = [
+  "atom",
+  "postfix",
+  "prefix",
+  "power",
+  "multiplicative",
+  "additive",
+  "relation",
+  "conjunction",
+  "disjunction",
+  "implication",
+  "equivalence",
+] as const;
+export const operatorLatexPrecedenceSchema = z.enum(OPERATOR_LATEX_PRECEDENCES);
+export type OperatorLatexPrecedence = z.infer<typeof operatorLatexPrecedenceSchema>;
+
+const LATEX_COMMAND_TRIGGER_PATTERN = /^\\[A-Za-z]+$/;
+const LATEX_NAMED_FUNCTION_TRIGGER_PATTERN = /^\\(?:operatorname|mathrm)\{[A-Za-z][A-Za-z0-9]*\}$/;
+
+/**
+ * How LaTeX input is parsed back into this operator. `trigger` is a LaTeX command such as
+ * `\divides`, or for `function` notation also `\operatorname{name}`.
+ */
+export const operatorLatexParseSchema = z
+  .object({
+    trigger: z.string().min(1),
+    notation: z.enum(["function", "infix", "prefix"]),
+  })
+  .strict();
+export type OperatorLatexParse = z.infer<typeof operatorLatexParseSchema>;
+
+/** `#1`, `#2`, ... refer to the operator's operands in signature order. `\#` is a literal hash. */
+export const operatorLatexPresentationSchema = z
+  .object({
+    template: z.string().min(1),
+    precedence: operatorLatexPrecedenceSchema,
+    parse: operatorLatexParseSchema.optional(),
+  })
+  .strict();
+export type OperatorLatexPresentation = z.infer<typeof operatorLatexPresentationSchema>;
+
+/**
+ * A natural-language template. Placeholders outside `$...$` are rendered as natural language,
+ * inside `$...$` as raw LaTeX. `proposition` marks a clause ("#1 divides #2") rather than a noun
+ * phrase ("the greatest common divisor of #1 and #2"); it defaults to the signature's result.
+ * `negated` is the clause for the negation of a proposition-valued operator.
+ */
+export const operatorNaturalLanguageTemplateSchema = z
+  .object({
+    template: z.string().min(1),
+    proposition: z.boolean().optional(),
+    negated: z.string().min(1).optional(),
+  })
+  .strict();
+export type OperatorNaturalLanguageTemplate = z.infer<typeof operatorNaturalLanguageTemplateSchema>;
+
+/** Optional presentation metadata. The first natural-language template is the preferred one. */
+export const operatorPresentationSchema = z
+  .object({
+    displayName: z.string().min(1),
+    latex: operatorLatexPresentationSchema.optional(),
+    naturalLanguage: z.array(operatorNaturalLanguageTemplateSchema).min(1).optional(),
+    domains: z.array(z.string().min(1)).optional(),
+    notations: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+export type OperatorPresentation = z.infer<typeof operatorPresentationSchema>;
+
+export type OperatorTemplateSegment =
+  Readonly<{ kind: "text"; text: string }> | Readonly<{ kind: "operand"; index: number }>;
+
+/**
+ * Split an operator template into literal text and zero-based operand references. Returns
+ * `undefined` for a malformed template: an unescaped `#` not followed by a positive index.
+ */
+export function operatorTemplateSegments(
+  template: string,
+): readonly OperatorTemplateSegment[] | undefined {
+  const segments: OperatorTemplateSegment[] = [];
+  let text = "";
+  let position = 0;
+  while (position < template.length) {
+    const character = template[position];
+    if (character === "\\" && template[position + 1] === "#") {
+      text += "\\#";
+      position += 2;
+      continue;
+    }
+    if (character !== "#") {
+      text += character;
+      position += 1;
+      continue;
+    }
+    const digits = /^[1-9]\d*/.exec(template.slice(position + 1))?.[0];
+    if (digits === undefined) return undefined;
+    if (text.length > 0) segments.push(Object.freeze({ kind: "text", text }));
+    text = "";
+    segments.push(Object.freeze({ kind: "operand", index: Number(digits) - 1 }));
+    position += 1 + digits.length;
+  }
+  if (text.length > 0) segments.push(Object.freeze({ kind: "text", text }));
+  return Object.freeze(segments);
+}
+
+function addTemplateIssues(
+  template: string,
+  arity: number,
+  context: z.RefinementCtx,
+  path: readonly PropertyKey[],
+): void {
+  const segments = operatorTemplateSegments(template);
+  if (segments === undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "A template placeholder must be # followed by a positive operand index.",
+      path: [...path],
+    });
+    return;
+  }
+  const referenced = new Set<number>();
+  for (const segment of segments) {
+    if (segment.kind !== "operand") continue;
+    referenced.add(segment.index);
+    if (segment.index >= arity) {
+      context.addIssue({
+        code: "custom",
+        message: `Placeholder #${segment.index + 1} is outside the operator's signature.`,
+        path: [...path],
+      });
+    }
+  }
+  for (let index = 0; index < arity; index += 1) {
+    if (!referenced.has(index)) {
+      context.addIssue({
+        code: "custom",
+        message: `The template does not render operand #${index + 1}.`,
+        path: [...path],
+      });
+    }
+  }
+}
+
+function addPresentationIssues(
+  presentation: OperatorPresentation,
+  signature: Signature,
+  context: z.RefinementCtx,
+): void {
+  const arity = signature.parameters.length;
+  const latex = presentation.latex;
+  if (latex !== undefined) {
+    addTemplateIssues(latex.template, arity, context, ["presentation", "latex", "template"]);
+    const parse = latex.parse;
+    if (parse !== undefined) {
+      const path = ["presentation", "latex", "parse"];
+      const validTrigger =
+        LATEX_COMMAND_TRIGGER_PATTERN.test(parse.trigger) ||
+        (parse.notation === "function" && LATEX_NAMED_FUNCTION_TRIGGER_PATTERN.test(parse.trigger));
+      if (!validTrigger) {
+        context.addIssue({
+          code: "custom",
+          message: "A parse trigger must be a LaTeX command such as \\name.",
+          path: [...path, "trigger"],
+        });
+      } else if (!latex.template.includes(parse.trigger)) {
+        context.addIssue({
+          code: "custom",
+          message: "The parse trigger must occur in the serialization template.",
+          path: [...path, "trigger"],
+        });
+      }
+      if (parse.notation === "infix" && arity !== 2) {
+        context.addIssue({
+          code: "custom",
+          message: "An infix parse trigger requires a binary operator.",
+          path: [...path, "notation"],
+        });
+      }
+      if (parse.notation === "prefix" && arity !== 1) {
+        context.addIssue({
+          code: "custom",
+          message: "A prefix parse trigger requires a unary operator.",
+          path: [...path, "notation"],
+        });
+      }
+    }
+  }
+
+  const propositionValued = signature.result.kind === "proposition";
+  presentation.naturalLanguage?.forEach((entry, index) => {
+    const path = ["presentation", "naturalLanguage", index];
+    addTemplateIssues(entry.template, arity, context, [...path, "template"]);
+    if (entry.proposition !== undefined && entry.proposition !== propositionValued) {
+      context.addIssue({
+        code: "custom",
+        message: "The proposition flag must agree with the operator's result sort.",
+        path: [...path, "proposition"],
+      });
+    }
+    if (entry.negated !== undefined) {
+      if (!propositionValued) {
+        context.addIssue({
+          code: "custom",
+          message: "Only proposition-valued operators can have a negated template.",
+          path: [...path, "negated"],
+        });
+      }
+      addTemplateIssues(entry.negated, arity, context, [...path, "negated"]);
+    }
+  });
+}
+
 export const operatorDeclarationSchema = z
   .object({
     id: operatorIdSchema,
     symbol: symbolSchema,
     signature: signatureSchema,
     binder: binderSpecificationSchema.optional(),
+    presentation: operatorPresentationSchema.optional(),
   })
   .strict()
   .superRefine((operator, context) => {
@@ -312,6 +529,9 @@ export const operatorDeclarationSchema = z
         message: "A custom operator cannot replace a reserved built-in operator.",
         path: ["symbol"],
       });
+    }
+    if (operator.presentation !== undefined) {
+      addPresentationIssues(operator.presentation, operator.signature, context);
     }
     if (operator.binder === undefined) return;
     const parameterCount = operator.signature.parameters.length;
@@ -335,6 +555,19 @@ export const operatorDeclarationsSchema = z
   .superRefine((operators, context) => {
     addUniqueFieldIssues(operators, "id", "operator ID", context);
     addUniqueFieldIssues(operators, "symbol", "operator symbol", context);
+    const triggers = new Set<string>();
+    operators.forEach((operator, index) => {
+      const trigger = operator.presentation?.latex?.parse?.trigger;
+      if (trigger === undefined) return;
+      if (triggers.has(trigger)) {
+        context.addIssue({
+          code: "custom",
+          message: "Each LaTeX parse trigger must be unique in its scope.",
+          path: [index, "presentation", "latex", "parse", "trigger"],
+        });
+      }
+      triggers.add(trigger);
+    });
   });
 
 export const BUILTIN_BINDER_SPECIFICATIONS = Object.freeze({

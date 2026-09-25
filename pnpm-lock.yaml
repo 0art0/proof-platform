@@ -74,6 +74,9 @@ importers:
       '@cortex-js/compute-engine':
         specifier: ^0.120.0
         version: 0.120.0
+      '@proof/language':
+        specifier: workspace:*
+        version: link:../../packages/language
       '@proof/mathjson-model':
         specifier: workspace:*
         version: link:../../packages/mathjson-model
@@ -101,12 +104,12 @@ importers:
 
   apps/worker:
     dependencies:
-      '@proof/llm':
-        specifier: workspace:*
-        version: link:../../packages/llm
       '@proof/library':
         specifier: workspace:*
         version: link:../../packages/library
+      '@proof/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@proof/moves':
         specifier: workspace:*
         version: link:../../packages/moves
@@ -143,9 +146,15 @@ importers:
 
   packages/language:
     dependencies:
+      '@cortex-js/compute-engine':
+        specifier: ^0.120.0
+        version: 0.120.0
       '@proof/mathjson-model':
         specifier: workspace:*
         version: link:../mathjson-model
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
 
   packages/library:
     dependencies:
