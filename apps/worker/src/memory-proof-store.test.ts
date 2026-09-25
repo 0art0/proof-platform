@@ -120,6 +120,45 @@ describe("MemoryProofStore transactions", () => {
     });
   });
 
+  it("round-trips optional session metadata and enforces the object check", async () => {
+    const store = new MemoryProofStore();
+    const metadata = {
+      problem: { title: "Memory", statement: "A memory-store session." },
+      background: { level: "basic", summary: "Basic.", assumptions: [] },
+      libraryLayerIds: [],
+    };
+    const withMetadata = proofSessionSchema.parse({ ...session("session:meta"), metadata });
+    await store.transaction(async (transaction) => {
+      await transaction.insertSession(withMetadata);
+      await transaction.insertNode(withMetadata.id, DEVELOPMENT_ROOT_NODE);
+    });
+    const loaded = await store.transaction(async (transaction) =>
+      transaction.lockSession(withMetadata.id),
+    );
+    expect(loaded).toEqual(withMetadata);
+
+    const legacy = await (
+      await seeded()
+    ).transaction(async (transaction) => transaction.lockSession(sessionId));
+    expect(legacy).not.toHaveProperty("metadata");
+
+    const invalid = await store
+      .transaction(async (transaction) => {
+        await transaction.insertSession({
+          ...session("session:bad-meta"),
+          metadata: [] as unknown as ProofSession["metadata"] & object,
+        });
+        await transaction.insertNode(
+          proofSessionIdSchema.parse("session:bad-meta"),
+          DEVELOPMENT_ROOT_NODE,
+        );
+      })
+      .catch((caught: unknown) => caught);
+    expect((invalid as ProofStoreTransactionError).cause).toBeInstanceOf(
+      MemoryProofStoreConstraintError,
+    );
+  });
+
   it("returns detached JSON copies rather than stored references", async () => {
     const store = await seeded();
     const first = await store.transaction(async (transaction) =>

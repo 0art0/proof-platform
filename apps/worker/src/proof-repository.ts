@@ -9,6 +9,7 @@ import {
   prepareDisplayedSuggestionSet,
   prepareMovePreview,
   prepareProofCommand,
+  proofSessionMetadataSchema,
   movePreviewIdSchema,
   kernelOperationAdapterSchema,
   proofNodeIdSchema,
@@ -22,6 +23,7 @@ import {
   type PrepareProofCommandSuccess,
   type ProofEdge,
   type ProofNode,
+  type ProofSessionMetadata,
   type ProtocolEnvironment,
   type SuggestionSetId,
   type TransitionEvent,
@@ -60,6 +62,8 @@ export type ProofSession = Readonly<{
   rootNodeId: ProofNode["id"];
   currentNodeId: ProofNode["id"];
   operators: readonly OperatorDeclaration[];
+  /** Documentary session context; absent for sessions created before migration 0003. */
+  metadata?: ProofSessionMetadata | undefined;
 }>;
 
 export const proofSessionSchema: z.ZodType<ProofSession> = z
@@ -68,6 +72,7 @@ export const proofSessionSchema: z.ZodType<ProofSession> = z
     rootNodeId: proofNodeIdSchema,
     currentNodeId: proofNodeIdSchema,
     operators: operatorEnvironmentSchema,
+    metadata: proofSessionMetadataSchema.optional(),
   })
   .strict();
 
@@ -277,6 +282,7 @@ const initializeInputSchema = z
     sessionId: proofSessionIdSchema,
     rootNode: z.unknown(),
     operators: operatorEnvironmentSchema.optional(),
+    metadata: proofSessionMetadataSchema.optional(),
   })
   .strict();
 
@@ -315,6 +321,9 @@ export async function initializeProofSession(
     rootNodeId: rootNode.id,
     currentNodeId: rootNode.id,
     operators: environment.operators ?? [],
+    ...(parsedInput.metadata === undefined
+      ? {}
+      : { metadata: structuredClone(parsedInput.metadata) }),
   }) satisfies ProofSession;
 
   try {

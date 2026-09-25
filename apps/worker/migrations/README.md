@@ -13,6 +13,11 @@ The migration has not been exercised against a live PostgreSQL instance by the u
 topic-manifest review decisions. A `dispatching` record deliberately remains ambiguous after a
 worker crash: retry reads it as uncertain and does not silently dispatch the provider again.
 
+`0003_session_metadata.sql` adds a nullable `proof_sessions.metadata` JSONB object holding the
+protocol `ProofSessionMetadata` (problem title and statement, background profile, preferences and
+active library layer IDs). Existing sessions keep `NULL` and load without metadata. The column is
+written only when a session is initialized and is never part of proof state.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying

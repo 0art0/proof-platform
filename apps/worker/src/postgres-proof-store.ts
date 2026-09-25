@@ -97,7 +97,7 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
 
   async lockSession(sessionId: ProofSessionId): Promise<unknown | undefined> {
     const result = await this.client.query(
-      `SELECT id, root_node_id, current_node_id, operators
+      `SELECT id, root_node_id, current_node_id, operators, metadata
        FROM proof_sessions
        WHERE id = $1
        FOR UPDATE`,
@@ -111,6 +111,9 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
           rootNodeId: row.root_node_id,
           currentNodeId: row.current_node_id,
           operators: row.operators,
+          ...(row.metadata === null || row.metadata === undefined
+            ? {}
+            : { metadata: row.metadata }),
         };
   }
 
@@ -204,9 +207,15 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
 
   async insertSession(session: ProofSession): Promise<void> {
     await this.client.query(
-      `INSERT INTO proof_sessions (id, root_node_id, current_node_id, operators)
-       VALUES ($1, $2, $3, $4::jsonb)`,
-      [session.id, session.rootNodeId, session.currentNodeId, JSON.stringify(session.operators)],
+      `INSERT INTO proof_sessions (id, root_node_id, current_node_id, operators, metadata)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+      [
+        session.id,
+        session.rootNodeId,
+        session.currentNodeId,
+        JSON.stringify(session.operators),
+        session.metadata === undefined ? null : JSON.stringify(session.metadata),
+      ],
     );
   }
 

@@ -10,6 +10,7 @@ import {
   type UniversalParameterDeclaration,
 } from "@proof/mathjson-model";
 import { z } from "zod";
+import { backgroundClassificationSchema, type BackgroundClassification } from "./background";
 
 export const libraryArtifactKindSchema = z.enum(["definition", "result", "technique", "move"]);
 export type LibraryArtifactKind = z.infer<typeof libraryArtifactKindSchema>;
@@ -27,6 +28,8 @@ export const libraryLayerSchema = z.enum([
   "move-discovery-draft",
 ]);
 export type LibraryLayer = z.infer<typeof libraryLayerSchema>;
+export const libraryLayerIdSchema = stableIdentifierSchema.brand("LibraryLayerId");
+export type LibraryLayerId = z.infer<typeof libraryLayerIdSchema>;
 
 export const applicationDirectionSchema = z.enum(["forward", "backward"]);
 export type ApplicationDirection = z.infer<typeof applicationDirectionSchema>;
@@ -35,17 +38,6 @@ export const deterministicRenderingsSchema = z
   .object({ latex: z.string().min(1), naturalLanguage: z.string().min(1) })
   .strict();
 export type DeterministicRenderings = z.infer<typeof deterministicRenderingsSchema>;
-
-export const backgroundClassificationSchema = z
-  .object({
-    domains: z.array(z.string().min(1)).min(1),
-    level: z.string().min(1),
-  })
-  .strict()
-  .superRefine((classification, context) => {
-    addDuplicateStringIssues(classification.domains, "domain", context, ["domains"]);
-  });
-export type BackgroundClassification = z.infer<typeof backgroundClassificationSchema>;
 
 /**
  * Deterministic, equivalence-preserving reshapings applied by `generateVariants`. Forward/backward
@@ -592,4 +584,5 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
   return Object.freeze(value);
 }
 
+export * from "./background";
 export * from "./variants";

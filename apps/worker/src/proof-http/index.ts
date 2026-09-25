@@ -9,6 +9,7 @@ import {
   createProofNodeSchema,
   displayedSuggestionSetSchema,
   proofCommandReceiptSchema,
+  proofSessionMetadataSchema,
   stableIdentifierSchema,
   suggestionIdSchema,
   suggestionSetIdSchema,
@@ -33,9 +34,33 @@ import {
   readDisplayedSuggestionSet,
   recordDisplayedSuggestionSet,
   recordMovePreview,
+  type ProofSession,
   type ProofStore,
   type RepositoryFailure,
 } from "../proof-repository";
+
+/**
+ * Session objects in HTTP responses never carry metadata: existing clients parse them strictly.
+ * `GET /proof-sessions/:id?include=metadata` returns stored metadata beside the session instead.
+ */
+const proofHttpSessionSchema = proofSessionSchema.refine(
+  (session) => session.metadata === undefined,
+  "HTTP session objects omit metadata.",
+);
+
+function withoutMetadata(session: ProofSession): ProofSession {
+  const { id, rootNodeId, currentNodeId, operators } = session;
+  return { id, rootNodeId, currentNodeId, operators };
+}
+
+function includesMetadata(requestTarget: string | undefined): boolean {
+  try {
+    const url = new URL(requestTarget ?? "/", "http://proof.local");
+    return url.searchParams.getAll("include").includes("metadata");
+  } catch {
+    return false;
+  }
+}
 
 const operandPathSchema = z.array(z.number().int().nonnegative());
 const displayRangeSchema = z
@@ -104,7 +129,7 @@ export const proofHttpPreviewResponseSchema = z
 
 export const proofHttpCommandResponseSchema = z
   .object({
-    session: proofSessionSchema,
+    session: proofHttpSessionSchema,
     node: z.unknown(),
     receipt: proofCommandReceiptSchema,
     replayed: z.boolean(),
@@ -113,14 +138,14 @@ export const proofHttpCommandResponseSchema = z
 
 export const proofHttpHistoryResponseSchema = z
   .object({
-    session: proofSessionSchema,
+    session: proofHttpSessionSchema,
     nodes: z.array(z.unknown()),
     edges: z.array(z.object({ edge: z.unknown(), name: z.string().min(1) }).strict()),
   })
   .strict();
 
 export const proofHttpBacktrackResponseSchema = z
-  .object({ session: proofSessionSchema, node: z.unknown(), replayed: z.boolean() })
+  .object({ session: proofHttpSessionSchema, node: z.unknown(), replayed: z.boolean() })
   .strict();
 
 const WEB_ACTOR = actorSchema.parse({ id: "actor:web", kind: "human" });
@@ -195,16 +220,22 @@ async function handleRequest(
       writeRepositoryFailure(response, loaded);
       return;
     }
+    const metadata = includesMetadata(request.url) ? loaded.session.metadata : undefined;
     writeValidatedJson(
       response,
       200,
       z
         .object({
-          session: proofSessionSchema,
+          session: proofHttpSessionSchema,
           node: createProofNodeSchema({ operators: loaded.session.operators }),
+          metadata: proofSessionMetadataSchema.optional(),
         })
         .strict(),
-      { session: loaded.session, node: loaded.node },
+      {
+        session: withoutMetadata(loaded.session),
+        node: loaded.node,
+        ...(metadata === undefined ? {} : { metadata }),
+      },
     );
     return;
   }
@@ -373,7 +404,7 @@ async function handleRequest(
       node: createProofNodeSchema({ operators: loaded.session.operators }),
     });
     writeValidatedJson(response, executed.replayed ? 200 : 201, schema, {
-      session: loaded.session,
+      session: withoutMetadata(loaded.session),
       node: loaded.node,
       receipt: executed.result.receipt,
       replayed: executed.replayed,
@@ -399,7 +430,7 @@ async function handleRequest(
       ),
     });
     writeValidatedJson(response, 200, schema, {
-      session: history.session,
+      session: withoutMetadata(history.session),
       nodes: history.nodes,
       edges: history.edges,
     });
@@ -421,7 +452,7 @@ async function handleRequest(
       node: createProofNodeSchema({ operators: backtracked.session.operators }),
     });
     writeValidatedJson(response, 200, schema, {
-      session: backtracked.session,
+      session: withoutMetadata(backtracked.session),
       node: backtracked.node,
       replayed: backtracked.replayed,
     });

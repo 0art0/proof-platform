@@ -1,4 +1,9 @@
-import { createProofNodeSchema, type ProofNode } from "@proof/protocol";
+import {
+  createProofNodeSchema,
+  proofSessionMetadataSchema,
+  type ProofNode,
+  type ProofSessionMetadata,
+} from "@proof/protocol";
 import {
   initializeProofSession,
   loadCurrentProofSession,
@@ -70,6 +75,26 @@ export const DEVELOPMENT_ROOT_NODE: ProofNode = deepFreeze(
   }),
 );
 
+/** Session-level context for the fixture; documentary only, never part of proof state. */
+export const DEVELOPMENT_SESSION_METADATA: ProofSessionMetadata = deepFreeze(
+  proofSessionMetadataSchema.parse({
+    problem: {
+      title: "Duplicated conjunction",
+      statement:
+        "Assuming p and q, and assuming q, show p and p and q. " +
+        "Separately, assuming r, show that r implies s.",
+    },
+    background: {
+      level: "elementary propositional logic",
+      summary: "Propositional connectives with natural-deduction introduction and elimination.",
+      assumptions: [],
+      domains: ["logic"],
+      maximumLevel: "foundational",
+    },
+    libraryLayerIds: [],
+  }),
+);
+
 export type EnsureDevelopmentProofSessionResult =
   | Readonly<{
       status: "ready";
@@ -98,6 +123,7 @@ export async function ensureDevelopmentProofSession(
     sessionId: DEVELOPMENT_PROOF_SESSION_ID,
     rootNode: DEVELOPMENT_ROOT_NODE,
     operators: [],
+    metadata: DEVELOPMENT_SESSION_METADATA,
   });
   if (initialized.status === "committed") {
     return Object.freeze({

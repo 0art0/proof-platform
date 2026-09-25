@@ -807,3 +807,189 @@ describe("operator presentation metadata", () => {
     ]);
   });
 });
+
+describe("state-global additional assumptions and obligation provenance", () => {
+  const propositionVariable = (id: string, symbol: string) =>
+    universal(id, symbol, PROPOSITION_SORT);
+  const baseState = {
+    id: "state:assumptions",
+    goals: [
+      {
+        id: "statement:goal",
+        sequent: {
+          context: { declarations: [propositionVariable("decl:p", "p")], hypotheses: [] },
+          conclusion: statement(["Or", "p", ["Not", "p"]]),
+        },
+      },
+    ],
+    obligations: [],
+  } as const;
+  const sorryOrigin = {
+    kind: "sorry",
+    sourceTarget: { kind: "goal", id: "statement:sorried" },
+    sorryId: "sorry:one",
+  } as const;
+  const closedAssumption = {
+    id: "assumption:excluded-middle",
+    declarations: [propositionVariable("decl:q", "q")],
+    statement: statement(["ForAll", "q", ["Or", "q", ["Not", "q"]]]),
+    origin: sorryOrigin,
+  } as const;
+
+  it("keeps states without assumptions or provenance valid and unchanged", () => {
+    const parsed = executableProofStateSchema.parse(baseState);
+    expect(parsed).toEqual(baseState);
+    expect("assumptions" in parsed).toBe(false);
+  });
+
+  it("accepts closed assumptions in draft and executable states", () => {
+    const state = { ...baseState, assumptions: [closedAssumption] };
+    expect(executableProofStateSchema.safeParse(state).success).toBe(true);
+    expect(proofStateSchema.safeParse(state).success).toBe(true);
+    expect(
+      executableProofStateSchema.safeParse({
+        ...baseState,
+        assumptions: [
+          {
+            id: "assumption:trivial",
+            declarations: [],
+            statement: statement("True"),
+            origin: { kind: "sorry", sourceTarget: { kind: "obligation", id: "statement:o" } },
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("admits declared operators but rejects free symbols", () => {
+    const operators = [
+      operatorDeclarationSchema.parse({
+        id: "operator:is-prime",
+        symbol: "IsPrime",
+        signature: { parameters: [naturalSort], result: PROPOSITION_SORT },
+      }),
+    ];
+    const withOperator = {
+      ...baseState,
+      assumptions: [
+        {
+          ...closedAssumption,
+          declarations: [universal("decl:n", "n", naturalSort)],
+          statement: statement(["Exists", "n", ["IsPrime", "n"]]),
+        },
+      ],
+    };
+    expect(createExecutableProofStateSchema({ operators }).safeParse(withOperator).success).toBe(
+      true,
+    );
+    expect(executableProofStateSchema.safeParse(withOperator).success).toBe(false);
+
+    const open = executableProofStateSchema.safeParse({
+      ...baseState,
+      assumptions: [
+        {
+          ...closedAssumption,
+          declarations: [propositionVariable("decl:q", "q"), propositionVariable("decl:r", "r")],
+          statement: statement(["ForAll", "q", ["Or", "q", "r"]]),
+        },
+      ],
+    });
+    expect(open.success).toBe(false);
+    expect(open.error?.issues[0]?.message).toMatch(/closed; free symbols: r/);
+  });
+
+  it("rejects duplicate assumption ids, non-propositions and construction binders", () => {
+    expect(
+      executableProofStateSchema.safeParse({
+        ...baseState,
+        assumptions: [closedAssumption, closedAssumption],
+      }).success,
+    ).toBe(false);
+    expect(
+      executableProofStateSchema.safeParse({
+        ...baseState,
+        assumptions: [{ ...closedAssumption, declarations: [], statement: statement(1) }],
+      }).success,
+    ).toBe(false);
+    expect(
+      executableProofStateSchema.safeParse({
+        ...baseState,
+        assumptions: [
+          {
+            ...closedAssumption,
+            declarations: [
+              declarationSchema.parse({
+                id: "decl:q",
+                symbol: "q",
+                sort: PROPOSITION_SORT,
+                role: "construction-metavariable",
+                resolution: { status: "resolved", value: "True" },
+              }),
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      executableProofStateSchema.safeParse({
+        ...baseState,
+        assumptions: [{ ...closedAssumption, origin: { kind: "sorry" } }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects any assumption mentioning an undeclared free symbol", () => {
+    fc.assert(
+      fc.property(fc.stringMatching(/^[a-z][a-z0-9]{0,6}$/), (name) => {
+        fc.pre(name !== "q");
+        const parsed = executableProofStateSchema.safeParse({
+          ...baseState,
+          assumptions: [
+            {
+              ...closedAssumption,
+              declarations: [
+                propositionVariable("decl:q", "q"),
+                propositionVariable("decl:free", name),
+              ],
+              statement: statement(["ForAll", "q", ["Implies", name, "q"]]),
+            },
+          ],
+        });
+        expect(parsed.success).toBe(false);
+      }),
+    );
+  });
+
+  it("accepts optional obligation provenance and rejects malformed provenance", () => {
+    const withObligation = (provenance: unknown) => ({
+      ...baseState,
+      obligations: [
+        {
+          id: "statement:obligation",
+          sequent: {
+            context: { declarations: [], hypotheses: [] },
+            conclusion: statement("True"),
+          },
+          provenance,
+        },
+      ],
+    });
+    [
+      { kind: "premise-of-result", resultId: "result:modus-ponens" },
+      { kind: "side-condition", resultId: "result:division", sideConditionId: "nonzero" },
+      { kind: "user" },
+      { kind: "case" },
+      { kind: "suffices" },
+    ].forEach((provenance) => {
+      expect(executableProofStateSchema.safeParse(withObligation(provenance)).success).toBe(true);
+    });
+    [
+      { kind: "premise-of-result" },
+      { kind: "side-condition", resultId: "result:division" },
+      { kind: "user", resultId: "result:x" },
+      { kind: "unknown" },
+    ].forEach((provenance) => {
+      expect(executableProofStateSchema.safeParse(withObligation(provenance)).success).toBe(false);
+    });
+  });
+});

@@ -76,7 +76,7 @@ Unmerged agentctl task worktrees live under `.worktrees/` in the canonical check
       MathJSON→text entries, pattern templates with wildcards, operator templates (N02), domain terminology
       packs, and problem-local overrides. Precedence order: override > exact > pattern > operator >
       constructor. _Accept:_ golden tests; rendering is total, with a fallback to LaTeX-in-text.
-- [ ] **N05 Session-level mathematical context (§7, §11).** Move `backgroundProfileSchema` into
+- [x] **N05 Session-level mathematical context (§7, §11).** Move `backgroundProfileSchema` into
       `packages/library` and re-export it from `llm`. Add `ProofState.assumptions`: universally closed
       additional assumptions, each with origin (sorry id, source goal/obligation) and a `StatementView`.
       Add obligation provenance (`premise-of-result`, `side-condition`, `user`, `case`), a transition

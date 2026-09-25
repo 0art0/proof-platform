@@ -7,6 +7,7 @@ import {
 import {
   DEVELOPMENT_PROOF_SESSION_ID,
   DEVELOPMENT_ROOT_NODE,
+  DEVELOPMENT_SESSION_METADATA,
   ensureDevelopmentProofSession,
 } from "../development-session";
 import { initializeProofSession, type ProofStore } from "../proof-repository";
@@ -113,6 +114,43 @@ describe("proof HTTP service", () => {
         },
       },
     });
+  });
+
+  it("returns session metadata only when requested and never inside the session object", async () => {
+    const store = new MemoryProofStore();
+    await ensureDevelopmentProofSession(store);
+    expect(store.sessions.get(DEVELOPMENT_PROOF_SESSION_ID)?.metadata).toEqual(
+      DEVELOPMENT_SESSION_METADATA,
+    );
+    const origin = await runningService(store);
+    const url = `${origin}/proof-sessions/${DEVELOPMENT_PROOF_SESSION_ID}`;
+
+    const plain = await json(await fetch(url));
+    expect(Object.keys(plain).sort()).toEqual(["node", "session"]);
+    expect(plain.session).not.toHaveProperty("metadata");
+
+    const requested = await json(await fetch(`${url}?include=metadata`));
+    expect(requested.metadata).toEqual(DEVELOPMENT_SESSION_METADATA);
+    expect(requested.session).not.toHaveProperty("metadata");
+    expect(requested.metadata).toMatchObject({
+      background: { level: "elementary propositional logic" },
+    });
+
+    const history = await json(await fetch(`${url}/history`));
+    expect(history.session).not.toHaveProperty("metadata");
+  });
+
+  it("omits metadata for legacy sessions even when requested", async () => {
+    const store = new MemoryProofStore();
+    await initializeProofSession(store, {
+      sessionId: "session:legacy",
+      rootNode: DEVELOPMENT_ROOT_NODE,
+    });
+    const origin = await runningService(store);
+    const body = await json(
+      await fetch(`${origin}/proof-sessions/session:legacy?include=metadata`),
+    );
+    expect(Object.keys(body).sort()).toEqual(["node", "session"]);
   });
 
   it("records exact and associative selections and replays only an identical anchored request", async () => {

@@ -19,7 +19,8 @@ import {
 
 /**
  * Committed rows of the in-memory store, mirroring the PostgreSQL tables in
- * `migrations/0001_proof_commands.sql`. Sessions are keyed by session ID; every other table is
+ * `migrations/0001_proof_commands.sql` (plus the nullable `proof_sessions.metadata` object from
+ * `0003_session_metadata.sql`). Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */
 export type MemoryProofTables = Readonly<{
@@ -266,6 +267,7 @@ class MemoryTransactionContext {
               rootNodeId: session.rootNodeId,
               currentNodeId: session.currentNodeId,
               operators: session.operators,
+              ...(session.metadata === undefined ? {} : { metadata: session.metadata }),
             };
       },
       readNode: async (sessionId, nodeId) => {
@@ -316,7 +318,15 @@ class MemoryTransactionContext {
           }));
       },
       insertSession: async (session) =>
-        this.insert("sessions", session.id, session.id, session, () => undefined),
+        this.insert("sessions", session.id, session.id, session, (row) => {
+          const metadata: unknown = row.metadata;
+          if (
+            metadata !== undefined &&
+            (typeof metadata !== "object" || metadata === null || Array.isArray(metadata))
+          ) {
+            violation("proof_sessions metadata check: metadata must be a JSON object.");
+          }
+        }),
       insertNode: async (sessionId, node) =>
         this.insert("nodes", sessionId, memoryProofRecordKey(sessionId, node.id), node, (row) => {
           const duplicateState = this.sessionRows("nodes", sessionId).some(

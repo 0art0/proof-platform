@@ -115,6 +115,41 @@ async function initializedStore(root: ProofNode = rawNode()): Promise<MemoryProo
   return store;
 }
 
+describe("proof-session metadata", () => {
+  const metadata = {
+    problem: { title: "Identity", statement: "Show p.", statementMathJson: "p" },
+    background: { level: "basic", summary: "Basic logic.", assumptions: [] },
+    preferences: { notation: ["prefix negation"] },
+    libraryLayerIds: ["layer:global"],
+  };
+
+  it("persists metadata at initialization and returns a detached frozen copy on load", async () => {
+    const store = new MemoryProofStore();
+    const input = { sessionId: "session:one", rootNode: rawNode(), metadata };
+    const initialized = await initializeProofSession(store, input);
+    expect(initialized).toMatchObject({ status: "committed", session: { metadata } });
+    expect(Object.isFrozen(input.metadata)).toBe(false);
+
+    const loaded = await loadCurrentProofSession(store, "session:one");
+    expect(loaded).toMatchObject({ status: "loaded", session: { metadata } });
+    if (loaded.status === "loaded") expect(Object.isFrozen(loaded.session.metadata)).toBe(true);
+  });
+
+  it("omits metadata for sessions created without it and rejects invalid metadata", async () => {
+    const loaded = await loadCurrentProofSession(await initializedStore(), "session:one");
+    expect(loaded.status).toBe("loaded");
+    if (loaded.status === "loaded") expect(loaded.session).not.toHaveProperty("metadata");
+
+    expect(
+      await initializeProofSession(new MemoryProofStore(), {
+        sessionId: "session:one",
+        rootNode: rawNode(),
+        metadata: { ...metadata, background: { level: "basic" } },
+      }),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "invalid-initial-session" }] });
+  });
+});
+
 describe("proof repository workflow", () => {
   it("materializes generated IDs and preserves two children after backtracking", async () => {
     const root = createProofNodeSchema().parse({

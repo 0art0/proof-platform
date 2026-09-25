@@ -27,6 +27,7 @@ class RecordingClient implements SqlClient {
   calls: QueryCall[] = [];
   released = false;
   failOn: "BEGIN" | "COMMIT" | "ROLLBACK" | undefined;
+  sessionMetadata: unknown = null;
 
   async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
     this.calls.push({ text, values });
@@ -42,6 +43,7 @@ class RecordingClient implements SqlClient {
             root_node_id: "node:root",
             current_node_id: "node:root",
             operators: [],
+            metadata: this.sessionMetadata,
           },
         ],
         rowCount: 1,
@@ -195,10 +197,45 @@ describe("PostgresProofStore", () => {
       expect(call.text).not.toContain("session:one");
       expect(call.text).toMatch(/\$1/);
     }
-    expect(inserts[0]?.values).toEqual(["session:one", "node:root", "node:root", "[]"]);
+    expect(inserts[0]?.values).toEqual(["session:one", "node:root", "node:root", "[]", null]);
     expect(inserts[1]?.values?.[3]).toBe(JSON.stringify(rootNode().state));
     const update = client.calls.find(({ text }) => text.includes("UPDATE proof_sessions"));
     expect(update?.values).toEqual(["session:one", "node:root", "node:child"]);
+  });
+
+  it("round-trips optional session metadata through a nullable JSONB parameter", async () => {
+    const metadata = {
+      problem: { title: "Excluded middle", statement: "Show p or not p." },
+      background: { level: "elementary propositional logic", summary: "Logic.", assumptions: [] },
+      libraryLayerIds: ["layer:global"],
+    };
+    const client = new RecordingClient();
+    client.sessionMetadata = metadata;
+    const store = new PostgresProofStore(poolFor(client));
+    const session = proofSessionSchema.parse({
+      id: "session:one",
+      rootNodeId: "node:root",
+      currentNodeId: "node:root",
+      operators: [],
+      metadata,
+    });
+
+    const loaded = await store.transaction(async (transaction) => {
+      await transaction.insertSession(session);
+      return transaction.lockSession("session:one" as ProofSessionId);
+    });
+
+    const insert = client.calls.find(({ text }) => text.includes("INSERT INTO proof_sessions"));
+    expect(insert?.text).toContain("metadata");
+    expect(insert?.values?.[4]).toBe(JSON.stringify(metadata));
+    expect(proofSessionSchema.parse(loaded)).toEqual(session);
+
+    client.sessionMetadata = null;
+    const legacy = await store.transaction((transaction) =>
+      transaction.lockSession("session:one" as ProofSessionId),
+    );
+    expect(legacy).not.toHaveProperty("metadata");
+    expect(proofSessionSchema.safeParse(legacy).success).toBe(true);
   });
 
   it("reads and inserts suggestion evidence with snapshot identities in parameters", async () => {

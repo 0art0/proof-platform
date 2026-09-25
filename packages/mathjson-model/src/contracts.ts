@@ -1263,20 +1263,91 @@ const goalShapeSchema = z
 
 export type Goal = z.infer<typeof goalShapeSchema>;
 
+/**
+ * Why an obligation exists. Library identifiers are plain stable identifiers here because this
+ * package cannot depend on the library's branded artifact IDs.
+ */
+export const obligationProvenanceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("premise-of-result"), resultId: stableIdentifierSchema }).strict(),
+  z
+    .object({
+      kind: z.literal("side-condition"),
+      resultId: stableIdentifierSchema,
+      sideConditionId: stableIdentifierSchema,
+    })
+    .strict(),
+  z.object({ kind: z.literal("user") }).strict(),
+  z.object({ kind: z.literal("case") }).strict(),
+  z.object({ kind: z.literal("suffices") }).strict(),
+]);
+export type ObligationProvenance = z.infer<typeof obligationProvenanceSchema>;
+
 const obligationShapeSchema = z
   .object({
     id: statementIdSchema,
     sequent: rawContextualSequentSchema,
+    provenance: obligationProvenanceSchema.optional(),
   })
   .strict();
 
 export type Obligation = z.infer<typeof obligationShapeSchema>;
+
+export const assumptionIdSchema = stableIdentifierSchema.brand("AssumptionId");
+export type AssumptionId = z.infer<typeof assumptionIdSchema>;
+
+export const assumptionOriginSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("sorry"),
+      sourceTarget: z
+        .object({ kind: z.enum(["goal", "obligation"]), id: statementIdSchema })
+        .strict(),
+      sorryId: stableIdentifierSchema.optional(),
+    })
+    .strict(),
+]);
+export type AssumptionOrigin = z.infer<typeof assumptionOriginSchema>;
+
+/**
+ * A state-global additional assumption (design plan §11). Its statement is closed: apart from
+ * built-in and declared operators, every symbol is bound inside it. `declarations` only supply the
+ * sorts of those bound symbols, exactly as a context supplies sorts for quantified conclusions.
+ */
+const additionalAssumptionShapeSchema = z
+  .object({
+    id: assumptionIdSchema,
+    declarations: z.array(declarationSchema),
+    statement: rawStatementViewSchema,
+    origin: assumptionOriginSchema,
+  })
+  .strict()
+  .superRefine((assumption, context) => {
+    addUniqueFieldIssues(assumption.declarations, "id", "declaration ID", context, [
+      "declarations",
+    ]);
+    addUniqueFieldIssues(assumption.declarations, "symbol", "declaration symbol", context, [
+      "declarations",
+    ]);
+    assumption.declarations.forEach((declaration, index) => {
+      if (declaration.role === "construction-metavariable") {
+        context.addIssue({
+          code: "custom",
+          message: "Additional-assumption binders cannot be construction metavariables.",
+          path: ["declarations", index, "role"],
+        });
+      }
+    });
+  });
+
+export type AdditionalAssumption = z.infer<typeof additionalAssumptionShapeSchema>;
 
 const rawProofStateSchema = z
   .object({
     id: proofStateIdSchema,
     goals: z.array(goalShapeSchema),
     obligations: z.array(obligationShapeSchema),
+    /** State-global closed assumptions; absent means none. */
+    assumptions: z.array(additionalAssumptionShapeSchema).optional(),
   })
   .strict();
 
@@ -1318,7 +1389,47 @@ function createValidatedProofStateSchema(
         ]);
       }
     });
+
+    const assumptions = proofState.assumptions ?? [];
+    addUniqueFieldIssues(assumptions, "id", "assumption ID", context, ["assumptions"]);
+    assumptions.forEach((assumption, index) => {
+      addAssumptionIssues(assumption, operators, context, ["assumptions", index]);
+    });
   });
+}
+
+function addAssumptionIssues(
+  assumption: AdditionalAssumption,
+  operators: readonly OperatorDeclaration[],
+  context: z.RefinementCtx,
+  prefix: readonly PropertyKey[],
+): void {
+  const environment = addContextIssues(
+    { declarations: assumption.declarations, hypotheses: [] },
+    operators,
+    context,
+    prefix,
+    false,
+  );
+  const operatorSymbols = new Set(operators.map((operator) => operator.symbol));
+  const openSymbols = [...freeSymbolNames(assumption.statement.expression, operators)].filter(
+    (symbol) => !RESERVED_BUILTIN_SYMBOLS.has(symbol) && !operatorSymbols.has(symbol),
+  );
+  if (openSymbols.length > 0) {
+    context.addIssue({
+      code: "custom",
+      message: `An additional assumption must be closed; free symbols: ${openSymbols.join(", ")}.`,
+      path: [...prefix, "statement", "expression"],
+    });
+    return;
+  }
+  if (!isPropositionExpression(assumption.statement.expression, environment)) {
+    context.addIssue({
+      code: "custom",
+      message: "An additional assumption must be proposition-valued.",
+      path: [...prefix, "statement", "expression"],
+    });
+  }
 }
 
 export function createProofStateSchema(
