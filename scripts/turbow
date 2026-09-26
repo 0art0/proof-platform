@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-export NEXT_TELEMETRY_DISABLED=1
-export TURBO_TELEMETRY_DISABLED=1
-
-exec turbo "$@"

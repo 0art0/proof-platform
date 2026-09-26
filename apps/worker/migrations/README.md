@@ -2,8 +2,7 @@
 
 `0001_proof_commands.sql` creates the initial PostgreSQL proof-session, immutable-node,
 displayed-suggestion, concrete-preview, edge, event, and idempotent-command tables. Mathematical
-state and documentary records are stored as JSONB; orchestration SQLite state is deliberately
-unrelated.
+state and documentary records are stored as JSONB.
 
 Apply migrations with the deployment environment's normal PostgreSQL migration runner.
 The worker does not connect to a database or run migrations automatically at startup.
@@ -45,7 +44,7 @@ After applying migrations with the deployment migration runner, exercise a real 
 and persistence boundary with:
 
 ```bash
-PROOF_DATABASE_URL=postgresql://... ./scripts/pnpmw exec tsx \
+PROOF_DATABASE_URL=postgresql://... npx tsx \
   apps/worker/src/development-session/live-postgres-verification.ts
 ```
 

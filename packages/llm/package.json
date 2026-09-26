@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@proof/protocol": "workspace:*",
+    "@proof/protocol": "*",
     "openai": "^7.8.0",
     "zod": "^4.5.4"
   }

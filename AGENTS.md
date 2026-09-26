@@ -36,8 +36,9 @@ The implementation must continue to honor the design plan's central boundaries:
 ## Useful commands
 
 ```bash
-./scripts/pnpmw install --frozen-lockfile
-./scripts/pnpmw verify
+npm ci
+npm run verify
+npm run dev -w @proof/web
 ```
 
 `verify` runs the Prettier check and lint, typecheck, test, and build across the workspace.

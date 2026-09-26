@@ -13,12 +13,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@proof/kernel": "workspace:*",
-    "@proof/library": "workspace:*",
-    "@proof/mathjson-model": "workspace:*",
-    "@proof/moves": "workspace:*",
-    "@proof/retrieval": "workspace:*",
-    "@proof/selections": "workspace:*",
+    "@proof/kernel": "*",
+    "@proof/library": "*",
+    "@proof/mathjson-model": "*",
+    "@proof/moves": "*",
+    "@proof/retrieval": "*",
+    "@proof/selections": "*",
     "zod": "^4.5.4"
   }
 }

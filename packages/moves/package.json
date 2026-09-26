@@ -13,9 +13,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@proof/kernel": "workspace:*",
-    "@proof/library": "workspace:*",
-    "@proof/mathjson-model": "workspace:*",
+    "@proof/kernel": "*",
+    "@proof/library": "*",
+    "@proof/mathjson-model": "*",
     "zod": "^4.5.4"
   }
 }
