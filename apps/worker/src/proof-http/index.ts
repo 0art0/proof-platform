@@ -21,7 +21,7 @@ import {
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import type { Pool } from "pg";
 import { z } from "zod";
-import { APPROVED_LIBRARY_RESULTS } from "../approved-catalog";
+import { approvedCatalog } from "../approved-catalog";
 import { postgresProofStore } from "../postgres-proof-store";
 import {
   backtrackProofSession,
@@ -578,8 +578,13 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
 function approvedRetrievalIndex(
   operators: NonNullable<ProtocolEnvironment["operators"]>,
 ): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
+  const catalog = approvedCatalog(operators);
   const result = createRetrievalIndex(
-    { results: APPROVED_LIBRARY_RESULTS, moves: HAND_AUTHORED_MOVES, variantFamilies: [] },
+    {
+      results: catalog.results,
+      moves: HAND_AUTHORED_MOVES,
+      variantFamilies: catalog.variantFamilies,
+    },
     { operators },
   );
   return result.ok
