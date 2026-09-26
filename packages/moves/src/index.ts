@@ -1022,3 +1022,7 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
   });
   return Object.freeze(value);
 }
+
+export * from "./result-adapter";
+export * from "./materialize";
+export * from "./plan";

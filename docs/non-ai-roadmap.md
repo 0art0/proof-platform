@@ -411,3 +411,17 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     moves (add a target-slot pattern) or relax the protocol rule.
   - Prose-only side conditions always become obligations; premise availability only checks hypotheses in
     the target's context.
+- 2026-09-26 — N14 (moves part; worker wiring outstanding, box stays open) — `libraryResultToKernelResult`
+  / `approvedKernelResults`, `generateParameterMenus`, `materializeMoveOperation` (all 29 kinds, menu
+  choices only), `commandIdGenerator`, `materializeResultApplication`, `planMoveSequence`,
+  `movePlanImplementationSchema`.
+  - Remaining for N14 acceptance: worker replaces `materializeKernelOperation` with
+    `materializeMoveOperation` + `commandIdGenerator`, builds `env.results` via `approvedKernelResults`,
+    routes `source: "result"` suggestions through `materializeResultApplication`, passes the selected
+    occurrence for equivalence suggestions; protocol/UI need a menu-choice payload.
+  - Top-level `Implies` results always split into premises + conclusion, so they are no longer
+    `rewrite-with-implication` sources.
+  - N06(a) still open: proposed fix is kernel returns `strengthening` when obligations exist and
+    `PRIMITIVE_TRANSITION_CLASSES` becomes a per-kind allowed set.
+  - The plan implementation kind is not yet in the `MoveDefinition` union (N35). Forward/assumption premise
+    matching is greedy (no backtracking).
