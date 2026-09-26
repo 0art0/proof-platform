@@ -1,4 +1,5 @@
 import {
+  assumptionIdSchema,
   createExecutableProofStateSchema,
   createStatementViewSchema,
   freeSymbolNames,
@@ -9,12 +10,15 @@ import {
   stableIdentifierSchema,
   statementIdSchema,
   substituteMathJson,
+  type AdditionalAssumption,
+  type AssumptionId,
   type ContextualSequent,
   type Declaration,
   type ExecutableProofState,
   type Goal,
   type Hypothesis,
   type Obligation,
+  type ObligationProvenance,
   type OperatorDeclaration,
   type PlainMathJson,
   type ProofState,
@@ -32,6 +36,7 @@ import {
   type RewriteSource,
 } from "./deep-rewrite";
 import { operatorOperands, symbolValue } from "./expression";
+import { closesByAssumption, sorryClosure } from "./obligations";
 import {
   instantiateResultInContext,
   kernelResultIdSchema,
@@ -43,6 +48,7 @@ import {
 import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 
 export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equivalence";
+export { sorryClosure, type SorryClosure, type SorryClosureResult } from "./obligations";
 export type { RewriteLens, RewriteSource } from "./deep-rewrite";
 export {
   RESULT_APPLICATION_DIRECTIONS,
@@ -77,13 +83,16 @@ export type TransitionClass = "equivalence" | "strengthening" | "weakening";
  * external attestation reference and did not judge it. `library-result` means
  * the kernel checked the instantiation and matching of an approved result from
  * `KernelEnvironment.results`, whose truth it takes from the catalog; the
- * transition result then also carries that result's `resultId`. Later
- * evidence kinds (for example sorry) extend this list.
+ * transition result then also carries that result's `resultId`. `sorry` means
+ * the target was removed by `mark-sorry` and its dependency-restricted
+ * universal closure appended to the state's additional assumptions; the
+ * transition is an equivalence only relative to that extended assumption set.
  */
 export const TRANSITION_EVIDENCE_KINDS = [
   "structural",
   "background-inference",
   "library-result",
+  "sorry",
 ] as const;
 export type TransitionEvidence = (typeof TRANSITION_EVIDENCE_KINDS)[number];
 
@@ -110,6 +119,19 @@ export type TransitionStatementTarget =
  * rewrite one proposition occurrence, possibly deep inside a statement, with an
  * `Equivalent` or `Implies` statement from a hypothesis or an instantiated
  * premise-free result; see `rewriteStatement` for the polarity rules.
+ * `mark-sorry` removes a target and records its closure as an additional
+ * assumption; `close-by-assumption` closes a target with an instance of such an
+ * assumption. There is no separate `discharge-obligation`: every closer accepts
+ * an obligation target, which is how an obligation is discharged.
+ *
+ * Obligation provenance: `suffices` creates a `suffices` obligation;
+ * `apply-result-forward` obligations for unmet premises and, on an obligation
+ * target, `apply-result-backward` premise obligations are `premise-of-result`;
+ * case splits (`split-hypothesis-disjunction`, `split-classical-cases`) of an
+ * obligation yield `case` obligations; conjunct obligations from
+ * `split-goal-conjunction` and every rewritten obligation keep the parent's
+ * provenance. Obligations a transition does not touch, and the state's
+ * additional assumptions, are always preserved unchanged.
  */
 export const KERNEL_OPERATION_KINDS = [
   "close-by-hypothesis",
@@ -139,6 +161,8 @@ export const KERNEL_OPERATION_KINDS = [
   "rewrite-with-implication",
   "apply-result-backward",
   "apply-result-forward",
+  "mark-sorry",
+  "close-by-assumption",
 ] as const;
 export type KernelOperationKind = (typeof KERNEL_OPERATION_KINDS)[number];
 
@@ -263,7 +287,24 @@ export type KernelOperation =
         resultHypothesisId: StatementId;
         /** One fresh obligation ID per null premise entry, in premise order. */
         obligationIds: readonly StatementId[];
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "mark-sorry";
+        /** Fresh ID of the appended additional assumption. */
+        assumptionId: AssumptionId;
+        /** Optional external sorry reference recorded in the assumption's origin. */
+        sorryId?: SorryId;
+      }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "close-by-assumption";
+        assumptionId: AssumptionId;
+        /** Terms for a prefix of the assumption's leading universal binders, keyed by symbol. */
+        instantiation: ResultInstantiation;
       }>);
+
+type SorryId = ReturnType<typeof stableIdentifierSchema.parse>;
 
 type RuntimeIssue = Readonly<{ message: string; path: readonly PropertyKey[] }>;
 type RuntimeParseResult<T> =
@@ -309,7 +350,9 @@ export type KernelDiagnosticCode =
   | "invalid-instantiation"
   | "conclusion-mismatch"
   | "premise-mismatch"
-  | "polarity-not-permitted";
+  | "polarity-not-permitted"
+  | "assumption-not-found"
+  | "construction-metavariable-dependency";
 
 export type KernelDiagnostic = Readonly<{
   code: KernelDiagnosticCode;
@@ -590,6 +633,7 @@ function applyValidatedOperation(
       if (collision !== undefined) return idCollision(state, collision);
       const replacements = operands.map((operand, index): TargetEntry => ({
         id: operation.childIds[index] as StatementId,
+        ...provenanceOf(target.entry),
         sequent: {
           context: structuredClone(target.entry.sequent.context),
           conclusion: { expression: structuredClone(operand) },
@@ -674,6 +718,7 @@ function applyValidatedOperation(
             hypothesis(operation.branchHypothesisIds[index] as StatementId, operand),
           ]),
           id: operation.childIds[index] as StatementId,
+          ...obligationProvenance(operation.target, { kind: "case" }),
         };
       });
       return success(
@@ -705,6 +750,7 @@ function applyValidatedOperation(
             hypothesis(operation.branchHypothesisIds[index] as StatementId, expression),
           ),
           id: operation.childIds[index] as StatementId,
+          ...obligationProvenance(operation.target, { kind: "case" }),
         };
       });
       return success(
@@ -755,6 +801,7 @@ function applyValidatedOperation(
       if (collision !== undefined) return idCollision(state, collision);
       const implication: Obligation = {
         id: operation.obligationId,
+        provenance: { kind: "suffices" },
         sequent: {
           context: structuredClone(target.entry.sequent.context),
           conclusion: {
@@ -946,7 +993,75 @@ function applyValidatedOperation(
       return applyResultBackward(state, target, operation, operators, results);
     case "apply-result-forward":
       return applyResultForward(state, target, operation, operators, results);
+    case "mark-sorry":
+      return markSorry(state, target, operation, operators);
+    case "close-by-assumption": {
+      const assumption = (state.assumptions ?? []).find(
+        (candidate) => candidate.id === operation.assumptionId,
+      );
+      if (assumption === undefined) {
+        return internalFailure(
+          state,
+          "assumption-not-found",
+          "The additional assumption does not exist in this proof state.",
+        );
+      }
+      const closes = closesByAssumption(
+        assumption,
+        operation.instantiation,
+        target.entry.sequent,
+        operators,
+      );
+      if (!closes.ok) return internalFailure(state, closes.code, closes.message);
+      // The kernel checks the instantiation and modus ponens itself; the
+      // assumption is explicit, state-global, and already marked by the `sorry`
+      // evidence of the transition that created it, so this step is structural.
+      return success(replaceTarget(state, operation.target, target.index, []), "equivalence");
+    }
   }
+}
+
+/**
+ * Remove the target and append its dependency-restricted universal closure
+ * (see `sorryClosure`) as an additional assumption whose origin records the
+ * removed target. Relative to the extended assumption set the result is
+ * provable exactly when the input is, so the class is equivalence; the
+ * evidence is `sorry` because the closure itself is unproved.
+ */
+function markSorry(
+  state: ProofState,
+  target: LocatedTarget,
+  operation: Extract<KernelOperation, { kind: "mark-sorry" }>,
+  operators: readonly OperatorDeclaration[],
+): InternalResult {
+  const existing = state.assumptions ?? [];
+  if (existing.some((candidate) => candidate.id === operation.assumptionId)) {
+    return internalFailure(
+      state,
+      "identifier-collision",
+      `The supplied assumption ID is not fresh: ${operation.assumptionId}.`,
+    );
+  }
+  const closure = sorryClosure(target.entry.sequent, operators);
+  if (!closure.ok) return internalFailure(state, closure.code, closure.message);
+  const assumption: AdditionalAssumption = {
+    id: operation.assumptionId,
+    declarations: [...closure.closure.declarations],
+    statement: { expression: closure.closure.statement },
+    origin: {
+      kind: "sorry",
+      sourceTarget: { kind: operation.target.kind, id: operation.target.id },
+      ...(operation.sorryId === undefined ? {} : { sorryId: operation.sorryId }),
+    },
+  };
+  return success(
+    {
+      ...replaceTarget(state, operation.target, target.index, []),
+      assumptions: [...existing, assumption],
+    },
+    "equivalence",
+    "sorry",
+  );
 }
 
 /**
@@ -996,6 +1111,10 @@ function applyResultBackward(
   if (collision !== undefined) return idCollision(state, collision);
   const replacements = instance.premises.map((premise, index): TargetEntry => ({
     id: operation.premiseTargetIds[index] as StatementId,
+    ...obligationProvenance(operation.target, {
+      kind: "premise-of-result",
+      resultId: operation.resultId,
+    }),
     sequent: {
       context: structuredClone(target.entry.sequent.context),
       conclusion: { expression: premise },
@@ -1075,6 +1194,7 @@ function applyResultForward(
 
   const obligations = unmet.map((premise, index): Obligation => ({
     id: operation.obligationIds[index] as StatementId,
+    provenance: { kind: "premise-of-result", resultId: operation.resultId },
     sequent: {
       context: structuredClone(target.entry.sequent.context),
       conclusion: { expression: premise },
@@ -1151,6 +1271,21 @@ function withConclusion(target: TargetEntry, expression: PlainMathJson): TargetE
     ...target,
     sequent: { ...target.sequent, conclusion: { expression: structuredClone(expression) } },
   };
+}
+
+/** A new obligation copies its parent's provenance; goals carry none. */
+function provenanceOf(entry: TargetEntry): Readonly<{ provenance?: ObligationProvenance }> {
+  return "provenance" in entry && entry.provenance !== undefined
+    ? { provenance: structuredClone(entry.provenance) }
+    : {};
+}
+
+/** Provenance for a new target replacing `target`: only obligations carry it. */
+function obligationProvenance(
+  target: TransitionTarget,
+  provenance: ObligationProvenance,
+): Readonly<{ provenance?: ObligationProvenance }> {
+  return target.kind === "obligation" ? { provenance } : {};
 }
 
 function hypothesis(id: StatementId, expression: PlainMathJson): Hypothesis {
@@ -1658,6 +1793,8 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
       "resultHypothesisId",
       "obligationIds",
     ],
+    "mark-sorry": ["assumptionId"],
+    "close-by-assumption": ["assumptionId", "instantiation"],
   };
   if (!(KERNEL_OPERATION_KINDS as readonly string[]).includes(value.kind)) {
     return runtimeFailure("The kernel operation kind is unknown.", ["kind"]);
@@ -1665,6 +1802,8 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
   const extras = extraKeys[value.kind as KernelOperationKind];
   // Rewrites accept one optional field: an associative lens under `path`.
   const hasLens = LENS_OPERATION_KINDS.has(value.kind) && Object.hasOwn(value, "lens");
+  // A sorry accepts one optional field: an external sorry reference.
+  const hasSorryId = value.kind === "mark-sorry" && Object.hasOwn(value, "sorryId");
   if (
     !hasExactKeys(value, [
       "kind",
@@ -1673,6 +1812,7 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
       "target",
       ...extras,
       ...(hasLens ? ["lens"] : []),
+      ...(hasSorryId ? ["sorryId"] : []),
     ])
   ) {
     return runtimeFailure("The kernel operation contains missing or unknown fields.", []);
@@ -1701,6 +1841,12 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     if (field in value && !statementIdSchema.safeParse(value[field]).success) {
       return runtimeFailure("The statement ID is invalid.", [field]);
     }
+  }
+  if ("assumptionId" in value && !assumptionIdSchema.safeParse(value.assumptionId).success) {
+    return runtimeFailure("The assumption ID is invalid.", ["assumptionId"]);
+  }
+  if (hasSorryId && !stableIdentifierSchema.safeParse(value.sorryId).success) {
+    return runtimeFailure("The sorry ID is invalid.", ["sorryId"]);
   }
   if ("attestationId" in value && !attestationIdSchema.safeParse(value.attestationId).success) {
     return runtimeFailure("The attestation ID is invalid.", ["attestationId"]);
@@ -1986,6 +2132,26 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
           premiseHypothesisIds: copyOptionalStatementIds(value.premiseHypothesisIds),
           resultHypothesisId: statementIdSchema.parse(value.resultHypothesisId),
           obligationIds: copyStatementIds(value.obligationIds),
+        },
+      };
+    case "mark-sorry":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          assumptionId: assumptionIdSchema.parse(value.assumptionId),
+          ...(hasSorryId ? { sorryId: stableIdentifierSchema.parse(value.sorryId) } : {}),
+        },
+      };
+    case "close-by-assumption":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          assumptionId: assumptionIdSchema.parse(value.assumptionId),
+          instantiation: copyInstantiation(value.instantiation),
         },
       };
   }

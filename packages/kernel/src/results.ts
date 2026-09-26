@@ -312,7 +312,7 @@ export function instantiateResultInContext(
  * `(expected) -> proposition` is declared, and its application to the term is
  * checked as a proposition, so every free symbol of the term must be declared.
  */
-function termHasSortInContext(
+export function termHasSortInContext(
   term: PlainMathJson,
   expected: Sort,
   declarations: readonly Declaration[],
@@ -350,7 +350,7 @@ function termHasSortInContext(
   }
 }
 
-function collectSymbolNames(expression: PlainMathJson, names: Set<string>): void {
+export function collectSymbolNames(expression: PlainMathJson, names: Set<string>): void {
   const symbol = symbolValue(expression);
   if (symbol !== undefined) {
     names.add(symbol);

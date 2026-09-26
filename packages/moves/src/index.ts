@@ -164,6 +164,8 @@ export const PRIMITIVE_TRANSITION_CLASSES: Readonly<Record<KernelOperationKind, 
     "rewrite-with-implication": "strengthening",
     "apply-result-backward": "strengthening",
     "apply-result-forward": "equivalence",
+    "mark-sorry": "equivalence",
+    "close-by-assumption": "equivalence",
   });
 
 export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, string>> = Object.freeze(
@@ -195,6 +197,8 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, strin
     "rewrite-with-implication": "implication",
     "apply-result-backward": "target",
     "apply-result-forward": "target",
+    "mark-sorry": "target",
+    "close-by-assumption": "target",
   },
 );
 
@@ -207,8 +211,10 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, strin
  * result (library-result), so their entry lists both; the kernel reports the
  * one its operation's `source` determines. A set per kind keeps one move per
  * kernel rule rather than splitting each rewrite into source-specific kinds
- * with duplicated operations and moves. The record is exhaustive so a new
- * primitive must choose its evidence explicitly.
+ * with duplicated operations and moves. `mark-sorry` records an unproved
+ * closure as an additional assumption (sorry); `close-by-assumption` is
+ * structurally checked against that explicit assumption. The record is
+ * exhaustive so a new primitive must choose its evidence explicitly.
  */
 export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
   Record<KernelOperationKind, readonly TransitionEvidence[]>
@@ -240,6 +246,8 @@ export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
   "rewrite-with-implication": ["structural", "library-result"],
   "apply-result-backward": ["library-result"],
   "apply-result-forward": ["library-result"],
+  "mark-sorry": ["sorry"],
+  "close-by-assumption": ["structural"],
 });
 
 type MoveCatalogInput = Readonly<{
@@ -675,6 +683,35 @@ const catalogInputs: readonly MoveCatalogInput[] = [
       "Derive a conclusion now and leave its missing premise as an obligation.",
     ],
     "A selected hypothesis does not match the instantiated premise.",
+  ),
+  catalogEntry(
+    "mark-sorry",
+    "Mark as sorry",
+    "Set a target aside as an explicit sorry: remove it and assume its universal closure over the variables and hypotheses it depends on.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [parameter("assumptionId", "Sorry assumption ID", "generated-id")],
+    [
+      "Defer goal x < z under x < y and y < z as the assumption for all x y z, x < y and y < z implies x < z.",
+      "Postpone a side-condition obligation to continue with the main argument.",
+    ],
+    "The target depends on an unresolved construction metavariable.",
+  ),
+  catalogEntry(
+    "close-by-assumption",
+    "Close by assumption",
+    "Close a target by an instance of an additional assumption whose antecedents are all local hypotheses.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("assumptionId", "Additional assumption", "menu"),
+      parameter("instantiation", "Instantiation", "menu"),
+    ],
+    [
+      "Close u < s under u < t and t < s from a sorry assumed for all x y z.",
+      "Discharge an obligation that is an instance of an earlier sorry.",
+    ],
+    "An antecedent of the instantiated assumption is missing from the local context.",
   ),
 ];
 

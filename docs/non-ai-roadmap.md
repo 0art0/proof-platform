@@ -104,7 +104,7 @@ that archive.
   Instantiations are validated for sort and scope. Evidence kind is `library-result` with the artifact id.
   _Accept:_ invariant tests; a result whose premise does not match is rejected with a specific diagnostic.
 
-- [ ] **N07 Obligations and sorries (§11).** Add these operations:
+- [x] **N07 Obligations and sorries (§11).** Add these operations:
   - `discharge-obligation`: close an obligation through the usual closers, since obligations are already
     closable targets. Verify this and make it explicit.
   - `mark-sorry`: remove a goal or obligation and append its universal closure to `assumptions`. The

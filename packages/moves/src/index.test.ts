@@ -229,11 +229,60 @@ describe("deterministic move planning", () => {
       "rewrite-with-implication",
       "apply-result-backward",
       "apply-result-forward",
+      "mark-sorry",
     ]);
     expect(PRIMITIVE_TRANSITION_EVIDENCE["rewrite-with-implication"]).toEqual([
       "structural",
       "library-result",
     ]);
+  });
+
+  it("previews a sorry and closing a target by that additional assumption", () => {
+    const input = state(["Implies", "p", "q"], [{ id: "hypothesis:p", expression: "p" }]);
+    const sorry = planMove(input, {
+      moveId: "move:mark-sorry",
+      operation: operation("mark-sorry", { assumptionId: "assumption:sorry" }),
+    });
+    expect(sorry).toMatchObject({
+      ok: true,
+      preview: {
+        transitionClass: "equivalence",
+        evidence: "sorry",
+        state: {
+          goals: [],
+          assumptions: [
+            {
+              id: "assumption:sorry",
+              statement: {
+                expression: [
+                  "ForAll",
+                  "p",
+                  ["ForAll", "q", ["Implies", "p", ["Implies", "p", "q"]]],
+                ],
+              },
+              origin: { kind: "sorry", sourceTarget: { kind: "goal", id: "goal:main" } },
+            },
+          ],
+        },
+      },
+    });
+    if (!sorry.ok) return;
+
+    const withAssumption = executableProofStateSchema.parse({
+      ...input,
+      assumptions: sorry.preview.state.assumptions,
+    });
+    const closed = planMove(withAssumption, {
+      moveId: "move:close-by-assumption",
+      operation: operation("close-by-assumption", {
+        assumptionId: "assumption:sorry",
+        instantiation: { p: "p", q: "q" },
+      }),
+    });
+    expect(closed).toMatchObject({
+      ok: true,
+      preview: { transitionClass: "equivalence", evidence: "structural", state: { goals: [] } },
+    });
   });
 
   it("previews approved-result applications with library-result evidence", () => {
