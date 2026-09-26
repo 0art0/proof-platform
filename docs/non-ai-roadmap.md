@@ -194,7 +194,7 @@ that archive.
   Arbitrary expression payloads are rejected (refinement §11). _Accept:_ the four previously unappliable
   moves are applicable via menu choices, end-to-end in the worker tests.
 
-- [ ] **N15 Discrimination tree and filtering (§14.1–§14.3).** Replace the one-level key with a real
+- [x] **N15 Discrimination tree and filtering (§14.1–§14.3).** Replace the one-level key with a real
       discrimination tree over preorder operator/arity paths with wildcard edges. Add secondary keys for
       polarity, section, and semantic role.
   - Typed unification against declared sorts.
@@ -401,3 +401,13 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     rename fails unless the renamed symbol is declared. N01 must give quantifiers self-contained typed
     binders.
   - (c) The catalog is revalidated on every call; callers should narrow or cache it.
+- 2026-09-26 — N15 — discrimination tree (`fn:<head>/<arity>`, `fnv:` variadic grouping for binary
+  And/Or/Add/Multiply move patterns), typed unification, premise/side-condition evaluation, category
+  diversity. Median ~5 ms over 1000 results. Follow-ups:
+  - `rank` gains an "exact type fit" element at index 3; results with premises are now `applicable` with
+    `rank[1] = 0` instead of `requires-input`.
+  - e2e "goal only → `move:expand-hypothesis-conjunction` requires-input" still fails: the move has no
+    target-slot pattern and protocol requires the primary pattern to be linked to a selection. Fix in
+    moves (add a target-slot pattern) or relax the protocol rule.
+  - Prose-only side conditions always become obligations; premise availability only checks hypotheses in
+    the target's context.

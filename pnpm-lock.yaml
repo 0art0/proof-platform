@@ -230,6 +230,9 @@ importers:
 
   packages/retrieval:
     dependencies:
+      '@proof/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@proof/library':
         specifier: workspace:*
         version: link:../library

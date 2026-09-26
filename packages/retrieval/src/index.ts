@@ -31,6 +31,31 @@ import {
   type ResolvedProofSelectionQuery,
   type ResolvedProofSelectionQuerySubject,
 } from "@proof/selections";
+import { DiscriminationTree } from "./discrimination-tree";
+import {
+  bindingsTypeFit,
+  evaluateResultPremises,
+  type FilterContext,
+  type PredictedObligation,
+  type TypeFit,
+} from "./filtering";
+import { functionParts, matchPattern, symbolValue, type PatternMatchOptions } from "./matching";
+
+export {
+  DiscriminationTree,
+  WILDCARD_EDGE,
+  patternKeys,
+  type DiscriminationTreeQueryOptions,
+} from "./discrimination-tree";
+export {
+  bindingsTypeFit,
+  evaluateResultPremises,
+  type FilterContext,
+  type PredictedObligation,
+  type PremiseEvaluation,
+  type TypeFit,
+} from "./filtering";
+export { matchPattern, type PatternMatchOptions } from "./matching";
 
 export interface RankedCandidate {
   readonly id: string;
@@ -113,7 +138,9 @@ export interface RetrievalIndex {
 }
 
 type IndexedPatternBase = Readonly<{
-  indexKey: string;
+  /** Secondary key for the leaf bucket: the requirement or slot shape filtered after lookup. */
+  bucket: string;
+  matchOptions: PatternMatchOptions;
   pattern: PlainMathJson;
   patternId: string;
   wildcardSymbols: ReadonlySet<string>;
@@ -170,23 +197,20 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
   readonly moveCount: number;
   readonly patternCount: number;
   readonly #operators: readonly OperatorDeclaration[];
-  readonly #entriesByKey: ReadonlyMap<string, readonly IndexedPattern[]>;
+  readonly #tree: DiscriminationTree<IndexedPattern>;
   readonly #familiesById: ReadonlyMap<string, VariantFamily>;
   readonly #approvedResultIds: ReadonlySet<string>;
 
   constructor(
     catalog: RetrievalCatalog,
     operators: readonly OperatorDeclaration[],
-    entriesByKey: ReadonlyMap<string, readonly IndexedPattern[]>,
+    tree: DiscriminationTree<IndexedPattern>,
   ) {
     this.resultCount = catalog.results.length;
     this.moveCount = catalog.moves.length;
-    this.patternCount = [...entriesByKey.values()].reduce(
-      (total, candidates) => total + candidates.length,
-      0,
-    );
+    this.patternCount = tree.size;
     this.#operators = operators;
-    this.#entriesByKey = entriesByKey;
+    this.#tree = tree;
     this.#familiesById = new Map(catalog.variantFamilies.map((family) => [family.id, family]));
     this.#approvedResultIds = new Set(
       catalog.results
@@ -235,13 +259,13 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
       return retrievalFailure("selection-rejected", "The proof state could not be revalidated.");
     }
 
-    const allCandidates = uniqueCandidates([...this.#entriesByKey.values()].flat());
     const candidateMatches = resolved.subjects.flatMap((subject) =>
-      candidateEntriesForSubject(subject, this.#entriesByKey, allCandidates).map((candidate) => ({
+      candidateEntriesForSubject(subject, this.#tree).map((candidate) => ({
         candidate,
         subject,
       })),
     );
+    const sortCache = new Map<string, TypeFit>();
     const available = new Set<string>(
       options.availableArtifacts.map((reference) => artifactReferenceKey(reference)),
     );
@@ -249,7 +273,7 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
       available.add(artifactReferenceKey({ kind: "result", id })),
     );
 
-    const suggestions = [
+    const ranked = [
       ...uniqueSuggestions(
         candidateMatches.flatMap((match) =>
           buildSuggestionsForMatch(
@@ -258,12 +282,12 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
             stateResult.data,
             available,
             this.#operators,
+            sortCache,
           ),
         ),
       ),
-    ]
-      .sort(compareSuggestions)
-      .slice(0, options.limit);
+    ].sort(compareSuggestions);
+    const suggestions = selectWithCategoryDiversity(ranked, options.limit);
 
     return freezeDetached({
       ok: true as const,
@@ -336,17 +360,52 @@ function subjectFromResolvedQuery(
   };
 }
 
+/**
+ * Walk the discrimination tree for one selected occurrence. A whole-selection
+ * abstraction is a query-side hole, so it skips one complete pattern subterm
+ * and reaches every pattern. Requirement and slot shapes are leaf buckets, so
+ * they filter candidates without another scan.
+ */
 function candidateEntriesForSubject(
   subject: RetrievalSubject,
-  entriesByKey: ReadonlyMap<string, readonly IndexedPattern[]>,
-  allCandidates: readonly IndexedPattern[],
+  tree: DiscriminationTree<IndexedPattern>,
 ): readonly IndexedPattern[] {
-  if (subject.abstraction !== undefined) return allCandidates;
-  const key = structuralIndexKey(subject.selection.fragment, new Set());
-  return uniqueCandidates([
-    ...(entriesByKey.get(key) ?? []),
-    ...(key === WILDCARD_INDEX_KEY ? [] : (entriesByKey.get(WILDCARD_INDEX_KEY) ?? [])),
-  ]);
+  const fragment = subject.selection.fragment;
+  return [
+    ...tree.retrieve(fragment, {
+      isQueryWildcard: subject.abstraction === undefined ? undefined : (term) => term === fragment,
+      acceptBucket: (bucket) => bucketAccepts(bucket, subject),
+    }),
+  ].sort(compareIndexedPatterns);
+}
+
+function resultBucket(requirement: ApplicationRequirement): string {
+  return ["result", requirement.section, requirement.polarity, requirement.role].join("\u0000");
+}
+
+function moveBucket(slot: MoveSelectionSlot): string {
+  return ["move", slot.role, slot.semanticRole].join("\u0000");
+}
+
+function bucketAccepts(bucket: string, subject: RetrievalSubject): boolean {
+  const [source, first, second, third] = bucket.split("\u0000");
+  if (source === "result") {
+    return requirementMatches(
+      {
+        section: first as ApplicationRequirement["section"],
+        polarity: second as ApplicationRequirement["polarity"],
+        role: third as ApplicationRequirement["role"],
+      },
+      subject.selection,
+    );
+  }
+  return subjectFitsSlot(
+    {
+      role: first as MoveSelectionSlot["role"],
+      semanticRole: second as MoveSelectionSlot["semanticRole"],
+    },
+    subject,
+  );
 }
 
 function buildSuggestionsForMatch(
@@ -355,6 +414,7 @@ function buildSuggestionsForMatch(
   state: ProofState,
   available: ReadonlySet<string>,
   operators: readonly OperatorDeclaration[],
+  sortCache: Map<string, TypeFit>,
 ): readonly RetrievalSuggestion[] {
   const { candidate, subject } = match;
   if (candidate.artifact.approval.status !== "approved") return [];
@@ -374,23 +434,33 @@ function buildSuggestionsForMatch(
     const matchResult = matchSubjectPattern(
       candidate.pattern,
       candidate.wildcardSymbols,
+      candidate.matchOptions,
       subject,
       candidate.requirement.role,
       new Map(),
     );
     if (matchResult === undefined) return [];
+    const context = filterContextFor(state, subject.selection, operators, sortCache);
+    const typeFit =
+      matchResult.abstractionFit === "not-used"
+        ? bindingsTypeFit(candidate.artifact, matchResult.bindings, context)
+        : "unknown";
+    if (typeFit === "mismatch") return [];
+    const premises = evaluateResultPremises(candidate.artifact, matchResult.bindings, context);
     const applicability =
-      candidate.artifact.premises.length === 0 && candidate.artifact.sideConditions.length === 0
+      subject.abstraction === undefined && premises.unresolvedParameters.length === 0
         ? "applicable"
         : "requires-input";
     return [
       buildSuggestion(candidate, subject.selection, matchResult.bindings, {
         selectionMatches: [{ selectionId: subject.id, patternId: candidate.patternId }],
         unresolvedSelectionSlots: [],
-        unresolvedParameters: [],
-        applicability:
-          subject.abstraction === undefined ? applicability : ("requires-input" as const),
+        unresolvedParameters: premises.unresolvedParameters,
+        applicability,
         abstractionFit: matchResult.abstractionFit,
+        exactTypeFit: typeFit === "exact",
+        availablePremiseCount: premises.availablePremiseCount,
+        predictedObligations: premises.obligations,
       }),
     ];
   }
@@ -436,6 +506,9 @@ function buildSuggestionsForMatch(
           unresolvedParameters,
           applicability,
           abstractionFit: plan.abstractionFit,
+          exactTypeFit: plan.abstractionFit === "not-used",
+          availablePremiseCount: 0,
+          predictedObligations: [],
         }),
       ];
     });
@@ -551,6 +624,7 @@ function matchMoveAssignmentPatterns(
         const matched = matchSubjectPattern(
           pattern.expression,
           wildcardSymbols,
+          MOVE_MATCH_OPTIONS,
           assignment.subject,
           assignment.slot.semanticRole,
           branch.bindings,
@@ -598,6 +672,7 @@ function matchMoveAssignmentPatterns(
 function matchSubjectPattern(
   pattern: PlainMathJson,
   wildcardSymbols: ReadonlySet<string>,
+  matchOptions: PatternMatchOptions,
   subject: RetrievalSubject,
   requiredRole: "proposition" | "term" | "binder" | "any",
   initialBindings: ReadonlyMap<string, PlainMathJson>,
@@ -617,6 +692,7 @@ function matchSubjectPattern(
     pattern,
     subject.selection.fragment,
     wildcardSymbols,
+    matchOptions,
     initialBindings,
   );
   return bindings === undefined ? undefined : { bindings, abstractionFit: "not-used" };
@@ -827,7 +903,10 @@ function sameTarget(left: ResolvedProofSelection, right: ResolvedProofSelection)
   );
 }
 
-function subjectFitsSlot(slot: MoveSelectionSlot, subject: RetrievalSubject): boolean {
+function subjectFitsSlot(
+  slot: Pick<MoveSelectionSlot, "role" | "semanticRole">,
+  subject: RetrievalSubject,
+): boolean {
   return (
     slotMatches(slot, subject.selection) &&
     (subject.abstraction === undefined ||
@@ -920,7 +999,7 @@ export function createRetrievalIndex(
       index: new DeterministicRetrievalIndex(
         frozenCatalog,
         frozenOperators,
-        buildStructuralIndex(frozenCatalog, frozenOperators),
+        buildDiscriminationTree(frozenCatalog, frozenOperators),
       ),
       diagnostics: [],
     };
@@ -986,21 +1065,18 @@ function catalogLinksAreValid(catalog: RetrievalCatalog): boolean {
   });
 }
 
-function buildStructuralIndex(
+const RESULT_MATCH_OPTIONS: PatternMatchOptions = Object.freeze({ associativeGrouping: false });
+const MOVE_MATCH_OPTIONS: PatternMatchOptions = Object.freeze({ associativeGrouping: true });
+
+function buildDiscriminationTree(
   catalog: RetrievalCatalog,
   operators: readonly OperatorDeclaration[],
-): ReadonlyMap<string, readonly IndexedPattern[]> {
-  const mutable = new Map<string, IndexedPattern[]>();
-  const append = (entry: IndexedPattern): void => {
-    const bucket = mutable.get(entry.indexKey) ?? [];
-    bucket.push(entry);
-    mutable.set(entry.indexKey, bucket);
-  };
-
+): DiscriminationTree<IndexedPattern> {
+  const entries: IndexedPattern[] = [];
   catalog.results.forEach((result) => {
     const wildcardSymbols = new Set(result.parameters.map((parameter) => parameter.symbol));
     result.patterns.forEach((pattern) => {
-      append({
+      entries.push({
         source: "result",
         artifact: result,
         pattern: pattern.expression,
@@ -1008,7 +1084,8 @@ function buildStructuralIndex(
         requirement: pattern.requirement,
         wildcardSymbols,
         specificity: patternSpecificity(pattern.expression, wildcardSymbols),
-        indexKey: structuralIndexKey(pattern.expression, wildcardSymbols),
+        bucket: resultBucket(pattern.requirement),
+        matchOptions: RESULT_MATCH_OPTIONS,
       });
     });
   });
@@ -1019,7 +1096,7 @@ function buildStructuralIndex(
       );
       if (slot === undefined) return;
       const wildcardSymbols = collectMoveWildcardSymbols(pattern, operators);
-      append({
+      entries.push({
         source: "move",
         artifact: move,
         pattern: pattern.expression,
@@ -1027,16 +1104,18 @@ function buildStructuralIndex(
         slot,
         wildcardSymbols,
         specificity: patternSpecificity(pattern.expression, wildcardSymbols),
-        indexKey: structuralIndexKey(pattern.expression, wildcardSymbols),
+        bucket: moveBucket(slot),
+        matchOptions: MOVE_MATCH_OPTIONS,
       });
     });
   });
-  return new Map(
-    [...mutable].map(([key, entries]) => [
-      key,
-      Object.freeze([...entries].sort(compareIndexedPatterns)),
-    ]),
-  );
+  const tree = new DiscriminationTree<IndexedPattern>();
+  entries
+    .sort(compareIndexedPatterns)
+    .forEach((entry) =>
+      tree.insert(entry.pattern, entry.wildcardSymbols, entry.matchOptions, entry.bucket, entry),
+    );
+  return tree;
 }
 
 function collectMoveWildcardSymbols(
@@ -1132,7 +1211,10 @@ function requirementMatches(
   );
 }
 
-function slotMatches(slot: MoveSelectionSlot, selection: ResolvedProofSelection): boolean {
+function slotMatches(
+  slot: Pick<MoveSelectionSlot, "role" | "semanticRole">,
+  selection: ResolvedProofSelection,
+): boolean {
   const statementKind = selection.anchor.statement.kind;
   const requiresWholeStatement = slot.role !== "rewrite-occurrence" && slot.role !== "witness";
   const isWholeStatement = selection.kind === "exact" && selection.path.length === 0;
@@ -1158,24 +1240,16 @@ function buildSuggestion(
   candidate: IndexedPattern,
   selection: ResolvedProofSelection,
   bindings: ReadonlyMap<string, PlainMathJson>,
-  evidence: Pick<
-    RetrievalSuggestion,
-    | "selectionMatches"
-    | "unresolvedSelectionSlots"
-    | "unresolvedParameters"
-    | "applicability"
-    | "abstractionFit"
-  >,
+  evidence: SuggestionEvidence,
 ): RetrievalSuggestion {
   const exactRepresentationMatch =
     evidence.abstractionFit === "not-used" && mathJsonEquals(candidate.pattern, selection.fragment);
-  const noNewObligations =
-    candidate.source === "move" ||
-    (candidate.artifact.premises.length === 0 && candidate.artifact.sideConditions.length === 0);
+  const noNewObligations = evidence.predictedObligations.length === 0;
   const guaranteed =
     candidate.source === "result" &&
     exactRepresentationMatch &&
     noNewObligations &&
+    evidence.exactTypeFit &&
     evidence.applicability === "applicable";
   const directProgress =
     selection.anchor.statement.kind === "conclusion" && selection.anchor.target.kind === "goal";
@@ -1194,9 +1268,19 @@ function buildSuggestion(
         : "The retrieval-only abstraction is compatible with this catalog pattern.",
     `The selection contract fits ${selectionSection(selection)} in ${selection.position.polarity} polarity.`,
     noNewObligations
-      ? "The catalog entry declares no additional premise obligations."
-      : "Applying this result may require premises or side conditions.",
+      ? evidence.availablePremiseCount === 0
+        ? "The catalog entry declares no additional premise obligations."
+        : "Every premise and side condition is already available as a hypothesis."
+      : nearMissReason(evidence.predictedObligations),
   ];
+  if (!noNewObligations && evidence.availablePremiseCount > 0) {
+    reasons.push(
+      `Already available as hypotheses: ${evidence.availablePremiseCount} premise or side condition(s).`,
+    );
+  }
+  if (candidate.source === "result" && !evidence.exactTypeFit) {
+    reasons.push("Some bound terms could not be sort-checked in the local context.");
+  }
   if (selectionMatches.length > 1) {
     reasons.push("Every selected occurrence is assigned to a distinct compatible selection slot.");
   }
@@ -1222,6 +1306,7 @@ function buildSuggestion(
       guaranteed ? 1 : 0,
       noNewObligations ? 1 : 0,
       evidence.applicability === "applicable" ? 1 : 0,
+      evidence.exactTypeFit ? 1 : 0,
       candidate.specificity,
       directProgress ? 1 : 0,
       locality,
@@ -1237,6 +1322,100 @@ function buildSuggestion(
     ...(candidate.source === "result" && candidate.artifact.variantFamilyId !== undefined
       ? { variantFamilyId: candidate.artifact.variantFamilyId }
       : {}),
+  };
+}
+
+type SuggestionEvidence = Pick<
+  RetrievalSuggestion,
+  | "selectionMatches"
+  | "unresolvedSelectionSlots"
+  | "unresolvedParameters"
+  | "applicability"
+  | "abstractionFit"
+> &
+  Readonly<{
+    /** Every bound term provably has its declared sort (always true for sortless move patterns). */
+    exactTypeFit: boolean;
+    availablePremiseCount: number;
+    predictedObligations: readonly PredictedObligation[];
+  }>;
+
+/** The near-miss explanation: which predicted obligations the application would create. */
+function nearMissReason(obligations: readonly PredictedObligation[]): string {
+  const conditions = obligations.map(describeObligation).join("; ");
+  const effect =
+    obligations.length === 1 ? "it becomes a new obligation" : "each becomes a new obligation";
+  return `Applies if ${conditions}; ${effect}.`;
+}
+
+function describeObligation(obligation: PredictedObligation): string {
+  return obligation.kind === "premise"
+    ? `${obligation.description} is proved`
+    : `side condition "${obligation.description}" holds`;
+}
+
+/** Index of the "no new obligations" component in every suggestion rank. */
+const RANK_NO_NEW_OBLIGATIONS = 1;
+
+/** Slots reserved per category when the limit truncates, so no category is crowded out. */
+const RESERVED_SLOTS_PER_CATEGORY = 2;
+
+type SuggestionCategory = "immediate" | "with-obligations" | "requires-input";
+
+const SUGGESTION_CATEGORIES: readonly SuggestionCategory[] = [
+  "immediate",
+  "with-obligations",
+  "requires-input",
+];
+
+function suggestionCategory(suggestion: RetrievalSuggestion): SuggestionCategory {
+  if (suggestion.applicability === "requires-input") return "requires-input";
+  return suggestion.rank[RANK_NO_NEW_OBLIGATIONS] === 1 ? "immediate" : "with-obligations";
+}
+
+/**
+ * Deterministic category diversity. Without truncation the ranked list is
+ * returned unchanged. Otherwise the best few suggestions of each category
+ * (immediately applicable, applicable with new obligations, requires input)
+ * are reserved first, the remaining slots follow rank order, and the chosen
+ * suggestions keep their rank order.
+ */
+function selectWithCategoryDiversity(
+  ranked: readonly RetrievalSuggestion[],
+  limit: number,
+): readonly RetrievalSuggestion[] {
+  if (ranked.length <= limit) return ranked;
+  const chosen = new Set<RetrievalSuggestion>();
+  for (const category of SUGGESTION_CATEGORIES) {
+    let reserved = 0;
+    for (const suggestion of ranked) {
+      if (chosen.size >= limit || reserved >= RESERVED_SLOTS_PER_CATEGORY) break;
+      if (suggestionCategory(suggestion) !== category) continue;
+      chosen.add(suggestion);
+      reserved += 1;
+    }
+  }
+  for (const suggestion of ranked) {
+    if (chosen.size >= limit) break;
+    chosen.add(suggestion);
+  }
+  return ranked.filter((suggestion) => chosen.has(suggestion));
+}
+
+function filterContextFor(
+  state: ProofState,
+  selection: ResolvedProofSelection,
+  operators: readonly OperatorDeclaration[],
+  sortCache: Map<string, TypeFit>,
+): FilterContext {
+  const collection = selection.anchor.target.kind === "goal" ? state.goals : state.obligations;
+  const target = collection.find(({ id }) => id === selection.anchor.target.id);
+  return {
+    declarations: target?.sequent.context.declarations ?? [],
+    hypotheses:
+      target?.sequent.context.hypotheses.map(({ statement }) => statement.expression) ?? [],
+    operators,
+    sortCache,
   };
 }
 
@@ -1296,86 +1475,21 @@ function buildVariantGroups(
     }));
 }
 
-function matchPattern(
-  pattern: PlainMathJson,
-  candidate: PlainMathJson,
-  wildcardSymbols: ReadonlySet<string>,
-  initialBindings: ReadonlyMap<string, PlainMathJson> = new Map(),
-): ReadonlyMap<string, PlainMathJson> | undefined {
-  const bindings = new Map(initialBindings);
-  return matchExpression(pattern, candidate, wildcardSymbols, bindings) ? bindings : undefined;
-}
-
-function matchExpression(
-  pattern: PlainMathJson,
-  candidate: PlainMathJson,
-  wildcardSymbols: ReadonlySet<string>,
-  bindings: Map<string, PlainMathJson>,
-): boolean {
-  const patternSymbol = symbolValue(pattern);
-  if (patternSymbol !== undefined && wildcardSymbols.has(patternSymbol)) {
-    return bindWildcard(patternSymbol, candidate, bindings);
-  }
-  const patternParts = functionParts(pattern);
-  const candidateParts = functionParts(candidate);
-  if (patternParts !== undefined || candidateParts !== undefined) {
-    if (patternParts === undefined || candidateParts === undefined) return false;
-    if (wildcardSymbols.has(patternParts.operator)) {
-      if (!bindWildcard(patternParts.operator, candidateParts.operator, bindings)) return false;
-    } else if (patternParts.operator !== candidateParts.operator) {
-      return false;
-    }
-    return (
-      patternParts.operands.length === candidateParts.operands.length &&
-      patternParts.operands.every((operand, index) => {
-        const candidateOperand = candidateParts.operands[index];
-        return (
-          candidateOperand !== undefined &&
-          matchExpression(operand, candidateOperand, wildcardSymbols, bindings)
-        );
-      })
-    );
-  }
-  const candidateSymbol = symbolValue(candidate);
-  if (patternSymbol !== undefined || candidateSymbol !== undefined) {
-    return patternSymbol !== undefined && patternSymbol === candidateSymbol;
-  }
-  return mathJsonEquals(pattern, candidate);
-}
-
-function bindWildcard(
-  symbol: string,
-  value: PlainMathJson,
-  bindings: Map<string, PlainMathJson>,
-): boolean {
-  const previous = bindings.get(symbol);
-  if (previous !== undefined) return mathJsonEquals(previous, value);
-  bindings.set(symbol, value);
-  return true;
-}
-
-const WILDCARD_INDEX_KEY = "*";
-
-function structuralIndexKey(
-  expression: PlainMathJson,
-  wildcardSymbols: ReadonlySet<string>,
-): string {
-  const symbol = symbolValue(expression);
-  if (symbol !== undefined)
-    return wildcardSymbols.has(symbol) ? WILDCARD_INDEX_KEY : `sym:${symbol}`;
-  const parts = functionParts(expression);
-  if (parts !== undefined) {
-    return wildcardSymbols.has(parts.operator)
-      ? WILDCARD_INDEX_KEY
-      : `fn:${parts.operator}:${parts.operands.length}`;
-  }
-  return `literal:${JSON.stringify(expression)}`;
-}
-
+/**
+ * Structural specificity: fixed heads and symbols score, variables do not. A
+ * generic pattern that is a bare variable scores -1, below every pattern that
+ * fixes any structure, so catch-all moves rank after structural matches.
+ */
 function patternSpecificity(
   expression: PlainMathJson,
   wildcardSymbols: ReadonlySet<string>,
 ): number {
+  const symbol = symbolValue(expression);
+  if (symbol !== undefined) return wildcardSymbols.has(symbol) ? -1 : 2;
+  return nodeSpecificity(expression, wildcardSymbols);
+}
+
+function nodeSpecificity(expression: PlainMathJson, wildcardSymbols: ReadonlySet<string>): number {
   const symbol = symbolValue(expression);
   if (symbol !== undefined) return wildcardSymbols.has(symbol) ? 0 : 2;
   const parts = functionParts(expression);
@@ -1383,39 +1497,10 @@ function patternSpecificity(
   return (
     (wildcardSymbols.has(parts.operator) ? 0 : 3) +
     parts.operands.reduce<number>(
-      (total, operand) => total + patternSpecificity(operand, wildcardSymbols),
+      (total, operand) => total + nodeSpecificity(operand, wildcardSymbols),
       0,
     )
   );
-}
-
-type FunctionParts = Readonly<{
-  operator: string;
-  operands: readonly PlainMathJson[];
-}>;
-
-function functionParts(expression: PlainMathJson): FunctionParts | undefined {
-  if (Array.isArray(expression)) {
-    const operator = expression[0];
-    return typeof operator === "string"
-      ? { operator, operands: expression.slice(1) as readonly PlainMathJson[] }
-      : undefined;
-  }
-  if (typeof expression !== "object" || expression === null || !("fn" in expression)) {
-    return undefined;
-  }
-  const operator = expression.fn[0];
-  return typeof operator === "string" ? { operator, operands: expression.fn.slice(1) } : undefined;
-}
-
-function symbolValue(expression: PlainMathJson): string | undefined {
-  if (typeof expression === "string") return expression;
-  return typeof expression === "object" &&
-    expression !== null &&
-    !Array.isArray(expression) &&
-    "sym" in expression
-    ? expression.sym
-    : undefined;
 }
 
 function walkExpression(
@@ -1460,16 +1545,6 @@ function parseQueryOptions(value: unknown): QueryOptions | undefined {
 
 function artifactReferenceKey(reference: Readonly<{ kind: string; id: string }>): string {
   return `${reference.kind}\u0000${reference.id}`;
-}
-
-function uniqueCandidates(candidates: readonly IndexedPattern[]): readonly IndexedPattern[] {
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    const key = `${candidate.source}\u0000${candidate.artifact.id}\u0000${candidate.patternId}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function uniqueSuggestions(

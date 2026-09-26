@@ -7,7 +7,12 @@ import {
   type ProofState,
 } from "@proof/mathjson-model";
 import { HAND_AUTHORED_MOVES, moveDefinitionSchema } from "@proof/moves";
-import { createRetrievalIndex, type RetrievalCatalog, type RetrievalIndex } from "./index";
+import {
+  bindingsTypeFit,
+  createRetrievalIndex,
+  type RetrievalCatalog,
+  type RetrievalIndex,
+} from "./index";
 
 const declarations = ["p", "q", "r"].map((symbol, index) => ({
   id: `declaration:${index}`,
@@ -793,6 +798,366 @@ describe("deterministic structural retrieval", () => {
     );
     expect(reversed).toEqual(forward);
   });
+});
+
+function premiseResult(
+  id: string,
+  premises: readonly PlainMathJson[],
+  sideConditions: readonly unknown[] = [],
+  extraParameters: readonly string[] = [],
+) {
+  const source = structuredClone(CORE_LOGIC_RESULTS[1]!);
+  return libraryResultSchema.parse({
+    ...source,
+    id,
+    name: `Premise result ${id}`,
+    parameters: [
+      ...source.parameters,
+      ...extraParameters.map((symbol) => ({
+        id: `declaration:extra-${symbol}`,
+        symbol,
+        sort: PROPOSITION_SORT,
+        role: "universal-parameter",
+      })),
+    ],
+    statement: { expression: ["And", "p", "q"] },
+    premises: premises.map((expression) => ({ expression })),
+    sideConditions,
+    applicationDirections: ["backward"],
+    patterns: [
+      {
+        id: `pattern:${id}`,
+        expression: ["And", "p", "q"],
+        direction: "backward",
+        requirement: { section: "goal", polarity: "positive", role: "proposition" },
+      },
+    ],
+  });
+}
+
+function suggestionCategory(
+  suggestion: Readonly<{ applicability: string; rank: readonly number[] }>,
+) {
+  if (suggestion.applicability === "requires-input") return "requires-input";
+  return suggestion.rank[1] === 1 ? "immediate" : "with-obligations";
+}
+
+describe("variadic associative matching", () => {
+  // Mirrors the development session: the goal is a ternary conjunction.
+  const developmentState = () =>
+    state(
+      ["And", "p", "p", "q"],
+      [
+        { id: "hypothesis:conjunction", expression: ["And", "p", "q"] },
+        { id: "hypothesis:q", expression: "q" },
+      ],
+    );
+
+  it("offers the variadic conjunction primitives for an n-ary conjunction at the default limit", () => {
+    const index = indexFor();
+    const goalOnly = index.query(developmentState(), selection());
+    expect(goalOnly.ok).toBe(true);
+    if (!goalOnly.ok) return;
+    expect(
+      goalOnly.suggestions.find(({ artifactId }) => artifactId === "move:split-goal-conjunction"),
+    ).toMatchObject({
+      applicability: "applicable",
+      substitutions: [
+        { symbol: "p", expression: "p" },
+        { symbol: "q", expression: ["And", "p", "q"] },
+      ],
+    });
+
+    const both = index.query(
+      developmentState(),
+      selectionQuery([
+        { id: "selection:target", selection: selection() },
+        {
+          id: "selection:conjunction",
+          selection: selection({ kind: "hypothesis", id: "hypothesis:conjunction" }),
+        },
+      ]),
+    );
+    expect(both.ok).toBe(true);
+    if (!both.ok) return;
+    expect(
+      both.suggestions.find(
+        ({ artifactId }) => artifactId === "move:expand-hypothesis-conjunction",
+      ),
+    ).toMatchObject({ applicability: "applicable", unresolvedSelectionSlots: [] });
+  });
+
+  it("matches a ternary conjunction hypothesis with the binary move pattern", () => {
+    const proofState = state("r", [
+      { id: "hypothesis:triple", expression: ["And", "p", "q", "r"] },
+    ]);
+    const result = indexFor().query(
+      proofState,
+      selection({ kind: "hypothesis", id: "hypothesis:triple" }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.suggestions.map(({ artifactId }) => artifactId)).toContain(
+      "move:expand-hypothesis-conjunction",
+    );
+  });
+
+  it("never groups variadic operands for result instances", () => {
+    const ids = suggestionIds(indexFor(), state(["And", "p", "q", "r"]));
+    expect(ids.some((id) => id.includes("result:conjunction-commutativity"))).toBe(false);
+    expect(ids.some((id) => id.includes("move:split-goal-conjunction"))).toBe(true);
+  });
+});
+
+describe("typed unification and side-condition evaluation", () => {
+  const realDeclarations = [
+    { id: "declaration:p", symbol: "p", sort: PROPOSITION_SORT, role: "universal-parameter" },
+    {
+      id: "declaration:n",
+      symbol: "n",
+      sort: { kind: "named", id: "sort:real" },
+      role: "universal-parameter",
+    },
+  ] as const;
+
+  function equalityState(conclusion: PlainMathJson): ProofState {
+    return proofStateSchema.parse({
+      id: "state:query",
+      goals: [
+        {
+          id: "goal:main",
+          sequent: {
+            context: { declarations: realDeclarations, hypotheses: [] },
+            conclusion: { expression: conclusion },
+          },
+        },
+      ],
+      obligations: [],
+    });
+  }
+
+  const reflexivity = libraryResultSchema.parse({
+    ...structuredClone(CORE_LOGIC_RESULTS[2]!),
+    id: "result:real-reflexivity",
+    name: "Reflexivity of real equality",
+    parameters: [
+      {
+        id: "declaration:real-x",
+        symbol: "x",
+        sort: { kind: "named", id: "sort:real" },
+        role: "universal-parameter",
+      },
+    ],
+    statement: { expression: ["Equal", "x", "x"] },
+    patterns: [
+      {
+        id: "pattern:real-reflexivity",
+        expression: ["Equal", "x", "x"],
+        direction: "forward",
+        requirement: { section: "any", polarity: "any", role: "proposition" },
+      },
+    ],
+  });
+
+  it("rejects bindings whose sort contradicts the declared parameter sort", () => {
+    const index = indexFor({ results: [reflexivity], moves: [] });
+    expect(suggestionIds(index, equalityState(["Equal", "p", "p"]))).toEqual([]);
+    const real = index.query(equalityState(["Equal", "n", "n"]), selection(), { limit: 100 });
+    expect(real).toMatchObject({
+      ok: true,
+      suggestions: [{ artifactId: "result:real-reflexivity", applicability: "applicable" }],
+    });
+    if (real.ok) expect(real.suggestions[0]?.rank.slice(1, 4)).toEqual([1, 1, 1]);
+    expect(suggestionIds(index, equalityState(["Equal", 2, 2]))).toHaveLength(1);
+  });
+
+  it("treats terms with undeclared symbols as compatible but not exactly typed", () => {
+    const context = { declarations: [], hypotheses: [], operators: [], sortCache: new Map() };
+    expect(bindingsTypeFit(reflexivity, new Map([["x", "unknownSymbol"]]), context)).toBe(
+      "unknown",
+    );
+    expect(bindingsTypeFit(reflexivity, new Map([["x", "True"]]), context)).toBe("mismatch");
+    expect(bindingsTypeFit(reflexivity, new Map([["x", 3]]), context)).toBe("exact");
+  });
+
+  it("uses available hypotheses to avoid predicted obligations", () => {
+    const index = indexFor({ results: [premiseResult("result:needs-p-q", ["p", "q"])], moves: [] });
+    const partial = index.query(
+      state(["And", "p", "q"], [{ id: "hypothesis:p", expression: "p" }]),
+      selection(),
+      { limit: 100 },
+    );
+    expect(partial).toMatchObject({
+      ok: true,
+      suggestions: [{ artifactId: "result:needs-p-q", applicability: "applicable" }],
+    });
+    if (!partial.ok) return;
+    expect(partial.suggestions[0]?.rank[1]).toBe(0);
+    expect(partial.suggestions[0]?.reasons).toContain(
+      "Applies if premise 2 is proved; it becomes a new obligation.",
+    );
+
+    const complete = index.query(
+      state(
+        ["And", "p", "q"],
+        [
+          { id: "hypothesis:p", expression: "p" },
+          { id: "hypothesis:q", expression: "q" },
+        ],
+      ),
+      selection(),
+      { limit: 100 },
+    );
+    expect(complete.ok).toBe(true);
+    if (!complete.ok) return;
+    expect(complete.suggestions[0]?.rank.slice(0, 3)).toEqual([1, 1, 1]);
+    expect(complete.suggestions[0]?.reasons).toContain(
+      "Every premise and side condition is already available as a hypothesis.",
+    );
+  });
+
+  it("predicts obligations for prose side conditions and input for undetermined parameters", () => {
+    const prose = premiseResult(
+      "result:prose-side-condition",
+      [],
+      [{ id: "side-condition:prose", description: "the carrier is nonempty" }],
+    );
+    const undetermined = premiseResult("result:undetermined", ["r"], [], ["r"]);
+    const result = indexFor({ results: [prose, undetermined], moves: [] }).query(
+      state(["And", "p", "q"]),
+      selection(),
+      { limit: 100 },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.suggestions.find(({ artifactId }) => artifactId === "result:prose-side-condition"),
+    ).toMatchObject({
+      applicability: "applicable",
+      reasons: expect.arrayContaining([
+        'Applies if side condition "the carrier is nonempty" holds; it becomes a new obligation.',
+      ]),
+    });
+    expect(
+      result.suggestions.find(({ artifactId }) => artifactId === "result:undetermined"),
+    ).toMatchObject({
+      applicability: "requires-input",
+      unresolvedParameters: ["declaration:extra-r"],
+    });
+  });
+});
+
+describe("deterministic category diversity", () => {
+  it("reserves slots for each category when the limit truncates", () => {
+    const nearMiss = premiseResult("result:near-miss", [["Or", "p", "q"]]);
+    const index = indexFor({ results: [...CORE_LOGIC_RESULTS, nearMiss] });
+    const proofState = state(["And", "p", "q"]);
+    const full = index.query(proofState, selection(), { limit: 100 });
+    const truncated = index.query(proofState, selection(), { limit: 4 });
+    expect(full.ok && truncated.ok).toBe(true);
+    if (!full.ok || !truncated.ok) return;
+    const fullIds = full.suggestions.map(({ id }) => id);
+    // Plain rank order would fill all four slots with immediately applicable entries.
+    expect(full.suggestions.slice(0, 4).map(suggestionCategory)).toEqual([
+      "immediate",
+      "immediate",
+      "immediate",
+      "immediate",
+    ]);
+    expect(truncated.suggestions.map(suggestionCategory)).toEqual([
+      "immediate",
+      "immediate",
+      "requires-input",
+      "with-obligations",
+    ]);
+    expect(truncated.suggestions.map(({ artifactId }) => artifactId)).toContain("result:near-miss");
+    const truncatedIds = truncated.suggestions.map(({ id }) => id);
+    expect(truncatedIds).toEqual(fullIds.filter((id) => truncatedIds.includes(id)));
+  });
+
+  it("ranks bare-variable catch-all moves below structural matches", () => {
+    const result = indexFor({ results: [] }).query(state(["And", "p", "q"]), selection(), {
+      limit: 100,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.suggestions[0]?.artifactId).toBe("move:split-goal-conjunction");
+    const markSorry = result.suggestions.find(({ artifactId }) => artifactId === "move:mark-sorry");
+    expect(markSorry?.rank[4]).toBe(-1);
+  });
+});
+
+describe("retrieval performance", () => {
+  it("answers a typical query on a 1000-result catalog within 150 ms", () => {
+    const connectives = ["And", "Or", "Implies", "Equivalent"] as const;
+    let seed = 7;
+    const next = (bound: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % bound;
+    };
+    const leaves = ["p", "q", "r", "True", "False"];
+    const expression = (depth: number): PlainMathJson => {
+      const choice = next(10);
+      if (depth === 0 || choice < 3) return leaves[next(leaves.length)]!;
+      if (choice === 3) return ["Not", expression(depth - 1)];
+      return [connectives[next(connectives.length)]!, expression(depth - 1), expression(depth - 1)];
+    };
+    const source = structuredClone(CORE_LOGIC_RESULTS[1]!);
+    const results = Array.from({ length: 1000 }, (_, index) => {
+      const pattern = index % 97 === 0 ? "p" : expression(3);
+      return {
+        ...source,
+        id: `result:synthetic-${index}`,
+        name: `Synthetic ${index}`,
+        parameters: ["p", "q", "r"].map((symbol) => ({
+          id: `declaration:synthetic-${symbol}`,
+          symbol,
+          sort: PROPOSITION_SORT,
+          role: "universal-parameter",
+        })),
+        statement: { expression: pattern },
+        premises: index % 5 === 0 ? [{ expression: "q" }] : [],
+        applicationDirections: ["forward"],
+        patterns: [
+          {
+            id: `pattern:synthetic-${index}`,
+            expression: pattern,
+            direction: "forward",
+            requirement: { section: "any", polarity: "any", role: "proposition" },
+          },
+        ],
+      };
+    });
+    const created = createRetrievalIndex({
+      results,
+      moves: HAND_AUTHORED_MOVES,
+      variantFamilies: [],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.index.resultCount).toBe(1000);
+    const proofState = state(
+      ["Implies", ["And", "p", "q"], ["Or", "q", ["Not", "p"]]],
+      [{ id: "hypothesis:q", expression: "q" }],
+    );
+    const timings: number[] = [];
+    let suggestionCount = 0;
+    for (let run = 0; run < 7; run += 1) {
+      const started = performance.now();
+      const result = created.index.query(proofState, selection(), { limit: 20 });
+      timings.push(performance.now() - started);
+      expect(result.ok).toBe(true);
+      if (result.ok) suggestionCount = result.suggestions.length;
+    }
+    const median = [...timings].sort((left, right) => left - right)[3]!;
+    process.stdout.write(
+      `retrieval over 1000 results: median ${median.toFixed(2)} ms; runs ${timings
+        .map((timing) => timing.toFixed(2))
+        .join(", ")} ms; ${suggestionCount} suggestions\n`,
+    );
+    expect(suggestionCount).toBeGreaterThan(0);
+    expect(median).toBeLessThan(150);
+  }, 60_000);
 });
 
 describe("retrieval boundary validation", () => {
