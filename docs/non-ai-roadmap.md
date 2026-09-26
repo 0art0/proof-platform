@@ -314,7 +314,7 @@ that archive.
 
 ## Phase 8 — Human interface (apps/web)
 
-- [ ] **N29 Workspace chrome and accessibility (§17.1).** Add:
+- [x] **N29 Workspace chrome and accessibility (§17.1).** Add:
   - a header with problem title, background summary, solved status, and branch breadcrumb;
   - colour families (variables red, hypotheses orange, goals blue, obligations/assumptions purple) plus
     polarity bevels, reinforced by icons, outlines, and labels;

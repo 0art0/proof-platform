@@ -226,10 +226,17 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
   ).toBeDefined();
   const suggestionSetId = await page.getByTestId("suggestion-set-id").textContent();
   expect(suggestionSetId).toBeTruthy();
+  // Each card shows two stored lists: the reasons and the matched selections. Both must be read
+  // back exactly as persisted, so they are compared separately.
   const displayed = await page.locator("[data-suggestion-id]").evaluateAll((cards) =>
     cards.map((card) => ({
       id: card.getAttribute("data-suggestion-id"),
-      reasons: [...card.querySelectorAll("ul li")].map((reason) => reason.textContent),
+      reasons: [...card.querySelectorAll('ul[aria-label^="Reasons for"] li')].map(
+        (reason) => reason.textContent,
+      ),
+      matches: [...card.querySelectorAll('ul[aria-label^="Matched selections for"] li')].map(
+        (match) => match.textContent,
+      ),
     })),
   );
   const persisted = await page.evaluate(async (id) => {
@@ -242,7 +249,21 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
   expect(persisted).toMatchObject({ ok: true });
   expect(
     persisted.data.suggestionSet.suggestions.map(
-      ({ id, reasons }: { id: string; reasons: string[] }) => ({ id, reasons }),
+      ({
+        id,
+        reasons,
+        selectionMatches,
+      }: {
+        id: string;
+        reasons: string[];
+        selectionMatches: { selectionId: string; selectionSlotId?: string; patternId: string }[];
+      }) => ({
+        id,
+        reasons,
+        matches: selectionMatches.map(
+          (match) => `${match.selectionId} → ${match.selectionSlotId ?? match.patternId}`,
+        ),
+      }),
     ),
   ).toEqual(displayed);
 });
@@ -270,7 +291,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   await expect(splitCard.locator('[data-applicability="applicable"]')).toBeVisible();
   await expect(splitCard.locator('[data-transition-class="equivalence"]')).toBeVisible();
   expect(
-    await splitCard.getByLabel("Reasons for Split goal conjunction").locator("li").count(),
+    await splitCard.getByLabel("Reasons for Split conjunction goal").locator("li").count(),
   ).toBeGreaterThan(0);
   await expect(splitCard.getByText("selection:primary → target", { exact: true })).toBeVisible();
 
@@ -356,6 +377,44 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
     new Set(children.map(({ edge }: { edge: { childNodeId: string } }) => edge.childNodeId)).size,
   ).toBeGreaterThanOrEqual(2);
   expect(children.map(({ name }: { name: string }) => name)).toEqual(
-    expect.arrayContaining(["Split goal conjunction", "Expand hypothesis conjunction"]),
+    expect.arrayContaining(["Split conjunction goal", "Expand conjunction hypothesis"]),
   );
+});
+
+test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw state", async ({
+  page,
+}) => {
+  // It exercises several render paths; cold webpack compilation dominates its runtime.
+  test.slow();
+  await page.goto("/");
+  await waitForWorkspace(page);
+
+  await expect(page.getByRole("heading", { level: 1, name: "session:development" })).toBeVisible();
+  await expect(page.getByTestId("snapshot-status")).toHaveText(
+    /Snapshot targets:\s*Open: 1 goal, 1 obligation/,
+  );
+  const branch = page.getByRole("navigation", { name: "Current branch" });
+  await expect(branch.getByRole("listitem")).toHaveText(["Root"]);
+
+  const goal = page.getByLabel("Goal 1 conclusion");
+  expect(await clickOccurrence(goal, "0")).toBe(true);
+  await expect(page.locator("[data-selection-key]")).toHaveCount(1);
+  await expect(page.getByTestId("selection-feedback")).toHaveText(
+    /Click it again to expand to its parent/,
+  );
+  expect(await clickOccurrence(goal, "0")).toBe(true);
+  await expect(page.getByTestId("selection-feedback")).toHaveText("Expanded to parent.");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-selection-key]")).toHaveCount(0);
+  await expect(page.getByTestId("selection-feedback")).toHaveText("Selections cleared.");
+
+  await page.getByRole("button", { name: "Natural language" }).click();
+  await expect(page.locator("math-field")).toHaveCount(0);
+  await expect(page.getByLabel("Goal 1 conclusion")).toContainText("and");
+  await page.getByRole("button", { name: "Formal (LaTeX)" }).click();
+  await expect(page.getByLabel("Goal 1 conclusion")).toBeVisible();
+
+  await page.getByText("View raw MathJSON").click();
+  const raw = JSON.parse((await page.getByTestId("raw-proof-state").textContent()) ?? "{}");
+  expect(raw.state.id).toBe("state:development-root");
 });

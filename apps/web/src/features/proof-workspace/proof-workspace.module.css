@@ -1,7 +1,13 @@
+/*
+ * Colours come from the tokens in app/styles.css (light and dark). Each visual family is also
+ * signalled by a glyph, a text label, and a border style, so colour is never the only cue:
+ * variables use square marks, hypotheses a double left rule, goals a solid frame, and
+ * obligations a dashed frame. Polarity uses inward (positive) and outward (negative) bevels.
+ */
 .workspace {
   display: grid;
   gap: 1.5rem;
-  color: #17241d;
+  color: var(--text);
 }
 
 .workspace h1,
@@ -17,21 +23,21 @@
   align-items: end;
   justify-content: space-between;
   gap: 1.5rem;
-  border-bottom: 1px solid #b8c0b7;
+  border-bottom: 1px solid var(--border);
   padding-bottom: 1rem;
 }
 
-.workspaceHeader h1 {
+.workspaceHeader h2 {
   max-width: none;
   margin: 0.2rem 0 0;
-  font-size: clamp(2.25rem, 5vw, 4.5rem);
-  line-height: 1;
+  font-size: clamp(1.6rem, 3.5vw, 2.6rem);
+  line-height: 1.05;
 }
 
 .eyebrow,
 .sequentKind {
   margin-bottom: 0;
-  color: #80432f;
+  color: var(--text-muted);
   font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -51,7 +57,7 @@
 }
 
 .snapshotFacts dt {
-  color: #66736a;
+  color: var(--text-muted);
   font-size: 0.75rem;
 }
 
@@ -78,6 +84,79 @@
   margin-top: 0.5rem;
 }
 
+.familyLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  list-style: none;
+}
+
+.familyLegend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.familyGlyph {
+  display: inline-grid;
+  min-width: 1.2rem;
+  place-items: center;
+  font-weight: 800;
+}
+
+.familyGlyph[data-family="variable"] {
+  color: var(--variable-fg);
+}
+
+.familyGlyph[data-family="hypothesis"] {
+  color: var(--hypothesis-fg);
+}
+
+.familyGlyph[data-family="goal"] {
+  color: var(--goal-fg);
+}
+
+.familyGlyph[data-family="obligation"] {
+  color: var(--obligation-fg);
+}
+
+.bevelSample {
+  display: inline-block;
+  width: 1.1rem;
+  height: 0.8rem;
+  border-radius: 0.2rem;
+  background: var(--surface-muted);
+}
+
+.bevelSample[data-polarity="positive"],
+.mathProjection[data-selection-polarity="positive"],
+.naturalLanguage[data-selection-polarity="positive"] {
+  box-shadow:
+    inset 2px 2px 3px var(--bevel-dark),
+    inset -2px -2px 3px var(--bevel-light);
+}
+
+.bevelSample[data-polarity="negative"],
+.mathProjection[data-selection-polarity="negative"],
+.naturalLanguage[data-selection-polarity="negative"] {
+  box-shadow:
+    2px 2px 4px var(--bevel-dark),
+    -2px -2px 4px var(--bevel-light);
+}
+
+.viewNote {
+  margin: 0;
+  border-left: 4px solid var(--border);
+  background: var(--surface-muted);
+  padding: 0.55rem 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 .groupHeading,
 .selectionHeading {
   display: flex;
@@ -92,15 +171,15 @@
   font-size: 1.35rem;
 }
 
-.groupHeading span,
+.groupHeading span:last-child,
 .selectionCount {
   display: grid;
   min-width: 1.8rem;
   min-height: 1.8rem;
   place-items: center;
-  border: 1px solid #aeb8ae;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: #f7f6f0;
+  background: var(--surface-muted);
   font-size: 0.76rem;
   font-weight: 800;
 }
@@ -109,10 +188,15 @@
   display: grid;
   gap: 1rem;
   overflow: hidden;
-  border: 1px solid #c4cac1;
+  border: 2px solid var(--goal-border);
   border-radius: 1rem;
-  background: rgb(255 254 249 / 92%);
+  background: var(--surface);
   box-shadow: 0 0.75rem 2.5rem rgb(34 48 39 / 6%);
+}
+
+.sequent[data-family="obligation"] {
+  border-style: dashed;
+  border-color: var(--obligation-border);
 }
 
 .sequentHeader {
@@ -120,13 +204,21 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid #d9ddd5;
+  border-bottom: 1px solid var(--border-soft);
   padding: 1rem 1.15rem;
-  background: #edf3f7;
+  background: var(--goal-bg);
 }
 
-.targetGroup:last-child .sequentHeader {
-  background: #f3eef7;
+.sequent[data-family="goal"] .sequentKind {
+  color: var(--goal-fg);
+}
+
+.sequent[data-family="obligation"] .sequentHeader {
+  background: var(--obligation-bg);
+}
+
+.sequent[data-family="obligation"] .sequentKind {
+  color: var(--obligation-fg);
 }
 
 .sequentHeader h3 {
@@ -135,7 +227,7 @@
 }
 
 .sequentHeader code {
-  color: #5d6961;
+  color: var(--text-muted);
   font-size: 0.75rem;
 }
 
@@ -147,7 +239,7 @@
 }
 
 .conclusionSection {
-  border-top: 1px solid #d9ddd5;
+  border-top: 1px solid var(--border-soft);
   padding-top: 1rem;
   padding-bottom: 1.15rem;
 }
@@ -155,7 +247,7 @@
 .contextSection h4,
 .conclusionSection h4 {
   margin: 0;
-  color: #526057;
+  color: var(--text-muted);
   font-family: inherit;
   font-size: 0.72rem;
   font-weight: 800;
@@ -178,9 +270,9 @@
   grid-template-columns: auto 1fr auto;
   gap: 0.65rem;
   align-items: center;
-  border: 1px solid #e0d1cb;
-  border-radius: 0.7rem;
-  background: #fff7f4;
+  border: 1px solid var(--variable-border);
+  border-radius: 0.2rem;
+  background: var(--variable-bg);
   padding: 0.7rem 0.8rem;
 }
 
@@ -190,20 +282,13 @@
 }
 
 .declarationList small {
-  color: #765d54;
+  color: var(--text-muted);
   font-size: 0.7rem;
 }
 
 .declarationList code {
-  color: #6f473a;
+  color: var(--variable-fg);
   font-size: 0.72rem;
-}
-
-.declarationMark {
-  width: 0.55rem;
-  height: 0.55rem;
-  border: 2px solid #9d4e35;
-  border-radius: 2px;
 }
 
 .statementList li {
@@ -211,6 +296,8 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.65rem;
   align-items: center;
+  border-left: 4px double var(--hypothesis-border);
+  padding-left: 0.5rem;
 }
 
 .statementLabel {
@@ -218,35 +305,66 @@
   width: 2rem;
   height: 2rem;
   place-items: center;
-  border: 1px solid #dc9a68;
-  border-radius: 0.55rem;
-  color: #79421d;
+  border: 1px solid var(--hypothesis-border);
+  border-radius: 999px;
+  background: var(--hypothesis-bg);
+  color: var(--hypothesis-fg);
   font-size: 0.74rem;
   font-weight: 800;
 }
 
-.mathProjection {
+.statement {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.mathProjection,
+.naturalLanguage {
   min-height: 3.7rem;
   overflow-x: auto;
-  border: 1px solid #d7d8d0;
+  border: 1px solid var(--border-soft);
   border-radius: 0.7rem;
-  background: #fff;
+  background: var(--surface-strong);
   padding: 0.55rem 0.7rem;
-  color: #627067;
+  color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.mathProjection[data-selected="true"] {
-  border-color: #316b50;
-  box-shadow: 0 0 0 2px rgb(49 107 80 / 18%);
+.naturalLanguage {
+  margin: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.naturalLanguage code {
+  font-size: 0.9em;
+}
+
+.mathProjection[data-selected="true"],
+.naturalLanguage[data-selected="true"] {
+  border: 2px solid var(--accent);
+}
+
+.selectedBadge {
+  justify-self: start;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  padding: 0.1rem 0.5rem;
+  color: var(--accent-text);
+  font-size: 0.7rem;
+  font-weight: 800;
 }
 
 .mathField {
   width: 100%;
   border: 0;
   background: transparent;
+  color: var(--text);
   font-size: clamp(1.25rem, 3vw, 1.85rem);
-  --caret-color: #2f6f56;
+  --caret-color: var(--focus);
   --selection-background-color: #ffd69e;
   --selection-color: #18231d;
 }
@@ -256,30 +374,58 @@
   top: 1rem;
   display: grid;
   gap: 1rem;
-  border: 1px solid #c4cac1;
+  border: 1px solid var(--border);
   border-radius: 1rem;
-  background: rgb(255 254 249 / 94%);
+  background: var(--surface);
   padding: 1rem;
 }
 
 .selectionList li {
   display: grid;
   gap: 0.45rem;
-  border-left: 4px solid #316b50;
+  border-left: 4px solid var(--accent);
   border-radius: 0.45rem;
-  background: #edf5ef;
+  background: var(--accent-soft);
   padding: 0.7rem;
+}
+
+.selectionList li[data-family="hypothesis"] {
+  border-left-style: double;
+  border-left-color: var(--hypothesis-border);
+}
+
+.selectionList li[data-family="goal"] {
+  border-left-color: var(--goal-border);
+}
+
+.selectionList li[data-family="obligation"] {
+  border-left-style: dashed;
+  border-left-color: var(--obligation-border);
+}
+
+.selectionList li[data-polarity="positive"] {
+  box-shadow:
+    inset 2px 2px 3px var(--bevel-dark),
+    inset -2px -2px 3px var(--bevel-light);
+}
+
+.selectionList li[data-polarity="negative"] {
+  box-shadow:
+    2px 2px 4px var(--bevel-dark),
+    -2px -2px 4px var(--bevel-light);
 }
 
 .selectionList p {
   display: grid;
-  gap: 0.15rem;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.35rem;
   margin-bottom: 0;
   font-size: 0.78rem;
 }
 
-.selectionList p span {
-  color: #5c6960;
+.selectionList p span:not(:first-child) {
+  grid-column: 2;
+  color: var(--text-muted);
 }
 
 .selectionList code {
@@ -295,12 +441,20 @@
 }
 
 .clearButton {
-  border: 1px solid #8aa092;
+  border: 1px solid var(--accent);
   border-radius: 0.6rem;
-  background: #edf3ee;
+  background: var(--accent-soft);
   padding: 0.65rem 0.8rem;
-  color: #294a39;
+  color: var(--accent-text);
   cursor: pointer;
+}
+
+.clearButton kbd {
+  margin-left: 0.35rem;
+  border: 1px solid currentcolor;
+  border-radius: 0.3rem;
+  padding: 0 0.3rem;
+  font-size: 0.7rem;
 }
 
 .clearButton:disabled {
@@ -313,18 +467,18 @@
 .emptyGroup,
 .emptyContext {
   margin-bottom: 0;
-  color: #627067;
+  color: var(--text-muted);
   font-size: 0.8rem;
   line-height: 1.5;
 }
 
 .invalidWorkspace {
-  border: 1px solid #bb6a35;
+  border: 1px solid var(--warning-border);
   border-left-width: 4px;
   border-radius: 0.75rem;
-  background: #fff2e7;
+  background: var(--warning-bg);
   padding: 1rem;
-  color: #713b18;
+  color: var(--warning-text);
 }
 
 @media (max-width: 52rem) {

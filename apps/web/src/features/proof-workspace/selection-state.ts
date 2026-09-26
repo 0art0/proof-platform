@@ -6,12 +6,25 @@ import {
   type StatementAnchor,
 } from "@proof/selections";
 
+/** How the reducer interpreted the most recent gesture. */
+export type SelectionGestureOutcome =
+  "replaced" | "expanded" | "saturated" | "added" | "removed" | "overlap-rejected" | "cleared";
+
+export type SelectionGestureFeedback = Readonly<{
+  outcome: SelectionGestureOutcome;
+  /** True when repeating the same primary collapsed click would walk to a semantic parent. */
+  repeatable: boolean;
+  /** Present when the display gesture was snapped to the nearest semantic subtree. */
+  fallbackReason?: string;
+}>;
+
 export type SelectionGestureState = Readonly<{
   active: readonly AnchoredProofSelection[];
   repetition?: Readonly<{
     sourceKey: string;
     activeKey: string;
   }>;
+  feedback?: SelectionGestureFeedback;
 }>;
 
 export type SelectionGestureAction =
@@ -19,6 +32,9 @@ export type SelectionGestureAction =
       type: "select";
       selection: AnchoredProofSelection;
       modifier: boolean;
+      /** Only a primary, collapsed click can participate in repeated-click expansion. */
+      repeatable: boolean;
+      fallbackReason?: string;
     }>
   | Readonly<{ type: "clear" }>;
 
@@ -44,15 +60,23 @@ export function proofSelectionKey(selection: AnchoredProofSelection): string {
 }
 
 /**
- * Ordinary gestures replace the active set and repeated gestures walk upward.
+ * Ordinary gestures replace the active set and repeated primary clicks walk upward.
  * Ctrl/Cmd gestures toggle only independent occurrences in the active set.
+ * Every transition records a feedback outcome so the UI can explain its interpretation.
  */
 export function selectionGestureReducer(
   state: SelectionGestureState,
   action: SelectionGestureAction,
 ): SelectionGestureState {
-  if (action.type === "clear") return EMPTY_SELECTION_GESTURE_STATE;
+  if (action.type === "clear") {
+    return {
+      active: EMPTY_SELECTION_GESTURE_STATE.active,
+      feedback: { outcome: "cleared", repeatable: false },
+    };
+  }
 
+  const fallback =
+    action.fallbackReason === undefined ? {} : { fallbackReason: action.fallbackReason };
   const sourceKey = proofSelectionKey(action.selection);
   if (action.modifier) {
     const existingIndex = state.active.findIndex(
@@ -61,25 +85,67 @@ export function selectionGestureReducer(
     if (existingIndex >= 0) {
       return {
         active: state.active.filter((_selection, index) => index !== existingIndex),
+        feedback: { outcome: "removed", repeatable: false, ...fallback },
       };
     }
     if (state.active.some((selection) => selectionsOverlap(selection, action.selection))) {
-      return { active: state.active };
+      return {
+        active: state.active,
+        feedback: { outcome: "overlap-rejected", repeatable: false, ...fallback },
+      };
     }
-    return { active: [...state.active, action.selection] };
+    return {
+      active: [...state.active, action.selection],
+      feedback: { outcome: "added", repeatable: false, ...fallback },
+    };
   }
 
   const previous = state.active.length === 1 ? state.active[0] : undefined;
   const canExpand =
+    action.repeatable &&
     previous !== undefined &&
     state.repetition?.sourceKey === sourceKey &&
     state.repetition.activeKey === proofSelectionKey(previous);
-  const active = canExpand ? (semanticParent(previous) ?? previous) : action.selection;
+  const parent = canExpand ? semanticParent(previous) : undefined;
+  const active = parent ?? (canExpand ? previous : action.selection);
+  const outcome: SelectionGestureOutcome = canExpand
+    ? parent === undefined
+      ? "saturated"
+      : "expanded"
+    : "replaced";
 
   return {
     active: [active],
-    repetition: { sourceKey, activeKey: proofSelectionKey(active) },
+    ...(action.repeatable
+      ? { repetition: { sourceKey, activeKey: proofSelectionKey(active) } }
+      : {}),
+    feedback: {
+      outcome,
+      repeatable: action.repeatable && semanticParent(active) !== undefined,
+      ...fallback,
+    },
   };
+}
+
+const OUTCOME_MESSAGES: Readonly<Record<SelectionGestureOutcome, string>> = Object.freeze({
+  replaced: "Selected the occurrence.",
+  expanded: "Expanded to parent.",
+  saturated: "Already at the statement root; the selection cannot expand further.",
+  added: "Added the occurrence to the selection set.",
+  removed: "Removed the occurrence from the selection set.",
+  "overlap-rejected": "Not added: the occurrence overlaps an active selection.",
+  cleared: "Selections cleared.",
+});
+
+/** A short, screen-reader-friendly description of how the last gesture was interpreted. */
+export function describeSelectionFeedback(feedback: SelectionGestureFeedback): string {
+  const base =
+    feedback.outcome === "replaced" && feedback.repeatable
+      ? "Selected the occurrence. Click it again to expand to its parent."
+      : OUTCOME_MESSAGES[feedback.outcome];
+  return feedback.fallbackReason === undefined
+    ? base
+    : `Snapped to nearest subtree (${feedback.fallbackReason.replace(/\.$/, "")}). ${base}`;
 }
 
 function stableAnchor(anchor: StatementAnchor): StatementAnchor {

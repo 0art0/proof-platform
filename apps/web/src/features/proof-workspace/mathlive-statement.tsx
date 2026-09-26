@@ -24,14 +24,21 @@ function loadMathfieldElement(): Promise<typeof MathfieldElementType> {
 export type MathLiveStatementGesture = Readonly<{
   selection: AnchoredProofSelection;
   modifier: boolean;
+  /** Only a primary, collapsed click can take part in repeated-click expansion. */
+  repeatable: boolean;
   fallbackReason?: string;
 }>;
+
+/** The logical polarity of the selected sub-expression, used for its bevel treatment. */
+export type SelectionPolarity = "positive" | "negative" | "mixed" | "neutral";
 
 type MathLiveStatementProps = Readonly<{
   anchor: StatementAnchor;
   expression: PlainMathJson;
   label: string;
   selected: boolean;
+  /** Polarity of the active selection inside this statement, when one exists. */
+  selectionPolarity?: SelectionPolarity | undefined;
   onGesture: (gesture: MathLiveStatementGesture) => void;
 }>;
 
@@ -40,6 +47,7 @@ export function MathLiveStatement({
   expression,
   label,
   selected,
+  selectionPolarity,
   onGesture,
 }: MathLiveStatementProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -71,7 +79,8 @@ export function MathLiveStatement({
       field.dataset.statementAnchor = serializedAnchor;
 
       const handlePointerUp = (event: PointerEvent) => {
-        if (!field) return;
+        if (!field || event.button !== 0) return;
+        const repeatable = field.selectionIsCollapsed;
         const interpreted = readAnchoredMathLiveSelection(
           field as unknown as MathLiveSelectionPort,
           expression,
@@ -80,6 +89,7 @@ export function MathLiveStatement({
         onGestureRef.current({
           selection: interpreted.selection,
           modifier: event.ctrlKey || event.metaKey,
+          repeatable,
           ...(interpreted.interpretation.kind === "fallback"
             ? { fallbackReason: interpreted.interpretation.reason }
             : {}),
@@ -102,6 +112,7 @@ export function MathLiveStatement({
       className={styles.mathProjection}
       data-ready={ready}
       data-selected={selected}
+      data-selection-polarity={selected ? selectionPolarity : undefined}
       data-selection-anchor={serializedAnchor}
       ref={hostRef}
     >
