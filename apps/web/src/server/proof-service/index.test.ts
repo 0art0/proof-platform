@@ -611,6 +611,52 @@ describe("proof-service adapter", () => {
     });
   });
 
+  it("forwards menu-item choices and reports a move that still requires input", async () => {
+    const menuChoice = { ...choice, menuChoices: { disjunctIndex: "menu-item:0123456789abcdef" } };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          status: "requires-input",
+          suggestionSetId: choice.suggestionSetId,
+          chosenSuggestionId: choice.chosenSuggestionId,
+          menus: [
+            {
+              parameterId: "witness",
+              label: "Witness term",
+              automatic: false,
+              items: [
+                {
+                  id: "menu-item:fedcba9876543210",
+                  label: { kind: "math", expression: "a" },
+                  value: { kind: "term", expression: "a" },
+                  origin: { kind: "declaration", declarationId: "declaration:a" },
+                },
+              ],
+            },
+          ],
+          missingParameters: ["witness"],
+          diagnostics: [{ code: "requires-input", message: "Choose a menu item for: witness." }],
+        },
+        422,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeStoredProofCommand(SESSION_ID, menuChoice)).rejects.toMatchObject({
+      code: "requires-input",
+      status: 422,
+    });
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init).toMatchObject({ method: "POST", body: JSON.stringify(menuChoice) });
+
+    await expect(
+      executeStoredProofCommand(SESSION_ID, {
+        ...choice,
+        menuChoices: { disjunctIndex: ["Or", "p", "q"] },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+  });
+
   it("reads only a complete rooted discovery tree with retained edge names", async () => {
     const history = {
       session: sessionEnvelopeSession({ currentNodeId: appliedNode.id }),

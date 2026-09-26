@@ -1,6 +1,7 @@
 import {
   commandIdSchema,
   displayedSuggestionSetSchema,
+  menuChoicesSchema,
   operatorDeclarationSchema,
   proofCommandReceiptSchema,
   proofNodeIdSchema,
@@ -62,6 +63,8 @@ export const moveChoiceRequestSchema = z
     commandId: commandIdSchema,
     suggestionSetId: suggestionSetIdSchema,
     chosenSuggestionId: suggestionIdSchema,
+    /** Parameter ID → menu item ID for moves that need input; never an expression. */
+    menuChoices: menuChoicesSchema.optional(),
   })
   .strict();
 

@@ -208,6 +208,8 @@ export type MaterializationResult =
       ok: false;
       /** Non-empty exactly for `requires-input`. */
       missingParameters: readonly string[];
+      /** For `requires-input`, the menus for the choices so far; otherwise empty. */
+      menus: readonly ParameterMenu[];
       diagnostics: readonly [MaterializationDiagnostic];
     }>;
 
@@ -262,10 +264,14 @@ export function materializeMoveOperation(request: MaterializeMoveRequest): Mater
     ...(request.resultSeed === undefined ? {} : { resultSeed: request.resultSeed }),
     idGenerator: request.idGenerator,
   });
-  if (!walked.ok) return { ok: false, missingParameters: [], diagnostics: walked.diagnostics };
+  if (!walked.ok) {
+    return { ok: false, missingParameters: [], menus: [], diagnostics: walked.diagnostics };
+  }
   const { walk, context } = walked;
   const error = walk.errors[0];
-  if (error !== undefined) return { ok: false, missingParameters: [], diagnostics: [error] };
+  if (error !== undefined) {
+    return { ok: false, missingParameters: [], menus: [], diagnostics: [error] };
+  }
   const empty = walk.empty[0];
   if (empty !== undefined) {
     return materializationFailure(
@@ -274,16 +280,17 @@ export function materializeMoveOperation(request: MaterializeMoveRequest): Mater
     );
   }
   if (walk.missing.length > 0) {
-    return {
-      ok: false,
+    return freezeDetached({
+      ok: false as const,
       missingParameters: [...walk.missing],
+      menus: walk.menus,
       diagnostics: [
         {
           code: "requires-input",
           message: `Choose a menu item for: ${walk.missing.join(", ")}.`,
         },
-      ],
-    };
+      ] as const,
+    });
   }
   if (walk.fields === undefined) {
     return materializationFailure("invalid-operation", "The move could not be materialized.");
@@ -1771,7 +1778,7 @@ function materializationFailure(
   code: MaterializationDiagnosticCode,
   message: string,
 ): MaterializationResult {
-  return { ok: false, missingParameters: [], diagnostics: [{ code, message }] };
+  return { ok: false, missingParameters: [], menus: [], diagnostics: [{ code, message }] };
 }
 
 function freezeDetached<Value>(value: Value): Value {

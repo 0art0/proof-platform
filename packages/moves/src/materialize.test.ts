@@ -747,6 +747,7 @@ describe("materialization rejects anything outside the regenerated menus", () =>
     expect(materializeMoveOperation(request)).toMatchObject({
       ok: false,
       missingParameters: ["witness"],
+      menus: [{ parameterId: "witness", automatic: false }],
       diagnostics: [{ code: "requires-input" }],
     });
     expect(

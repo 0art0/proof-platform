@@ -5,6 +5,7 @@ import {
   createProofEdgeSchema,
   createProofNodeSchema,
   displayedSuggestionSetSchema,
+  moveRequiresInputResponseSchema,
   operatorDeclarationSchema,
   proofCommandReceiptSchema,
   proofNodeIdSchema,
@@ -183,6 +184,7 @@ export type BacktrackedProofSession = Readonly<{
 export type ProofServiceErrorCode =
   | z.infer<typeof repositoryDiagnosticCodeSchema>
   | "invalid_request"
+  | "requires-input"
   | "service_unavailable"
   | "invalid_upstream_response";
 
@@ -639,6 +641,11 @@ async function readValidatedEnvelope(response: Response): Promise<unknown> {
 }
 
 function failureForResponse(status: number, value: unknown): ProofServiceError {
+  // The worker answers 422 when a move still needs menu choices; nothing was recorded.
+  const requiresInput = moveRequiresInputResponseSchema.safeParse(value);
+  if (status === 422 && requiresInput.success) {
+    return new ProofServiceError("requires-input", requiresInput.data.diagnostics[0].message, 422);
+  }
   const failure = proofServiceFailureSchema.safeParse(value);
   if (!failure.success || status < 400 || status > 599) throw invalidUpstreamResponse();
   const diagnostic = failure.data.diagnostics[0];

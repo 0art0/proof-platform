@@ -2,6 +2,7 @@ import {
   applyTransition,
   kernelOperationSchema,
   type KernelOperation,
+  type KernelResult,
   type TransitionClass,
 } from "@proof/kernel";
 import {
@@ -34,6 +35,7 @@ import {
   type ResolvedProofSelectionQuery,
 } from "@proof/selections";
 import { z } from "zod";
+import { moveMenuSelectionSchema, type MoveMenuSelection } from "./parameter-menus";
 
 export {
   BUILTIN_BINDER_SPECIFICATIONS,
@@ -48,6 +50,7 @@ export type { OperatorDeclaration, PlainMathJson } from "@proof/mathjson-model";
 export * from "./session-metadata";
 export * from "./discovery-tree";
 export * from "./move-deletion";
+export * from "./parameter-menus";
 
 export const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 export type ActorId = z.infer<typeof actorIdSchema>;
@@ -454,6 +457,8 @@ export const applyKernelCommandSchema = z
     chosenSuggestionId: suggestionIdSchema.optional(),
     previewId: movePreviewIdSchema.optional(),
     operation: kernelOperationAdapterSchema,
+    /** The parameter menus displayed for the chosen suggestion and the item IDs chosen. */
+    menuSelection: moveMenuSelectionSchema.optional(),
   })
   .strict()
   .superRefine((command, context) => {
@@ -471,11 +476,16 @@ export const applyKernelCommandSchema = z
     ) {
       addLinkIssue(context, "A preview reference requires complete displayed-move evidence.");
     }
+    if (command.menuSelection !== undefined && !hasSuggestionSet) {
+      addLinkIssue(context, "Menu choices are recorded only for a displayed suggestion.");
+    }
   });
 export type ApplyKernelCommand = z.infer<typeof applyKernelCommandSchema>;
 
 export type ProtocolEnvironment = Readonly<{
   operators?: readonly OperatorDeclaration[];
+  /** Approved results that result-application moves may instantiate (kernel-validated). */
+  results?: readonly KernelResult[];
 }>;
 
 export type ProofNode = Readonly<{
@@ -568,6 +578,8 @@ export const proofEdgeSchema = z
     previewId: movePreviewIdSchema.optional(),
     operation: kernelOperationAdapterSchema,
     transitionClass: transitionClassSchema,
+    /** Static history: the menus displayed for this transition and the item IDs chosen. */
+    menuSelection: moveMenuSelectionSchema.optional(),
   })
   .strict()
   .superRefine((edge, context) => addSuggestionReferenceIssues(edge, context));
@@ -609,6 +621,7 @@ export type MovePreview = Readonly<{
   beforeState: ExecutableProofState;
   afterState: ExecutableProofState;
   delta: ProofStateDelta;
+  menuSelection?: MoveMenuSelection | undefined;
 }>;
 
 export function createMovePreviewSchema(
@@ -628,6 +641,7 @@ export function createMovePreviewSchema(
       beforeState: stateSchema,
       afterState: stateSchema,
       delta: proofStateDeltaSchema,
+      menuSelection: moveMenuSelectionSchema.optional(),
     })
     .strict()
     .superRefine((preview, context) => {
@@ -655,6 +669,7 @@ const prepareMovePreviewInputSchema = z
     chosenSuggestionId: suggestionIdSchema,
     moveId: moveIdSchema,
     operation: kernelOperationAdapterSchema,
+    menuSelection: moveMenuSelectionSchema.optional(),
   })
   .strict();
 
@@ -682,7 +697,12 @@ export function prepareMovePreview(
     if (
       request.suggestionSetId !== suggestionSet.id ||
       !suggestionSetMatchesNode(suggestionSet, node, environment) ||
-      !chosenSuggestionMatchesMove(suggestionSet, request.chosenSuggestionId, request.moveId)
+      !chosenSuggestionMatchesMove(
+        suggestionSet,
+        request.chosenSuggestionId,
+        request.moveId,
+        request.operation,
+      )
     ) {
       return protocolFailure(
         "preview-rejected",
@@ -712,6 +732,7 @@ export function prepareMovePreview(
       beforeState: node.state,
       afterState: planned.preview.state,
       delta: computeDelta(node.state, planned.preview.state),
+      ...(request.menuSelection === undefined ? {} : { menuSelection: request.menuSelection }),
     });
     const preview = candidate === undefined ? undefined : freezeDetached(candidate);
     return preview === undefined
@@ -914,6 +935,7 @@ export type PrepareProofCommandContext = Readonly<{
   /** Trusted request provenance. It is recorded, but grants no mathematical authority. */
   trustedActor: unknown;
   operators?: unknown;
+  results?: unknown;
   previous?: unknown;
   suggestionSet?: unknown;
   preview?: unknown;
@@ -923,6 +945,8 @@ const prepareContextSchema = z
   .object({
     trustedActor: actorSchema,
     operators: operatorDeclarationsSchema.optional(),
+    /** Approved kernel results; the kernel validates the catalog on every transition. */
+    results: z.array(z.unknown()).optional(),
     previous: z.unknown().optional(),
     suggestionSet: z.unknown().optional(),
     preview: z.unknown().optional(),
@@ -963,6 +987,9 @@ function prepareProofCommandInternal(
   }
   const environment: ProtocolEnvironment = {
     ...(contextResult.operators === undefined ? {} : { operators: contextResult.operators }),
+    ...(contextResult.results === undefined
+      ? {}
+      : { results: contextResult.results as readonly KernelResult[] }),
   };
 
   let nodeSchema: z.ZodType<ProofNode>;
@@ -1108,6 +1135,7 @@ function prepareProofCommandInternal(
     ...(command.previewId === undefined ? {} : { previewId: command.previewId }),
     operation: command.operation,
     transitionClass: transition.transitionClass,
+    ...(command.menuSelection === undefined ? {} : { menuSelection: command.menuSelection }),
   };
   const event: TransitionEvent = {
     id: command.eventId,
@@ -1252,6 +1280,7 @@ function addPreparedLinkIssues(prepared: PreparedProofCommand, context: z.Refine
     command.operation.resultStateId !== node.state.id ||
     command.operation.expectedStateId !== parent.state.id ||
     !jsonEquals(command.operation, edge.operation) ||
+    !jsonEquals(command.menuSelection, edge.menuSelection) ||
     !jsonEquals(command.operation, event.operation) ||
     !jsonEquals(parent.state, event.beforeState) ||
     !jsonEquals(node.state, event.afterState)
@@ -1349,21 +1378,53 @@ function suggestionEvidenceMatchesCommand(
   ) {
     return false;
   }
-  const chosen = suggestionSet.suggestions.find(
-    (suggestion) => suggestion.id === command.chosenSuggestionId,
+  return chosenSuggestionMatchesMove(
+    suggestionSet,
+    command.chosenSuggestionId,
+    command.moveId,
+    command.operation,
   );
-  return chosen?.source === "move" && chosen.artifactId === command.moveId;
 }
 
 function chosenSuggestionMatchesMove(
   suggestionSet: DisplayedSuggestionSet,
   chosenSuggestionId: SuggestionId,
-  moveId: MoveId,
+  moveId: MoveId | undefined,
+  operation: KernelOperation,
 ): boolean {
   const chosen = suggestionSet.suggestions.find(
     (suggestion) => suggestion.id === chosenSuggestionId,
   );
-  return chosen?.source === "move" && chosen.artifactId === moveId;
+  return chosen !== undefined && suggestionAuthorizesMove(chosen, moveId, operation);
+}
+
+/** Moves through which a displayed `source: "result"` suggestion is applied. */
+export const RESULT_APPLICATION_MOVE_IDS: readonly string[] = Object.freeze([
+  "move:apply-result-backward",
+  "move:apply-result-forward",
+  "move:rewrite-with-equivalence",
+]);
+
+/**
+ * Whether a displayed suggestion authorizes a move and operation. A move suggestion names its
+ * move. A result suggestion is applied by a result-application move whose operation
+ * instantiates exactly that result.
+ */
+export function suggestionAuthorizesMove(
+  suggestion: Pick<RetrievalSuggestion, "source" | "artifactId">,
+  moveId: string | undefined,
+  operation: KernelOperation,
+): boolean {
+  if (moveId === undefined) return false;
+  if (suggestion.source === "move") return suggestion.artifactId === moveId;
+  if (!RESULT_APPLICATION_MOVE_IDS.includes(moveId)) return false;
+  const resultId =
+    operation.kind === "apply-result-backward" || operation.kind === "apply-result-forward"
+      ? operation.resultId
+      : operation.kind === "rewrite-with-equivalence" && operation.source.kind === "result"
+        ? operation.source.resultId
+        : undefined;
+  return resultId === suggestion.artifactId;
 }
 
 function previewEvidenceMatchesCommand(
@@ -1387,8 +1448,14 @@ function previewEvidenceMatchesCommand(
     preview.chosenSuggestionId !== command.chosenSuggestionId ||
     preview.moveId !== command.moveId ||
     !jsonEquals(preview.operation, command.operation) ||
+    !jsonEquals(preview.menuSelection, command.menuSelection) ||
     !jsonEquals(preview.beforeState, parent.state) ||
-    !chosenSuggestionMatchesMove(suggestionSet, preview.chosenSuggestionId, preview.moveId)
+    !chosenSuggestionMatchesMove(
+      suggestionSet,
+      preview.chosenSuggestionId,
+      preview.moveId,
+      preview.operation,
+    )
   ) {
     return false;
   }

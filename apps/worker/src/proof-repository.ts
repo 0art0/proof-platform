@@ -14,17 +14,23 @@ import {
   prepareProofCommand,
   proofSessionMetadataSchema,
   movePreviewIdSchema,
-  kernelOperationAdapterSchema,
+  menuChoicesSchema,
+  moveMenuSelectionSchema,
+  parameterMenusSchema,
   proofDeletionRecordSchema,
   proofNodeIdSchema,
+  suggestionAuthorizesMove,
   suggestionIdSchema,
   suggestionSetMatchesNode,
   suggestionSetIdSchema,
+  RESULT_APPLICATION_MOVE_IDS,
   type ApplyKernelCommand,
   type DeletePreviousMoveReceipt,
   type DisplayedSuggestionSet,
   type MovePreview,
   type MovePreviewId,
+  type MoveMenuSelection,
+  type ParameterMenuRecord,
   type PrepareProofCommandSuccess,
   type ProofEdge,
   type ProofDeletionRecord,
@@ -34,9 +40,19 @@ import {
   type SuggestionSetId,
   type TransitionEvent,
 } from "@proof/protocol";
-import { HAND_AUTHORED_MOVES, type MoveDefinition } from "@proof/moves";
+import {
+  HAND_AUTHORED_MOVES,
+  commandIdGenerator,
+  materializeMoveOperation,
+  materializeResultApplication,
+  type MaterializationResult,
+  type MoveMenuChoices,
+  type MoveSelectionInput,
+  type MoveSelections,
+} from "@proof/moves";
 import type { RetrievalIndex } from "@proof/retrieval";
 import { z } from "zod";
+import { APPROVED_LIBRARY_RESULTS, approvedResultEnvironment } from "./approved-catalog";
 
 const stableStorageIdentifierSchema = z
   .string()
@@ -278,8 +294,23 @@ export type RecordMovePreviewResult =
     }>
   | RepositoryFailure;
 
+/**
+ * The chosen move still needs menu choices. Nothing was recorded; the caller shows `menus` and
+ * retries with item IDs for `missingParameters`.
+ */
+export type MoveRequiresInput = Readonly<{
+  status: "requires-input";
+  suggestionSetId: SuggestionSetId;
+  chosenSuggestionId: z.infer<typeof suggestionIdSchema>;
+  menus: readonly ParameterMenuRecord[];
+  missingParameters: readonly string[];
+  diagnostics: readonly [Readonly<{ code: "requires-input"; message: string }>];
+}>;
+
 export type MaterializeMoveChoiceResult =
-  Readonly<{ status: "materialized"; request: MaterializedMovePreviewRequest }> | RepositoryFailure;
+  | Readonly<{ status: "materialized"; request: MaterializedMovePreviewRequest }>
+  | MoveRequiresInput
+  | RepositoryFailure;
 
 export type ProofHistoryEdge = Readonly<{ edge: ProofEdge; name: string }>;
 
@@ -317,6 +348,8 @@ export const moveChoiceSchema = z
     commandId: commandIdSchema,
     suggestionSetId: suggestionSetIdSchema,
     chosenSuggestionId: suggestionIdSchema,
+    /** Parameter ID → menu item ID; arbitrary expressions are never accepted. */
+    menuChoices: menuChoicesSchema.optional(),
   })
   .strict();
 
@@ -333,6 +366,8 @@ export type MaterializedMovePreviewRequest = Readonly<{
   chosenSuggestionId: z.infer<typeof suggestionIdSchema>;
   moveId: MovePreview["moveId"];
   operation: MovePreview["operation"];
+  /** Present when the move displayed a choice menu or the caller chose menu items. */
+  menuSelection?: MoveMenuSelection;
 }>;
 
 const initializeInputSchema = z
@@ -571,8 +606,10 @@ export async function recordDisplayedSuggestionSet(
 }
 
 /**
- * Resolve a persisted applicable move choice to its trusted primitive request.
- * IDs and operation parameters that require no user judgment are derived from the command ID.
+ * Resolve a persisted displayed choice, with its menu choices, to a trusted primitive request.
+ * Generated IDs are derived from the command ID; every other parameter is a menu item regenerated
+ * from the historical snapshot, so a stale or fabricated item ID is rejected. A choice that still
+ * needs menu input returns the menus instead of a request.
  */
 export async function materializeMoveChoice(
   store: ProofStore,
@@ -616,16 +653,6 @@ export async function materializeMoveChoice(
           "The chosen suggestion was not present in the persisted displayed suggestion set.",
         );
       }
-      if (chosen.source !== "move" || chosen.applicability !== "applicable") {
-        return repositoryFailure(
-          "rejected",
-          "preview-rejected",
-          chosen.source !== "move"
-            ? "Only displayed move suggestions can be previewed as kernel operations."
-            : "This move still requires user input and cannot be previewed yet.",
-        );
-      }
-
       const loadedParentNode = await loadNode(
         transaction,
         session,
@@ -645,29 +672,6 @@ export async function materializeMoveChoice(
           "The displayed move suggestion is stale for the current proof node.",
         );
       }
-
-      const move = HAND_AUTHORED_MOVES.find((definition) => definition.id === chosen.artifactId);
-      if (move === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "preview-rejected",
-          "The displayed move is not available in the approved deterministic move catalog.",
-        );
-      }
-      const operation = materializeKernelOperation(
-        loadedParentNode.node,
-        suggestionSet,
-        chosen,
-        move,
-        choice.commandId,
-      );
-      if (operation === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "preview-rejected",
-          "The persisted choice could not be converted to a complete trusted kernel operation.",
-        );
-      }
       const chosenSuggestionId = safeParse(suggestionIdSchema, chosen.id) as
         z.infer<typeof suggestionIdSchema> | undefined;
       if (chosenSuggestionId === undefined) {
@@ -677,12 +681,41 @@ export async function materializeMoveChoice(
           "The chosen suggestion has an invalid persistent identity.",
         );
       }
+
+      const menuChoices: MoveMenuChoices = choice.menuChoices ?? {};
+      const materialized = materializeSuggestion(
+        loadedParentNode.node,
+        suggestionSet,
+        chosen,
+        environment,
+        choice.commandId,
+        menuChoices,
+      );
+      if (!materialized.ok) {
+        if (materialized.requiresInput === undefined) return materialized.failure;
+        return {
+          status: "requires-input" as const,
+          suggestionSetId: suggestionSet.id,
+          chosenSuggestionId,
+          ...materialized.requiresInput,
+        };
+      }
+      const { moveId, result } = materialized;
+      const menuSelection = recordedMenuSelection(result.menus, menuChoices);
+      if (menuSelection === null) {
+        return repositoryFailure(
+          "rejected",
+          "preview-rejected",
+          "The displayed parameter menus failed runtime validation.",
+        );
+      }
       const request: MaterializedMovePreviewRequest = {
         id: previewId,
         suggestionSetId: suggestionSet.id,
         chosenSuggestionId,
-        moveId: move.id,
-        operation,
+        moveId: moveId as MovePreview["moveId"],
+        operation: result.operation,
+        ...(menuSelection === undefined ? {} : { menuSelection }),
       };
       if (existingInput !== undefined) {
         const existing = safeParse(createMovePreviewSchema(environment), existingInput);
@@ -1275,6 +1308,7 @@ export async function executeProofCommand(
       const prepared = prepareProofCommand(currentNode, commandInput, {
         trustedActor,
         ...(environment.operators === undefined ? {} : { operators: environment.operators }),
+        ...(environment.results === undefined ? {} : { results: environment.results }),
         ...(previous === undefined ? {} : { previous }),
         ...(suggestionSet === undefined ? {} : { suggestionSet }),
         ...(preview === undefined ? {} : { preview }),
@@ -1329,139 +1363,154 @@ type ResolvedSelection = DisplayedSuggestionSet["selection"] extends infer Selec
     : Selection
   : never;
 
-function materializeKernelOperation(
+type MaterializedSuggestion =
+  | Readonly<{
+      ok: true;
+      moveId: string;
+      result: Extract<MaterializationResult, { ok: true }>;
+    }>
+  | Readonly<{
+      ok: false;
+      requiresInput: Pick<MoveRequiresInput, "menus" | "missingParameters" | "diagnostics">;
+    }>
+  | Readonly<{ ok: false; requiresInput?: undefined; failure: RepositoryFailure }>;
+
+/**
+ * Materialize one displayed suggestion through the moves package. A move suggestion uses its
+ * matched selections as move slots; a result suggestion is applied with its retrieval evidence
+ * (result, pattern direction, substitutions and the matched occurrence).
+ */
+function materializeSuggestion(
   node: ProofNode,
   suggestionSet: DisplayedSuggestionSet,
   suggestion: DisplayedSuggestion,
-  move: MoveDefinition,
+  environment: ProtocolEnvironment,
   commandId: ApplyKernelCommand["commandId"],
-): MovePreview["operation"] | undefined {
-  const selectionsBySlot = new Map<string, ResolvedSelection>();
-  for (const match of suggestion.selectionMatches) {
-    if (match.selectionSlotId === undefined) continue;
-    const selection = resolvedSelectionById(suggestionSet, match.selectionId);
-    if (selection === undefined || selectionsBySlot.has(match.selectionSlotId)) return undefined;
-    selectionsBySlot.set(match.selectionSlotId, selection);
-  }
-  const targetSelection = selectionsBySlot.get("target");
-  if (targetSelection === undefined) return undefined;
-  const common = {
-    expectedStateId: node.state.id,
-    resultStateId: derivedStateId(commandId),
-    target: targetSelection.anchor.target,
-  };
-  const hypothesisId = (slotId: string): string | undefined => {
-    const statement = selectionsBySlot.get(slotId)?.anchor.statement;
-    return statement?.kind === "hypothesis" ? statement.id : undefined;
-  };
-  const operandCount = (slotId: string): number | undefined =>
-    mathJsonOperandCount(selectionsBySlot.get(slotId)?.fragment);
-  const generatedIds = (label: string, count: number): readonly string[] =>
-    Array.from(
-      { length: count },
-      (_unused, index) => `statement:${commandId}:${label}:${index + 1}`,
-    );
+  menuChoices: MoveMenuChoices,
+): MaterializedSuggestion {
+  const idGenerator = commandIdGenerator(commandId);
+  const rejected = (message: string): MaterializedSuggestion => ({
+    ok: false,
+    failure: repositoryFailure("rejected", "preview-rejected", message),
+  });
 
-  let candidate: unknown;
-  switch (move.implementation.operationKind) {
-    case "close-by-hypothesis": {
-      const factId = hypothesisId("fact");
-      if (factId === undefined) return undefined;
-      candidate = { ...common, kind: "close-by-hypothesis", hypothesisId: factId };
-      break;
+  let moveId: string | undefined;
+  let result: MaterializationResult;
+  if (suggestion.source === "move") {
+    const move = HAND_AUTHORED_MOVES.find((definition) => definition.id === suggestion.artifactId);
+    if (move === undefined) {
+      return rejected(
+        "The displayed move is not available in the approved deterministic move catalog.",
+      );
     }
-    case "close-true":
-      candidate = { ...common, kind: "close-true" };
-      break;
-    case "close-false-hypothesis": {
-      const falseId = hypothesisId("false");
-      if (falseId === undefined) return undefined;
-      candidate = { ...common, kind: "close-false-hypothesis", hypothesisId: falseId };
-      break;
+    const selections: Record<string, MoveSelectionInput> = {};
+    for (const match of suggestion.selectionMatches) {
+      if (match.selectionSlotId === undefined) continue;
+      const selection = resolvedSelectionById(suggestionSet, match.selectionId);
+      if (selection === undefined || Object.hasOwn(selections, match.selectionSlotId)) {
+        return rejected("The displayed move's selection evidence is inconsistent.");
+      }
+      selections[match.selectionSlotId] = moveSelectionInput(selection);
     }
-    case "introduce-implication":
-      candidate = {
-        ...common,
-        kind: "introduce-implication",
-        hypothesisId: generatedIds("hypothesis", 1)[0],
-      };
-      break;
-    case "introduce-negation":
-      candidate = {
-        ...common,
-        kind: "introduce-negation",
-        hypothesisId: generatedIds("hypothesis", 1)[0],
-      };
-      break;
-    case "split-goal-conjunction": {
-      const count = mathJsonOperandCount(selectedStatementExpression(node, targetSelection));
-      if (count === undefined) return undefined;
-      candidate = {
-        ...common,
-        kind: "split-goal-conjunction",
-        childIds: generatedIds("child", count),
-      };
-      break;
+    moveId = move.id;
+    result = materializeMoveOperation({
+      state: node.state,
+      move,
+      selections: selections as MoveSelections,
+      menuChoices,
+      idGenerator,
+      env: environment,
+    });
+  } else {
+    const libraryResult = APPROVED_LIBRARY_RESULTS.find(({ id }) => id === suggestion.artifactId);
+    const pattern = libraryResult?.patterns.find(({ id }) => id === suggestion.patternId);
+    const match =
+      suggestion.selectionMatches.find(({ patternId }) => patternId === suggestion.patternId) ??
+      suggestion.selectionMatches[0];
+    const selection =
+      match === undefined ? undefined : resolvedSelectionById(suggestionSet, match.selectionId);
+    if (libraryResult === undefined || pattern === undefined || selection === undefined) {
+      return rejected("The displayed result is not available in the approved library catalog.");
     }
-    case "expand-hypothesis-conjunction": {
-      const sourceId = hypothesisId("conjunction");
-      const count = operandCount("conjunction");
-      if (sourceId === undefined || count === undefined) return undefined;
-      candidate = {
-        ...common,
-        kind: "expand-hypothesis-conjunction",
-        hypothesisId: sourceId,
-        expandedHypothesisIds: generatedIds("expanded-hypothesis", count),
-      };
-      break;
+    // The matched occurrence is used only when the result is a premise-free equivalence: the
+    // suggestion is then a rewrite of that occurrence rather than an application to the target.
+    result = materializeResultApplication(
+      {
+        state: node.state,
+        resultId: libraryResult.id,
+        direction: pattern.direction,
+        target: selection.anchor.target,
+        substitutions: suggestion.substitutions,
+        occurrence: moveSelectionInput(selection),
+        menuChoices,
+      },
+      environment,
+      idGenerator,
+    );
+    if (result.ok) {
+      const kind = result.operation.kind;
+      moveId = HAND_AUTHORED_MOVES.find(
+        (definition) =>
+          RESULT_APPLICATION_MOVE_IDS.includes(definition.id) &&
+          definition.implementation.operationKind === kind,
+      )?.id;
     }
-    case "split-hypothesis-disjunction": {
-      const sourceId = hypothesisId("disjunction");
-      const count = operandCount("disjunction");
-      if (sourceId === undefined || count === undefined) return undefined;
-      candidate = {
-        ...common,
-        kind: "split-hypothesis-disjunction",
-        hypothesisId: sourceId,
-        childIds: generatedIds("child", count),
-        branchHypothesisIds: generatedIds("branch-hypothesis", count),
-      };
-      break;
-    }
-    case "apply-implication-hypothesis": {
-      const implicationId = hypothesisId("implication");
-      const antecedentId = hypothesisId("antecedent");
-      if (implicationId === undefined || antecedentId === undefined) return undefined;
-      candidate = {
-        ...common,
-        kind: "apply-implication-hypothesis",
-        implicationHypothesisId: implicationId,
-        antecedentHypothesisId: antecedentId,
-        resultHypothesisId: generatedIds("result-hypothesis", 1)[0],
-      };
-      break;
-    }
-    case "introduce-universal":
-      candidate = { ...common, kind: "introduce-universal" };
-      break;
-    case "unpack-existential-hypothesis": {
-      const sourceId = hypothesisId("existential");
-      if (sourceId === undefined) return undefined;
-      candidate = {
-        ...common,
-        kind: "unpack-existential-hypothesis",
-        hypothesisId: sourceId,
-        resultHypothesisId: generatedIds("result-hypothesis", 1)[0],
-      };
-      break;
-    }
-    case "choose-goal-disjunct":
-    case "instantiate-universal-hypothesis":
-    case "choose-existential-witness":
-    case "rewrite-with-equality":
-      return undefined;
   }
-  return safeParse(kernelOperationAdapterSchema, candidate);
+
+  if (!result.ok) {
+    const diagnostic = result.diagnostics[0];
+    if (diagnostic.code === "requires-input") {
+      const menus = safeParse(parameterMenusSchema, result.menus);
+      if (menus === undefined) {
+        return rejected("The generated parameter menus failed runtime validation.");
+      }
+      return {
+        ok: false,
+        requiresInput: {
+          menus,
+          missingParameters: [...result.missingParameters],
+          diagnostics: [{ code: "requires-input", message: diagnostic.message }],
+        },
+      };
+    }
+    return rejected(diagnostic.message);
+  }
+  if (moveId === undefined || !suggestionAuthorizesMove(suggestion, moveId, result.operation)) {
+    return rejected("The materialized operation is not authorized by the displayed suggestion.");
+  }
+  return { ok: true, moveId, result };
+}
+
+/**
+ * The static-history record of the menus a materialization displayed and the item IDs chosen.
+ * Moves whose only menus are automatic (generated IDs) and that received no choices record
+ * nothing. Returns null when the menus fail the protocol schema.
+ */
+function recordedMenuSelection(
+  menus: Extract<MaterializationResult, { ok: true }>["menus"],
+  choices: MoveMenuChoices,
+): MoveMenuSelection | undefined | null {
+  if (Object.keys(choices).length === 0 && menus.every(({ automatic }) => automatic)) {
+    return undefined;
+  }
+  return safeParse(moveMenuSelectionSchema, { menus, choices }) ?? null;
+}
+
+function moveSelectionInput(selection: ResolvedSelection): MoveSelectionInput {
+  const anchor = {
+    stateId: selection.anchor.stateId,
+    target: selection.anchor.target,
+    statement: selection.anchor.statement,
+  };
+  return selection.kind === "exact"
+    ? { kind: "exact", anchor, path: [...selection.path] }
+    : {
+        kind: "associative",
+        anchor,
+        containerPath: [...selection.containerPath],
+        startOperand: selection.startOperand,
+        endOperand: selection.endOperand,
+      };
 }
 
 function resolvedSelectionById(
@@ -1475,32 +1524,6 @@ function resolvedSelectionById(
   }
   return suggestionSet.selection.selections.find(({ id }) => id === selectionId)?.selection as
     ResolvedSelection | undefined;
-}
-
-function mathJsonOperandCount(value: unknown): number | undefined {
-  const fn = Array.isArray(value)
-    ? value
-    : isDataRecord(value) && Array.isArray(value.fn)
-      ? value.fn
-      : undefined;
-  return fn !== undefined && fn.length >= 3 ? fn.length - 1 : undefined;
-}
-
-function selectedStatementExpression(
-  node: ProofNode,
-  selection: ResolvedSelection,
-): unknown | undefined {
-  const target =
-    selection.anchor.target.kind === "goal"
-      ? node.state.goals.find(({ id }) => id === selection.anchor.target.id)
-      : node.state.obligations.find(({ id }) => id === selection.anchor.target.id);
-  if (target === undefined) return undefined;
-  const statement = selection.anchor.statement;
-  if (statement.kind === "conclusion") {
-    return target.sequent.conclusion.expression;
-  }
-  return target.sequent.context.hypotheses.find(({ id }) => id === statement.id)?.statement
-    .expression;
 }
 
 export function derivedMoveRecordIds(commandId: ApplyKernelCommand["commandId"]): Readonly<{
@@ -1528,19 +1551,19 @@ function derivedStateId(commandId: ApplyKernelCommand["commandId"]): ProofNode["
 }
 
 function movePreviewRequestMatches(preview: MovePreview, request: unknown): boolean {
+  const keys = ["id", "suggestionSetId", "chosenSuggestionId", "moveId", "operation"];
   return (
-    isStrictDataRecord(request, [
-      "id",
-      "suggestionSetId",
-      "chosenSuggestionId",
-      "moveId",
-      "operation",
-    ]) &&
+    isDataRecord(request) &&
+    isStrictDataRecord(
+      request,
+      request.menuSelection === undefined ? keys : [...keys, "menuSelection"],
+    ) &&
     request.id === preview.id &&
     request.suggestionSetId === preview.suggestionSetId &&
     request.chosenSuggestionId === preview.chosenSuggestionId &&
     request.moveId === preview.moveId &&
-    jsonEquals(request.operation, preview.operation)
+    jsonEquals(request.operation, preview.operation) &&
+    jsonEquals(request.menuSelection, preview.menuSelection)
   );
 }
 
@@ -1665,7 +1688,7 @@ async function loadProofHistoryInTransaction(
         chosen === undefined ||
         loaded.suggestionSet.nodeId !== edge.parentNodeId ||
         !suggestionSetMatchesNode(loaded.suggestionSet, parent, environment) ||
-        (edge.moveId !== undefined && chosen.artifactId !== edge.moveId)
+        !suggestionAuthorizesMove(chosen, edge.moveId, edge.operation)
       ) {
         return repositoryFailure(
           "rejected",
@@ -1751,12 +1774,15 @@ function movePreviewIdFromUnknown(
   }
 }
 
+/** The session's operators and the approved results adapted to them, detached and frozen. */
 function frozenEnvironment(
   operators: readonly OperatorDeclaration[],
 ): ProtocolEnvironment | undefined {
   try {
     createProofNodeSchema({ operators });
-    return deepFreeze({ operators: structuredClone(operators) });
+    const results = approvedResultEnvironment(operators);
+    if (results === undefined) return undefined;
+    return deepFreeze({ operators: structuredClone(operators), results: structuredClone(results) });
   } catch {
     return undefined;
   }

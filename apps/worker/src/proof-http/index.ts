@@ -1,6 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { CORE_LOGIC_RESULTS } from "@proof/library";
 import { HAND_AUTHORED_MOVES } from "@proof/moves";
 import {
   actorSchema,
@@ -10,6 +9,7 @@ import {
   deletePreviousMoveCommandSchema,
   deletePreviousMoveReceiptSchema,
   displayedSuggestionSetSchema,
+  moveRequiresInputResponseSchema,
   proofCommandReceiptSchema,
   proofSessionMetadataSchema,
   stableIdentifierSchema,
@@ -21,6 +21,7 @@ import {
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import type { Pool } from "pg";
 import { z } from "zod";
+import { APPROVED_LIBRARY_RESULTS } from "../approved-catalog";
 import { postgresProofStore } from "../postgres-proof-store";
 import {
   backtrackProofSession,
@@ -38,6 +39,7 @@ import {
   recordDisplayedSuggestionSet,
   recordMovePreview,
   type ProofSession,
+  type MaterializeMoveChoiceResult,
   type ProofStore,
   type RepositoryFailure,
 } from "../proof-repository";
@@ -337,7 +339,7 @@ async function handleRequest(
     }
     const materialized = await materializeMoveChoice(store, route.sessionId, choice.value);
     if (materialized.status !== "materialized") {
-      writeRepositoryFailure(response, materialized);
+      writeMaterializationFailure(response, materialized);
       return;
     }
     const recorded = await recordMovePreview(store, route.sessionId, materialized.request);
@@ -379,7 +381,7 @@ async function handleRequest(
     }
     const materialized = await materializeMoveChoice(store, route.sessionId, choice.value);
     if (materialized.status !== "materialized") {
-      writeRepositoryFailure(response, materialized);
+      writeMaterializationFailure(response, materialized);
       return;
     }
     const recordedPreview = await recordMovePreview(store, route.sessionId, materialized.request);
@@ -404,6 +406,9 @@ async function handleRequest(
         chosenSuggestionId: recordedPreview.preview.chosenSuggestionId,
         previewId: recordedPreview.preview.id,
         operation: recordedPreview.preview.operation,
+        ...(recordedPreview.preview.menuSelection === undefined
+          ? {}
+          : { menuSelection: recordedPreview.preview.menuSelection }),
       },
       WEB_ACTOR,
     );
@@ -574,7 +579,7 @@ function approvedRetrievalIndex(
   operators: NonNullable<ProtocolEnvironment["operators"]>,
 ): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
   const result = createRetrievalIndex(
-    { results: CORE_LOGIC_RESULTS, moves: HAND_AUTHORED_MOVES, variantFamilies: [] },
+    { results: APPROVED_LIBRARY_RESULTS, moves: HAND_AUTHORED_MOVES, variantFamilies: [] },
     { operators },
   );
   return result.ok
@@ -657,6 +662,21 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
             ? 400
             : 500;
   writeJson(response, status, { diagnostics: failure.diagnostics });
+}
+
+/**
+ * A choice that still needs menu input is not a malformed request: the worker answers 422 with
+ * the menus to choose from and the parameters still missing. Nothing is recorded.
+ */
+function writeMaterializationFailure(
+  response: ServerResponse,
+  failure: Exclude<MaterializeMoveChoiceResult, { status: "materialized" }>,
+): void {
+  if (failure.status !== "requires-input") {
+    writeRepositoryFailure(response, failure);
+    return;
+  }
+  writeValidatedJson(response, 422, moveRequiresInputResponseSchema, failure);
 }
 
 function transitionClassesFor(

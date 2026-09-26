@@ -182,7 +182,7 @@ that archive.
       equivalences), symmetric equality orientation, curried/uncurried premise bundling, and
       forward/backward forms as separate indexed artifacts in one variant family, with provenance
       `derived-variant`. _Accept:_ each generated variant is validated, and the family groups it.
-- [ ] **N14 Result-application moves, plans, parameter menus (§13, §14.5, §17.4).** Moves become able to:
+- [x] **N14 Result-application moves, plans, parameter menus (§13, §14.5, §17.4).** Moves become able to:
   - wrap N06 result application, N07 sorry, N08 case split, N09 weakening/strengthening, and N10 deep
     rewriting;
   - run multi-operation plans, validated atomically in sequence;
@@ -425,3 +425,13 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     `PRIMITIVE_TRANSITION_CLASSES` becomes a per-kind allowed set.
   - The plan implementation kind is not yet in the `MoveDefinition` union (N35). Forward/assumption premise
     matching is greedy (no backtracking).
+- 2026-09-26 — N14 (worker wiring; completes N14) — the worker uses `materializeMoveOperation` +
+  `commandIdGenerator`. Protocol adds `menuChoices` (menu item ids only) and `moveRequiresInputResponseSchema`
+  (HTTP 422, nothing recorded). `menuSelection` is stored on previews, commands and edges for static
+  history. A result suggestion authorizes `apply-result-*`/`rewrite-with-equivalence` only for that same
+  result. choose-goal-disjunct, instantiate-universal-hypothesis, choose-existential-witness and
+  rewrite-with-equality apply via menus end to end over HTTP.
+  - `env.results` comes from `CORE_LOGIC_RESULTS` (same as retrieval), not the per-session library store;
+    wire both to the store together.
+  - Web has no menu picker yet; a 422 surfaces as `requires-input`.
+  - `TransitionEvent` does not carry `menuSelection`.
