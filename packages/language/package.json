@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",
@@ -10,6 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@proof/mathjson-model": "*"
+    "@cortex-js/compute-engine": "^0.120.0",
+    "@proof/mathjson-model": "*",
+    "zod": "^4.5.4"
   }
 }

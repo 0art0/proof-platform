@@ -6,6 +6,7 @@ import {
   type KernelOperation,
   type KernelOperationKind,
   type TransitionClass,
+  type TransitionEvidence,
 } from "@proof/kernel";
 import {
   libraryApprovalSchema,
@@ -139,18 +140,32 @@ export const PRIMITIVE_TRANSITION_CLASSES: Readonly<Record<KernelOperationKind, 
     "close-by-hypothesis": "equivalence",
     "close-true": "equivalence",
     "close-false-hypothesis": "equivalence",
+    "close-reflexive-equality": "equivalence",
+    "close-by-contradiction": "equivalence",
+    "close-by-accepted-inference": "equivalence",
     "introduce-implication": "equivalence",
     "introduce-negation": "equivalence",
     "split-goal-conjunction": "equivalence",
     "choose-goal-disjunct": "strengthening",
     "expand-hypothesis-conjunction": "equivalence",
     "split-hypothesis-disjunction": "equivalence",
+    "split-classical-cases": "equivalence",
+    "assume-hypothesis": "weakening",
+    "replace-goal": "weakening",
+    suffices: "strengthening",
+    "drop-hypothesis": "strengthening",
     "apply-implication-hypothesis": "equivalence",
     "introduce-universal": "equivalence",
     "instantiate-universal-hypothesis": "equivalence",
     "choose-existential-witness": "strengthening",
     "unpack-existential-hypothesis": "equivalence",
     "rewrite-with-equality": "equivalence",
+    "rewrite-with-equivalence": "equivalence",
+    "rewrite-with-implication": "strengthening",
+    "apply-result-backward": "strengthening",
+    "apply-result-forward": "equivalence",
+    "mark-sorry": "equivalence",
+    "close-by-assumption": "equivalence",
   });
 
 export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, string>> = Object.freeze(
@@ -158,20 +173,82 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, strin
     "close-by-hypothesis": "target",
     "close-true": "target",
     "close-false-hypothesis": "false",
+    "close-reflexive-equality": "target",
+    "close-by-contradiction": "negation",
+    "close-by-accepted-inference": "target",
     "introduce-implication": "target",
     "introduce-negation": "target",
     "split-goal-conjunction": "target",
     "choose-goal-disjunct": "target",
     "expand-hypothesis-conjunction": "conjunction",
     "split-hypothesis-disjunction": "disjunction",
+    "split-classical-cases": "target",
+    "assume-hypothesis": "target",
+    "replace-goal": "target",
+    suffices: "target",
+    "drop-hypothesis": "dropped",
     "apply-implication-hypothesis": "implication",
     "introduce-universal": "target",
     "instantiate-universal-hypothesis": "universal",
     "choose-existential-witness": "target",
     "unpack-existential-hypothesis": "existential",
     "rewrite-with-equality": "equality",
+    "rewrite-with-equivalence": "equivalence",
+    "rewrite-with-implication": "implication",
+    "apply-result-backward": "target",
+    "apply-result-forward": "target",
+    "mark-sorry": "target",
+    "close-by-assumption": "target",
   },
 );
+
+/**
+ * Evidence each primitive's kernel transition may report. An accepted
+ * inference rests on an external attestation and a result application on an
+ * approved library result; every other primitive is structurally checked by
+ * the kernel. The deep rewrites take their `Equivalent`/`Implies` statement
+ * either from a local hypothesis (structural) or from an instantiated approved
+ * result (library-result), so their entry lists both; the kernel reports the
+ * one its operation's `source` determines. A set per kind keeps one move per
+ * kernel rule rather than splitting each rewrite into source-specific kinds
+ * with duplicated operations and moves. `mark-sorry` records an unproved
+ * closure as an additional assumption (sorry); `close-by-assumption` is
+ * structurally checked against that explicit assumption. The record is
+ * exhaustive so a new primitive must choose its evidence explicitly.
+ */
+export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
+  Record<KernelOperationKind, readonly TransitionEvidence[]>
+> = deepFreeze({
+  "close-by-hypothesis": ["structural"],
+  "close-true": ["structural"],
+  "close-false-hypothesis": ["structural"],
+  "close-reflexive-equality": ["structural"],
+  "close-by-contradiction": ["structural"],
+  "close-by-accepted-inference": ["background-inference"],
+  "introduce-implication": ["structural"],
+  "introduce-negation": ["structural"],
+  "split-goal-conjunction": ["structural"],
+  "choose-goal-disjunct": ["structural"],
+  "expand-hypothesis-conjunction": ["structural"],
+  "split-hypothesis-disjunction": ["structural"],
+  "split-classical-cases": ["structural"],
+  "assume-hypothesis": ["structural"],
+  "replace-goal": ["structural"],
+  suffices: ["structural"],
+  "drop-hypothesis": ["structural"],
+  "apply-implication-hypothesis": ["structural"],
+  "introduce-universal": ["structural"],
+  "instantiate-universal-hypothesis": ["structural"],
+  "choose-existential-witness": ["structural"],
+  "unpack-existential-hypothesis": ["structural"],
+  "rewrite-with-equality": ["structural"],
+  "rewrite-with-equivalence": ["structural", "library-result"],
+  "rewrite-with-implication": ["structural", "library-result"],
+  "apply-result-backward": ["library-result"],
+  "apply-result-forward": ["library-result"],
+  "mark-sorry": ["sorry"],
+  "close-by-assumption": ["structural"],
+});
 
 type MoveCatalogInput = Readonly<{
   suffix: string;
@@ -224,6 +301,49 @@ const catalogInputs: readonly MoveCatalogInput[] = [
       "An obligation under an explicit contradiction already reduced to False.",
     ],
     "No False hypothesis is present in the target's local context.",
+  ),
+  catalogEntry(
+    "close-reflexive-equality",
+    "Close by reflexivity",
+    "Close a target that equates a term with itself, up to renaming of bound symbols.",
+    [slot("target", "target-conclusion", "proposition")],
+    ["Equal", "x", "x"],
+    [],
+    ["A goal x = x.", "An obligation equating two alpha-equivalent sides."],
+    "The two sides of the equality differ.",
+  ),
+  catalogEntry(
+    "close-by-contradiction",
+    "Close by contradiction",
+    "Close any target from a local hypothesis P and a local hypothesis not P.",
+    [
+      slot("target", "target-conclusion", "proposition"),
+      slot("fact", "hypothesis", "proposition"),
+      slot("negation", "hypothesis", "proposition"),
+    ],
+    ["Not", "p"],
+    [
+      parameter("hypothesisId", "Hypothesis", "selection"),
+      parameter("negationHypothesisId", "Negated hypothesis", "selection"),
+    ],
+    [
+      "A goal under local hypotheses p and not p.",
+      "An obligation whose context contains a statement and its alpha-equivalent negation.",
+    ],
+    "The negated hypothesis negates a different statement than the selected fact.",
+  ),
+  catalogEntry(
+    "close-by-accepted-inference",
+    "Close by accepted inference",
+    "Close a target on a recorded background attestation; the kernel records but does not judge it.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [parameter("attestationId", "Attestation", "menu")],
+    [
+      "Close a routine arithmetic goal that an attestation accepted within the background.",
+      "Close an obligation whose inference was attested as correct and in scope.",
+    ],
+    "No recorded attestation accepts the step, so the target stays open.",
   ),
   catalogEntry(
     "introduce-implication",
@@ -305,6 +425,83 @@ const catalogInputs: readonly MoveCatalogInput[] = [
       "Create all cases of a variadic disjunction hypothesis.",
     ],
     "One case or one generated ID is omitted.",
+  ),
+  catalogEntry(
+    "split-classical-cases",
+    "Split on a proposition",
+    "Replace a target with one case assuming P and one case assuming not P.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("proposition", "Case proposition", "menu"),
+      parameter("childIds", "Case target IDs", "generated-id"),
+      parameter("branchHypothesisIds", "Case hypothesis IDs", "generated-id"),
+    ],
+    [
+      "Prove r separately under p and under not p.",
+      "Split an obligation on whether a selected condition holds.",
+    ],
+    "The case proposition mentions a symbol outside the target's context.",
+  ),
+  catalogEntry(
+    "assume-hypothesis",
+    "Assume hypothesis",
+    "Add an unproved local hypothesis; the result no longer establishes the original target.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("proposition", "Assumed proposition", "menu"),
+      parameter("hypothesisId", "Assumed hypothesis ID", "generated-id"),
+    ],
+    [
+      "Explore goal r after additionally assuming p.",
+      "Assume a missing condition in an obligation to see what else it needs.",
+    ],
+    "The assumed expression is a term rather than a proposition.",
+  ),
+  catalogEntry(
+    "replace-goal",
+    "Replace goal",
+    "Replace the conclusion with another proposition; the result no longer establishes the original target.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [parameter("proposition", "Replacement conclusion", "menu")],
+    [
+      "Explore an easier goal p in place of p and q.",
+      "Replace an obligation's conclusion with a special case.",
+    ],
+    "The replacement proposition is the current conclusion.",
+  ),
+  catalogEntry(
+    "suffices",
+    "Suffices to show",
+    "Replace goal G with P and add an obligation P implies G in the same context.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("proposition", "Sufficient proposition", "menu"),
+      parameter("obligationId", "Sufficiency obligation ID", "generated-id"),
+    ],
+    [
+      "Prove q by proving p and q, with obligation p and q implies q.",
+      "Reduce an obligation to a stronger intermediate claim.",
+    ],
+    "The sufficient proposition uses a symbol that is not declared in the target's context.",
+  ),
+  catalogEntry(
+    "drop-hypothesis",
+    "Drop hypothesis",
+    "Remove one local hypothesis; proving the result still proves the original target.",
+    // The hypothesis selection anchors its target, so no separate target slot is
+    // needed; one would also match every target-plus-hypothesis selection query.
+    [slot("dropped", "hypothesis", "proposition")],
+    "p",
+    [parameter("hypothesisId", "Dropped hypothesis", "selection")],
+    [
+      "Remove an irrelevant hypothesis p before proving r.",
+      "Discard a hypothesis from an obligation to state a more general claim.",
+    ],
+    "The selected hypothesis belongs to another target's context.",
   ),
   catalogEntry(
     "apply-implication-hypothesis",
@@ -406,6 +603,116 @@ const catalogInputs: readonly MoveCatalogInput[] = [
     ],
     "The replacement would capture a free symbol under a binder.",
   ),
+  catalogEntry(
+    "rewrite-with-equivalence",
+    "Rewrite with equivalence",
+    "Replace one proposition occurrence at any position using a local or approved A iff B.",
+    [
+      slot("target", "target-conclusion", "any"),
+      // Optional: the source may instead be an approved result chosen from the menu.
+      slot("equivalence", "hypothesis", "proposition", false),
+      slot("occurrence", "rewrite-occurrence", "proposition"),
+    ],
+    ["Equivalent", "p", "q"],
+    [
+      parameter("statement", "Statement", "selection"),
+      parameter("path", "Occurrence", "selection"),
+      parameter("source", "Equivalence source", "menu"),
+      parameter("direction", "Direction", "menu"),
+    ],
+    [
+      "Rewrite p to q under a negation from p iff q.",
+      "Rewrite a double negation inside a hypothesis with an approved equivalence.",
+    ],
+    "The selected occurrence is not alpha-equivalent to the chosen side.",
+  ),
+  catalogEntry(
+    "rewrite-with-implication",
+    "Rewrite with implication",
+    "Strengthen by replacing B with A at a positive position, or A with B at a negative position, using A implies B.",
+    [
+      slot("target", "target-conclusion", "any"),
+      // Optional: the source may instead be an approved result chosen from the menu.
+      slot("implication", "hypothesis", "proposition", false),
+      slot("occurrence", "rewrite-occurrence", "proposition"),
+    ],
+    ["Implies", "p", "q"],
+    [
+      parameter("statement", "Statement", "selection"),
+      parameter("path", "Occurrence", "selection"),
+      parameter("source", "Implication source", "menu"),
+    ],
+    [
+      "Reduce goal q or r to p or r using p implies q.",
+      "Weaken an assumption p and r to q and r, making the goal harder.",
+    ],
+    "The occurrence is an operand of an equivalence, where polarity is mixed.",
+  ),
+  catalogEntry(
+    "apply-result-backward",
+    "Apply result backward",
+    "Reduce a target matching an approved result's conclusion to that result's instantiated premises.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("resultId", "Result", "menu"),
+      parameter("instantiation", "Instantiation", "menu"),
+      parameter("premiseTargetIds", "Premise target IDs", "generated-id"),
+    ],
+    [
+      "Prove x < z from transitivity by proving x < y and y < z.",
+      "Close an obligation that is an instance of a premise-free approved result.",
+    ],
+    "The instantiated conclusion differs from the target conclusion.",
+  ),
+  catalogEntry(
+    "apply-result-forward",
+    "Apply result forward",
+    "Derive an approved result's instantiated conclusion from local facts; unmet premises become obligations.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("resultId", "Result", "menu"),
+      parameter("instantiation", "Instantiation", "menu"),
+      parameter("premiseHypothesisIds", "Premise hypotheses", "selection"),
+      parameter("resultHypothesisId", "Derived hypothesis ID", "generated-id"),
+      parameter("obligationIds", "Premise obligation IDs", "generated-id"),
+    ],
+    [
+      "Derive q by modus ponens from local facts p implies q and p.",
+      "Derive a conclusion now and leave its missing premise as an obligation.",
+    ],
+    "A selected hypothesis does not match the instantiated premise.",
+  ),
+  catalogEntry(
+    "mark-sorry",
+    "Mark as sorry",
+    "Set a target aside as an explicit sorry: remove it and assume its universal closure over the variables and hypotheses it depends on.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [parameter("assumptionId", "Sorry assumption ID", "generated-id")],
+    [
+      "Defer goal x < z under x < y and y < z as the assumption for all x y z, x < y and y < z implies x < z.",
+      "Postpone a side-condition obligation to continue with the main argument.",
+    ],
+    "The target depends on an unresolved construction metavariable.",
+  ),
+  catalogEntry(
+    "close-by-assumption",
+    "Close by assumption",
+    "Close a target by an instance of an additional assumption whose antecedents are all local hypotheses.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("assumptionId", "Additional assumption", "menu"),
+      parameter("instantiation", "Instantiation", "menu"),
+    ],
+    [
+      "Close u < s under u < t and t < s from a sorry assumed for all x y z.",
+      "Discharge an obligation that is an instance of an earlier sorry.",
+    ],
+    "An antecedent of the instantiated assumption is missing from the local context.",
+  ),
 ];
 
 /** All trusted primitives have visible, inspectable move metadata; the catalog cannot mutate state. */
@@ -461,7 +768,11 @@ export type MovePlanResult =
       ok: true;
       move: MoveDefinition;
       operation: KernelOperation;
-      preview: Readonly<{ state: ExecutableProofState; transitionClass: TransitionClass }>;
+      preview: Readonly<{
+        state: ExecutableProofState;
+        transitionClass: TransitionClass;
+        evidence: TransitionEvidence;
+      }>;
       diagnostics: readonly [];
     }>
   | Readonly<{ ok: false; diagnostics: readonly [MovePlanDiagnostic] }>;
@@ -507,17 +818,26 @@ export function planMove(
           : `The kernel rejected the move: ${diagnostic.code}.`,
       );
     }
-    if (transition.transitionClass !== move.transitionClass) {
+    if (
+      transition.transitionClass !== move.transitionClass ||
+      !PRIMITIVE_TRANSITION_EVIDENCE[move.implementation.operationKind].includes(
+        transition.evidence,
+      )
+    ) {
       return moveFailure(
         "invalid-move-definition",
-        "The kernel transition class contradicts the move definition.",
+        "The kernel transition class or evidence contradicts the move definition.",
       );
     }
     const detached = freezeDetached({
       ok: true as const,
       move,
       operation: operation.data,
-      preview: { state: transition.state, transitionClass: transition.transitionClass },
+      preview: {
+        state: transition.state,
+        transitionClass: transition.transitionClass,
+        evidence: transition.evidence,
+      },
       diagnostics: [] as const,
     });
     return (
@@ -555,8 +875,9 @@ function slot(
   id: string,
   role: MoveSelectionSlot["role"],
   semanticRole: MoveSelectionSlot["semanticRole"],
+  required = true,
 ): MoveSelectionSlot {
-  return moveSelectionSlotSchema.parse({ id, role, semanticRole, required: true });
+  return moveSelectionSlotSchema.parse({ id, role, semanticRole, required });
 }
 
 function parameter(id: string, label: string, source: MoveParameter["source"]): MoveParameter {
@@ -701,3 +1022,7 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
   });
   return Object.freeze(value);
 }
+
+export * from "./result-adapter";
+export * from "./materialize";
+export * from "./plan";

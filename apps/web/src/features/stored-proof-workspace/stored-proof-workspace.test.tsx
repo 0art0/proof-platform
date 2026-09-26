@@ -15,10 +15,13 @@ import { StoredProofWorkspace } from "./stored-proof-workspace";
 vi.mock("../proof-workspace", () => ({
   ProofWorkspace: ({
     onSelectionChange,
+    view,
   }: {
     onSelectionChange: (selections: readonly AnchoredProofSelection[]) => void;
+    view?: string;
   }) => (
     <div>
+      <span data-testid="workspace-view">{view}</span>
       <button type="button" onClick={() => onSelectionChange([exactSelection([0])])}>
         Select first
       </button>
@@ -613,10 +616,39 @@ describe("StoredProofWorkspace", () => {
     );
     render(<StoredProofWorkspace session={childSession} node={child} />);
 
+    const branch = screen.getByRole("navigation", { name: "Current branch" });
+    await waitFor(() =>
+      expect(
+        within(branch)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual(["Root", "Split goal conjunction"]),
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "session:test" })).toBeVisible();
+    expect(screen.getByTestId("snapshot-status")).toHaveTextContent("Open: 1 goal, 0 obligations");
+
     const rootButton = await screen.findByRole("button", { name: /Root.*node:test/ });
     fireEvent.click(rootButton);
 
     await screen.findByText("Backtracked to node:test.");
     expect(screen.getByText("Current node node:test")).toBeVisible();
+
+    // The new snapshot's workspace reports its empty selection when it mounts; that must not
+    // discard the backtrack notice.
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText("Backtracked to node:test.")).toBeVisible();
+  });
+
+  it("passes the selected statement view to the workspace and read-only history", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() => Promise.reject(new Error("Unexpected request"))),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    expect(screen.getByTestId("workspace-view")).toHaveTextContent("formal");
+    fireEvent.click(screen.getByRole("button", { name: "Natural language" }));
+    expect(screen.getByTestId("workspace-view")).toHaveTextContent("natural-language");
+    const history = screen.getByRole("region", { name: "Proof-discovery tree" });
+    await waitFor(() => expect(within(history).getByText(/Goal:/)).toHaveTextContent("and"));
   });
 });

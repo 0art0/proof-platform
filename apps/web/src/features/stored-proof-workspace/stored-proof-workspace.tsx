@@ -14,7 +14,11 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import type { AnchoredProofSelection } from "@proof/selections";
-import { ProofWorkspace } from "../proof-workspace";
+import { ProofWorkspace, type WorkspaceView } from "../proof-workspace";
+import { InlineLatex, NaturalLanguageText, usePresentation } from "../proof-workspace/presentation";
+import type { Presentation } from "@proof/language";
+import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
+import { WorkspaceToolbar } from "./workspace-toolbar";
 import {
   backtrackApiResponseSchema,
   commandApiResponseSchema,
@@ -91,12 +95,16 @@ function StatefulStoredWorkspace({
   const [history, setHistory] = useState<HistoryState>({ kind: "loading" });
   const [notice, setNotice] = useState<Notice>();
   const [mutationPending, setMutationPending] = useState(false);
+  const [view, setView] = useState<WorkspaceView>("formal");
+  const presentation = usePresentation(session.operators);
   const requestGeneration = useRef(0);
   const actionGeneration = useRef(0);
   const historyGeneration = useRef(0);
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const commandIds = useRef(new Map<string, MoveChoiceRequest["commandId"]>());
   const mutationPendingRef = useRef(false);
+  // Whether the last reported selection was empty. A snapshot starts with no selection.
+  const selectionEmpty = useRef(true);
 
   const loadHistory = useCallback(async () => {
     const generation = ++historyGeneration.current;
@@ -126,6 +134,7 @@ function StatefulStoredWorkspace({
     activeRequest.current?.abort();
     activeRequest.current = undefined;
     commandIds.current.clear();
+    selectionEmpty.current = true;
     setSuggestions({ kind: "idle" });
     setMoveState({ kind: "idle" });
   }, []);
@@ -133,6 +142,11 @@ function StatefulStoredWorkspace({
   const handleSelectionChange = useCallback(
     (selections: readonly AnchoredProofSelection[]) => {
       if (mutationPendingRef.current) return;
+      // The workspace of a newly committed snapshot reports its empty selection once it mounts.
+      // Nothing changed, so keep the notice of the apply or backtrack that produced it.
+      const empty = selections.length === 0;
+      if (empty && selectionEmpty.current) return;
+      selectionEmpty.current = empty;
       const generation = ++requestGeneration.current;
       actionGeneration.current += 1;
       activeRequest.current?.abort();
@@ -307,6 +321,16 @@ function StatefulStoredWorkspace({
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.suggestionSet
       : undefined;
+  const breadcrumb = useMemo(() => {
+    if (history.kind === "loading") return { kind: "loading" } as const;
+    const crumbs =
+      history.kind === "ready"
+        ? branchBreadcrumb(history.nodes, history.edges, node.id)
+        : undefined;
+    return crumbs === undefined
+      ? ({ kind: "unavailable" } as const)
+      : ({ kind: "ready", crumbs } as const);
+  }, [history, node.id]);
   const statusText = useMemo(() => suggestionStatusText(suggestions), [suggestions]);
   const classes = new Map(
     suggestions.kind === "ready" || suggestions.kind === "empty"
@@ -316,13 +340,13 @@ function StatefulStoredWorkspace({
 
   return (
     <section className={styles.storedWorkspace} aria-label="Stored proof session">
-      <header className={styles.sessionHeader}>
-        <div>
-          <span>Stored development session</span>
-          <strong>{session.id}</strong>
-        </div>
-        <span>Current node {node.id}</span>
-      </header>
+      <WorkspaceHeader
+        sessionId={session.id}
+        currentNodeId={node.id}
+        counts={{ goals: node.state.goals.length, obligations: node.state.obligations.length }}
+        breadcrumb={breadcrumb}
+      />
+      <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node} />
       {notice ? (
         <p className={styles.actionNotice} data-state={notice.state} role="status">
           {notice.message}
@@ -337,6 +361,7 @@ function StatefulStoredWorkspace({
           key={node.id}
           node={node}
           operators={session.operators}
+          view={view}
           onSelectionChange={handleSelectionChange}
         />
       </div>
@@ -455,7 +480,9 @@ function StatefulStoredWorkspace({
                       Move rejected: {moveState.message}
                     </p>
                   ) : null}
-                  {preview ? <PreviewDetails preview={preview} /> : null}
+                  {preview ? (
+                    <PreviewDetails preview={preview} presentation={presentation} view={view} />
+                  ) : null}
                 </li>
               );
             })}
@@ -466,13 +493,39 @@ function StatefulStoredWorkspace({
         history={history}
         currentNodeId={node.id}
         mutationPending={mutationPending}
+        presentation={presentation}
+        view={view}
         onBacktrack={backtrackTo}
       />
     </section>
   );
 }
 
-function PreviewDetails({ preview }: Readonly<{ preview: MovePreview }>) {
+type ReadOnlyPresentation = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
+
+/** A read-only statement in the selected view; the stored MathJSON is never altered. */
+function ReadOnlyStatement({
+  expression,
+  declarations,
+  presentation,
+  view,
+}: ReadOnlyPresentation &
+  Readonly<{
+    expression: ProofNode["state"]["goals"][number]["sequent"]["conclusion"]["expression"];
+    declarations: ProofNode["state"]["goals"][number]["sequent"]["context"]["declarations"];
+  }>) {
+  return view === "natural-language" ? (
+    <NaturalLanguageText text={presentation.naturalLanguage(expression, { declarations })} />
+  ) : (
+    <InlineLatex latex={presentation.latex(expression)} />
+  );
+}
+
+function PreviewDetails({
+  preview,
+  presentation,
+  view,
+}: ReadOnlyPresentation & Readonly<{ preview: MovePreview }>) {
   const added = preview.afterState.obligations.filter((item) =>
     preview.delta.obligations.added.includes(item.id),
   );
@@ -499,7 +552,14 @@ function PreviewDetails({ preview }: Readonly<{ preview: MovePreview }>) {
         ) : (
           <ul>
             {added.map((item) => (
-              <li key={item.id}>{JSON.stringify(item.sequent.conclusion.expression)}</li>
+              <li key={item.id}>
+                <ReadOnlyStatement
+                  expression={item.sequent.conclusion.expression}
+                  declarations={item.sequent.context.declarations}
+                  presentation={presentation}
+                  view={view}
+                />
+              </li>
             ))}
           </ul>
         )}
@@ -512,13 +572,16 @@ function HistoryView({
   history,
   currentNodeId,
   mutationPending,
+  presentation,
+  view,
   onBacktrack,
-}: Readonly<{
-  history: HistoryState;
-  currentNodeId: string;
-  mutationPending: boolean;
-  onBacktrack: (id: string) => Promise<void>;
-}>) {
+}: ReadOnlyPresentation &
+  Readonly<{
+    history: HistoryState;
+    currentNodeId: string;
+    mutationPending: boolean;
+    onBacktrack: (id: string) => Promise<void>;
+  }>) {
   return (
     <section className={styles.historyPanel} aria-label="Proof-discovery tree">
       <div className={styles.historyHeading}>
@@ -548,7 +611,9 @@ function HistoryView({
                 type="button"
                 onClick={() => void onBacktrack(node.id)}
               >
-                <span>{historyNodeLabel(node)}</span>
+                <span>
+                  <HistoryNodeLabel node={node} presentation={presentation} view={view} />
+                </span>
                 <small>
                   {incoming === undefined
                     ? `Root · ${node.id}`
@@ -586,11 +651,25 @@ function orderedHistory(nodes: readonly ProofNode[], edges: readonly HistoryEdge
   return result;
 }
 
-function historyNodeLabel(node: ProofNode): string {
-  const first = node.state.goals[0] ?? node.state.obligations[0];
-  return first === undefined
-    ? "Solved snapshot"
-    : `Goal: ${JSON.stringify(first.sequent.conclusion.expression)}`;
+function HistoryNodeLabel({
+  node,
+  presentation,
+  view,
+}: ReadOnlyPresentation & Readonly<{ node: ProofNode }>) {
+  const goal = node.state.goals[0];
+  const first = goal ?? node.state.obligations[0];
+  if (first === undefined) return <>No open goals</>;
+  return (
+    <>
+      {goal === undefined ? "Obligation: " : "Goal: "}
+      <ReadOnlyStatement
+        expression={first.sequent.conclusion.expression}
+        declarations={first.sequent.context.declarations}
+        presentation={presentation}
+        view={view}
+      />
+    </>
+  );
 }
 
 function missingInputText(suggestion: DisplayedSuggestionSet["suggestions"][number]): string {

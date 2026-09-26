@@ -1107,7 +1107,16 @@ const RELATION_OPERATORS = new Set([
   "SupersetEqual",
 ]);
 
-function positionAtPath(
+/**
+ * The single source of truth for logical polarity and semantic role at an operand path (design
+ * plan §7.1). `root` is the statement's base position: a conclusion is positive and a hypothesis
+ * negative. Not and an Implies antecedent flip polarity, an Implies consequent, And, Or, and
+ * quantifier bodies preserve it, Equivalent operands and proposition arguments of other operators
+ * are mixed, and term positions are neutral. Neutral and mixed are absorbing. The result is the
+ * overall polarity of the position, not a polarity relative to its parent. Returns undefined when
+ * no expression exists at the path.
+ */
+export function positionAtPath(
   expression: PlainMathJson,
   path: OperandPath,
   root: SelectionPosition,

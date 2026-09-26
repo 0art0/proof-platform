@@ -1,16 +1,25 @@
 "use client";
 
-import { useEffect, useId, useReducer, useRef, useState } from "react";
+import { useEffect, useId, useReducer, useRef } from "react";
 import { createProofNodeSchema, type OperatorDeclaration, type ProofNode } from "@proof/protocol";
 import {
   formatOperandPath,
   resolveProofSelection,
   type AnchoredProofSelection,
+  type ResolveProofSelectionResult,
   type StatementAnchor,
 } from "@proof/selections";
-import { MathLiveStatement, type MathLiveStatementGesture } from "./mathlive-statement";
+import type { PlainMathJson } from "@proof/mathjson-model";
+import type { Presentation } from "@proof/language";
+import {
+  MathLiveStatement,
+  type MathLiveStatementGesture,
+  type SelectionPolarity,
+} from "./mathlive-statement";
+import { NaturalLanguageText, usePresentation, type WorkspaceView } from "./presentation";
 import {
   EMPTY_SELECTION_GESTURE_STATE,
+  describeSelectionFeedback,
   proofSelectionKey,
   selectionGestureReducer,
 } from "./selection-state";
@@ -21,6 +30,8 @@ const EMPTY_OPERATORS: readonly OperatorDeclaration[] = Object.freeze([]);
 export type ProofWorkspaceProps = Readonly<{
   node: unknown;
   operators?: readonly OperatorDeclaration[];
+  /** Formal view keeps interactive MathLive fields; natural language is read-only. */
+  view?: WorkspaceView;
   onSelectionChange?: (selections: readonly AnchoredProofSelection[]) => void;
 }>;
 
@@ -28,6 +39,7 @@ export type ProofWorkspaceProps = Readonly<{
 export function ProofWorkspace({
   node: nodeInput,
   operators = EMPTY_OPERATORS,
+  view = "formal",
   onSelectionChange,
 }: ProofWorkspaceProps) {
   const node = parseProofNode(nodeInput, operators);
@@ -41,6 +53,7 @@ export function ProofWorkspace({
       key={JSON.stringify(node)}
       node={node}
       operators={operators}
+      view={view}
       onSelectionChange={onSelectionChange}
     />
   );
@@ -79,21 +92,24 @@ function parseProofNode(
 type ValidatedProofWorkspaceProps = Readonly<{
   node: ProofNode;
   operators: readonly OperatorDeclaration[];
+  view: WorkspaceView;
   onSelectionChange?: ((selections: readonly AnchoredProofSelection[]) => void) | undefined;
 }>;
+
+const INITIAL_SELECTION_NOTICE =
+  "Select a hypothesis or conclusion. Ctrl/Cmd-click adds an independent occurrence; Escape clears.";
 
 function ValidatedProofWorkspace({
   node,
   operators,
+  view,
   onSelectionChange,
 }: ValidatedProofWorkspaceProps) {
   const [selectionState, dispatch] = useReducer(
     selectionGestureReducer,
     EMPTY_SELECTION_GESTURE_STATE,
   );
-  const [selectionNotice, setSelectionNotice] = useState(
-    "Select a hypothesis or conclusion. Ctrl/Cmd-click adds an independent occurrence.",
-  );
+  const presentation = usePresentation(operators);
   const selectionHeadingId = useId();
   const onSelectionChangeRef = useRef(onSelectionChange);
 
@@ -105,26 +121,59 @@ function ValidatedProofWorkspace({
     onSelectionChangeRef.current?.(selectionState.active);
   }, [selectionState.active]);
 
+  const hasSelection = selectionState.active.length > 0;
+  useEffect(() => {
+    if (!hasSelection) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      dispatch({ type: "clear" });
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [hasSelection]);
+
   const handleGesture = (gesture: MathLiveStatementGesture) => {
-    dispatch({ type: "select", selection: gesture.selection, modifier: gesture.modifier });
-    setSelectionNotice(
-      gesture.fallbackReason ??
-        (gesture.modifier
-          ? "The occurrence was added to or removed from the active selection set."
-          : "The occurrence replaced the active set; repeat the click to expand."),
-    );
+    dispatch({
+      type: "select",
+      selection: gesture.selection,
+      modifier: gesture.modifier,
+      repeatable: gesture.repeatable,
+      ...(gesture.fallbackReason === undefined ? {} : { fallbackReason: gesture.fallbackReason }),
+    });
   };
 
-  const selectedAnchors = new Set(
-    selectionState.active.map((selection) => JSON.stringify(selection.anchor)),
-  );
+  const resolvedSelections = selectionState.active.map((selection) => ({
+    selection,
+    resolved: resolveProofSelection(node.state, selection, { operators }),
+  }));
+  const selectedAnchors = new Map<string, SelectionPolarity | undefined>();
+  for (const { selection, resolved } of resolvedSelections) {
+    const key = JSON.stringify(selection.anchor);
+    const polarity = resolved.ok ? resolved.selection.position.polarity : undefined;
+    const existing = selectedAnchors.get(key);
+    // Several selections in one statement with different polarities read as mixed.
+    selectedAnchors.set(
+      key,
+      selectedAnchors.has(key) && existing !== polarity ? "mixed" : polarity,
+    );
+  }
+  const selectionNotice =
+    selectionState.feedback === undefined
+      ? INITIAL_SELECTION_NOTICE
+      : describeSelectionFeedback(selectionState.feedback);
+  const statementEnvironment: StatementEnvironment = {
+    view,
+    presentation,
+    selectedAnchors,
+    onGesture: handleGesture,
+  };
 
   return (
     <section className={styles.workspace} aria-label="Proof workspace">
       <header className={styles.workspaceHeader}>
         <div>
           <p className={styles.eyebrow}>Proof snapshot</p>
-          <h1>Contextual sequents</h1>
+          <h2>Contextual sequents</h2>
         </div>
         <dl className={styles.snapshotFacts}>
           <div>
@@ -140,19 +189,23 @@ function ValidatedProofWorkspace({
 
       <div className={styles.workspaceBody}>
         <div className={styles.sequentColumn}>
+          <FamilyLegend />
+          {view === "natural-language" ? (
+            <p className={styles.viewNote}>
+              Natural-language view is read-only. Switch to the formal view to select occurrences.
+            </p>
+          ) : null}
           <TargetGroup
             kind="goal"
             targets={node.state.goals}
             stateId={node.state.id}
-            selectedAnchors={selectedAnchors}
-            onGesture={handleGesture}
+            environment={statementEnvironment}
           />
           <TargetGroup
             kind="obligation"
             targets={node.state.obligations}
             stateId={node.state.id}
-            selectedAnchors={selectedAnchors}
-            onGesture={handleGesture}
+            environment={statementEnvironment}
           />
         </div>
 
@@ -169,11 +222,10 @@ function ValidatedProofWorkspace({
             <p className={styles.emptySelection}>No active occurrence.</p>
           ) : (
             <ol className={styles.selectionList}>
-              {selectionState.active.map((selection) => (
+              {resolvedSelections.map(({ selection, resolved }) => (
                 <SelectionSummary
                   key={proofSelectionKey(selection)}
-                  node={node}
-                  operators={operators}
+                  resolved={resolved}
                   selection={selection}
                 />
               ))}
@@ -184,14 +236,18 @@ function ValidatedProofWorkspace({
             className={styles.clearButton}
             type="button"
             disabled={selectionState.active.length === 0}
-            onClick={() => {
-              dispatch({ type: "clear" });
-              setSelectionNotice("The active selection set was cleared.");
-            }}
+            aria-keyshortcuts="Escape"
+            onClick={() => dispatch({ type: "clear" })}
           >
-            Clear selections
+            Clear selections <kbd aria-hidden="true">Esc</kbd>
           </button>
-          <p className={styles.selectionNotice} aria-live="polite">
+          <p
+            className={styles.selectionNotice}
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="selection-feedback"
+            data-outcome={selectionState.feedback?.outcome}
+          >
             {selectionNotice}
           </p>
         </aside>
@@ -201,23 +257,82 @@ function ValidatedProofWorkspace({
 }
 
 type Target = ProofNode["state"]["goals"][number];
+type TargetKind = "goal" | "obligation";
 
-type TargetGroupProps = Readonly<{
-  kind: "goal" | "obligation";
-  targets: readonly Target[];
-  stateId: ProofNode["state"]["id"];
-  selectedAnchors: ReadonlySet<string>;
+type StatementEnvironment = Readonly<{
+  view: WorkspaceView;
+  presentation: Presentation;
+  /** Selected statement anchors, keyed by serialized anchor, with their selection polarity. */
+  selectedAnchors: ReadonlyMap<string, SelectionPolarity | undefined>;
   onGesture: (gesture: MathLiveStatementGesture) => void;
 }>;
 
-function TargetGroup({ kind, targets, stateId, selectedAnchors, onGesture }: TargetGroupProps) {
+/**
+ * Visual families (§17.1). Colour is always doubled by a glyph, a label, and a border style so
+ * that no family is identified by colour alone.
+ */
+const FAMILIES = Object.freeze({
+  variable: { glyph: "𝑥", label: "Variable" },
+  hypothesis: { glyph: "⊢", label: "Hypothesis" },
+  goal: { glyph: "◎", label: "Goal" },
+  obligation: { glyph: "◇", label: "Obligation" },
+} as const);
+
+type Family = keyof typeof FAMILIES;
+
+function FamilyGlyph({ family }: Readonly<{ family: Family }>) {
+  return (
+    <span className={styles.familyGlyph} data-family={family} aria-hidden="true">
+      {FAMILIES[family].glyph}
+    </span>
+  );
+}
+
+function FamilyLegend() {
+  return (
+    <ul className={styles.familyLegend} aria-label="Colour key">
+      {(Object.keys(FAMILIES) as Family[]).map((family) => (
+        <li key={family} data-family={family}>
+          <FamilyGlyph family={family} />
+          {family === "obligation" ? "Obligation / assumption" : FAMILIES[family].label}
+        </li>
+      ))}
+      <li data-polarity="positive">
+        <span className={styles.bevelSample} data-polarity="positive" aria-hidden="true" />
+        Positive (goal-like): inward bevel
+      </li>
+      <li data-polarity="negative">
+        <span className={styles.bevelSample} data-polarity="negative" aria-hidden="true" />
+        Negative (hypothesis-like): outward bevel
+      </li>
+    </ul>
+  );
+}
+
+const POLARITY_LABELS: Readonly<Record<SelectionPolarity, string>> = Object.freeze({
+  positive: "Positive position (goal-like)",
+  negative: "Negative position (hypothesis-like)",
+  mixed: "Mixed polarity",
+  neutral: "Neutral (term) position",
+});
+
+type TargetGroupProps = Readonly<{
+  kind: TargetKind;
+  targets: readonly Target[];
+  stateId: ProofNode["state"]["id"];
+  environment: StatementEnvironment;
+}>;
+
+function TargetGroup({ kind, targets, stateId, environment }: TargetGroupProps) {
   const headingId = useId();
   const label = kind === "goal" ? "Goals" : "Obligations";
   return (
-    <section className={styles.targetGroup} aria-labelledby={headingId}>
+    <section className={styles.targetGroup} data-family={kind} aria-labelledby={headingId}>
       <div className={styles.groupHeading}>
-        <h2 id={headingId}>{label}</h2>
-        <span>{targets.length}</span>
+        <h2 id={headingId}>
+          <FamilyGlyph family={kind} /> {label}
+        </h2>
+        <span aria-label={`${targets.length} ${label.toLowerCase()}`}>{targets.length}</span>
       </div>
       {targets.length === 0 ? (
         <p className={styles.emptyGroup}>No {label.toLowerCase()} in this snapshot.</p>
@@ -229,8 +344,7 @@ function TargetGroup({ kind, targets, stateId, selectedAnchors, onGesture }: Tar
             ordinal={index + 1}
             stateId={stateId}
             target={target}
-            selectedAnchors={selectedAnchors}
-            onGesture={onGesture}
+            environment={environment}
           />
         ))
       )}
@@ -239,12 +353,11 @@ function TargetGroup({ kind, targets, stateId, selectedAnchors, onGesture }: Tar
 }
 
 type ContextualSequentViewProps = Readonly<{
-  kind: "goal" | "obligation";
+  kind: TargetKind;
   ordinal: number;
   stateId: ProofNode["state"]["id"];
   target: Target;
-  selectedAnchors: ReadonlySet<string>;
-  onGesture: (gesture: MathLiveStatementGesture) => void;
+  environment: StatementEnvironment;
 }>;
 
 function ContextualSequentView({
@@ -252,8 +365,7 @@ function ContextualSequentView({
   ordinal,
   stateId,
   target,
-  selectedAnchors,
-  onGesture,
+  environment,
 }: ContextualSequentViewProps) {
   const titleId = useId();
   const declarationsId = useId();
@@ -266,12 +378,20 @@ function ContextualSequentView({
     target: targetAnchor,
     statement: { kind: "conclusion" },
   };
+  const declarations = target.sequent.context.declarations;
 
   return (
-    <article className={styles.sequent} data-target-id={target.id} aria-labelledby={titleId}>
+    <article
+      className={styles.sequent}
+      data-family={kind}
+      data-target-id={target.id}
+      aria-labelledby={titleId}
+    >
       <header className={styles.sequentHeader}>
         <div>
-          <p className={styles.sequentKind}>{targetLabel}</p>
+          <p className={styles.sequentKind}>
+            <FamilyGlyph family={kind} /> {kind === "goal" ? "Goal" : "Obligation (assumption)"}
+          </p>
           <h3 id={titleId}>
             {targetLabel} {ordinal}
           </h3>
@@ -279,17 +399,25 @@ function ContextualSequentView({
         <code>{target.id}</code>
       </header>
 
-      <section className={styles.contextSection} aria-labelledby={declarationsId}>
+      <section
+        className={styles.contextSection}
+        data-family="variable"
+        aria-labelledby={declarationsId}
+      >
         <h4 id={declarationsId}>
           Declarations for {targetLabel.toLowerCase()} {ordinal}
         </h4>
-        {target.sequent.context.declarations.length === 0 ? (
+        {declarations.length === 0 ? (
           <p className={styles.emptyContext}>No declarations in this sequent.</p>
         ) : (
           <ul className={styles.declarationList}>
-            {target.sequent.context.declarations.map((declaration) => (
-              <li key={declaration.id}>
-                <span aria-hidden="true" className={styles.declarationMark} />
+            {declarations.map((declaration) => (
+              <li
+                key={declaration.id}
+                data-family="variable"
+                aria-label={`Variable ${declaration.symbol}: ${sortLabel(declaration.sort)}, ${declarationRoleLabel(declaration.role).toLowerCase()}`}
+              >
+                <FamilyGlyph family="variable" />
                 <span>
                   <strong>{declaration.symbol}</strong>
                   <small>{declarationRoleLabel(declaration.role)}</small>
@@ -301,7 +429,11 @@ function ContextualSequentView({
         )}
       </section>
 
-      <section className={styles.contextSection} aria-labelledby={hypothesesId}>
+      <section
+        className={styles.contextSection}
+        data-family="hypothesis"
+        aria-labelledby={hypothesesId}
+      >
         <h4 id={hypothesesId}>
           Hypotheses for {targetLabel.toLowerCase()} {ordinal}
         </h4>
@@ -316,14 +448,21 @@ function ContextualSequentView({
                 statement: { kind: "hypothesis", id: hypothesis.id },
               };
               return (
-                <li key={hypothesis.id}>
-                  <span className={styles.statementLabel}>H{index + 1}</span>
-                  <MathLiveStatement
+                <li key={hypothesis.id} data-family="hypothesis" data-polarity="negative">
+                  <span
+                    className={styles.statementLabel}
+                    data-family="hypothesis"
+                    title={`Hypothesis ${index + 1}`}
+                  >
+                    <span aria-hidden="true">H{index + 1}</span>
+                    <span className="visually-hidden">Hypothesis {index + 1}</span>
+                  </span>
+                  <StatementView
                     anchor={anchor}
+                    declarations={declarations}
                     expression={hypothesis.statement.expression}
                     label={`${targetLabel} ${ordinal} hypothesis ${index + 1}`}
-                    selected={selectedAnchors.has(JSON.stringify(anchor))}
-                    onGesture={onGesture}
+                    environment={environment}
                   />
                 </li>
               );
@@ -332,19 +471,75 @@ function ContextualSequentView({
         )}
       </section>
 
-      <section className={styles.conclusionSection} aria-labelledby={conclusionId}>
+      <section
+        className={styles.conclusionSection}
+        data-family={kind}
+        data-polarity="positive"
+        aria-labelledby={conclusionId}
+      >
         <h4 id={conclusionId}>
           Conclusion for {targetLabel.toLowerCase()} {ordinal}
         </h4>
-        <MathLiveStatement
+        <StatementView
           anchor={conclusionAnchor}
+          declarations={declarations}
           expression={target.sequent.conclusion.expression}
           label={`${targetLabel} ${ordinal} conclusion`}
-          selected={selectedAnchors.has(JSON.stringify(conclusionAnchor))}
-          onGesture={onGesture}
+          environment={environment}
         />
       </section>
     </article>
+  );
+}
+
+type StatementViewProps = Readonly<{
+  anchor: StatementAnchor;
+  declarations: Target["sequent"]["context"]["declarations"];
+  expression: PlainMathJson;
+  label: string;
+  environment: StatementEnvironment;
+}>;
+
+/** One statement: an interactive MathLive field (formal) or read-only prose (natural language). */
+function StatementView({
+  anchor,
+  declarations,
+  expression,
+  label,
+  environment,
+}: StatementViewProps) {
+  const key = JSON.stringify(anchor);
+  const selected = environment.selectedAnchors.has(key);
+  const polarity = environment.selectedAnchors.get(key);
+  return (
+    <div className={styles.statement}>
+      {environment.view === "natural-language" ? (
+        <p
+          className={styles.naturalLanguage}
+          aria-label={label}
+          data-selected={selected}
+          data-selection-polarity={selected ? polarity : undefined}
+        >
+          <NaturalLanguageText
+            text={environment.presentation.naturalLanguage(expression, { declarations })}
+          />
+        </p>
+      ) : (
+        <MathLiveStatement
+          anchor={anchor}
+          expression={expression}
+          label={label}
+          selected={selected}
+          selectionPolarity={polarity}
+          onGesture={environment.onGesture}
+        />
+      )}
+      {selected ? (
+        <span className={styles.selectedBadge} data-polarity={polarity}>
+          Selected{polarity === undefined ? "" : ` · ${POLARITY_LABELS[polarity]}`}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -368,13 +563,11 @@ function sortLabel(sort: Target["sequent"]["context"]["declarations"][number]["s
 }
 
 type SelectionSummaryProps = Readonly<{
-  node: ProofNode;
-  operators: readonly OperatorDeclaration[];
   selection: AnchoredProofSelection;
+  resolved: ResolveProofSelectionResult;
 }>;
 
-function SelectionSummary({ node, operators, selection }: SelectionSummaryProps) {
-  const resolved = resolveProofSelection(node.state, selection, { operators });
+function SelectionSummary({ selection, resolved }: SelectionSummaryProps) {
   const path =
     selection.kind === "exact"
       ? formatOperandPath(selection.path)
@@ -384,14 +577,23 @@ function SelectionSummary({ node, operators, selection }: SelectionSummaryProps)
   const statement = selection.anchor.statement;
   const statementLabel =
     statement.kind === "conclusion" ? "conclusion" : `hypothesis ${statement.id}`;
+  const polarity = resolved.ok ? resolved.selection.position.polarity : undefined;
+  const family: Family =
+    statement.kind === "hypothesis" ? "hypothesis" : selection.anchor.target.kind;
 
   return (
-    <li data-selection-key={proofSelectionKey(selection)}>
+    <li
+      data-selection-key={proofSelectionKey(selection)}
+      data-family={family}
+      data-polarity={polarity}
+    >
       <p>
+        <FamilyGlyph family={family} />
         <strong>
           {selection.anchor.target.kind} {selection.anchor.target.id}
         </strong>
         <span>{statementLabel}</span>
+        {polarity === undefined ? null : <span>{POLARITY_LABELS[polarity]}</span>}
       </p>
       <code>{selection.kind === "exact" ? `path ${path}` : `lens ${path}`}</code>
       <pre>
@@ -402,4 +604,10 @@ function SelectionSummary({ node, operators, selection }: SelectionSummaryProps)
 }
 
 export { proofSelectionKey, selectionGestureReducer } from "./selection-state";
-export type { SelectionGestureAction, SelectionGestureState } from "./selection-state";
+export type {
+  SelectionGestureAction,
+  SelectionGestureFeedback,
+  SelectionGestureOutcome,
+  SelectionGestureState,
+} from "./selection-state";
+export type { WorkspaceView } from "./presentation";

@@ -25,6 +25,45 @@ both tables. The table alterations, unique-index construction, and foreign-key v
 take locks that can block concurrent reads or writes. Plan enough time and disk space and run the
 migration during a suitable low-traffic or maintenance window.
 
+`0004_session_metadata.sql` adds a nullable `proof_sessions.metadata` JSONB object holding the
+protocol `ProofSessionMetadata` (problem title and statement, background profile, preferences and
+active library layer IDs). Existing sessions keep `NULL` and load without metadata. The column is
+written only when a session is initialized and is never part of proof state.
+
+`0005_library.sql` adds the library store (design plan §12.4):
+
+- `library_addition_events`: append-only addition events keyed by `(scope_key, id)`, where
+  `scope_key` is `global` or `session:<id>`. Every gate decision is recorded, including rejections.
+  Only `global`-layer events are outside a session.
+- `library_artifacts`: admitted artifacts keyed by `(scope_key, id)`. Each row references its
+  admitting event by artifact ID, layer, sequence, and an `admitted` decision.
+- `library_background_revisions`: append-only session background revisions. Recording one also
+  rewrites `proof_sessions.metadata.background` in the same transaction.
+- `library_operators`: the global registry of approved operator declarations, with a unique symbol.
+
+Sequences are allocated per scope under the session row lock (or a global advisory lock). Stored
+suggestion sets are never touched, so earlier menus stay exactly as displayed. `MemoryLibraryStore`
+mirrors these constraints for database-free runs.
+
+`0006_proof_deletions.sql` adds `proof_deletions`, the audit tombstones of "Delete previous move"
+(design plan §16.2). A deletion physically removes, in foreign-key order, the transition events and
+edges of the deleted subtree, previews anchored at deleted nodes or chosen by deleted edges (unless a
+retained edge still references one), suggestion sets anchored at deleted nodes, the deleted command
+records, and the deleted nodes. The session cursor moves to the parent in the same transaction.
+Deleted work is therefore absent from history and export.
+
+- Each tombstone holds only identities: the issuing command ID, actor, optional reason, parent node,
+  and the deleted node, edge, event, command, suggestion-set and preview IDs. It never stores
+  snapshots, operations, or suggestions; a check rejects records carrying such keys.
+- `UNIQUE (session_id, command_id)` makes the delete command idempotent. Delete command IDs share
+  the session's command-ID space with apply commands, but are kept out of `proof_commands`, whose
+  checks describe apply results.
+- A GIN index on `deleted_command_ids` lets a retried apply command discover that its move was
+  deleted; the repository rejects it (`command-deleted`) instead of re-applying it.
+
+`MemoryProofStore` mirrors the table and checks each immediate foreign key as rows are deleted, and
+the deferred command and session-pointer keys at commit.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -32,6 +71,10 @@ migrations. Its PostgreSQL-backed endpoints are:
 
 - `GET /proof-sessions/:sessionId` for the runtime-validated session and current proof node.
 - `POST /proof-sessions/:sessionId/suggestion-sets` to record deterministic retrieval evidence.
+- `POST /proof-sessions/:sessionId/delete-previous-move` with
+  `{ commandId, expectedCurrentNodeId, confirmDescendants?, reason? }`. It returns the session,
+  the parent node and `{ deletedNodeIds, deletedEdgeIds, currentNodeId }`. A stale cursor, deleting
+  unconfirmed descendants, or replaying a deleted command returns 409. Deleting at the root returns 400.
 - `GET /proof-sessions/:sessionId/suggestion-sets/:suggestionSetId` for immutable persisted
   evidence, validated against its historical proof node.
 

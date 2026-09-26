@@ -1,4 +1,5 @@
 import {
+  backgroundProfileSchema,
   BUILTIN_BINDER_SPECIFICATIONS,
   declarationSchema,
   freeSymbolNames,
@@ -45,14 +46,7 @@ const uniqueShortTextsSchema = z
   .max(64)
   .superRefine((values, context) => addDuplicateIssues(values, context));
 
-export const backgroundProfileSchema = z
-  .object({
-    level: shortTextSchema,
-    summary: boundedTextSchema,
-    assumptions: uniqueShortTextsSchema,
-  })
-  .strict();
-export type BackgroundProfile = z.infer<typeof backgroundProfileSchema>;
+export { backgroundProfileSchema, type BackgroundProfile } from "@proof/protocol";
 
 const topicExtractorContextSchema = z
   .object({

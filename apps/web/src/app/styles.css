@@ -1,5 +1,10 @@
+/*
+ * Workspace design tokens. Every colour family is paired with a non-colour signal in the
+ * components (icons, labels, border styles), so these tokens never carry meaning alone.
+ * Foreground/background pairs keep at least 4.5:1 contrast in both schemes.
+ */
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   font-family:
     Inter,
     ui-sans-serif,
@@ -8,9 +13,74 @@
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  background: #f3f0e8;
-  color: #18231d;
+  --page: #f3f0e8;
+  --page-glow: rgb(190 207 191 / 45%);
+  --surface: rgb(255 254 249 / 94%);
+  --surface-strong: #fff;
+  --surface-muted: #f4f3ec;
+  --text: #18231d;
+  --text-muted: #536057;
+  --border: #c4cac1;
+  --border-soft: #d9ddd5;
+  --focus: #2f6f56;
+  --accent: #356d52;
+  --accent-soft: #edf5ef;
+  --accent-text: #285c43;
+  --warning-bg: #fff2e7;
+  --warning-border: #bb6a35;
+  --warning-text: #713b18;
+  --variable-fg: #9a2f24;
+  --variable-bg: #fff4f2;
+  --variable-border: #d98b80;
+  --hypothesis-fg: #8a4a0f;
+  --hypothesis-bg: #fff6ea;
+  --hypothesis-border: #dc9a58;
+  --goal-fg: #1f4f86;
+  --goal-bg: #edf3fb;
+  --goal-border: #7fa3cf;
+  --obligation-fg: #633d8a;
+  --obligation-bg: #f5effb;
+  --obligation-border: #a98bc9;
+  --bevel-light: rgb(255 255 255 / 90%);
+  --bevel-dark: rgb(20 30 25 / 28%);
+  background: var(--page);
+  color: var(--text);
   font-synthesis: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #111714;
+    --page-glow: rgb(60 90 72 / 35%);
+    --surface: rgb(27 34 30 / 96%);
+    --surface-strong: #1e2622;
+    --surface-muted: #232c27;
+    --text: #e6ece7;
+    --text-muted: #a9b6ad;
+    --border: #45524a;
+    --border-soft: #36413b;
+    --focus: #7fcfa7;
+    --accent: #6fbf95;
+    --accent-soft: #1f3228;
+    --accent-text: #a6e0c0;
+    --warning-bg: #3a2515;
+    --warning-border: #d08a54;
+    --warning-text: #f5c9a4;
+    --variable-fg: #ffaba0;
+    --variable-bg: #3a1f1c;
+    --variable-border: #b0584c;
+    --hypothesis-fg: #ffc98f;
+    --hypothesis-bg: #37270f;
+    --hypothesis-border: #b27730;
+    --goal-fg: #a9ccff;
+    --goal-bg: #182a40;
+    --goal-border: #4f7fb8;
+    --obligation-fg: #dcc2ff;
+    --obligation-bg: #2b1f3b;
+    --obligation-border: #8a68b3;
+    --bevel-light: rgb(255 255 255 / 14%);
+    --bevel-dark: rgb(0 0 0 / 55%);
+  }
 }
 
 * {
@@ -19,7 +89,8 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at 12% 6%, rgb(190 207 191 / 45%), transparent 28rem), #f3f0e8;
+  background: radial-gradient(circle at 12% 6%, var(--page-glow), transparent 28rem), var(--page);
+  color: var(--text);
 }
 
 button,
@@ -33,8 +104,17 @@ select:focus-visible,
 textarea:focus-visible,
 a:focus-visible,
 math-field:focus-visible {
-  outline: 3px solid #2f6f56;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 main {
@@ -43,9 +123,15 @@ main {
   padding: clamp(2rem, 6vw, 5rem) 0 5rem;
 }
 
+/* The spike predates the design tokens and keeps its original light palette. */
 .spike {
   display: grid;
   gap: 1.25rem;
+  color-scheme: light;
+  border-radius: 1rem;
+  background: #f3f0e8;
+  padding: 1rem;
+  color: #18231d;
 }
 
 .spike-intro {

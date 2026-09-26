@@ -19,6 +19,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
+    "test:e2e:workspace": "playwright test --config playwright.proof-workspace-memory.config.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "verify": "prettier --check . && npm run lint && npm run typecheck && npm test && npm run build"
   },

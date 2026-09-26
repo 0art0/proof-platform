@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@proof/mathjson-model": "*"
+    "@proof/mathjson-model": "*",
+    "@proof/selections": "*"
   }
 }

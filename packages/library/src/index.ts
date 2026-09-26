@@ -10,6 +10,7 @@ import {
   type UniversalParameterDeclaration,
 } from "@proof/mathjson-model";
 import { z } from "zod";
+import { backgroundClassificationSchema, type BackgroundClassification } from "./background";
 
 export const libraryArtifactKindSchema = z.enum(["definition", "result", "technique", "move"]);
 export type LibraryArtifactKind = z.infer<typeof libraryArtifactKindSchema>;
@@ -27,6 +28,8 @@ export const libraryLayerSchema = z.enum([
   "move-discovery-draft",
 ]);
 export type LibraryLayer = z.infer<typeof libraryLayerSchema>;
+export const libraryLayerIdSchema = stableIdentifierSchema.brand("LibraryLayerId");
+export type LibraryLayerId = z.infer<typeof libraryLayerIdSchema>;
 
 export const applicationDirectionSchema = z.enum(["forward", "backward"]);
 export type ApplicationDirection = z.infer<typeof applicationDirectionSchema>;
@@ -36,16 +39,20 @@ export const deterministicRenderingsSchema = z
   .strict();
 export type DeterministicRenderings = z.infer<typeof deterministicRenderingsSchema>;
 
-export const backgroundClassificationSchema = z
-  .object({
-    domains: z.array(z.string().min(1)).min(1),
-    level: z.string().min(1),
-  })
-  .strict()
-  .superRefine((classification, context) => {
-    addDuplicateStringIssues(classification.domains, "domain", context, ["domains"]);
-  });
-export type BackgroundClassification = z.infer<typeof backgroundClassificationSchema>;
+/**
+ * Deterministic, equivalence-preserving reshapings applied by `generateVariants`. Forward/backward
+ * restriction is deliberately absent: see the module comment in `variants.ts`.
+ */
+export const variantTransformationSchema = z.enum([
+  "contrapositive",
+  "converse",
+  "symmetric-equality",
+  "uncurry",
+  "curry",
+  "bundle-premises",
+  "unbundle-premises",
+]);
+export type VariantTransformation = z.infer<typeof variantTransformationSchema>;
 
 export const libraryProvenanceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("curated"), source: z.string().min(1) }).strict(),
@@ -62,6 +69,13 @@ export const libraryProvenanceSchema = z.discriminatedUnion("kind", [
       kind: z.literal("derived"),
       sessionId: stableIdentifierSchema,
       proofNodeId: stableIdentifierSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("derived-variant"),
+      sourceId: libraryArtifactIdSchema,
+      transformation: variantTransformationSchema,
     })
     .strict(),
 ]);
@@ -569,3 +583,8 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
   });
   return Object.freeze(value);
 }
+
+export * from "./background";
+export * from "./variants";
+export * from "./additions";
+export * from "./derived";

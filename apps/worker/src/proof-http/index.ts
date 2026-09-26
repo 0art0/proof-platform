@@ -1,14 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { CORE_LOGIC_RESULTS } from "@proof/library";
 import { HAND_AUTHORED_MOVES } from "@proof/moves";
 import {
   actorSchema,
   createMovePreviewSchema,
   createProofEdgeSchema,
   createProofNodeSchema,
+  deletePreviousMoveCommandSchema,
+  deletePreviousMoveReceiptSchema,
   displayedSuggestionSetSchema,
+  moveRequiresInputResponseSchema,
   proofCommandReceiptSchema,
+  proofSessionMetadataSchema,
   stableIdentifierSchema,
   suggestionIdSchema,
   suggestionSetIdSchema,
@@ -18,10 +21,12 @@ import {
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import type { Pool } from "pg";
 import { z } from "zod";
+import { APPROVED_LIBRARY_RESULTS } from "../approved-catalog";
 import { postgresProofStore } from "../postgres-proof-store";
 import {
   backtrackProofSession,
   backtrackProofSessionSchema,
+  deletePreviousMove,
   derivedMoveRecordIds,
   executeProofCommand,
   loadProofHistory,
@@ -33,9 +38,34 @@ import {
   readDisplayedSuggestionSet,
   recordDisplayedSuggestionSet,
   recordMovePreview,
+  type ProofSession,
+  type MaterializeMoveChoiceResult,
   type ProofStore,
   type RepositoryFailure,
 } from "../proof-repository";
+
+/**
+ * Session objects in HTTP responses never carry metadata: existing clients parse them strictly.
+ * `GET /proof-sessions/:id?include=metadata` returns stored metadata beside the session instead.
+ */
+const proofHttpSessionSchema = proofSessionSchema.refine(
+  (session) => session.metadata === undefined,
+  "HTTP session objects omit metadata.",
+);
+
+function withoutMetadata(session: ProofSession): ProofSession {
+  const { id, rootNodeId, currentNodeId, operators } = session;
+  return { id, rootNodeId, currentNodeId, operators };
+}
+
+function includesMetadata(requestTarget: string | undefined): boolean {
+  try {
+    const url = new URL(requestTarget ?? "/", "http://proof.local");
+    return url.searchParams.getAll("include").includes("metadata");
+  } catch {
+    return false;
+  }
+}
 
 const operandPathSchema = z.array(z.number().int().nonnegative());
 const displayRangeSchema = z
@@ -85,6 +115,10 @@ export const proofHttpSuggestionRequestSchema = z
 
 export const proofHttpMoveChoiceRequestSchema = moveChoiceSchema;
 export const proofHttpBacktrackRequestSchema = backtrackProofSessionSchema;
+/** The web actor is supplied by the service; clients never name the actor. */
+export const proofHttpDeletePreviousMoveRequestSchema = deletePreviousMoveCommandSchema.omit({
+  actor: true,
+});
 
 export const proofHttpTransitionClassificationSchema = z
   .object({ suggestionId: suggestionIdSchema, transitionClass: transitionClassSchema })
@@ -104,7 +138,7 @@ export const proofHttpPreviewResponseSchema = z
 
 export const proofHttpCommandResponseSchema = z
   .object({
-    session: proofSessionSchema,
+    session: proofHttpSessionSchema,
     node: z.unknown(),
     receipt: proofCommandReceiptSchema,
     replayed: z.boolean(),
@@ -113,14 +147,23 @@ export const proofHttpCommandResponseSchema = z
 
 export const proofHttpHistoryResponseSchema = z
   .object({
-    session: proofSessionSchema,
+    session: proofHttpSessionSchema,
     nodes: z.array(z.unknown()),
     edges: z.array(z.object({ edge: z.unknown(), name: z.string().min(1) }).strict()),
   })
   .strict();
 
 export const proofHttpBacktrackResponseSchema = z
-  .object({ session: proofSessionSchema, node: z.unknown(), replayed: z.boolean() })
+  .object({ session: proofHttpSessionSchema, node: z.unknown(), replayed: z.boolean() })
+  .strict();
+
+export const proofHttpDeletePreviousMoveResponseSchema = z
+  .object({
+    session: proofHttpSessionSchema,
+    node: z.unknown(),
+    receipt: deletePreviousMoveReceiptSchema,
+    replayed: z.boolean(),
+  })
   .strict();
 
 const WEB_ACTOR = actorSchema.parse({ id: "actor:web", kind: "human" });
@@ -195,16 +238,22 @@ async function handleRequest(
       writeRepositoryFailure(response, loaded);
       return;
     }
+    const metadata = includesMetadata(request.url) ? loaded.session.metadata : undefined;
     writeValidatedJson(
       response,
       200,
       z
         .object({
-          session: proofSessionSchema,
+          session: proofHttpSessionSchema,
           node: createProofNodeSchema({ operators: loaded.session.operators }),
+          metadata: proofSessionMetadataSchema.optional(),
         })
         .strict(),
-      { session: loaded.session, node: loaded.node },
+      {
+        session: withoutMetadata(loaded.session),
+        node: loaded.node,
+        ...(metadata === undefined ? {} : { metadata }),
+      },
     );
     return;
   }
@@ -290,7 +339,7 @@ async function handleRequest(
     }
     const materialized = await materializeMoveChoice(store, route.sessionId, choice.value);
     if (materialized.status !== "materialized") {
-      writeRepositoryFailure(response, materialized);
+      writeMaterializationFailure(response, materialized);
       return;
     }
     const recorded = await recordMovePreview(store, route.sessionId, materialized.request);
@@ -332,7 +381,7 @@ async function handleRequest(
     }
     const materialized = await materializeMoveChoice(store, route.sessionId, choice.value);
     if (materialized.status !== "materialized") {
-      writeRepositoryFailure(response, materialized);
+      writeMaterializationFailure(response, materialized);
       return;
     }
     const recordedPreview = await recordMovePreview(store, route.sessionId, materialized.request);
@@ -357,6 +406,9 @@ async function handleRequest(
         chosenSuggestionId: recordedPreview.preview.chosenSuggestionId,
         previewId: recordedPreview.preview.id,
         operation: recordedPreview.preview.operation,
+        ...(recordedPreview.preview.menuSelection === undefined
+          ? {}
+          : { menuSelection: recordedPreview.preview.menuSelection }),
       },
       WEB_ACTOR,
     );
@@ -373,7 +425,7 @@ async function handleRequest(
       node: createProofNodeSchema({ operators: loaded.session.operators }),
     });
     writeValidatedJson(response, executed.replayed ? 200 : 201, schema, {
-      session: loaded.session,
+      session: withoutMetadata(loaded.session),
       node: loaded.node,
       receipt: executed.result.receipt,
       replayed: executed.replayed,
@@ -399,7 +451,7 @@ async function handleRequest(
       ),
     });
     writeValidatedJson(response, 200, schema, {
-      session: history.session,
+      session: withoutMetadata(history.session),
       nodes: history.nodes,
       edges: history.edges,
     });
@@ -421,9 +473,45 @@ async function handleRequest(
       node: createProofNodeSchema({ operators: backtracked.session.operators }),
     });
     writeValidatedJson(response, 200, schema, {
-      session: backtracked.session,
+      session: withoutMetadata(backtracked.session),
       node: backtracked.node,
       replayed: backtracked.replayed,
+    });
+    return;
+  }
+
+  if (route.kind === "delete-previous-move" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(
+      request,
+      proofHttpDeletePreviousMoveRequestSchema,
+    );
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const deleted = await deletePreviousMove(
+      store,
+      route.sessionId,
+      { ...requested.value, actor: WEB_ACTOR },
+      WEB_ACTOR,
+    );
+    if (deleted.status !== "committed") {
+      writeRepositoryFailure(response, deleted);
+      return;
+    }
+    const loaded = await loadCurrentProofSession(store, route.sessionId);
+    if (loaded.status !== "loaded") {
+      writeRepositoryFailure(response, loaded);
+      return;
+    }
+    const schema = proofHttpDeletePreviousMoveResponseSchema.extend({
+      node: createProofNodeSchema({ operators: loaded.session.operators }),
+    });
+    writeValidatedJson(response, 200, schema, {
+      session: withoutMetadata(loaded.session),
+      node: loaded.node,
+      receipt: deleted.receipt,
+      replayed: deleted.replayed,
     });
     return;
   }
@@ -444,7 +532,8 @@ type ParsedRoute =
   | Readonly<{ kind: "preview-collection"; sessionId: string }>
   | Readonly<{ kind: "command-collection"; sessionId: string }>
   | Readonly<{ kind: "history"; sessionId: string }>
-  | Readonly<{ kind: "backtrack"; sessionId: string }>;
+  | Readonly<{ kind: "backtrack"; sessionId: string }>
+  | Readonly<{ kind: "delete-previous-move"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
   try {
@@ -469,6 +558,9 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       }
       if (segments[2] === "history") return { kind: "history", sessionId: sessionId.data };
       if (segments[2] === "backtrack") return { kind: "backtrack", sessionId: sessionId.data };
+      if (segments[2] === "delete-previous-move") {
+        return { kind: "delete-previous-move", sessionId: sessionId.data };
+      }
       return undefined;
     }
     if (segments[2] !== "suggestion-sets" || segments.length !== 4 || segments[3] === undefined) {
@@ -487,7 +579,7 @@ function approvedRetrievalIndex(
   operators: NonNullable<ProtocolEnvironment["operators"]>,
 ): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
   const result = createRetrievalIndex(
-    { results: CORE_LOGIC_RESULTS, moves: HAND_AUTHORED_MOVES, variantFamilies: [] },
+    { results: APPROVED_LIBRARY_RESULTS, moves: HAND_AUTHORED_MOVES, variantFamilies: [] },
     { operators },
   );
   return result.ok
@@ -556,15 +648,35 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
           code === "preview-not-found" ||
           code === "current-node-not-found"
         ? 404
-        : code === "serialized-stale-command" || code === "serialized-stale-backtrack"
+        : code === "serialized-stale-command" ||
+            code === "serialized-stale-backtrack" ||
+            code === "serialized-stale-delete" ||
+            code === "delete-requires-confirmation" ||
+            code === "command-deleted"
           ? 409
           : code === "suggestion-set-rejected" ||
               code === "preview-rejected" ||
               code === "command-rejected" ||
-              code === "backtrack-rejected"
+              code === "backtrack-rejected" ||
+              code === "delete-rejected"
             ? 400
             : 500;
   writeJson(response, status, { diagnostics: failure.diagnostics });
+}
+
+/**
+ * A choice that still needs menu input is not a malformed request: the worker answers 422 with
+ * the menus to choose from and the parameters still missing. Nothing is recorded.
+ */
+function writeMaterializationFailure(
+  response: ServerResponse,
+  failure: Exclude<MaterializeMoveChoiceResult, { status: "materialized" }>,
+): void {
+  if (failure.status !== "requires-input") {
+    writeRepositoryFailure(response, failure);
+    return;
+  }
+  writeValidatedJson(response, 422, moveRequiresInputResponseSchema, failure);
 }
 
 function transitionClassesFor(

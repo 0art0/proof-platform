@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  proofDeletionRecordSchema,
   proofNodeSchema,
   type DisplayedSuggestionSet,
   type MovePreview,
@@ -18,6 +19,7 @@ import {
 import {
   ProofStoreTransactionError,
   proofSessionSchema,
+  type ProofRecordDeletionRequest,
   type ProofSessionId,
 } from "./proof-repository";
 
@@ -27,6 +29,7 @@ class RecordingClient implements SqlClient {
   calls: QueryCall[] = [];
   releases: (Error | boolean | undefined)[] = [];
   failOn: "BEGIN" | "COMMIT" | "ROLLBACK" | undefined;
+  sessionMetadata: unknown = null;
   failureCause: unknown = new Error("forced control-statement failure");
 
   async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
@@ -43,6 +46,7 @@ class RecordingClient implements SqlClient {
             root_node_id: "node:root",
             current_node_id: "node:root",
             operators: [],
+            metadata: this.sessionMetadata,
           },
         ],
         rowCount: 1,
@@ -196,10 +200,45 @@ describe("PostgresProofStore", () => {
       expect(call.text).not.toContain("session:one");
       expect(call.text).toMatch(/\$1/);
     }
-    expect(inserts[0]?.values).toEqual(["session:one", "node:root", "node:root", "[]"]);
+    expect(inserts[0]?.values).toEqual(["session:one", "node:root", "node:root", "[]", null]);
     expect(inserts[1]?.values?.[3]).toBe(JSON.stringify(rootNode().state));
     const update = client.calls.find(({ text }) => text.includes("UPDATE proof_sessions"));
     expect(update?.values).toEqual(["session:one", "node:root", "node:child"]);
+  });
+
+  it("round-trips optional session metadata through a nullable JSONB parameter", async () => {
+    const metadata = {
+      problem: { title: "Excluded middle", statement: "Show p or not p." },
+      background: { level: "elementary propositional logic", summary: "Logic.", assumptions: [] },
+      libraryLayerIds: ["layer:global"],
+    };
+    const client = new RecordingClient();
+    client.sessionMetadata = metadata;
+    const store = new PostgresProofStore(poolFor(client));
+    const session = proofSessionSchema.parse({
+      id: "session:one",
+      rootNodeId: "node:root",
+      currentNodeId: "node:root",
+      operators: [],
+      metadata,
+    });
+
+    const loaded = await store.transaction(async (transaction) => {
+      await transaction.insertSession(session);
+      return transaction.lockSession("session:one" as ProofSessionId);
+    });
+
+    const insert = client.calls.find(({ text }) => text.includes("INSERT INTO proof_sessions"));
+    expect(insert?.text).toContain("metadata");
+    expect(insert?.values?.[4]).toBe(JSON.stringify(metadata));
+    expect(proofSessionSchema.parse(loaded)).toEqual(session);
+
+    client.sessionMetadata = null;
+    const legacy = await store.transaction((transaction) =>
+      transaction.lockSession("session:one" as ProofSessionId),
+    );
+    expect(legacy).not.toHaveProperty("metadata");
+    expect(proofSessionSchema.safeParse(legacy).success).toBe(true);
   });
 
   it("reads and inserts suggestion evidence with snapshot identities in parameters", async () => {
@@ -448,5 +487,127 @@ describe("PostgresProofStore", () => {
     expect(client.calls.map(({ text }) => text.trim())).toEqual(["BEGIN"]);
     expect(worked).toBe(false);
     expect(client.releases).toEqual([true]);
+  });
+});
+
+class DeletionClient implements SqlClient {
+  calls: QueryCall[] = [];
+  released = false;
+
+  async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
+    this.calls.push({ text, values });
+    if (text.includes("FROM proof_deletions")) {
+      return { rows: [{ record: { id: "deletion:command:delete" } }], rowCount: 1 };
+    }
+    if (!text.trim().startsWith("DELETE")) return { rows: [], rowCount: 0 };
+    // Echo the first ID-array parameter, as RETURNING would for rows that exist.
+    const ids = (values?.[1] ?? []) as readonly string[];
+    const rows = text.includes("FROM proof_events")
+      ? ids.map((id) => ({ id: id.replace("edge:", "event:") }))
+      : ids.map((id) => ({ id }));
+    return { rows, rowCount: rows.length };
+  }
+
+  release(): void {
+    this.released = true;
+  }
+}
+
+describe("PostgresProofStore deletion", () => {
+  const deletionRequest = {
+    nodeIds: ["node:command:d"],
+    edgeIds: ["edge:command:d"],
+    commandIds: ["command:d"],
+    chosenPreviewIds: ["preview:command:d"],
+  } as unknown as ProofRecordDeletionRequest;
+
+  it("deletes in foreign-key dependency order with IDs only in parameters", async () => {
+    const client = new DeletionClient();
+    const store = new PostgresProofStore({ connect: async () => client });
+    const removed = await store.transaction(async (transaction) =>
+      transaction.deleteProofRecords(sessionId, deletionRequest),
+    );
+    expect(removed).toEqual({
+      eventIds: ["event:command:d"],
+      edgeIds: ["edge:command:d"],
+      previewIds: ["node:command:d"],
+      suggestionSetIds: ["node:command:d"],
+      commandIds: ["command:d"],
+      nodeIds: ["node:command:d"],
+    });
+    const deletes = client.calls.filter(({ text }) => text.trim().startsWith("DELETE"));
+    expect(deletes.map(({ text }) => /DELETE FROM (\w+)/.exec(text)?.[1])).toEqual([
+      "proof_events",
+      "proof_edges",
+      "proof_previews",
+      "proof_suggestion_sets",
+      "proof_commands",
+      "proof_nodes",
+    ]);
+    for (const call of deletes) {
+      expect(call.text).toContain("RETURNING");
+      expect(call.text).not.toContain("command:d");
+      expect(call.values?.[0]).toBe("session:one");
+    }
+    expect(deletes[2]?.text).toContain("NOT EXISTS");
+    expect(deletes[2]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
+    expect(client.calls.map(({ text }) => text.trim().split(/\s+/)[0])).toEqual([
+      "BEGIN",
+      "DELETE",
+      "DELETE",
+      "DELETE",
+      "DELETE",
+      "DELETE",
+      "DELETE",
+      "COMMIT",
+    ]);
+    expect(client.released).toBe(true);
+  });
+
+  it("looks up tombstones by issuing or deleted command ID and inserts ID-only records", async () => {
+    const client = new DeletionClient();
+    const store = new PostgresProofStore({ connect: async () => client });
+    const deletion = proofDeletionRecordSchema.parse({
+      id: "deletion:command:delete",
+      commandId: "command:delete",
+      actor: { id: "actor:human", kind: "human" },
+      expectedCurrentNodeId: "node:command:d",
+      confirmDescendants: false,
+      parentNodeId: "node:command:b",
+      deletedNodeIds: ["node:command:d"],
+      deletedEdgeIds: ["edge:command:d"],
+      deletedEventIds: ["event:command:d"],
+      deletedCommandIds: ["command:d"],
+      deletedSuggestionSetIds: [],
+      deletedPreviewIds: ["preview:command:d"],
+      occurredAt: "2026-09-26T12:00:00.000Z",
+    });
+    const found = await store.transaction(async (transaction) => {
+      await transaction.insertDeletion(sessionId, deletion);
+      return transaction.readDeletion(
+        sessionId,
+        "command:d" as Parameters<typeof transaction.readDeletion>[1],
+      );
+    });
+    expect(found).toEqual({ id: "deletion:command:delete" });
+    const [insert, select] = client.calls.slice(1, 3);
+    expect(insert?.text).toContain("INSERT INTO proof_deletions");
+    expect(insert?.values).toEqual([
+      "session:one",
+      "deletion:command:delete",
+      "command:delete",
+      "actor:human",
+      "human",
+      null,
+      "node:command:b",
+      ["node:command:d"],
+      ["edge:command:d"],
+      ["command:d"],
+      "2026-09-26T12:00:00.000Z",
+      JSON.stringify(deletion),
+    ]);
+    expect(String(insert?.values?.[11])).not.toMatch(/"state"|"goals"/);
+    expect(select?.text).toContain("ANY (deleted_command_ids)");
+    expect(select?.values).toEqual(["session:one", "command:d"]);
   });
 });
