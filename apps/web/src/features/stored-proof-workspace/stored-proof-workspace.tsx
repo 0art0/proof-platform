@@ -103,6 +103,8 @@ function StatefulStoredWorkspace({
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const commandIds = useRef(new Map<string, MoveChoiceRequest["commandId"]>());
   const mutationPendingRef = useRef(false);
+  // Whether the last reported selection was empty. A snapshot starts with no selection.
+  const selectionEmpty = useRef(true);
 
   const loadHistory = useCallback(async () => {
     const generation = ++historyGeneration.current;
@@ -132,6 +134,7 @@ function StatefulStoredWorkspace({
     activeRequest.current?.abort();
     activeRequest.current = undefined;
     commandIds.current.clear();
+    selectionEmpty.current = true;
     setSuggestions({ kind: "idle" });
     setMoveState({ kind: "idle" });
   }, []);
@@ -139,6 +142,11 @@ function StatefulStoredWorkspace({
   const handleSelectionChange = useCallback(
     (selections: readonly AnchoredProofSelection[]) => {
       if (mutationPendingRef.current) return;
+      // The workspace of a newly committed snapshot reports its empty selection once it mounts.
+      // Nothing changed, so keep the notice of the apply or backtrack that produced it.
+      const empty = selections.length === 0;
+      if (empty && selectionEmpty.current) return;
+      selectionEmpty.current = empty;
       const generation = ++requestGeneration.current;
       actionGeneration.current += 1;
       activeRequest.current?.abort();

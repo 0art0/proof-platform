@@ -632,6 +632,11 @@ describe("StoredProofWorkspace", () => {
 
     await screen.findByText("Backtracked to node:test.");
     expect(screen.getByText("Current node node:test")).toBeVisible();
+
+    // The new snapshot's workspace reports its empty selection when it mounts; that must not
+    // discard the backtrack notice.
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText("Backtracked to node:test.")).toBeVisible();
   });
 
   it("passes the selected statement view to the workspace and read-only history", async () => {
