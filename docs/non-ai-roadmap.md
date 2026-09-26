@@ -134,7 +134,7 @@ that archive.
 
   _Accept:_ each operation's class is asserted by tests; `planMove` classes stay consistent.
 
-- [ ] **N10 Deep, polarity-aware rewriting (§7.1, §9, §8.2).** Add these operations:
+- [x] **N10 Deep, polarity-aware rewriting (§7.1, §9, §8.2).** Add these operations:
   - Rewrite with an `Equivalent` hypothesis or result at any proposition position. The transition is
     equivalence.
   - Rewrite with an implication `A ⇒ B`. Replacing `B` by `A` in a positive position is strengthening,
@@ -205,7 +205,7 @@ that archive.
   _Accept:_ completeness tests (tree retrieval ⊇ brute-force matching on random patterns) and a
   performance test (≤150 ms query on a 1000-artifact catalog).
 
-- [ ] **N16 Starter domain packs and elementary corpus (§21.5, Stage 2 exit).** Hand-author approved
+- [x] **N16 Starter domain packs and elementary corpus (§21.5, Stage 2 exit).** Hand-author approved
       results with variants for elementary logic, equality, order (transitivity, antisymmetry, monotonicity
       of addition), basic arithmetic identities, and sets (subset transitivity, union/intersection
       membership). Add a benchmark corpus of at least 8 elementary problems, each solved deterministically
@@ -435,3 +435,20 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     wire both to the store together.
   - Web has no menu picker yet; a 422 surfaces as `requires-input`.
   - `TransitionEvent` does not carry `menuSelection`.
+- 2026-09-26 — N16 — `starterLibraryPacks()` (library `packs.ts`): elementary logic (7 results), equality
+  (3), order (12), arithmetic (13), sets (5, with registered `Union`/`Intersection` operators); variants
+  come from `generateVariants`, restricted per result to the useful transformations, and every result
+  passes the schema and the global admission gate. `ELEMENTARY_CORPUS` (library `corpus.ts`, 14 problems)
+  is solved over HTTP by `apps/worker/src/proof-http/elementary-corpus.test.ts` and checked with
+  `analyzeDiscoveryTree`. The worker catalog is core logic plus every pack whose operators the session
+  declares identically (`approvedCatalog`), shared by retrieval and materialization, with variant families.
+  - Backward result suggestions that need an instantiation menu or create obligations (e.g. transitivity
+    backward) rank below the catch-all moves and fall outside the 8-suggestion display, so the corpus
+    uses forward application from hypotheses for them. Retrieval ranking should fix this; the HTTP
+    suggestion request cannot raise the limit.
+  - Equality results are not rewrite sources (the kernel rewrites only with equality hypotheses): derive
+    the instance forward, then `rewrite-with-equality`. `generateVariants` derives an unapplicable
+    right-hand-term backward pattern for equations; the packs re-derive equation-variant patterns.
+  - Retrieval reports `requires-input` for forward parameters that materialization binds from
+    hypotheses, and ignores premises split from an `Implies` statement (contrapositive variants).
+  - Sorts are monomorphic: the packs are stated over `sort:real` and sets of `sort:element`.

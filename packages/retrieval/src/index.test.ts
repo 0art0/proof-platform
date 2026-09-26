@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CORE_LOGIC_RESULTS, libraryResultSchema, variantFamilySchema } from "@proof/library";
+import {
+  CORE_LOGIC_RESULTS,
+  SET_OPERATOR_DECLARATIONS,
+  libraryResultSchema,
+  starterLibraryPacks,
+  variantFamilySchema,
+} from "@proof/library";
 import {
   PROPOSITION_SORT,
   proofStateSchema,
@@ -1209,5 +1215,66 @@ describe("retrieval boundary validation", () => {
       diagnostics: [{ code: "invalid-catalog" }],
     });
     expect(invoked).toBe(false);
+  });
+});
+
+describe("starter domain packs", () => {
+  const packs = starterLibraryPacks();
+  const catalog = {
+    results: packs.flatMap((pack) => pack.results),
+    moves: HAND_AUTHORED_MOVES,
+    variantFamilies: packs.flatMap((pack) => pack.variantFamilies),
+  };
+
+  it("indexes every pack result and variant family in the set operators' environment", () => {
+    const created = createRetrievalIndex(catalog, { operators: SET_OPERATOR_DECLARATIONS });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error(created.diagnostics[0].message);
+    expect(created.index.resultCount).toBe(catalog.results.length);
+    // Without the set operators the set results are ill-typed, so callers must gate the pack.
+    expect(createRetrievalIndex(catalog).ok).toBe(false);
+  });
+
+  it("groups a transitivity law with its variants for an order goal", () => {
+    const orderPack = packs.find((pack) => pack.id === "pack:order")!;
+    const index = createRetrievalIndex({
+      results: orderPack.results,
+      moves: [],
+      variantFamilies: orderPack.variantFamilies,
+    });
+    if (!index.ok) throw new Error(index.diagnostics[0].message);
+    const real = { kind: "named", id: "sort:real" } as const;
+    const proofState = proofStateSchema.parse({
+      id: "state:query",
+      goals: [
+        {
+          id: "goal:main",
+          sequent: {
+            context: {
+              declarations: ["a", "b", "c"].map((symbol) => ({
+                id: `declaration:${symbol}`,
+                symbol,
+                sort: real,
+                role: "universal-parameter",
+              })),
+              hypotheses: [],
+            },
+            conclusion: { expression: ["Less", "a", "c"] },
+          },
+        },
+      ],
+      obligations: [],
+    });
+    const result = index.index.query(proofState, selection(), { limit: 100 });
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.suggestions.map(({ artifactId }) => artifactId)).toEqual(
+      expect.arrayContaining([
+        "result:less-transitivity",
+        "result:less-transitivity/bundle-premises",
+      ]),
+    );
+    expect(result.variantGroups).toContainEqual(
+      expect.objectContaining({ familyId: "variant-family:result:less-transitivity" }),
+    );
   });
 });

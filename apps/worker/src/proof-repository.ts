@@ -52,7 +52,7 @@ import {
 } from "@proof/moves";
 import type { RetrievalIndex } from "@proof/retrieval";
 import { z } from "zod";
-import { APPROVED_LIBRARY_RESULTS, approvedResultEnvironment } from "./approved-catalog";
+import { approvedCatalog, approvedResultEnvironment } from "./approved-catalog";
 
 const stableStorageIdentifierSchema = z
   .string()
@@ -1422,7 +1422,9 @@ function materializeSuggestion(
       env: environment,
     });
   } else {
-    const libraryResult = APPROVED_LIBRARY_RESULTS.find(({ id }) => id === suggestion.artifactId);
+    const libraryResult = approvedCatalog(environment.operators ?? []).results.find(
+      ({ id }) => id === suggestion.artifactId,
+    );
     const pattern = libraryResult?.patterns.find(({ id }) => id === suggestion.patternId);
     const match =
       suggestion.selectionMatches.find(({ patternId }) => patternId === suggestion.patternId) ??
