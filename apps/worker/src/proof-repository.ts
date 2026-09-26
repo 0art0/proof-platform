@@ -5,23 +5,29 @@ import {
   createMovePreviewSchema,
   createProofEdgeSchema,
   createProofNodeSchema,
+  deletePreviousMoveCommandSchema,
+  deletionReceipt,
   displayedSuggestionSetSchema,
+  planPreviousMoveDeletion,
   prepareDisplayedSuggestionSet,
   prepareMovePreview,
   prepareProofCommand,
   proofSessionMetadataSchema,
   movePreviewIdSchema,
   kernelOperationAdapterSchema,
+  proofDeletionRecordSchema,
   proofNodeIdSchema,
   suggestionIdSchema,
   suggestionSetMatchesNode,
   suggestionSetIdSchema,
   type ApplyKernelCommand,
+  type DeletePreviousMoveReceipt,
   type DisplayedSuggestionSet,
   type MovePreview,
   type MovePreviewId,
   type PrepareProofCommandSuccess,
   type ProofEdge,
+  type ProofDeletionRecord,
   type ProofNode,
   type ProofSessionMetadata,
   type ProtocolEnvironment,
@@ -106,6 +112,25 @@ export type StoredProofEdgeRecord = Readonly<{
   edge: unknown;
 }>;
 
+/** The live records "Delete previous move" asks a store to remove, in dependency order. */
+export type ProofRecordDeletionRequest = Readonly<{
+  nodeIds: readonly ProofNode["id"][];
+  edgeIds: readonly ProofEdge["id"][];
+  commandIds: readonly ApplyKernelCommand["commandId"][];
+  /** Previews chosen by deleted edges; removed only when no retained edge still references one. */
+  chosenPreviewIds: readonly MovePreviewId[];
+}>;
+
+/** The IDs a store actually removed from each table (unvalidated until the repository checks). */
+export type ProofRecordDeletionResult = Readonly<{
+  eventIds: readonly string[];
+  edgeIds: readonly string[];
+  previewIds: readonly string[];
+  suggestionSetIds: readonly string[];
+  commandIds: readonly string[];
+  nodeIds: readonly string[];
+}>;
+
 export interface ProofStoreTransaction {
   lockSession(sessionId: ProofSessionId): Promise<unknown | undefined>;
   readNode(sessionId: ProofSessionId, nodeId: ProofNode["id"]): Promise<unknown | undefined>;
@@ -139,6 +164,23 @@ export interface ProofStoreTransaction {
     expectedNodeId: ProofNode["id"],
     targetNodeId: ProofNode["id"],
   ): Promise<boolean>;
+  /**
+   * The deletion tombstone issued by this command ID, or else the one that deleted the apply
+   * command with this ID.
+   */
+  readDeletion(
+    sessionId: ProofSessionId,
+    commandId: ApplyKernelCommand["commandId"],
+  ): Promise<unknown | undefined>;
+  /**
+   * Remove events of the deleted edges, the edges, previews anchored at deleted nodes or chosen by
+   * deleted edges, suggestion sets anchored at deleted nodes, command records, then the nodes.
+   */
+  deleteProofRecords(
+    sessionId: ProofSessionId,
+    request: ProofRecordDeletionRequest,
+  ): Promise<ProofRecordDeletionResult>;
+  insertDeletion(sessionId: ProofSessionId, deletion: ProofDeletionRecord): Promise<void>;
 }
 
 export interface ProofStore {
@@ -184,6 +226,11 @@ export type RepositoryDiagnosticCode =
   | "backtrack-rejected"
   | "serialized-stale-backtrack"
   | "command-rejected"
+  | "command-deleted"
+  | "delete-rejected"
+  | "delete-requires-confirmation"
+  | "invalid-deletion-record"
+  | "serialized-stale-delete"
   | "serialized-stale-command"
   | "storage-failure"
   | "commit-unknown";
@@ -253,6 +300,17 @@ export type BacktrackProofSessionResult =
       replayed: boolean;
     }>
   | RepositoryFailure;
+
+export type DeletePreviousMoveResult =
+  | Readonly<{
+      status: "committed";
+      receipt: DeletePreviousMoveReceipt;
+      deletion: ProofDeletionRecord;
+      replayed: boolean;
+    }>
+  | RepositoryFailure;
+
+export type DeletePreviousMoveOptions = Readonly<{ now?: () => Date }>;
 
 export const moveChoiceSchema = z
   .object({
@@ -536,6 +594,8 @@ export async function materializeMoveChoice(
       const loadedSession = await loadSession(transaction, sessionId);
       if (!loadedSession.ok) return loadedSession.failure;
       const { session, environment } = loadedSession;
+      const deleted = await deletedCommandFailure(transaction, session.id, choice.commandId);
+      if (deleted !== undefined) return deleted;
       const previewId = derivedPreviewId(choice.commandId);
       const existingInput = await transaction.readPreview(session.id, previewId);
 
@@ -867,6 +927,218 @@ export async function backtrackProofSession(
   }
 }
 
+/**
+ * Delete the latest move at the current leaf (design plan §16.2): the edge whose child is the
+ * current node, that child, and, with `confirmDescendants`, its whole subtree. The cursor returns
+ * to the parent. Deleted work leaves the live history; only an ID-only tombstone is retained.
+ */
+export async function deletePreviousMove(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  commandInput: unknown,
+  trustedActorInput: unknown,
+  options: DeletePreviousMoveOptions = {},
+): Promise<DeletePreviousMoveResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const command = safeParse(deletePreviousMoveCommandSchema, commandInput);
+  const trustedActor = safeParse(actorSchema, trustedActorInput);
+  if (sessionId === undefined || command === undefined || trustedActor === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "delete-rejected",
+      "The session ID, delete-previous-move command, or trusted actor is invalid.",
+    );
+  }
+  if (command.actor.id !== trustedActor.id || command.actor.kind !== trustedActor.kind) {
+    return repositoryFailure(
+      "rejected",
+      "delete-rejected",
+      "The command actor does not match the trusted actor.",
+    );
+  }
+  const confirmDescendants = command.confirmDescendants ?? false;
+
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
+
+      const existingInput = await transaction.readDeletion(session.id, command.commandId);
+      if (existingInput !== undefined) {
+        const existing = safeParse(proofDeletionRecordSchema, existingInput);
+        if (existing === undefined) {
+          return repositoryFailure(
+            "rejected",
+            "invalid-deletion-record",
+            "The stored deletion tombstone failed runtime validation.",
+          );
+        }
+        if (
+          existing.commandId !== command.commandId ||
+          existing.actor.id !== command.actor.id ||
+          existing.actor.kind !== command.actor.kind ||
+          existing.expectedCurrentNodeId !== command.expectedCurrentNodeId ||
+          existing.confirmDescendants !== confirmDescendants ||
+          existing.reason !== command.reason
+        ) {
+          return repositoryFailure(
+            "rejected",
+            "delete-rejected",
+            "The command ID is already recorded for a different command.",
+          );
+        }
+        const deletion = freezeDetached(existing);
+        return deletion === undefined
+          ? repositoryFailure(
+              "rejected",
+              "invalid-deletion-record",
+              "The stored deletion tombstone could not be detached safely.",
+            )
+          : {
+              status: "committed" as const,
+              receipt: deepFreeze(deletionReceipt(deletion)),
+              deletion,
+              replayed: true,
+            };
+      }
+      if ((await transaction.readCommand(session.id, command.commandId)) !== undefined) {
+        return repositoryFailure(
+          "rejected",
+          "delete-rejected",
+          "The command ID is already recorded for a different command.",
+        );
+      }
+      if (session.currentNodeId !== command.expectedCurrentNodeId) {
+        return repositoryFailure(
+          "rejected",
+          "serialized-stale-delete",
+          "The current proof node changed before the deletion was applied.",
+        );
+      }
+
+      const history = await loadProofHistoryInTransaction(transaction, session, environment);
+      if (history.status !== "loaded") return history;
+      const planned = planPreviousMoveDeletion({
+        rootNodeId: session.rootNodeId,
+        currentNodeId: session.currentNodeId,
+        edges: history.edges.map(({ edge }) => edge),
+        confirmDescendants,
+      });
+      if (!planned.ok) {
+        const diagnostic = planned.diagnostics[0];
+        return repositoryFailure(
+          "rejected",
+          diagnostic.code === "descendants-require-confirmation"
+            ? "delete-requires-confirmation"
+            : diagnostic.code === "root-has-no-previous-move"
+              ? "delete-rejected"
+              : "invalid-proof-history",
+          diagnostic.message,
+        );
+      }
+      const { plan } = planned;
+      const parentNodeId = plan.parentNodeId as ProofNode["id"];
+
+      const repointed = await transaction.repointCurrentNode(
+        session.id,
+        session.currentNodeId,
+        parentNodeId,
+      );
+      if (!repointed) {
+        return repositoryFailure(
+          "rejected",
+          "serialized-stale-delete",
+          "The current proof node changed before the deletion was applied.",
+        );
+      }
+      const removed = await transaction.deleteProofRecords(session.id, {
+        nodeIds: plan.deletedNodeIds as readonly ProofNode["id"][],
+        edgeIds: plan.deletedEdgeIds as readonly ProofEdge["id"][],
+        commandIds: plan.deletedCommandIds as readonly ApplyKernelCommand["commandId"][],
+        chosenPreviewIds: plan.chosenPreviewIds as readonly MovePreviewId[],
+      });
+      if (
+        !sameIdSet(removed.nodeIds, plan.deletedNodeIds) ||
+        !sameIdSet(removed.edgeIds, plan.deletedEdgeIds) ||
+        !sameIdSet(removed.commandIds, plan.deletedCommandIds) ||
+        removed.eventIds.length !== plan.deletedEdgeIds.length
+      ) {
+        // Throwing rolls the whole deletion back.
+        throw new Error("The store did not remove exactly the planned proof records.");
+      }
+
+      const deletion = safeParse(proofDeletionRecordSchema, {
+        id: `deletion:${command.commandId}`,
+        commandId: command.commandId,
+        actor: command.actor,
+        ...(command.reason === undefined ? {} : { reason: command.reason }),
+        expectedCurrentNodeId: command.expectedCurrentNodeId,
+        confirmDescendants,
+        parentNodeId,
+        deletedNodeIds: plan.deletedNodeIds,
+        deletedEdgeIds: plan.deletedEdgeIds,
+        deletedEventIds: sortedIds(removed.eventIds),
+        deletedCommandIds: plan.deletedCommandIds,
+        deletedSuggestionSetIds: sortedIds(removed.suggestionSetIds),
+        deletedPreviewIds: sortedIds(removed.previewIds),
+        occurredAt: (options.now?.() ?? new Date()).toISOString(),
+      });
+      const detached = deletion === undefined ? undefined : freezeDetached(deletion);
+      if (detached === undefined) {
+        throw new Error("The deletion tombstone failed runtime validation.");
+      }
+      await transaction.insertDeletion(session.id, detached);
+      return {
+        status: "committed" as const,
+        receipt: deepFreeze(deletionReceipt(detached)),
+        deletion: detached,
+        replayed: false,
+      };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The previous move could not be deleted atomically.");
+  }
+}
+
+function sameIdSet(actual: readonly string[], expected: readonly string[]): boolean {
+  const expectedSet = new Set(expected);
+  return (
+    actual.length === expected.length &&
+    new Set(actual).size === actual.length &&
+    actual.every((id) => expectedSet.has(id))
+  );
+}
+
+function sortedIds(ids: readonly string[]): readonly string[] {
+  return [...ids].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+/** A command ID reserved by a deletion: either it issued one or its move was deleted. */
+async function deletedCommandFailure(
+  transaction: ProofStoreTransaction,
+  sessionId: ProofSessionId,
+  commandId: ApplyKernelCommand["commandId"],
+): Promise<RepositoryFailure | undefined> {
+  const input = await transaction.readDeletion(sessionId, commandId);
+  if (input === undefined) return undefined;
+  const deletion = safeParse(proofDeletionRecordSchema, input);
+  if (deletion === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-deletion-record",
+      "The stored deletion tombstone failed runtime validation.",
+    );
+  }
+  return repositoryFailure(
+    "rejected",
+    "command-deleted",
+    deletion.commandId === commandId
+      ? "The command ID was used to delete a previous move."
+      : "This command's move was deleted; issue a new command ID to apply it again.",
+  );
+}
+
 /** Execute or replay one command while holding the session row lock. */
 export async function executeProofCommand(
   store: ProofStore,
@@ -927,6 +1199,10 @@ export async function executeProofCommand(
           "invalid-command-record",
           "The stored command result failed runtime validation or identity checks.",
         );
+      }
+      if (previous === undefined && commandId !== undefined) {
+        const deleted = await deletedCommandFailure(transaction, session.id, commandId);
+        if (deleted !== undefined) return deleted;
       }
 
       const suggestionSetId = suggestionSetIdFromUnknown(commandInput, "suggestionSetId");

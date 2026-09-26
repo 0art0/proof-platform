@@ -495,4 +495,112 @@ describe("proof HTTP service", () => {
     expect(rootEdges).toHaveLength(2);
     expect(new Set(rootEdges.map(({ edge }) => edge.childNodeId)).size).toBe(2);
   });
+
+  it("deletes the previous move idempotently and blocks replay of the deleted command", async () => {
+    const store = new MemoryProofStore();
+    const binaryRoot = createProofNodeSchema().parse({
+      ...DEVELOPMENT_ROOT_NODE,
+      state: {
+        ...DEVELOPMENT_ROOT_NODE.state,
+        goals: [
+          {
+            ...DEVELOPMENT_ROOT_NODE.state.goals[0],
+            sequent: {
+              ...DEVELOPMENT_ROOT_NODE.state.goals[0]?.sequent,
+              conclusion: { expression: ["And", "p", "q"] },
+            },
+          },
+        ],
+      },
+    });
+    expect(
+      await initializeProofSession(store, {
+        sessionId: DEVELOPMENT_PROOF_SESSION_ID,
+        rootNode: binaryRoot,
+      }),
+    ).toMatchObject({ status: "committed" });
+    const origin = await runningService(store);
+    const sessionUrl = `${origin}/proof-sessions/${DEVELOPMENT_PROOF_SESSION_ID}`;
+    const post = (path: string, body: unknown) =>
+      fetch(`${sessionUrl}/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    const suggestions = await post("suggestion-sets", {
+      id: "suggestion-set:http-delete",
+      selections: [exactGoal()],
+    });
+    expect(suggestions.status).toBe(201);
+    const set = (await json(suggestions)).suggestionSet as DisplayedSuggestionSet;
+    const split = set.suggestions.find(
+      ({ artifactId, applicability }) =>
+        artifactId === "move:split-goal-conjunction" && applicability === "applicable",
+    );
+    if (split === undefined) throw new Error("Expected an applicable split.");
+    const choice = {
+      commandId: "command:http-accident",
+      suggestionSetId: set.id,
+      chosenSuggestionId: split.id,
+    };
+    expect((await post("commands", choice)).status).toBe(201);
+
+    const stale = await post("delete-previous-move", {
+      commandId: "command:http-delete",
+      expectedCurrentNodeId: "node:development-root",
+    });
+    expect(stale.status).toBe(409);
+    expect(await json(stale)).toMatchObject({
+      diagnostics: [{ code: "serialized-stale-delete" }],
+    });
+    const clientActor = await post("delete-previous-move", {
+      commandId: "command:http-delete",
+      expectedCurrentNodeId: "node:command:http-accident",
+      actor: { id: "actor:someone", kind: "agent" },
+    });
+    expect(clientActor.status).toBe(400);
+
+    const request = {
+      commandId: "command:http-delete",
+      expectedCurrentNodeId: "node:command:http-accident",
+      reason: "Wrong move.",
+    };
+    const deleted = await post("delete-previous-move", request);
+    expect(deleted.status).toBe(200);
+    const deletedBody = await json(deleted);
+    expect(deletedBody).toEqual({
+      session: expect.objectContaining({ currentNodeId: "node:development-root" }),
+      node: expect.objectContaining({ id: "node:development-root" }),
+      receipt: {
+        deletedNodeIds: ["node:command:http-accident"],
+        deletedEdgeIds: ["edge:command:http-accident"],
+        currentNodeId: "node:development-root",
+      },
+      replayed: false,
+    });
+    const retried = await post("delete-previous-move", request);
+    expect(retried.status).toBe(200);
+    expect(await json(retried)).toEqual({ ...deletedBody, replayed: true });
+
+    const history = await json(await fetch(`${sessionUrl}/history`));
+    expect(history).toMatchObject({ nodes: [{ id: "node:development-root" }], edges: [] });
+
+    const replayedApply = await post("commands", choice);
+    expect(replayedApply.status).toBe(409);
+    expect(await json(replayedApply)).toMatchObject({
+      diagnostics: [{ code: "command-deleted" }],
+    });
+
+    const atRoot = await post("delete-previous-move", {
+      commandId: "command:http-delete-root",
+      expectedCurrentNodeId: "node:development-root",
+    });
+    expect(atRoot.status).toBe(400);
+    expect(await json(atRoot)).toMatchObject({ diagnostics: [{ code: "delete-rejected" }] });
+
+    const wrongMethod = await fetch(`${sessionUrl}/delete-previous-move`);
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("POST");
+  });
 });

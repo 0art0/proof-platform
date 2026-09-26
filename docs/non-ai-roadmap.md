@@ -225,7 +225,7 @@ that archive.
   Weakening edges never count. _Accept:_ tests with weakening-only branches, partial case closure, and
   multiple alternative routes (choose the first-completed, documented).
 
-- [ ] **N18 Delete previous move (§16.2).** Add a repository command that removes the latest edge and child
+- [x] **N18 Delete previous move (§16.2).** Add a repository command that removes the latest edge and child
       at the current leaf. If descendants exist, it requires `confirmDescendants`. The cursor returns to
       the parent, and deleted work is removed from history and export while a tombstone audit row is kept.
       _Accept:_ tests covering leaf and with-descendants cases.

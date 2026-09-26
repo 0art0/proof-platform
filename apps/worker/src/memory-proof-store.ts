@@ -4,6 +4,7 @@ import type {
   MovePreview,
   MovePreviewId,
   PrepareProofCommandSuccess,
+  ProofDeletionRecord,
   ProofEdge,
   ProofNode,
   SuggestionSetId,
@@ -11,6 +12,8 @@ import type {
 } from "@proof/protocol";
 import {
   ProofStoreTransactionError,
+  type ProofRecordDeletionRequest,
+  type ProofRecordDeletionResult,
   type ProofSession,
   type ProofSessionId,
   type ProofStore,
@@ -20,7 +23,8 @@ import {
 /**
  * Committed rows of the in-memory store, mirroring the PostgreSQL tables in
  * `migrations/0001_proof_commands.sql` (plus the nullable `proof_sessions.metadata` object from
- * `0003_session_metadata.sql`). Sessions are keyed by session ID; every other table is
+ * `0003_session_metadata.sql`) and the `proof_deletions` tombstones of `0005_proof_deletions.sql`.
+ * Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */
 export type MemoryProofTables = Readonly<{
@@ -31,6 +35,7 @@ export type MemoryProofTables = Readonly<{
   edges: Map<string, ProofEdge>;
   events: Map<string, TransitionEvent>;
   commands: Map<string, PrepareProofCommandSuccess>;
+  deletions: Map<string, ProofDeletionRecord>;
 }>;
 
 type TableName = keyof MemoryProofTables;
@@ -46,6 +51,7 @@ const TABLE_NAMES = [
   "edges",
   "events",
   "commands",
+  "deletions",
 ] as const satisfies readonly TableName[];
 
 /** The composite `(session_id, id)` key used by every session-scoped memory table. */
@@ -86,6 +92,7 @@ export class MemoryProofStore implements ProofStore {
     edges: new Map(),
     events: new Map(),
     commands: new Map(),
+    deletions: new Map(),
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
@@ -144,6 +151,18 @@ class MemoryTransactionContext {
     edges: new Map(),
     events: new Map(),
     commands: new Map(),
+    deletions: new Map(),
+  };
+  /** Keys deleted by this transaction; a later insert of the same key re-stages the row. */
+  private readonly deleted: { [Name in TableName]: Set<string> } = {
+    sessions: new Set(),
+    nodes: new Set(),
+    suggestionSets: new Set(),
+    previews: new Set(),
+    edges: new Set(),
+    events: new Set(),
+    commands: new Set(),
+    deletions: new Set(),
   };
   private readonly locks = new Map<string, Promise<() => void>>();
   private closed = false;
@@ -158,7 +177,13 @@ class MemoryTransactionContext {
 
   checkDeferredConstraints(): void {
     this.assertOpen();
-    for (const [sessionId, session] of this.staged.sessions) {
+    const touchedSessions = new Set([
+      ...this.staged.sessions.keys(),
+      ...[...this.deleted.nodes].map(sessionOfKey),
+    ]);
+    for (const sessionId of touchedSessions) {
+      const session = this.row("sessions", sessionId);
+      if (session === undefined) continue;
       if (this.row("nodes", memoryProofRecordKey(sessionId, session.rootNodeId)) === undefined) {
         violation(`proof_sessions_root_node_fk: session ${sessionId} has no root node.`);
       }
@@ -174,6 +199,15 @@ class MemoryTransactionContext {
         }
       }
     }
+    for (const commandKey of this.deleted.commands) {
+      const sessionId = sessionOfKey(commandKey);
+      const referenced = (["edges", "events"] as const).some((table) =>
+        this.sessionRows(table, sessionId).some(
+          (record) => memoryProofRecordKey(sessionId, record.commandId) === commandKey,
+        ),
+      );
+      if (referenced) violation(`proof_commands: deleted command ${commandKey} is referenced.`);
+    }
   }
 
   /** Apply every staged row synchronously, so no other transaction observes a partial commit. */
@@ -184,6 +218,7 @@ class MemoryTransactionContext {
 
   private applyStaged<Name extends TableName>(name: Name): void {
     const target = this.committed[name] as Map<string, RowOf<Name>>;
+    for (const recordKey of this.deleted[name]) target.delete(recordKey);
     for (const [recordKey, row] of this.staged[name]) target.set(recordKey, row);
   }
 
@@ -214,8 +249,115 @@ class MemoryTransactionContext {
   }
 
   private row<Name extends TableName>(name: Name, recordKey: string): RowOf<Name> | undefined {
-    return (this.staged[name].get(recordKey) ??
-      (this.committed[name] as Map<string, RowOf<Name>>).get(recordKey)) as RowOf<Name> | undefined;
+    const staged = this.staged[name].get(recordKey);
+    if (staged !== undefined) return staged as RowOf<Name>;
+    if (this.deleted[name].has(recordKey)) return undefined;
+    return (this.committed[name] as Map<string, RowOf<Name>>).get(recordKey) as
+      RowOf<Name> | undefined;
+  }
+
+  /** Delete matching session rows of one table, like `DELETE ... RETURNING id`. */
+  private remove<Name extends TableName>(
+    name: Name,
+    sessionId: string,
+    matches: (row: RowOf<Name>) => boolean,
+    idOf: (row: RowOf<Name>) => string,
+  ): string[] {
+    const removed: string[] = [];
+    for (const row of this.sessionRows(name, sessionId)) {
+      if (!matches(row)) continue;
+      const recordKey = memoryProofRecordKey(sessionId, idOf(row));
+      this.staged[name].delete(recordKey);
+      this.deleted[name].add(recordKey);
+      removed.push(idOf(row));
+    }
+    return removed;
+  }
+
+  /** Mirrors `PostgresProofStore.deleteProofRecords`, checking each immediate foreign key. */
+  private async deleteProofRecords(
+    sessionId: ProofSessionId,
+    request: ProofRecordDeletionRequest,
+  ): Promise<ProofRecordDeletionResult> {
+    await this.lock(sessionId);
+    const nodeIds = new Set<string>(request.nodeIds);
+    const edgeIds = new Set<string>(request.edgeIds);
+    const commandIds = new Set<string>(request.commandIds);
+    const chosenPreviewIds = new Set<string>(request.chosenPreviewIds);
+
+    const eventIds = this.remove("events", sessionId, (row) => edgeIds.has(row.edgeId), idOf);
+    const removedEdgeIds = this.remove("edges", sessionId, (row) => edgeIds.has(row.id), idOf);
+    const removedEdges = new Set(removedEdgeIds);
+    if (this.sessionRows("events", sessionId).some((event) => removedEdges.has(event.edgeId))) {
+      violation("proof_events edge foreign key: a deleted edge is still referenced.");
+    }
+    const referencedPreviews = new Set(
+      this.sessionRows("edges", sessionId).flatMap(({ previewId }) =>
+        previewId === undefined ? [] : [previewId],
+      ),
+    );
+    const previewIds = this.remove(
+      "previews",
+      sessionId,
+      (row) =>
+        (nodeIds.has(row.nodeId) || chosenPreviewIds.has(row.id)) &&
+        !referencedPreviews.has(row.id),
+      idOf,
+    );
+    this.requireUnreferenced(sessionId, "previewId", new Set(previewIds), "proof_previews");
+    const suggestionSetIds = this.remove(
+      "suggestionSets",
+      sessionId,
+      (row) => nodeIds.has(row.nodeId),
+      idOf,
+    );
+    const removedSets = new Set(suggestionSetIds);
+    if (
+      this.sessionRows("previews", sessionId).some((row) => removedSets.has(row.suggestionSetId))
+    ) {
+      violation("proof_previews suggestion-set foreign key: a deleted set is still referenced.");
+    }
+    this.requireUnreferenced(sessionId, "suggestionSetId", removedSets, "proof_suggestion_sets");
+    const removedCommandIds = this.remove(
+      "commands",
+      sessionId,
+      (row) => commandIds.has(row.prepared.command.commandId),
+      (row) => row.prepared.command.commandId,
+    );
+    const removedNodeIds = this.remove("nodes", sessionId, (row) => nodeIds.has(row.id), idOf);
+    const removedNodes = new Set(removedNodeIds);
+    const nodeReferenced =
+      this.sessionRows("suggestionSets", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
+      this.sessionRows("previews", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
+      (["edges", "events"] as const).some((table) =>
+        this.sessionRows(table, sessionId).some(
+          (row) => removedNodes.has(row.parentNodeId) || removedNodes.has(row.childNodeId),
+        ),
+      );
+    if (nodeReferenced) violation("proof_nodes foreign key: a deleted node is still referenced.");
+    return {
+      eventIds,
+      edgeIds: removedEdgeIds,
+      previewIds,
+      suggestionSetIds,
+      commandIds: removedCommandIds,
+      nodeIds: removedNodeIds,
+    };
+  }
+
+  private requireUnreferenced(
+    sessionId: string,
+    column: "previewId" | "suggestionSetId",
+    removed: ReadonlySet<string>,
+    table: string,
+  ): void {
+    const referenced = (["edges", "events"] as const).some((name) =>
+      this.sessionRows(name, sessionId).some((row) => {
+        const value = row[column];
+        return value !== undefined && removed.has(value);
+      }),
+    );
+    if (referenced) violation(`${table} foreign key: a deleted row is still referenced.`);
   }
 
   private read<Name extends TableName>(name: Name, recordKey: string): RowOf<Name> | undefined {
@@ -404,6 +546,50 @@ class MemoryTransactionContext {
         this.updateCurrentNode(sessionId, expectedNodeId, nextNodeId),
       repointCurrentNode: async (sessionId, expectedNodeId, targetNodeId) =>
         this.updateCurrentNode(sessionId, expectedNodeId, targetNodeId),
+      readDeletion: async (sessionId, commandId) => {
+        this.assertOpen();
+        const rows = this.sessionRows("deletions", sessionId);
+        const found =
+          rows.find((row) => row.commandId === commandId) ??
+          rows
+            .filter((row) => row.deletedCommandIds.includes(commandId))
+            .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))[0];
+        return found === undefined ? undefined : structuredClone(found);
+      },
+      deleteProofRecords: async (sessionId, request) => this.deleteProofRecords(sessionId, request),
+      insertDeletion: async (sessionId, deletion) =>
+        this.insert(
+          "deletions",
+          sessionId,
+          memoryProofRecordKey(sessionId, deletion.id),
+          deletion,
+          (row) => {
+            if (
+              this.sessionRows("deletions", sessionId).some(
+                (existing) => existing.commandId === row.commandId,
+              )
+            ) {
+              violation(`proof_deletions unique command: ${row.commandId} exists.`);
+            }
+            if (
+              row.deletedNodeIds.length < 1 ||
+              row.deletedEdgeIds.length !== row.deletedNodeIds.length ||
+              row.deletedCommandIds.length !== row.deletedNodeIds.length ||
+              row.deletedNodeIds.includes(row.parentNodeId) ||
+              row.deletedCommandIds.includes(row.commandId)
+            ) {
+              violation("proof_deletions check: the tombstone identities are inconsistent.");
+            }
+            const keys = Object.keys(row);
+            if (
+              ["state", "node", "nodes", "edge", "edges", "event", "events"].some((key) =>
+                keys.includes(key),
+              )
+            ) {
+              violation("proof_deletions check: a tombstone cannot hold deleted snapshots.");
+            }
+          },
+        ),
     };
   }
 
@@ -464,6 +650,10 @@ class MemoryTransactionContext {
       }
     }
   }
+}
+
+function idOf(row: Readonly<{ id: string }>): string {
+  return row.id;
 }
 
 function violation(message: string): never {

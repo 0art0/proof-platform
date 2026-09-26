@@ -7,6 +7,8 @@ import {
   createMovePreviewSchema,
   createProofEdgeSchema,
   createProofNodeSchema,
+  deletePreviousMoveCommandSchema,
+  deletePreviousMoveReceiptSchema,
   displayedSuggestionSetSchema,
   proofCommandReceiptSchema,
   proofSessionMetadataSchema,
@@ -23,6 +25,7 @@ import { postgresProofStore } from "../postgres-proof-store";
 import {
   backtrackProofSession,
   backtrackProofSessionSchema,
+  deletePreviousMove,
   derivedMoveRecordIds,
   executeProofCommand,
   loadProofHistory,
@@ -110,6 +113,10 @@ export const proofHttpSuggestionRequestSchema = z
 
 export const proofHttpMoveChoiceRequestSchema = moveChoiceSchema;
 export const proofHttpBacktrackRequestSchema = backtrackProofSessionSchema;
+/** The web actor is supplied by the service; clients never name the actor. */
+export const proofHttpDeletePreviousMoveRequestSchema = deletePreviousMoveCommandSchema.omit({
+  actor: true,
+});
 
 export const proofHttpTransitionClassificationSchema = z
   .object({ suggestionId: suggestionIdSchema, transitionClass: transitionClassSchema })
@@ -146,6 +153,15 @@ export const proofHttpHistoryResponseSchema = z
 
 export const proofHttpBacktrackResponseSchema = z
   .object({ session: proofHttpSessionSchema, node: z.unknown(), replayed: z.boolean() })
+  .strict();
+
+export const proofHttpDeletePreviousMoveResponseSchema = z
+  .object({
+    session: proofHttpSessionSchema,
+    node: z.unknown(),
+    receipt: deletePreviousMoveReceiptSchema,
+    replayed: z.boolean(),
+  })
   .strict();
 
 const WEB_ACTOR = actorSchema.parse({ id: "actor:web", kind: "human" });
@@ -459,6 +475,42 @@ async function handleRequest(
     return;
   }
 
+  if (route.kind === "delete-previous-move" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(
+      request,
+      proofHttpDeletePreviousMoveRequestSchema,
+    );
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const deleted = await deletePreviousMove(
+      store,
+      route.sessionId,
+      { ...requested.value, actor: WEB_ACTOR },
+      WEB_ACTOR,
+    );
+    if (deleted.status !== "committed") {
+      writeRepositoryFailure(response, deleted);
+      return;
+    }
+    const loaded = await loadCurrentProofSession(store, route.sessionId);
+    if (loaded.status !== "loaded") {
+      writeRepositoryFailure(response, loaded);
+      return;
+    }
+    const schema = proofHttpDeletePreviousMoveResponseSchema.extend({
+      node: createProofNodeSchema({ operators: loaded.session.operators }),
+    });
+    writeValidatedJson(response, 200, schema, {
+      session: withoutMetadata(loaded.session),
+      node: loaded.node,
+      receipt: deleted.receipt,
+      replayed: deleted.replayed,
+    });
+    return;
+  }
+
   response.setHeader(
     "allow",
     route.kind === "session" || route.kind === "suggestion" || route.kind === "history"
@@ -475,7 +527,8 @@ type ParsedRoute =
   | Readonly<{ kind: "preview-collection"; sessionId: string }>
   | Readonly<{ kind: "command-collection"; sessionId: string }>
   | Readonly<{ kind: "history"; sessionId: string }>
-  | Readonly<{ kind: "backtrack"; sessionId: string }>;
+  | Readonly<{ kind: "backtrack"; sessionId: string }>
+  | Readonly<{ kind: "delete-previous-move"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
   try {
@@ -500,6 +553,9 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       }
       if (segments[2] === "history") return { kind: "history", sessionId: sessionId.data };
       if (segments[2] === "backtrack") return { kind: "backtrack", sessionId: sessionId.data };
+      if (segments[2] === "delete-previous-move") {
+        return { kind: "delete-previous-move", sessionId: sessionId.data };
+      }
       return undefined;
     }
     if (segments[2] !== "suggestion-sets" || segments.length !== 4 || segments[3] === undefined) {
@@ -587,12 +643,17 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
           code === "preview-not-found" ||
           code === "current-node-not-found"
         ? 404
-        : code === "serialized-stale-command" || code === "serialized-stale-backtrack"
+        : code === "serialized-stale-command" ||
+            code === "serialized-stale-backtrack" ||
+            code === "serialized-stale-delete" ||
+            code === "delete-requires-confirmation" ||
+            code === "command-deleted"
           ? 409
           : code === "suggestion-set-rejected" ||
               code === "preview-rejected" ||
               code === "command-rejected" ||
-              code === "backtrack-rejected"
+              code === "backtrack-rejected" ||
+              code === "delete-rejected"
             ? 400
             : 500;
   writeJson(response, status, { diagnostics: failure.diagnostics });

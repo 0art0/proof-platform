@@ -32,6 +32,25 @@ Sequences are allocated per scope under the session row lock (or a global adviso
 suggestion sets are never touched, so earlier menus stay exactly as displayed. `MemoryLibraryStore`
 mirrors these constraints for database-free runs.
 
+`0005_proof_deletions.sql` adds `proof_deletions`, the audit tombstones of "Delete previous move"
+(design plan §16.2). A deletion physically removes, in foreign-key order, the transition events and
+edges of the deleted subtree, previews anchored at deleted nodes or chosen by deleted edges (unless a
+retained edge still references one), suggestion sets anchored at deleted nodes, the deleted command
+records, and the deleted nodes. The session cursor moves to the parent in the same transaction.
+Deleted work is therefore absent from history and export.
+
+- Each tombstone holds only identities: the issuing command ID, actor, optional reason, parent node,
+  and the deleted node, edge, event, command, suggestion-set and preview IDs. It never stores
+  snapshots, operations, or suggestions; a check rejects records carrying such keys.
+- `UNIQUE (session_id, command_id)` makes the delete command idempotent. Delete command IDs share
+  the session's command-ID space with apply commands, but are kept out of `proof_commands`, whose
+  checks describe apply results.
+- A GIN index on `deleted_command_ids` lets a retried apply command discover that its move was
+  deleted; the repository rejects it (`command-deleted`) instead of re-applying it.
+
+`MemoryProofStore` mirrors the table and checks each immediate foreign key as rows are deleted, and
+the deferred command and session-pointer keys at commit.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -39,6 +58,10 @@ migrations. Its PostgreSQL-backed endpoints are:
 
 - `GET /proof-sessions/:sessionId` for the runtime-validated session and current proof node.
 - `POST /proof-sessions/:sessionId/suggestion-sets` to record deterministic retrieval evidence.
+- `POST /proof-sessions/:sessionId/delete-previous-move` with
+  `{ commandId, expectedCurrentNodeId, confirmDescendants?, reason? }`. It returns the session,
+  the parent node and `{ deletedNodeIds, deletedEdgeIds, currentNodeId }`. A stale cursor, deleting
+  unconfirmed descendants, or replaying a deleted command returns 409. Deleting at the root returns 400.
 - `GET /proof-sessions/:sessionId/suggestion-sets/:suggestionSetId` for immutable persisted
   evidence, validated against its historical proof node.
 

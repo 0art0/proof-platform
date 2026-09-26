@@ -44,6 +44,9 @@ export class InspectableMemoryProofStore extends MemoryProofStore {
   get commands() {
     return this.tables.commands;
   }
+  get deletions() {
+    return this.tables.deletions;
+  }
 
   protected override instrument(inner: ProofStoreTransaction): ProofStoreTransaction {
     const fail = (point: MemoryProofStoreFailurePoint): void => {

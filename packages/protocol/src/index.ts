@@ -47,6 +47,7 @@ export {
 export type { OperatorDeclaration, PlainMathJson } from "@proof/mathjson-model";
 export * from "./session-metadata";
 export * from "./discovery-tree";
+export * from "./move-deletion";
 
 export const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 export type ActorId = z.infer<typeof actorIdSchema>;

@@ -1,6 +1,8 @@
 import type { Pool } from "pg";
 import {
   ProofStoreTransactionError,
+  type ProofRecordDeletionRequest,
+  type ProofRecordDeletionResult,
   type ProofSession,
   type ProofSessionId,
   type ProofStore,
@@ -12,6 +14,7 @@ import type {
   MovePreview,
   MovePreviewId,
   PrepareProofCommandSuccess,
+  ProofDeletionRecord,
   ProofEdge,
   ProofNode,
   TransitionEvent,
@@ -346,5 +349,95 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
       [sessionId, expectedNodeId, targetNodeId],
     );
     return result.rowCount === 1;
+  }
+
+  async readDeletion(
+    sessionId: ProofSessionId,
+    commandId: ApplyKernelCommand["commandId"],
+  ): Promise<unknown | undefined> {
+    const result = await this.client.query(
+      `SELECT record
+       FROM proof_deletions
+       WHERE session_id = $1 AND (command_id = $2 OR $2 = ANY (deleted_command_ids))
+       ORDER BY (command_id = $2) DESC, id
+       LIMIT 1`,
+      [sessionId, commandId],
+    );
+    return result.rows[0]?.record;
+  }
+
+  async deleteProofRecords(
+    sessionId: ProofSessionId,
+    request: ProofRecordDeletionRequest,
+  ): Promise<ProofRecordDeletionResult> {
+    const ids = async (text: string, values: readonly unknown[]): Promise<readonly string[]> =>
+      (await this.client.query(text, [sessionId, ...values])).rows.map((row) => String(row.id));
+    // Dependency order: every non-deferred foreign key into a row is removed before the row.
+    const eventIds = await ids(
+      `DELETE FROM proof_events
+       WHERE session_id = $1 AND edge_id = ANY ($2::text[])
+       RETURNING id`,
+      [request.edgeIds],
+    );
+    const edgeIds = await ids(
+      `DELETE FROM proof_edges
+       WHERE session_id = $1 AND id = ANY ($2::text[])
+       RETURNING id`,
+      [request.edgeIds],
+    );
+    const previewIds = await ids(
+      `DELETE FROM proof_previews AS preview
+       WHERE preview.session_id = $1
+         AND (preview.node_id = ANY ($2::text[]) OR preview.id = ANY ($3::text[]))
+         AND NOT EXISTS (
+           SELECT 1 FROM proof_edges AS edge
+           WHERE edge.session_id = preview.session_id AND edge.preview_id = preview.id
+         )
+       RETURNING preview.id`,
+      [request.nodeIds, request.chosenPreviewIds],
+    );
+    const suggestionSetIds = await ids(
+      `DELETE FROM proof_suggestion_sets
+       WHERE session_id = $1 AND node_id = ANY ($2::text[])
+       RETURNING id`,
+      [request.nodeIds],
+    );
+    const commandIds = await ids(
+      `DELETE FROM proof_commands
+       WHERE session_id = $1 AND command_id = ANY ($2::text[])
+       RETURNING command_id AS id`,
+      [request.commandIds],
+    );
+    const nodeIds = await ids(
+      `DELETE FROM proof_nodes
+       WHERE session_id = $1 AND id = ANY ($2::text[])
+       RETURNING id`,
+      [request.nodeIds],
+    );
+    return { eventIds, edgeIds, previewIds, suggestionSetIds, commandIds, nodeIds };
+  }
+
+  async insertDeletion(sessionId: ProofSessionId, deletion: ProofDeletionRecord): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_deletions
+         (session_id, id, command_id, actor_id, actor_kind, reason, parent_node_id,
+          deleted_node_ids, deleted_edge_ids, deleted_command_ids, occurred_at, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9::text[], $10::text[],
+               $11::timestamptz, $12::jsonb)`,
+      [
+        sessionId,
+        deletion.id,
+        deletion.commandId,
+        deletion.actor.id,
+        deletion.actor.kind,
+        deletion.reason ?? null,
+        deletion.parentNodeId,
+        deletion.deletedNodeIds,
+        deletion.deletedEdgeIds,
+        deletion.deletedCommandIds,
+        deletion.occurredAt,
+        JSON.stringify(deletion),
+      ],
+    );
   }
 }
