@@ -18,6 +18,7 @@ export class PostgresLlmCallStore implements LlmCallStore {
     work: (transaction: LlmCallStoreTransaction) => Promise<Result>,
   ): Promise<Result> {
     const client = await this.pool.connect();
+    let reusable = false;
     try {
       try {
         await client.query("BEGIN");
@@ -41,6 +42,7 @@ export class PostgresLlmCallStore implements LlmCallStore {
             rollbackCause,
           );
         }
+        reusable = true;
         throw new ProofStoreTransactionError(
           "rolled-back",
           "The PostgreSQL LLM-call transaction was rolled back.",
@@ -56,9 +58,14 @@ export class PostgresLlmCallStore implements LlmCallStore {
           cause,
         );
       }
+      reusable = true;
       return result;
     } finally {
-      client.release();
+      if (reusable) {
+        client.release();
+      } else {
+        client.release(true);
+      }
     }
   }
 }

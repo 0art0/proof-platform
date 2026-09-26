@@ -1,12 +1,9 @@
-# Repository-local toolchain and package manager state
+# Package manager and build output
 /.git/
 /.agents/
 /.codex/
-/.tools/
-/.pnpm-store/
 /node_modules/
 **/node_modules/
-**/.turbo/
 **/.next/
 **/dist/
 **/coverage/

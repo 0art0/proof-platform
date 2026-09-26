@@ -1,0 +1,11 @@
+[2m$ vitest run --passWithNoTests[22m
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90m/home/kolakili/Code/proof-platform/.claude/worktrees/non-ai-features/packages/selections[39m
+
+ [32m✓[39m src/index.test.ts [2m([22m[2m46 tests[22m[2m)[22m[33m 595[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m46 passed[39m[22m[90m (46)[39m
+[2m   Start at [22m 00:53:59
+[2m   Duration [22m 10.06s[2m (transform 1.40s, setup 0ms, import 6.72s, tests 595ms, environment 0ms)[22m
+

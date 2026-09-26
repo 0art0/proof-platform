@@ -15,7 +15,7 @@ import {
 import { ProofStoreTransactionError } from "./proof-repository";
 import type { SqlClient, SqlPool } from "./postgres-proof-store";
 
-/** PostgreSQL/JSONB library storage (`migrations/0004_library.sql`). */
+/** PostgreSQL/JSONB library storage (`migrations/0005_library.sql`). */
 export class PostgresLibraryStore implements LibraryStore {
   constructor(private readonly pool: SqlPool) {}
 

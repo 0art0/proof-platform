@@ -37,10 +37,10 @@ The implementation must continue to honor the design plan's central boundaries:
 ## Useful commands
 
 ```bash
-./scripts/pnpmw install --frozen-lockfile
-./scripts/pnpmw verify
-./scripts/pnpmw run test:e2e:workspace
-PROOF_STORE=memory ./scripts/pnpmw exec tsx apps/worker/src/main.ts
+npm ci
+npm run verify
+npm run test:e2e:workspace
+PROOF_STORE=memory npx tsx apps/worker/src/main.ts
 ```
 
 `verify` runs the Prettier check and lint, typecheck, test, and build across the workspace.

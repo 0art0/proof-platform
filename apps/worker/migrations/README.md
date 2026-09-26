@@ -6,18 +6,31 @@ state and documentary records are stored as JSONB.
 
 Apply migrations with the deployment environment's normal PostgreSQL migration runner.
 The worker does not connect to a database or run migrations automatically at startup.
-The migration has not been exercised against a live PostgreSQL instance by the unit suite.
+The migrations are not exercised against a live PostgreSQL instance by the unit suite.
 
 `0002_llm_call_evidence.sql` adds owner-scoped immutable LLM request/outcome records and explicit
 topic-manifest review decisions. A `dispatching` record deliberately remains ambiguous after a
 worker crash: retry reads it as uncertain and does not silently dispatch the provider again.
 
-`0003_session_metadata.sql` adds a nullable `proof_sessions.metadata` JSONB object holding the
+`0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
+events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
+as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so
+the no-evidence, suggestion-without-preview, and suggestion-with-preview shapes all compare
+positionally without sentinel values. The migration validates existing rows and deliberately
+fails instead of rewriting inconsistent provenance.
+
+Migration `0003` requires PostgreSQL 12 or later because it uses stored generated columns. Adding
+the stored columns computes and stores a value for every existing edge and event and can rewrite
+both tables. The table alterations, unique-index construction, and foreign-key validation also
+take locks that can block concurrent reads or writes. Plan enough time and disk space and run the
+migration during a suitable low-traffic or maintenance window.
+
+`0004_session_metadata.sql` adds a nullable `proof_sessions.metadata` JSONB object holding the
 protocol `ProofSessionMetadata` (problem title and statement, background profile, preferences and
 active library layer IDs). Existing sessions keep `NULL` and load without metadata. The column is
 written only when a session is initialized and is never part of proof state.
 
-`0004_library.sql` adds the library store (design plan §12.4):
+`0005_library.sql` adds the library store (design plan §12.4):
 
 - `library_addition_events`: append-only addition events keyed by `(scope_key, id)`, where
   `scope_key` is `global` or `session:<id>`. Every gate decision is recorded, including rejections.
@@ -32,7 +45,7 @@ Sequences are allocated per scope under the session row lock (or a global adviso
 suggestion sets are never touched, so earlier menus stay exactly as displayed. `MemoryLibraryStore`
 mirrors these constraints for database-free runs.
 
-`0005_proof_deletions.sql` adds `proof_deletions`, the audit tombstones of "Delete previous move"
+`0006_proof_deletions.sql` adds `proof_deletions`, the audit tombstones of "Delete previous move"
 (design plan §16.2). A deletion physically removes, in foreign-key order, the transition events and
 edges of the deleted subtree, previews anchored at deleted nodes or chosen by deleted edges (unless a
 retained edge still references one), suggestion sets anchored at deleted nodes, the deleted command
@@ -74,7 +87,7 @@ After applying migrations with the deployment migration runner, exercise a real 
 and persistence boundary with:
 
 ```bash
-PROOF_DATABASE_URL=postgresql://... ./scripts/pnpmw exec tsx \
+PROOF_DATABASE_URL=postgresql://... npx tsx \
   apps/worker/src/development-session/live-postgres-verification.ts
 ```
 

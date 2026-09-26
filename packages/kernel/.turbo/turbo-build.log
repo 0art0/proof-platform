@@ -1,0 +1,4 @@
+[2m$ tsc --noEmit[22m
+src/index.ts(498,4): error TS2366: Function lacks ending return statement and return type does not include 'undefined'.
+src/index.ts(1666,9): error TS2739: Type '{ "close-by-hypothesis": string[]; "close-true": never[]; "close-false-hypothesis": string[]; "close-reflexive-equality": never[]; "close-by-contradiction": string[]; "close-by-accepted-inference": string[]; ... 20 more ...; "apply-result-forward": string[]; }' is missing the following properties from type 'Readonly<Record<"suffices" | "close-by-hypothesis" | "close-true" | "close-false-hypothesis" | "close-reflexive-equality" | "close-by-contradiction" | "close-by-accepted-inference" | ... 21 more ... | "close-by-assumption", readonly string[]>>': "mark-sorry", "close-by-assumption"
+[41m[31m[[39m[49m[41m[30mELIFECYCLE[39m[49m[41m[31m][39m[49m [31mCommand failed with exit code 2.[39m

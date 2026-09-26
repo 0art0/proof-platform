@@ -49,7 +49,7 @@ const emptyTables = (): LibraryTables => ({
 });
 
 /**
- * The in-memory proof store plus the library tables of `migrations/0004_library.sql`.
+ * The in-memory proof store plus the library tables of `migrations/0005_library.sql`.
  *
  * It shares session and node rows with the proof store, because the library references sessions,
  * checks derived-result proof nodes, and revises `proof_sessions.metadata`. Proof and library

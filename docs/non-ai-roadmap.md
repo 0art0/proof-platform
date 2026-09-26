@@ -24,8 +24,8 @@ otherwise automate — the substrate is in scope.
 - Match existing conventions: zod v4 `.strict()` schemas with branded ids, discriminated `{ok, diagnostics}`
   results, frozen outputs, and vitest tests. Mathematical-core changes need property (fast-check), golden,
   or invariant tests.
-- Checks per task: `./scripts/pnpmw run lint`, `./scripts/pnpmw run typecheck`, `./scripts/pnpmw run test`,
-  and `./scripts/pnpmw exec prettier --check .`. No live PostgreSQL is available in the development
+- Checks per task: `npm run lint`, `npm run typecheck`, `npm test` (or `-w @proof/<pkg>` for one
+  package), and `npx prettier --check .`. No live PostgreSQL is available in the development
   sandbox. Persistence is tested through the existing fake `SqlClient` and the in-memory store.
 
 ## Reusable work from the agentctl setup

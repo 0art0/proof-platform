@@ -1,0 +1,47 @@
+[2m$ vitest run --passWithNoTests[22m
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90m/home/kolakili/Code/proof-platform/.claude/worktrees/non-ai-features/packages/language[39m
+
+[90mstderr[2m | src/presentation.test.ts[2m > [22m[2mcreatePresentation[2m > [22m[2mparses what it serializes
+[22m[39mLatexSyntax dictionary warning: {
+  severity: [32m'warning'[39m,
+  message: [
+    [32m'invalid-dictionary-entry'[39m,
+    [32m'Divides'[39m,
+    [32m'Duplicate definition. The name (MathJSON symbol) must be unique, but triggers can be shared by multiple definitions.'[39m
+  ]
+}
+
+ [32m✓[39m src/presentation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 543[2mms[22m[39m
+     [33m[2m✓[22m[39m renders one statement to LaTeX and natural language from one registry [33m 331[2mms[22m[39m
+ [32m✓[39m src/natural-language.test.ts [2m([22m[2m60 tests[22m[2m)[22m[33m 854[2mms[22m[39m
+[90mstderr[2m | src/latex.test.ts[2m > [22m[2mLaTeX parsing[2m > [22m[2mround-trips ["Add","x",1]
+[22m[39mLatexSyntax dictionary warning: {
+  severity: [32m'warning'[39m,
+  message: [
+    [32m'invalid-dictionary-entry'[39m,
+    [32m'Divides'[39m,
+    [32m'Duplicate definition. The name (MathJSON symbol) must be unique, but triggers can be shared by multiple definitions.'[39m
+  ]
+}
+
+[90mstderr[2m | src/latex.test.ts[2m > [22m[2mLaTeX parsing[2m > [22m[2mparses custom triggers only when the operator is registered
+[22m[39mLatexSyntax dictionary warning: {
+  severity: [32m'warning'[39m,
+  message: [
+    [32m'invalid-dictionary-entry'[39m,
+    [32m'Divides'[39m,
+    [32m'Duplicate definition. The name (MathJSON symbol) must be unique, but triggers can be shared by multiple definitions.'[39m
+  ]
+}
+
+ [32m✓[39m src/latex.test.ts [2m([22m[2m86 tests[22m[2m)[22m[33m 2268[2mms[22m[39m
+     [33m[2m✓[22m[39m round-trips ["Add","x",1] [33m 386[2mms[22m[39m
+     [33m[2m✓[22m[39m parses custom triggers only when the operator is registered [33m 565[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes juxtaposition, grouping and numerals [33m 485[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m149 passed[39m[22m[90m (149)[39m
+[2m   Start at [22m 00:53:59
+[2m   Duration [22m 10.49s[2m (transform 2.46s, setup 0ms, import 16.39s, tests 3.66s, environment 1ms)[22m
+

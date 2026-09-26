@@ -1,0 +1,16 @@
+[2m$ vitest run --passWithNoTests[22m
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90m/home/kolakili/Code/proof-platform/.claude/worktrees/non-ai-features/packages/mathjson-model[39m
+
+ [32m✓[39m src/index.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 677[2mms[22m[39m
+     [33m[2m✓[22m[39m renders a noncanonical expression without replacing the source [33m 442[2mms[22m[39m
+ [32m✓[39m src/contracts.test.ts [2m([22m[2m36 tests[22m[2m)[22m[33m 1058[2mms[22m[39m
+ [32m✓[39m src/binding.test.ts [2m([22m[2m20 tests[22m[2m)[22m[33m 1683[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps an inserted free symbol free for arbitrary distinct names [33m 659[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves a colliding replacement as free under arbitrary binders [33m 633[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m62 passed[39m[22m[90m (62)[39m
+[2m   Start at [22m 00:53:58
+[2m   Duration [22m 10.03s[2m (transform 1.99s, setup 0ms, import 18.72s, tests 3.42s, environment 1ms)[22m
+

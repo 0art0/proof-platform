@@ -28,7 +28,7 @@ export type SqlQueryResult = Readonly<{
 
 export interface SqlClient {
   query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult>;
-  release(): void;
+  release(error?: Error | boolean): void;
 }
 
 export interface SqlPool {
@@ -43,6 +43,7 @@ export class PostgresProofStore implements ProofStore {
     work: (transaction: ProofStoreTransaction) => Promise<Result>,
   ): Promise<Result> {
     const client = await this.pool.connect();
+    let reusable = false;
     try {
       try {
         await client.query("BEGIN");
@@ -67,6 +68,7 @@ export class PostgresProofStore implements ProofStore {
             rollbackCause,
           );
         }
+        reusable = true;
         throw new ProofStoreTransactionError(
           "rolled-back",
           "The PostgreSQL proof transaction was rolled back.",
@@ -83,9 +85,14 @@ export class PostgresProofStore implements ProofStore {
           cause,
         );
       }
+      reusable = true;
       return result;
     } finally {
-      client.release();
+      if (reusable) {
+        client.release();
+      } else {
+        client.release(true);
+      }
     }
   }
 }

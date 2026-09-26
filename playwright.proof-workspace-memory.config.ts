@@ -21,7 +21,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `PROOF_STORE=memory PROOF_HTTP_PORT=${WORKER_PORT} ./scripts/pnpmw exec tsx apps/worker/src/main.ts`,
+      command: `PROOF_STORE=memory PROOF_HTTP_PORT=${WORKER_PORT} npx tsx apps/worker/src/main.ts`,
       url: `http://127.0.0.1:${WORKER_PORT}/proof-sessions/session%3Adevelopment`,
       reuseExistingServer: false,
       timeout: 120_000,
@@ -29,7 +29,7 @@ export default defineConfig({
     {
       // Webpack with polling avoids Turbopack's inotify watchers, which exhaust the OS watch
       // limit when several worktrees and dev servers share one host.
-      command: `WATCHPACK_POLLING=true PROOF_HTTP_ORIGIN=http://127.0.0.1:${WORKER_PORT} ./scripts/nodew apps/web/node_modules/next/dist/bin/next dev apps/web --webpack --hostname 127.0.0.1 --port ${WEB_PORT}`,
+      command: `NEXT_TELEMETRY_DISABLED=1 WATCHPACK_POLLING=true PROOF_HTTP_ORIGIN=http://127.0.0.1:${WORKER_PORT} npx next dev apps/web --webpack --hostname 127.0.0.1 --port ${WEB_PORT}`,
       url: `http://127.0.0.1:${WEB_PORT}`,
       reuseExistingServer: true,
       timeout: 120_000,

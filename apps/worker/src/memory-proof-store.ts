@@ -23,7 +23,7 @@ import {
 /**
  * Committed rows of the in-memory store, mirroring the PostgreSQL tables in
  * `migrations/0001_proof_commands.sql` (plus the nullable `proof_sessions.metadata` object from
- * `0003_session_metadata.sql`) and the `proof_deletions` tombstones of `0005_proof_deletions.sql`.
+ * `0004_session_metadata.sql`) and the `proof_deletions` tombstones of `0006_proof_deletions.sql`.
  * Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */

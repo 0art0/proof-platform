@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@proof/mathjson-model": "workspace:*",
-    "@proof/selections": "workspace:*"
+    "@proof/mathjson-model": "*",
+    "@proof/selections": "*"
   }
 }
