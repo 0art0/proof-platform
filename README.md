@@ -1,22 +1,22 @@
 # Proof Platform
 
-This repository implements the [interactive mathematical discovery platform](./platform-design-plan.md). It is a TypeScript/pnpm monorepo with a dependency-light autonomous development control plane in `orchestration/`.
+This repository implements the [interactive mathematical discovery platform](./platform-design-plan.md). It is a TypeScript/pnpm monorepo: shared packages live in `packages/`, the proof worker in `apps/worker`, and the Next.js web app in `apps/web`.
 
-## Bootstrap
+## Setup and verification
 
-The checked-in wrapper uses the system Node.js when it satisfies `.node-version`, otherwise it uses the verified repository-local toolchain in `.tools/`.
+The checked-in wrappers use the system Node.js when it satisfies `.node-version`, otherwise they use the verified repository-local toolchain in `.tools/`.
 
 ```bash
 ./scripts/pnpmw install --frozen-lockfile
 ./scripts/pnpmw verify
-./scripts/agentctl doctor
-./scripts/agentctl init
-./scripts/agentctl start --web
 ```
 
-This starts both the autonomous-work supervisor and the local dashboard. Open
-<http://127.0.0.1:3000/orchestrator>. Use `./scripts/agentctl stop --web` to stop
-both services. Run `./scripts/agentctl start` without `--web` when only the
-background supervisor is needed.
+`verify` runs the Prettier check followed by lint, typecheck, test, and build across the workspace.
 
-See [orchestration/README.md](./orchestration/README.md) before submitting autonomous work. The supervisor never pushes changes and requires a human approval before integration by default.
+## Running locally
+
+```bash
+./scripts/pnpmw --filter @proof/web dev
+```
+
+Then open <http://127.0.0.1:3000>. See [AGENTS.md](./AGENTS.md) for development guidelines.

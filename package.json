@@ -17,12 +17,7 @@
     "test": "./scripts/turbow run test",
     "test:e2e": "playwright test",
     "typecheck": "./scripts/turbow run typecheck",
-    "verify": "prettier --check . && PYTHONPATH=orchestration python3 -m unittest discover -s orchestration/tests -v && ./scripts/turbow run lint typecheck test build",
-    "agents": "./scripts/agentctl",
-    "agents:doctor": "./scripts/agentctl doctor",
-    "agents:start": "./scripts/agentctl start",
-    "agents:status": "./scripts/agentctl status",
-    "agents:test": "PYTHONPATH=orchestration python3 -m unittest discover -s orchestration/tests -v"
+    "verify": "prettier --check . && ./scripts/turbow run lint typecheck test build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
