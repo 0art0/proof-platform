@@ -816,6 +816,17 @@ describe("obligation provenance", () => {
     ];
     const templateCount = templates("x").length;
     const appliedKinds = new Set<unknown>();
+    // Some templates apply to only one initial target (e.g. choose-goal-disjunct needs `q ∨ r`),
+    // so seed every template × initial target as a single-step example. Examples count toward
+    // numRuns, so 150 random runs are added on top.
+    type Step = { template: number; obligationTarget: boolean; index: number };
+    const examples: [Step[]][] = Array.from({ length: templateCount }, (_, template) =>
+      [false, true].flatMap((obligationTarget) =>
+        conclusions.map((_conclusion, index): [Step[]] => [
+          [{ template, obligationTarget, index }],
+        ]),
+      ),
+    ).flat();
 
     fc.assert(
       fc.property(
@@ -868,7 +879,7 @@ describe("obligation provenance", () => {
           });
         },
       ),
-      { numRuns: 150 },
+      { numRuns: examples.length + 150, examples },
     );
     // Every template must actually have been exercised by some successful step.
     expect([...appliedKinds].sort()).toEqual(
