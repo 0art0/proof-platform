@@ -3,26 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "description": "Interactive mathematical discovery platform",
-  "packageManager": "pnpm@11.25.0",
   "engines": {
     "node": ">=24.0.0 <25",
-    "pnpm": ">=11.0.0 <12"
+    "npm": ">=11.0.0"
   },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "build": "./scripts/turbow run build",
-    "dev": "./scripts/turbow run dev --parallel",
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev -w @proof/worker & npm run dev -w @proof/web; wait",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "./scripts/turbow run lint",
-    "test": "./scripts/turbow run test",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
-    "typecheck": "./scripts/turbow run typecheck",
-    "verify": "prettier --check . && PYTHONPATH=orchestration python3 -m unittest discover -s orchestration/tests -v && ./scripts/turbow run lint typecheck test build",
-    "agents": "./scripts/agentctl",
-    "agents:doctor": "./scripts/agentctl doctor",
-    "agents:start": "./scripts/agentctl start",
-    "agents:status": "./scripts/agentctl status",
-    "agents:test": "PYTHONPATH=orchestration python3 -m unittest discover -s orchestration/tests -v"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "verify": "prettier --check . && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -41,9 +39,13 @@
     "jsdom": "^30.0.1",
     "prettier": "^3.9.6",
     "tsx": "^4.23.13",
-    "turbo": "^2.10.12",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.69.0",
     "vitest": "^4.1.11"
+  },
+  "allowScripts": {
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
   }
 }

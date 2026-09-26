@@ -1,11 +1,8 @@
-.agent-state
-.tools
-.worktrees
 .next
 coverage
 dist
 node_modules
 test-results
 playwright-report
-pnpm-lock.yaml
+package-lock.json
 platform-design-plan.md

@@ -3,14 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [
-      "**/node_modules/**",
-      "**/.next/**",
-      "**/dist/**",
-      ".agent-state/**",
-      ".tools/**",
-      ".worktrees/**",
-    ],
+    ignores: ["**/node_modules/**", "**/.next/**", "**/dist/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

@@ -1,25 +1,15 @@
-# Repository-local toolchain and package manager state
+# Package manager and build output
 /.git/
 /.agents/
 /.codex/
-/.tools/
-/.git-data/
-/.pnpm-store/
 /node_modules/
 **/node_modules/
-**/.turbo/
 **/.next/
 **/dist/
 **/coverage/
 **/test-results/
 **/playwright-report/
-**/__pycache__/
-*.py[cod]
 *.tsbuildinfo
-
-# Autonomous development runtime (never visible in commits or worktrees)
-/.agent-state/
-/.worktrees/
 
 # Claude Code interactive-session worktrees
 /.claude/
