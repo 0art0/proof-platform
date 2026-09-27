@@ -36,6 +36,7 @@ import {
 } from "@proof/selections";
 import { z } from "zod";
 import { moveMenuSelectionSchema, type MoveMenuSelection } from "./parameter-menus";
+import { definitionReferencesSchema, type DefinitionReference } from "./interaction-events";
 
 export {
   BUILTIN_BINDER_SPECIFICATIONS,
@@ -51,6 +52,7 @@ export * from "./session-metadata";
 export * from "./discovery-tree";
 export * from "./move-deletion";
 export * from "./parameter-menus";
+export * from "./interaction-events";
 
 export const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 export type ActorId = z.infer<typeof actorIdSchema>;
@@ -622,6 +624,8 @@ export type MovePreview = Readonly<{
   afterState: ExecutableProofState;
   delta: ProofStateDelta;
   menuSelection?: MoveMenuSelection | undefined;
+  /** Content hashes of the approved move/library definitions the preview was built from. */
+  definitions?: readonly DefinitionReference[] | undefined;
 }>;
 
 export function createMovePreviewSchema(
@@ -642,6 +646,7 @@ export function createMovePreviewSchema(
       afterState: stateSchema,
       delta: proofStateDeltaSchema,
       menuSelection: moveMenuSelectionSchema.optional(),
+      definitions: definitionReferencesSchema.optional(),
     })
     .strict()
     .superRefine((preview, context) => {
@@ -670,6 +675,7 @@ const prepareMovePreviewInputSchema = z
     moveId: moveIdSchema,
     operation: kernelOperationAdapterSchema,
     menuSelection: moveMenuSelectionSchema.optional(),
+    definitions: definitionReferencesSchema.optional(),
   })
   .strict();
 
@@ -733,6 +739,7 @@ export function prepareMovePreview(
       afterState: planned.preview.state,
       delta: computeDelta(node.state, planned.preview.state),
       ...(request.menuSelection === undefined ? {} : { menuSelection: request.menuSelection }),
+      ...(request.definitions === undefined ? {} : { definitions: request.definitions }),
     });
     const preview = candidate === undefined ? undefined : freezeDetached(candidate);
     return preview === undefined

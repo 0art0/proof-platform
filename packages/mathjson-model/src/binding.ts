@@ -1,11 +1,15 @@
 import { isPlainMathJson, type PlainMathJson } from "./index";
 import {
-  BUILTIN_BINDER_SPECIFICATIONS,
   RESERVED_BUILTIN_SYMBOLS,
   operatorDeclarationsSchema,
-  type BinderSpecification,
   type OperatorDeclaration,
 } from "./contracts";
+import {
+  binderShape,
+  readBinderDeclaration,
+  type BinderDeclaration,
+  type BinderShape,
+} from "./binders";
 
 export type BindingEnvironment = Readonly<{
   operators?: readonly OperatorDeclaration[];
@@ -250,7 +254,7 @@ function substituteExpression(
 
   const parts = functionParts(expression);
   if (parts === undefined) return expression;
-  const binder = binderFor(parts.operator, environment);
+  const binder = binderFor(parts, environment);
   if (binder === undefined) {
     const operator = substituteOperator(
       parts.operator,
@@ -304,10 +308,22 @@ function substituteExpression(
   );
   const scopedBlocked = new Set([...blocked, ...renamedBindingNames]);
   const operands = parts.operands.map((operand, index) => {
-    if (binding.boundOperandIndices.has(index)) {
-      const name = symbolValue(operand);
-      const renamed = name === undefined ? undefined : renamings.get(name);
-      return renamed === undefined ? operand : renameSymbolNode(operand, renamed);
+    const declaration = binding.declarations.get(index);
+    if (declaration !== undefined) {
+      // A declaration's domain or bounds belong to the enclosing scope.
+      return rebuildDeclaration(operand, declaration, renamings.get(declaration.name), (outer, j) =>
+        substituteExpression(
+          outer,
+          [...path, index, j],
+          blocked,
+          substitutions,
+          replacementFreeSymbols,
+          usedNames,
+          environment,
+          diagnostics,
+          alphaRenamings,
+        ),
+      );
     }
 
     const isScoped = binding.scopedOperandIndexSet.has(index);
@@ -351,7 +367,10 @@ function substituteOperator(
   // MathJSON stores a function head as a bare string. Accepting an object-form
   // symbol here would silently discard its metadata, so callers must provide a
   // bare non-binding symbol (or model a term-valued head with an explicit Apply).
-  if (typeof replacement === "string" && binderFor(replacement, environment) === undefined) {
+  if (
+    typeof replacement === "string" &&
+    binderShape(replacement, 0, environment.operators) === undefined
+  ) {
     return replacement;
   }
 
@@ -367,24 +386,19 @@ function substituteOperator(
 
 function readBinding(
   parts: FunctionParts,
-  binder: BinderSpecification,
+  binder: BinderShape,
   environment: ValidatedBindingEnvironment,
   path: readonly number[],
   diagnostics: SubstitutionDiagnostic[],
 ):
   | Readonly<{
       names: ReadonlySet<string>;
-      boundOperandIndices: ReadonlySet<number>;
+      declarations: ReadonlyMap<number, BinderDeclaration>;
       scopedOperandIndices: readonly number[];
       scopedOperandIndexSet: ReadonlySet<number>;
     }>
   | undefined {
-  const expectedArity =
-    parts.operator === "ForAll" || parts.operator === "Exists"
-      ? 2
-      : environment.operators.find((operator) => operator.symbol === parts.operator)?.signature
-          .parameters.length;
-  if (expectedArity === undefined || parts.operands.length !== expectedArity) {
+  if (!binderArityMatches(parts, environment)) {
     diagnostics.push({
       code: "invalid-binder",
       message: "A binder application must have exactly the operands declared by its signature.",
@@ -395,32 +409,60 @@ function readBinding(
   }
 
   const names = new Set<string>();
+  const declarations = new Map<number, BinderDeclaration>();
   for (const index of binder.boundOperands) {
     const operand = parts.operands[index];
-    const name = operand === undefined ? undefined : symbolValue(operand);
+    const declaration =
+      operand === undefined ? undefined : readBinderDeclaration(operand, binder.forms);
+    const name = declaration?.name ?? (operand === undefined ? undefined : symbolValue(operand));
     if (
-      name === undefined ||
-      names.has(name) ||
-      RESERVED_BUILTIN_SYMBOLS.has(name) ||
-      environment.operatorSymbols.has(name)
+      declaration === undefined ||
+      names.has(declaration.name) ||
+      RESERVED_BUILTIN_SYMBOLS.has(declaration.name) ||
+      environment.operatorSymbols.has(declaration.name)
     ) {
       diagnostics.push({
         code: "invalid-binder",
-        message: "Binder operands must be distinct non-reserved symbols.",
+        message:
+          "Binder operands must declare distinct non-reserved symbols in a form the binder admits.",
         path: [...path, index],
         ...(name === undefined ? {} : { symbol: name }),
       });
       return undefined;
     }
-    names.add(name);
+    names.add(declaration.name);
+    declarations.set(index, declaration);
   }
 
   return {
     names,
-    boundOperandIndices: new Set(binder.boundOperands),
+    declarations,
     scopedOperandIndices: binder.scopedOperands,
     scopedOperandIndexSet: new Set(binder.scopedOperands),
   };
+}
+
+/** Built-in binders have fixed arities, except `Function`, which takes at least one parameter. */
+function binderArityMatches(
+  parts: FunctionParts,
+  environment: ValidatedBindingEnvironment,
+): boolean {
+  const count = parts.operands.length;
+  switch (parts.operator) {
+    case "ForAll":
+    case "Exists":
+    case "Sum":
+    case "Product":
+    case "Integrate":
+      return count === 2;
+    case "Function":
+      return count >= 2;
+    default:
+      return (
+        environment.operators.find((operator) => operator.symbol === parts.operator)?.signature
+          .parameters.length === count
+      );
+  }
 }
 
 function validateBindingStructure(
@@ -431,7 +473,7 @@ function validateBindingStructure(
 ): void {
   const parts = functionParts(expression);
   if (parts === undefined) return;
-  const binder = binderFor(parts.operator, environment);
+  const binder = binderFor(parts, environment);
   if (binder === undefined) {
     parts.operands.forEach((operand, index) =>
       validateBindingStructure(operand, environment, [...path, index], diagnostics),
@@ -442,8 +484,18 @@ function validateBindingStructure(
   const binding = readBinding(parts, binder, environment, path, diagnostics);
   if (binding === undefined) return;
   parts.operands.forEach((operand, index) => {
-    if (binding.boundOperandIndices.has(index)) return;
-    validateBindingStructure(operand, environment, [...path, index], diagnostics);
+    const declaration = binding.declarations.get(index);
+    if (declaration === undefined) {
+      validateBindingStructure(operand, environment, [...path, index], diagnostics);
+      return;
+    }
+    const declarationOperands = functionParts(operand)?.operands ?? [];
+    declaration.outerOperands.forEach((outerIndex) => {
+      const outer = declarationOperands[outerIndex];
+      if (outer !== undefined) {
+        validateBindingStructure(outer, environment, [...path, index, outerIndex], diagnostics);
+      }
+    });
   });
 }
 
@@ -467,7 +519,7 @@ function renameBoundOccurrences(
     environment.operatorSymbols.has(parts.operator)
       ? parts.operator
       : (renamings.get(parts.operator) ?? parts.operator);
-  const binder = binderFor(parts.operator, environment);
+  const binder = shadowed.has(parts.operator) ? undefined : binderFor(parts, environment);
   if (binder === undefined) {
     const operands = parts.operands.map((operand) =>
       renameBoundOccurrences(operand, renamings, environment, shadowed),
@@ -475,17 +527,17 @@ function renameBoundOccurrences(
     return rebuildIfChanged(expression, parts, operator, operands);
   }
 
-  const nestedNames = new Set<string>();
-  binder.boundOperands.forEach((index) => {
-    const operand = parts.operands[index];
-    const name = operand === undefined ? undefined : symbolValue(operand);
-    if (name !== undefined) nestedNames.add(name);
-  });
-  const nestedShadowed = new Set([...shadowed, ...nestedNames]);
-  const boundIndices = new Set(binder.boundOperands);
+  const declarations = readDeclarations(parts, binder);
+  const nestedShadowed = new Set([...shadowed, ...[...declarations.values()].map((d) => d.name)]);
   const scopedIndices = new Set(binder.scopedOperands);
   const operands = parts.operands.map((operand, index) => {
-    if (boundIndices.has(index)) return operand;
+    const declaration = declarations.get(index);
+    if (declaration !== undefined) {
+      return rebuildDeclaration(operand, declaration, undefined, (outer) =>
+        renameBoundOccurrences(outer, renamings, environment, shadowed),
+      );
+    }
+    if (binder.boundOperands.includes(index)) return operand;
     return renameBoundOccurrences(
       operand,
       renamings,
@@ -518,7 +570,7 @@ function collectFreeSymbolNames(
     result.add(parts.operator);
   }
 
-  const binder = binderFor(parts.operator, environment);
+  const binder = bound.has(parts.operator) ? undefined : binderFor(parts, environment);
   if (binder === undefined) {
     parts.operands.forEach((operand) =>
       collectFreeSymbolNames(operand, environment, bound, result),
@@ -526,16 +578,21 @@ function collectFreeSymbolNames(
     return result;
   }
 
+  const declarations = readDeclarations(parts, binder);
   const nestedBound = new Set(bound);
-  const boundIndices = new Set(binder.boundOperands);
+  declarations.forEach((declaration) => nestedBound.add(declaration.name));
   const scopedIndices = new Set(binder.scopedOperands);
-  binder.boundOperands.forEach((index) => {
-    const operand = parts.operands[index];
-    const name = operand === undefined ? undefined : symbolValue(operand);
-    if (name !== undefined) nestedBound.add(name);
-  });
   parts.operands.forEach((operand, index) => {
-    if (boundIndices.has(index)) return;
+    const declaration = declarations.get(index);
+    if (declaration !== undefined) {
+      const declarationOperands = functionParts(operand)?.operands ?? [];
+      declaration.outerOperands.forEach((outerIndex) => {
+        const outer = declarationOperands[outerIndex];
+        if (outer !== undefined) collectFreeSymbolNames(outer, environment, bound, result);
+      });
+      return;
+    }
+    if (binder.boundOperands.includes(index)) return;
     collectFreeSymbolNames(
       operand,
       environment,
@@ -563,13 +620,48 @@ function collectAllSymbolNames(
 }
 
 function binderFor(
-  operator: string,
+  parts: FunctionParts,
   environment: ValidatedBindingEnvironment,
-): BinderSpecification | undefined {
-  if (operator === "ForAll" || operator === "Exists") {
-    return BUILTIN_BINDER_SPECIFICATIONS[operator];
+): BinderShape | undefined {
+  return binderShape(parts.operator, parts.operands.length, environment.operators);
+}
+
+/** Readable declarations of a binder node by operand index; malformed operands are omitted. */
+function readDeclarations(
+  parts: FunctionParts,
+  binder: BinderShape,
+): ReadonlyMap<number, BinderDeclaration> {
+  const declarations = new Map<number, BinderDeclaration>();
+  binder.boundOperands.forEach((index) => {
+    const operand = parts.operands[index];
+    const declaration =
+      operand === undefined ? undefined : readBinderDeclaration(operand, binder.forms);
+    if (declaration !== undefined) declarations.set(index, declaration);
+  });
+  return declarations;
+}
+
+/**
+ * Rebuild a bound operand: rename its bound symbol when `renamed` is given and map the domain or
+ * bounds of an `Element`/`Limits` declaration. Unchanged operands keep their identity.
+ */
+function rebuildDeclaration(
+  operand: PlainMathJson,
+  declaration: BinderDeclaration,
+  renamed: string | undefined,
+  mapOuter: (outer: PlainMathJson, index: number) => PlainMathJson,
+): PlainMathJson {
+  if (declaration.form === "symbol") {
+    return renamed === undefined ? operand : renameSymbolNode(operand, renamed);
   }
-  return environment.operators.find((candidate) => candidate.symbol === operator)?.binder;
+  const parts = functionParts(operand);
+  if (parts === undefined) return operand;
+  const outerIndices = new Set(declaration.outerOperands);
+  const operands = parts.operands.map((item, index) => {
+    if (index === 0) return renamed === undefined ? item : renameSymbolNode(item, renamed);
+    return outerIndices.has(index) ? mapOuter(item, index) : item;
+  });
+  return rebuildIfChanged(operand, parts, parts.operator, operands);
 }
 
 function symbolValue(expression: PlainMathJson): string | undefined {

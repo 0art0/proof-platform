@@ -64,6 +64,29 @@ Deleted work is therefore absent from history and export.
 `MemoryProofStore` mirrors the table and checks each immediate foreign key as rows are deleted, and
 the deferred command and session-pointer keys at commit.
 
+`0007_interaction_events.sql` adds `proof_interaction_events`, the ordered, node-anchored
+interaction log of refinement §12.1: selection changes, suggestion requests and displays, preview
+requests and rejections, menu expansions, focus and objective changes, interactions that ended
+without an action, and worker-recorded preview regenerations (§12.2). None of them changes proof
+state.
+
+- The client supplies the event ID, so a retry replays the stored event (`PRIMARY KEY
+(session_id, id)`); different content under that ID is rejected. The worker assigns `sequence`
+  as the session's highest sequence plus one while it holds the session row lock, and
+  `UNIQUE (session_id, sequence)` backs that ordering.
+- Each event references its anchor node and snapshot `(session_id, node_id, state_id)`. Suggestion
+  sets and previews are referenced only by ID columns: a `suggestions-requested` event precedes its
+  set. The repository checks every reference against the anchor node before inserting.
+- "Delete previous move" removes events anchored at deleted nodes, and events naming a deleted
+  chosen preview, before it removes the nodes.
+
+Move previews also record `definitions`: `sha256` hashes of the canonical JSON of the move and
+library definitions they were built from. When a command's preview was built from definitions
+that have since changed, the worker records a regenerated preview (ID
+`<preview>:regenerated:<digest>`) and a `preview-regenerated` event in one transaction and answers
+409 instead of applying; repeating the command applies the regenerated preview. A preview already
+applied by an edge is never regenerated.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -77,6 +100,11 @@ migrations. Its PostgreSQL-backed endpoints are:
   unconfirmed descendants, or replaying a deleted command returns 409. Deleting at the root returns 400.
 - `GET /proof-sessions/:sessionId/suggestion-sets/:suggestionSetId` for immutable persisted
   evidence, validated against its historical proof node.
+- `POST /proof-sessions/:sessionId/interaction-events` with a strict protocol
+  `recordInteractionEventRequestSchema` body (`{ id, nodeId, kind, ...payload }`). It returns
+  `{ event, replayed }` (201, or 200 for an identical retry); a conflicting reuse of the ID returns 409.
+- `GET /proof-sessions/:sessionId/interaction-events?nodeId=&after=&limit=` lists events in
+  sequence order.
 
 The POST body is `{ "id": "...", "selections": [...] }`. Each selection must be only a strict
 snapshot-anchored exact occurrence or supported associative range. Resolved fragments, contexts,

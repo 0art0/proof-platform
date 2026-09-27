@@ -266,6 +266,32 @@ export function createLatexRenderer(options: LatexRendererOptions = {}): LatexRe
         precedence: LATEX_PRECEDENCE.quantifier,
       };
     }
+    // A lambda with typed parameters: the Compute Engine would print `x\in\R\mapsto x+1`, which
+    // reads as membership in a lambda, so the typed parameters are grouped.
+    const typedParameters =
+      head === "Function" && operands.length >= 2 ? typedLambdaParameters(operands.slice(1)) : [];
+    if (typedParameters !== undefined && typedParameters.length > 0 && first !== undefined) {
+      const body = render(first);
+      return {
+        latex: `\\left(${typedParameters.join(", ")}\\right) \\mapsto ${wrap(body, body.precedence <= LATEX_PRECEDENCE.quantifier)}`,
+        precedence: LATEX_PRECEDENCE.quantifier,
+      };
+    }
+    // Application of a function-valued term; the Compute Engine would print `\lhd`.
+    if (head === "Apply" && first !== undefined) {
+      const name = symbolName(first);
+      const applied = render(first);
+      const headLatex =
+        name === undefined
+          ? wrap(applied, applied.precedence < LATEX_PRECEDENCE.atom)
+          : functionNameLatex(name);
+      return atom(
+        `${headLatex}(${operands
+          .slice(1)
+          .map((item) => render(item).latex)
+          .join(", ")})`,
+      );
+    }
     const relation = RELATION_COMMANDS[head];
     if (relation !== undefined && operands.length >= 2) {
       return {
@@ -284,6 +310,38 @@ export function createLatexRenderer(options: LatexRendererOptions = {}): LatexRe
       );
     }
     return renderDelegated(head, operands, expression);
+  };
+
+  /**
+   * LaTeX for lambda parameters when at least one is a typed `["Element", x, S]` declaration;
+   * `[]` when none is typed and undefined when a parameter is malformed.
+   */
+  const typedLambdaParameters = (
+    parameters: readonly PlainMathJson[],
+  ): readonly string[] | undefined => {
+    let typed = false;
+    const rendered: string[] = [];
+    for (const parameter of parameters) {
+      const name = symbolName(parameter);
+      if (name !== undefined) {
+        rendered.push(symbolLatex(name));
+        continue;
+      }
+      const parts = expressionParts(parameter);
+      const [bound, domain] = parts?.operands ?? [];
+      const boundName = bound === undefined ? undefined : symbolName(bound);
+      if (
+        parts?.operator !== "Element" ||
+        parts.operands.length !== 2 ||
+        boundName === undefined ||
+        domain === undefined
+      ) {
+        return undefined;
+      }
+      typed = true;
+      rendered.push(`${symbolLatex(boundName)} \\in ${operand(domain, LATEX_PRECEDENCE.relation)}`);
+    }
+    return typed ? rendered : [];
   };
 
   const renderArithmetic = (

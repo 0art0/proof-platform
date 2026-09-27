@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import {
   ProofStoreTransactionError,
+  type InteractionEventQuery,
   type ProofRecordDeletionRequest,
   type ProofRecordDeletionResult,
   type ProofSession,
@@ -11,6 +12,8 @@ import {
 import type {
   ApplyKernelCommand,
   DisplayedSuggestionSet,
+  InteractionEvent,
+  InteractionEventId,
   MovePreview,
   MovePreviewId,
   PrepareProofCommandSuccess,
@@ -380,6 +383,15 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     const ids = async (text: string, values: readonly unknown[]): Promise<readonly string[]> =>
       (await this.client.query(text, [sessionId, ...values])).rows.map((row) => String(row.id));
     // Dependency order: every non-deferred foreign key into a row is removed before the row.
+    const interactionEventIds = await ids(
+      `DELETE FROM proof_interaction_events
+       WHERE session_id = $1
+         AND (node_id = ANY ($2::text[])
+              OR preview_id = ANY ($3::text[])
+              OR stale_preview_id = ANY ($3::text[]))
+       RETURNING id`,
+      [request.nodeIds, request.chosenPreviewIds],
+    );
     const eventIds = await ids(
       `DELETE FROM proof_events
        WHERE session_id = $1 AND edge_id = ANY ($2::text[])
@@ -421,7 +433,15 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
        RETURNING id`,
       [request.nodeIds],
     );
-    return { eventIds, edgeIds, previewIds, suggestionSetIds, commandIds, nodeIds };
+    return {
+      interactionEventIds,
+      eventIds,
+      edgeIds,
+      previewIds,
+      suggestionSetIds,
+      commandIds,
+      nodeIds,
+    };
   }
 
   async insertDeletion(sessionId: ProofSessionId, deletion: ProofDeletionRecord): Promise<void> {
@@ -447,4 +467,79 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
       ],
     );
   }
+
+  async readInteractionEvent(
+    sessionId: ProofSessionId,
+    eventId: InteractionEventId,
+  ): Promise<unknown | undefined> {
+    const result = await this.client.query(
+      `SELECT session_id, id, sequence, node_id, record
+       FROM proof_interaction_events
+       WHERE session_id = $1 AND id = $2`,
+      [sessionId, eventId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : interactionEventRecord(row);
+  }
+
+  async lastInteractionSequence(sessionId: ProofSessionId): Promise<number> {
+    // The caller holds the session row lock, so no concurrent insert can take the next number.
+    const result = await this.client.query(
+      `SELECT COALESCE(MAX(sequence), 0) AS sequence
+       FROM proof_interaction_events
+       WHERE session_id = $1`,
+      [sessionId],
+    );
+    return Number(result.rows[0]?.sequence ?? 0);
+  }
+
+  async insertInteractionEvent(sessionId: ProofSessionId, event: InteractionEvent): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_interaction_events
+         (session_id, id, sequence, node_id, state_id, kind, actor_id, actor_kind,
+          suggestion_set_id, preview_id, stale_preview_id, recorded_at, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::jsonb)`,
+      [
+        sessionId,
+        event.id,
+        event.sequence,
+        event.nodeId,
+        event.stateId,
+        event.kind,
+        event.actor.id,
+        event.actor.kind,
+        "suggestionSetId" in event ? (event.suggestionSetId ?? null) : null,
+        "previewId" in event ? event.previewId : null,
+        "stalePreviewId" in event ? event.stalePreviewId : null,
+        event.recordedAt,
+        JSON.stringify(event),
+      ],
+    );
+  }
+
+  async listInteractionEvents(
+    sessionId: ProofSessionId,
+    query: InteractionEventQuery,
+  ): Promise<readonly unknown[]> {
+    const result = await this.client.query(
+      `SELECT session_id, id, sequence, node_id, record
+       FROM proof_interaction_events
+       WHERE session_id = $1 AND sequence > $2 AND ($3::text IS NULL OR node_id = $3)
+       ORDER BY sequence
+       LIMIT $4`,
+      [sessionId, query.afterSequence, query.nodeId ?? null, query.limit],
+    );
+    return result.rows.map(interactionEventRecord);
+  }
+}
+
+function interactionEventRecord(row: Readonly<Record<string, unknown>>): unknown {
+  return {
+    sessionId: row.session_id,
+    eventId: row.id,
+    // node-postgres returns bigint columns as strings; the column is an integer.
+    sequence: typeof row.sequence === "string" ? Number(row.sequence) : row.sequence,
+    nodeId: row.node_id,
+    event: row.record,
+  };
 }

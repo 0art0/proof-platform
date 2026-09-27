@@ -635,6 +635,26 @@ describe("snapshot-anchored exact selections", () => {
     });
   });
 
+  it("marks typed declarations and term-language binders as binder positions", () => {
+    const state = proofState([
+      "ForAll",
+      ["Element", "t", "RealNumbers"],
+      ["Less", ["Integrate", "u", ["Limits", "u", 0, "t"]], "t"],
+    ]);
+    const position = (path: readonly number[]) => {
+      const result = resolveProofSelection(state, anchored(path));
+      return result.ok ? result.selection.position : undefined;
+    };
+    expect(position([0])).toEqual({ polarity: "neutral", role: "binder" });
+    expect(position([0, 0])).toEqual({ polarity: "neutral", role: "binder" });
+    expect(position([0, 1])).toEqual({ polarity: "neutral", role: "term" });
+    expect(position([1])).toEqual({ polarity: "positive", role: "proposition" });
+    expect(position([1, 0, 0])).toEqual({ polarity: "neutral", role: "term" });
+    expect(position([1, 0, 1])).toEqual({ polarity: "neutral", role: "binder" });
+    expect(position([1, 0, 1, 0])).toEqual({ polarity: "neutral", role: "binder" });
+    expect(position([1, 0, 1, 2])).toEqual({ polarity: "neutral", role: "term" });
+  });
+
   it("handles quantifier binders, object-form functions, and exact metadata", () => {
     const body: PlainMathJson = {
       fn: ["Implies", "P", "Q"],

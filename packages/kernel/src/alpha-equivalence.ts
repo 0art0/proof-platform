@@ -4,7 +4,7 @@ import {
   type OperatorDeclaration,
   type PlainMathJson,
 } from "@proof/mathjson-model";
-import { binderFor, functionParts, symbolValue } from "./expression";
+import { binderFor, boundDeclaration, functionParts, symbolValue } from "./expression";
 
 export type AlphaEquivalenceEnvironment = Readonly<{
   operators?: readonly OperatorDeclaration[];
@@ -12,8 +12,10 @@ export type AlphaEquivalenceEnvironment = Readonly<{
 
 /**
  * Decide whether two plain MathJSON expressions differ only by consistent
- * renaming of bound symbols, for the built-in quantifiers and every custom
- * binder in the operator environment.
+ * renaming of bound symbols, for every built-in binder (quantifiers, `Function`,
+ * `Sum`, `Product`, `Integrate`) and every custom binder in the operator
+ * environment. Typed domains and summation bounds are compared outside the scope
+ * they introduce.
  *
  * Everything else is compared exactly: free symbols by name, literals and
  * wrapper metadata (such as `comment`) by value, and the array/object form of
@@ -76,9 +78,7 @@ function compare(
 
   // A locally bound head is a variable, never a binder; built-in and operator
   // symbols cannot be bound, so both heads resolve to the same specification.
-  const binder = leftScope.has(leftParts.operator)
-    ? undefined
-    : binderFor(leftParts.operator, operators);
+  const binder = leftScope.has(leftParts.operator) ? undefined : binderFor(leftParts, operators);
   if (binder === undefined) {
     return leftParts.operands.every((operand, index) =>
       compare(
@@ -96,21 +96,40 @@ function compare(
   const rightInner = new Map(rightScope);
   let innerDepth = depth;
   for (const index of binder.boundOperands) {
-    const leftBound = leftParts.operands[index];
-    const rightBound = rightParts.operands[index];
-    const leftName = leftBound === undefined ? undefined : symbolValue(leftBound);
-    const rightName = rightBound === undefined ? undefined : symbolValue(rightBound);
+    const leftDeclaration = boundDeclaration(leftParts, binder, index);
+    const rightDeclaration = boundDeclaration(rightParts, binder, index);
     if (
-      leftBound === undefined ||
-      rightBound === undefined ||
-      leftName === undefined ||
-      rightName === undefined ||
-      !sameNodeMetadata(leftBound, rightBound, "sym")
+      leftDeclaration === undefined ||
+      rightDeclaration === undefined ||
+      leftDeclaration.form !== rightDeclaration.form ||
+      !sameNodeMetadata(leftDeclaration.symbol, rightDeclaration.symbol, "sym")
     ) {
       return false;
     }
-    leftInner.set(leftName, innerDepth);
-    rightInner.set(rightName, innerDepth);
+    if (leftDeclaration.form !== "symbol") {
+      // Typed domains and bounds are compared in the enclosing scope.
+      const leftNode = leftParts.operands[index] as PlainMathJson;
+      const rightNode = rightParts.operands[index] as PlainMathJson;
+      const leftOperands = functionParts(leftNode)?.operands ?? [];
+      const rightOperands = functionParts(rightNode)?.operands ?? [];
+      if (
+        !sameNodeMetadata(leftNode, rightNode, "fn") ||
+        !leftDeclaration.outerOperands.every((outer) =>
+          compare(
+            leftOperands[outer] as PlainMathJson,
+            rightOperands[outer] as PlainMathJson,
+            leftScope,
+            rightScope,
+            depth,
+            operators,
+          ),
+        )
+      ) {
+        return false;
+      }
+    }
+    leftInner.set(leftDeclaration.name, innerDepth);
+    rightInner.set(rightDeclaration.name, innerDepth);
     innerDepth += 1;
   }
   const boundOperands = new Set(binder.boundOperands);

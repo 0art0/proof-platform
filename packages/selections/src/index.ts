@@ -1,6 +1,9 @@
 import {
+  binderShape,
+  builtinBinderSorts,
   createProofStateSchema,
   mathJsonEquals,
+  readBinderDeclaration,
   operatorDeclarationsSchema,
   proofStateIdSchema,
   retrievalWildcardSchema,
@@ -1126,17 +1129,34 @@ export function positionAtPath(
   let currentExpression = expression;
   let currentPosition = root;
   let bindings = new Map(declarations.map((declaration) => [declaration.symbol, declaration.sort]));
+  // Set while the current node is a typed binder declaration such as `["Element", x, S]`.
+  let inDeclaration = false;
   for (const operandIndex of path) {
     const parts = functionParts(currentExpression);
     const operand = parts?.operands[operandIndex];
     if (parts === undefined || operand === undefined) return undefined;
-    currentPosition = childPosition(
-      parts.operator,
-      operandIndex,
-      currentPosition,
-      bindings,
-      operators,
-    );
+    if (inDeclaration) {
+      // The declared symbol is a binder; its domain or bounds are neutral terms.
+      currentPosition =
+        operandIndex === 0
+          ? { polarity: "neutral", role: "binder" }
+          : { polarity: "neutral", role: "term" };
+      inDeclaration = false;
+      currentExpression = operand;
+      continue;
+    }
+    const binder = bindings.has(parts.operator)
+      ? undefined
+      : binderShape(parts.operator, parts.operands.length, operators);
+    const bindsHere = binder?.boundOperands.includes(operandIndex) === true;
+    currentPosition = bindsHere
+      ? { polarity: "neutral", role: "binder" }
+      : childPosition(parts.operator, operandIndex, currentPosition, bindings, operators);
+    const declarationForm =
+      bindsHere && binder !== undefined
+        ? readBinderDeclaration(operand, binder.forms)?.form
+        : undefined;
+    inDeclaration = declarationForm !== undefined && declarationForm !== "symbol";
     bindings = scopedBindings(parts, operandIndex, bindings, operators);
     currentExpression = operand;
   }
@@ -1205,21 +1225,25 @@ function scopedBindings(
   operators: readonly OperatorDeclaration[],
 ): Map<string, Sort> {
   const customOperator = operators.find((candidate) => candidate.symbol === parts.operator);
-  const builtinBinder =
-    parts.operator === "ForAll" || parts.operator === "Exists"
-      ? { boundOperands: [0], scopedOperands: [1] }
-      : undefined;
-  const binder = customOperator?.binder ?? builtinBinder;
+  const binder = bindings.has(parts.operator)
+    ? undefined
+    : binderShape(parts.operator, parts.operands.length, operators);
   if (binder === undefined || !binder.scopedOperands.includes(selectedOperand)) {
     return new Map(bindings);
   }
 
   const next = new Map(bindings);
+  if (customOperator === undefined) {
+    builtinBinderSorts(parts.operator, parts.operands, bindings, operators)?.forEach(
+      (sort, symbol) => next.set(symbol, sort),
+    );
+    return next;
+  }
   for (const boundOperand of binder.boundOperands) {
     const boundExpression = parts.operands[boundOperand];
     const symbol = boundExpression === undefined ? undefined : directSymbol(boundExpression);
     const sort =
-      customOperator?.signature.parameters[boundOperand] ??
+      customOperator.signature.parameters[boundOperand] ??
       (symbol === undefined ? undefined : bindings.get(symbol));
     if (symbol !== undefined && sort !== undefined) next.set(symbol, sort);
   }

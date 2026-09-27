@@ -17,6 +17,7 @@ import {
   readCurrentProofSession,
   readProofHistory,
   readStoredSuggestionSet,
+  recordStoredInteractionEvent,
 } from ".";
 
 const SESSION_ID = "session:test";
@@ -747,6 +748,107 @@ describe("proof-service adapter", () => {
     await expect(readCurrentProofSession(SESSION_ID)).rejects.toEqual(
       new ProofServiceError("service_unavailable", "The proof service could not be reached.", 503),
     );
+  });
+
+  it("reports a regenerated preview and returns the regeneration provenance", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            status: "preview-regenerated",
+            stalePreviewId: "preview:stale",
+            preview,
+            diagnostics: [{ code: "preview-regenerated", message: "Definitions changed." }],
+          },
+          409,
+        ),
+      ),
+    );
+    await expect(executeStoredProofCommand(SESSION_ID, choice)).rejects.toMatchObject({
+      code: "preview-regenerated",
+      status: 409,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(sessionEnvelope()))
+        .mockResolvedValueOnce(
+          jsonResponse({ preview, replayed: true, regeneratedFrom: "preview:stale" }, 200),
+        ),
+    );
+    await expect(createStoredMovePreview(SESSION_ID, choice)).resolves.toEqual({
+      preview,
+      replayed: true,
+      regeneratedFrom: "preview:stale",
+    });
+  });
+
+  it("records interaction events and verifies the returned identity and replay status", async () => {
+    const request = {
+      id: "interaction:one",
+      nodeId: NODE_ID,
+      kind: "objective-changed",
+      objective: "Split the goal.",
+    };
+    const event = {
+      ...request,
+      sequence: 3,
+      stateId: STATE_ID,
+      actor: { id: "actor:web", kind: "human" },
+      recordedAt: "2026-09-27T12:00:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ event, replayed: false }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(recordStoredInteractionEvent(SESSION_ID, request)).resolves.toEqual({
+      event,
+      replayed: false,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      new URL("http://127.0.0.1:8787/proof-sessions/session%3Atest/interaction-events"),
+      expect.objectContaining({ method: "POST", body: JSON.stringify(request) }),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ event, replayed: false }, 200)),
+    );
+    await expect(recordStoredInteractionEvent(SESSION_ID, request)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ event: { ...event, id: "interaction:other" }, replayed: false }, 201),
+        ),
+    );
+    await expect(recordStoredInteractionEvent(SESSION_ID, request)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            diagnostics: [
+              { code: "interaction-event-conflict", message: "The ID is already recorded." },
+            ],
+          },
+          409,
+        ),
+      ),
+    );
+    await expect(recordStoredInteractionEvent(SESSION_ID, request)).rejects.toMatchObject({
+      code: "interaction-event-conflict",
+      status: 409,
+    });
+    await expect(
+      recordStoredInteractionEvent(SESSION_ID, { ...request, kind: "preview-regenerated" }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
   });
 });
 

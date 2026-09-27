@@ -11,6 +11,7 @@ export type MemoryProofStoreFailurePoint =
   | "insertEdge"
   | "insertEvent"
   | "insertCommand"
+  | "insertInteractionEvent"
   | "advance";
 
 /**
@@ -46,6 +47,9 @@ export class InspectableMemoryProofStore extends MemoryProofStore {
   }
   get deletions() {
     return this.tables.deletions;
+  }
+  get interactionEvents() {
+    return this.tables.interactionEvents;
   }
 
   protected override instrument(inner: ProofStoreTransaction): ProofStoreTransaction {
@@ -105,6 +109,10 @@ export class InspectableMemoryProofStore extends MemoryProofStore {
       insertCommand: async (sessionId, result) => {
         fail("insertCommand");
         return inner.insertCommand(sessionId, result);
+      },
+      insertInteractionEvent: async (sessionId, event) => {
+        fail("insertInteractionEvent");
+        return inner.insertInteractionEvent(sessionId, event);
       },
       advanceCurrentNode: async (sessionId, expectedNodeId, nextNodeId) => {
         this.log.push("advanceCurrentNode");

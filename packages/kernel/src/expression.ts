@@ -1,6 +1,8 @@
 import {
-  BUILTIN_BINDER_SPECIFICATIONS,
-  type BinderSpecification,
+  binderShape,
+  readBinderDeclaration,
+  type BinderDeclaration,
+  type BinderShape,
   type OperatorDeclaration,
   type PlainMathJson,
 } from "@proof/mathjson-model";
@@ -55,13 +57,23 @@ export function symbolValue(expression: PlainMathJson): string | undefined {
     : undefined;
 }
 
-/** The binder specification for a function head, using built-ins before custom operators. */
+/**
+ * The binder shape of a function node, using built-ins before custom operators. Callers treat a
+ * locally bound head as a variable and must not ask for its shape.
+ */
 export function binderFor(
-  operator: string,
+  parts: FunctionParts,
   operators: readonly OperatorDeclaration[],
-): BinderSpecification | undefined {
-  if (operator === "ForAll" || operator === "Exists") {
-    return BUILTIN_BINDER_SPECIFICATIONS[operator];
-  }
-  return operators.find((candidate) => candidate.symbol === operator)?.binder;
+): BinderShape | undefined {
+  return binderShape(parts.operator, parts.operands.length, operators);
+}
+
+/** The declaration at a bound operand of a binder node, or undefined when it is malformed. */
+export function boundDeclaration(
+  parts: FunctionParts,
+  binder: BinderShape,
+  index: number,
+): BinderDeclaration | undefined {
+  const operand = parts.operands[index];
+  return operand === undefined ? undefined : readBinderDeclaration(operand, binder.forms);
 }

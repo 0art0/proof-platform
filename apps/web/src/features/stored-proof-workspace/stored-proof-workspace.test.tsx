@@ -76,9 +76,12 @@ const session = {
   operators: [],
 } as const;
 let uuid = 0;
+/** Interaction-event bodies the workspace posted, in posting order. */
+let postedInteractions: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
   uuid = 0;
+  postedInteractions = [];
   vi.spyOn(globalThis.crypto, "randomUUID").mockImplementation(
     () => `00000000-0000-4000-8000-${String(++uuid).padStart(12, "0")}`,
   );
@@ -239,9 +242,24 @@ function historyResponse(
 function mockWithHistory(
   handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response,
 ) {
-  return vi.fn<typeof fetch>(async (input, init) =>
-    String(input).endsWith("/history") ? historyResponse() : handler(input, init),
-  );
+  return vi.fn<typeof fetch>(async (input, init) => {
+    if (String(input).endsWith("/history")) return historyResponse();
+    if (String(input).endsWith("/interaction-events")) {
+      postedInteractions.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return jsonResponse({ ok: true, data: {} }, 201);
+    }
+    return handler(input, init);
+  });
+}
+
+/** The interaction events posted so far, without their random client IDs. */
+function postedKinds(): Array<Record<string, unknown>> {
+  return postedInteractions.map((event) => {
+    expect(event.id).toMatch(/^interaction:web-/);
+    const copy: Record<string, unknown> = { ...event };
+    delete copy.id;
+    return copy;
+  });
 }
 
 describe("StoredProofWorkspace", () => {
@@ -650,5 +668,192 @@ describe("StoredProofWorkspace", () => {
     expect(screen.getByTestId("workspace-view")).toHaveTextContent("natural-language");
     const history = screen.getByRole("region", { name: "Proof-discovery tree" });
     await waitFor(() => expect(within(history).getByText(/Goal:/)).toHaveTextContent("and"));
+  });
+
+  it("reports selection, suggestion, preview and rejection interactions in order", async () => {
+    const applicable = moveSuggestionSet("suggestion-set:move");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory((input, init) => {
+        if (String(input).endsWith("/move-previews")) {
+          const body = JSON.parse(String(init?.body)) as { commandId: string };
+          return jsonResponse(
+            { ok: true, data: { preview: previewFor(body.commandId), replayed: false } },
+            201,
+          );
+        }
+        return jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: applicable,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        });
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    await within(card).findByLabelText("Move preview");
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+    await waitFor(() => expect(postedInteractions).toHaveLength(7));
+    const requested = postedInteractions[1]?.suggestionSetId;
+    const preview = postedInteractions[3];
+    expect(postedKinds()).toEqual([
+      {
+        kind: "selection-changed",
+        nodeId: node.id,
+        selections: [{ kind: "exact", anchor: anchor(), path: [0] }],
+      },
+      { kind: "suggestions-requested", nodeId: node.id, suggestionSetId: requested },
+      {
+        kind: "suggestions-displayed",
+        nodeId: node.id,
+        suggestionSetId: "suggestion-set:move",
+        suggestionIds: ["suggestion:split-goal"],
+      },
+      {
+        kind: "preview-requested",
+        nodeId: node.id,
+        suggestionSetId: "suggestion-set:move",
+        chosenSuggestionId: "suggestion:split-goal",
+        commandId: preview?.commandId,
+      },
+      {
+        kind: "preview-rejected",
+        nodeId: node.id,
+        previewId: `preview:${String(preview?.commandId)}`,
+        reason: "selection-changed",
+      },
+      { kind: "selection-changed", nodeId: node.id, selections: [] },
+      {
+        kind: "interaction-ended-without-action",
+        nodeId: node.id,
+        suggestionSetId: "suggestion-set:move",
+        reason: "selection-cleared",
+      },
+    ]);
+  });
+
+  it("reports an expanded input menu", async () => {
+    const requiresInput = moveSuggestionSet("suggestion-set:move", "requires-input");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() =>
+        jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: requiresInput,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        }),
+      ),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    const details = within(card).getByText("Input menus").closest("details")!;
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+
+    await waitFor(() =>
+      expect(postedKinds()).toContainEqual({
+        kind: "menu-expanded",
+        nodeId: node.id,
+        suggestionSetId: "suggestion-set:move",
+        suggestionId: "suggestion:split-goal",
+      }),
+    );
+    expect(within(card).getByLabelText("Input menus for Split goal conjunction")).toHaveTextContent(
+      "choice",
+    );
+  });
+
+  it("shows the regenerated preview when apply finds stale definitions, then applies it", async () => {
+    const applicable = moveSuggestionSet("suggestion-set:move");
+    let applies = 0;
+    let previews = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory((input, init) => {
+        const body = JSON.parse(String(init?.body)) as { commandId: string };
+        if (String(input).endsWith("/move-previews")) {
+          previews += 1;
+          return jsonResponse(
+            { ok: true, data: { preview: previewFor(body.commandId), replayed: previews > 1 } },
+            previews > 1 ? 200 : 201,
+          );
+        }
+        if (String(input).endsWith("/commands")) {
+          applies += 1;
+          if (applies === 1) {
+            return jsonResponse(
+              {
+                ok: false,
+                error: {
+                  code: "preview-regenerated",
+                  message: "The approved definitions behind the preview changed.",
+                },
+              },
+              409,
+            );
+          }
+          const preview = previewFor(body.commandId);
+          const nextNode = { id: `node:${body.commandId}`, state: preview.afterState };
+          return jsonResponse(
+            {
+              ok: true,
+              data: {
+                session: { ...session, currentNodeId: nextNode.id },
+                node: nextNode,
+                receipt: {
+                  commandId: body.commandId,
+                  nodeId: nextNode.id,
+                  edgeId: `edge:${body.commandId}`,
+                  eventId: `event:${body.commandId}`,
+                  resultStateId: preview.afterState.id,
+                  transitionClass: "equivalence",
+                },
+                replayed: false,
+              },
+            },
+            201,
+          );
+        }
+        return jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: applicable,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        });
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    await within(card).findByLabelText("Move preview");
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+
+    await screen.findByText(/Apply paused: The approved definitions behind the preview changed/);
+    expect(previews).toBe(2);
+    expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
+    expect(within(card).getByLabelText("Move preview")).toBeVisible();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    await screen.findByText(/advanced to node:command:web/);
+    expect(applies).toBe(2);
   });
 });
