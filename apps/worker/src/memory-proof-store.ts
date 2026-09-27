@@ -1,6 +1,7 @@
 import type {
   ApplyKernelCommand,
   DisplayedSuggestionSet,
+  InteractionEvent,
   MovePreview,
   MovePreviewId,
   PrepareProofCommandSuccess,
@@ -23,7 +24,8 @@ import {
 /**
  * Committed rows of the in-memory store, mirroring the PostgreSQL tables in
  * `migrations/0001_proof_commands.sql` (plus the nullable `proof_sessions.metadata` object from
- * `0004_session_metadata.sql`) and the `proof_deletions` tombstones of `0006_proof_deletions.sql`.
+ * `0004_session_metadata.sql`), the `proof_deletions` tombstones of `0006_proof_deletions.sql`,
+ * and the `proof_interaction_events` log of `0007_interaction_events.sql`.
  * Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */
@@ -36,6 +38,7 @@ export type MemoryProofTables = Readonly<{
   events: Map<string, TransitionEvent>;
   commands: Map<string, PrepareProofCommandSuccess>;
   deletions: Map<string, ProofDeletionRecord>;
+  interactionEvents: Map<string, InteractionEvent>;
 }>;
 
 type TableName = keyof MemoryProofTables;
@@ -52,6 +55,7 @@ const TABLE_NAMES = [
   "events",
   "commands",
   "deletions",
+  "interactionEvents",
 ] as const satisfies readonly TableName[];
 
 /** The composite `(session_id, id)` key used by every session-scoped memory table. */
@@ -93,6 +97,7 @@ export class MemoryProofStore implements ProofStore {
     events: new Map(),
     commands: new Map(),
     deletions: new Map(),
+    interactionEvents: new Map(),
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
@@ -152,6 +157,7 @@ class MemoryTransactionContext {
     events: new Map(),
     commands: new Map(),
     deletions: new Map(),
+    interactionEvents: new Map(),
   };
   /** Keys deleted by this transaction; a later insert of the same key re-stages the row. */
   private readonly deleted: { [Name in TableName]: Set<string> } = {
@@ -163,6 +169,7 @@ class MemoryTransactionContext {
     events: new Set(),
     commands: new Set(),
     deletions: new Set(),
+    interactionEvents: new Set(),
   };
   private readonly locks = new Map<string, Promise<() => void>>();
   private closed = false;
@@ -285,6 +292,14 @@ class MemoryTransactionContext {
     const commandIds = new Set<string>(request.commandIds);
     const chosenPreviewIds = new Set<string>(request.chosenPreviewIds);
 
+    const interactionEventIds = this.remove(
+      "interactionEvents",
+      sessionId,
+      (row) =>
+        nodeIds.has(row.nodeId) ||
+        interactionPreviewIds(row).some((previewId) => chosenPreviewIds.has(previewId)),
+      idOf,
+    );
     const eventIds = this.remove("events", sessionId, (row) => edgeIds.has(row.edgeId), idOf);
     const removedEdgeIds = this.remove("edges", sessionId, (row) => edgeIds.has(row.id), idOf);
     const removedEdges = new Set(removedEdgeIds);
@@ -327,6 +342,9 @@ class MemoryTransactionContext {
     const removedNodeIds = this.remove("nodes", sessionId, (row) => nodeIds.has(row.id), idOf);
     const removedNodes = new Set(removedNodeIds);
     const nodeReferenced =
+      this.sessionRows("interactionEvents", sessionId).some((row) =>
+        removedNodes.has(row.nodeId),
+      ) ||
       this.sessionRows("suggestionSets", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
       this.sessionRows("previews", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
       (["edges", "events"] as const).some((table) =>
@@ -336,6 +354,7 @@ class MemoryTransactionContext {
       );
     if (nodeReferenced) violation("proof_nodes foreign key: a deleted node is still referenced.");
     return {
+      interactionEventIds,
       eventIds,
       edgeIds: removedEdgeIds,
       previewIds,
@@ -557,6 +576,63 @@ class MemoryTransactionContext {
         return found === undefined ? undefined : structuredClone(found);
       },
       deleteProofRecords: async (sessionId, request) => this.deleteProofRecords(sessionId, request),
+      readInteractionEvent: async (sessionId, eventId) => {
+        const event = this.read("interactionEvents", memoryProofRecordKey(sessionId, eventId));
+        return event === undefined
+          ? undefined
+          : {
+              sessionId,
+              eventId: event.id,
+              sequence: event.sequence,
+              nodeId: event.nodeId,
+              event,
+            };
+      },
+      lastInteractionSequence: async (sessionId) => {
+        await this.lock(sessionId);
+        return Math.max(
+          0,
+          ...this.sessionRows("interactionEvents", sessionId).map(({ sequence }) => sequence),
+        );
+      },
+      insertInteractionEvent: async (sessionId, event) =>
+        this.insert(
+          "interactionEvents",
+          sessionId,
+          memoryProofRecordKey(sessionId, event.id),
+          event,
+          (row) => {
+            if (!Number.isInteger(row.sequence) || row.sequence < 1) {
+              violation("proof_interaction_events check: sequence must be positive.");
+            }
+            if (
+              this.sessionRows("interactionEvents", sessionId).some(
+                (existing) => existing.sequence === row.sequence,
+              )
+            ) {
+              violation(`proof_interaction_events unique sequence: ${row.sequence} exists.`);
+            }
+            this.requireNode(sessionId, row.nodeId, row.stateId);
+          },
+        ),
+      listInteractionEvents: async (sessionId, query) => {
+        this.assertOpen();
+        return this.sessionRows("interactionEvents", sessionId)
+          .filter(
+            (event) =>
+              event.sequence > query.afterSequence &&
+              (query.nodeId === undefined || event.nodeId === query.nodeId),
+          )
+          .sort((left, right) => left.sequence - right.sequence)
+          .slice(0, query.limit)
+          .map((event) => ({
+            sessionId,
+            eventId: event.id,
+            sequence: event.sequence,
+            nodeId: event.nodeId,
+            event: structuredClone(event),
+          }));
+      },
       insertDeletion: async (sessionId, deletion) =>
         this.insert(
           "deletions",
@@ -650,6 +726,13 @@ class MemoryTransactionContext {
       }
     }
   }
+}
+
+/** The preview IDs an interaction event names (`preview_id` and `stale_preview_id`). */
+function interactionPreviewIds(event: InteractionEvent): string[] {
+  if (event.kind === "preview-rejected") return [event.previewId];
+  if (event.kind === "preview-regenerated") return [event.previewId, event.stalePreviewId];
+  return [];
 }
 
 function idOf(row: Readonly<{ id: string }>): string {

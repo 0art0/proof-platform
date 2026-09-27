@@ -58,7 +58,7 @@ that archive.
 
 ## Phase 1 — Mathematical representation (packages/mathjson-model, packages/language)
 
-- [ ] **N01 Term-language breadth (§5.2, §5.4).** Statement/term validation for `Function`/lambda
+- [x] **N01 Term-language breadth (§5.2, §5.4).** Statement/term validation for `Function`/lambda
       literals with typed parameters, application of function-valued expressions (`Apply` and applied
       function variables), `Tuple`, `Set`/`List` literals, `Sequence`/indexing, typed quantifier binders
       (`["ForAll", ["Element", x, S], body]`), and binder operators `Sum`, `Product`, `Integrate`, `Limit`
@@ -229,7 +229,7 @@ that archive.
       at the current leaf. If descendants exist, it requires `confirmDescendants`. The cursor returns to
       the parent, and deleted work is removed from history and export while a tombstone audit row is kept.
       _Accept:_ tests covering leaf and with-descendants cases.
-- [ ] **N19 Interaction events and preview coherence (refinement §12).** Add an ordered, node-anchored
+- [x] **N19 Interaction events and preview coherence (refinement §12).** Add an ordered, node-anchored
       interaction-event log: selection changed, suggestions requested/displayed, preview requested, preview
       rejected, menu expanded, focus/objective changed, and "interaction ended without action".
   - Previews record content hashes of the library/move definitions they used.
@@ -452,3 +452,48 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
   - Retrieval reports `requires-input` for forward parameters that materialization binds from
     hypotheses, and ignores premises split from an `Implies` statement (contrapositive variants).
   - Sorts are monomorphic: the packs are stated over `sort:real` and sets of `sort:element`.
+- 2026-09-27 — N01 — mathjson-model `binders.ts` (`binderShape`, `readBinderDeclaration`) is the single
+  binder contract, used by free names, substitution, statement validation, kernel alpha-equivalence,
+  result matching and deep-rewrite location, and selection positions. Built-in binders:
+  `ForAll`/`Exists` over a symbol or `["Element", x, S]`; `["Function", body, p1, …]`;
+  `["Sum" | "Product", body, ["Limits", k, lo, hi] | ["Element", k, S]]`;
+  `["Integrate", body, ["Limits", x, a, b]]`. `Limit` is `["Limit", ["Function", body, x], point]`,
+  the shape the Compute Engine serializes. Domains and bounds are in the enclosing scope. Sort rules
+  also cover `Apply`, `Tuple` (`sort:tuple`), `Set`/`List`, `At` (lists, `sort:sequence`, tuples,
+  unary functions) and standard sets (`RealNumbers` → `set<real>`, …). Literals and untyped lambdas
+  are checked against a known expected sort. The new heads and standard sets are reserved symbols.
+  - Typed binders are self-contained, so capture renames validate without declarations (N06(b)).
+    Kernel quantifier operations still accept only untyped binders; typed ones need a membership
+    hypothesis or obligation, which is an operation-schema change.
+  - `moves/context-terms.ts` and retrieval binder-path keys still use `BUILTIN_BINDER_SPECIFICATIONS`,
+    so they ignore the new binders and typed declarations. Port them to `binderShape`.
+  - CE `Sequence` (a splice) is unsupported; sequences are `sort:sequence` or unary functions.
+  - A variable function head is still replaced only by a symbol; replacing it with a lambda needs an
+    `Apply` form.
+  - There is no numeric subtyping, and no function-space set constructor. Quantifying over functions
+    uses a declared set of functions or an untyped binder with a declaration.
+  - LaTeX renders typed lambdas as `\left(x \in \R\right) \mapsto …` and `Apply` as `f(…)`.
+    `parseLatex` does not map the CE parse of `\int`/`\mapsto` (`Block`-wrapped `Function`) back to
+    these shapes.
+- 2026-09-27 — N19 — protocol `interaction-events.ts`: strict `recordInteractionEventRequestSchema`
+  (client kinds: selection-changed, suggestions-requested/-displayed, preview-requested/-rejected,
+  menu-expanded, focus-changed, objective-changed, interaction-ended-without-action) and
+  `interactionEventSchema`, which adds the worker-assigned `sequence`, `stateId`, `actor` and
+  `recordedAt` and the worker-only `preview-regenerated` kind. Migration `0007` adds
+  `proof_interaction_events`, mirrored in `MemoryProofStore`. `POST` and `GET` on
+  `/proof-sessions/:id/interaction-events` record and list events. A retried event ID replays the
+  event; different content under the same ID gets 409. Sequences are allocated under the session
+  lock. Deleting a move also removes events anchored at deleted nodes.
+  - Previews carry `definitions`: `sha256` hashes of the canonical JSON of the move and library
+    definitions used. The worker's `DefinitionCatalog` (`APPROVED_DEFINITIONS`, injectable into
+    `createProofHttpService`) supplies retrieval, materialization and kernel results.
+  - An apply whose preview was built from changed definitions records a regenerated preview
+    (`<preview>:regenerated:<digest>`) and a `preview-regenerated` event atomically, then answers 409
+    `preview-regenerated`. Repeating the same command applies the regenerated preview. Previews
+    already applied are replayed, never regenerated.
+  - The web workspace posts events through a serialized best-effort recorder. It covers selection,
+    suggestions requested/displayed, preview requested, preview rejected (superseded or selection
+    changed), cleared selection and expanded input menus. Focus and objective events have no web UI
+    yet, and the web app has no GET proxy for the log.
+  - Events reference suggestion sets and previews by ID only (a request precedes its set); only the
+    anchor node is a foreign key. Deletion tombstones do not list removed interaction-event IDs.

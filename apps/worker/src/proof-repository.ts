@@ -5,9 +5,13 @@ import {
   createMovePreviewSchema,
   createProofEdgeSchema,
   createProofNodeSchema,
+  definitionChanges,
   deletePreviousMoveCommandSchema,
   deletionReceipt,
   displayedSuggestionSetSchema,
+  interactionEventIdSchema,
+  interactionEventRequestFields,
+  interactionEventSchema,
   planPreviousMoveDeletion,
   prepareDisplayedSuggestionSet,
   prepareMovePreview,
@@ -19,14 +23,19 @@ import {
   parameterMenusSchema,
   proofDeletionRecordSchema,
   proofNodeIdSchema,
+  recordInteractionEventRequestSchema,
   suggestionAuthorizesMove,
   suggestionIdSchema,
   suggestionSetMatchesNode,
   suggestionSetIdSchema,
   RESULT_APPLICATION_MOVE_IDS,
+  type Actor,
   type ApplyKernelCommand,
+  type DefinitionReference,
   type DeletePreviousMoveReceipt,
   type DisplayedSuggestionSet,
+  type InteractionEvent,
+  type InteractionEventId,
   type MovePreview,
   type MovePreviewId,
   type MoveMenuSelection,
@@ -41,7 +50,6 @@ import {
   type TransitionEvent,
 } from "@proof/protocol";
 import {
-  HAND_AUTHORED_MOVES,
   commandIdGenerator,
   materializeMoveOperation,
   materializeResultApplication,
@@ -52,7 +60,7 @@ import {
 } from "@proof/moves";
 import type { RetrievalIndex } from "@proof/retrieval";
 import { z } from "zod";
-import { approvedCatalog, approvedResultEnvironment } from "./approved-catalog";
+import { APPROVED_DEFINITIONS, definitionHash, type DefinitionCatalog } from "./approved-catalog";
 
 const stableStorageIdentifierSchema = z
   .string()
@@ -139,6 +147,8 @@ export type ProofRecordDeletionRequest = Readonly<{
 
 /** The IDs a store actually removed from each table (unvalidated until the repository checks). */
 export type ProofRecordDeletionResult = Readonly<{
+  /** Interaction events anchored at deleted nodes or naming a deleted chosen preview. */
+  interactionEventIds: readonly string[];
   eventIds: readonly string[];
   edgeIds: readonly string[];
   previewIds: readonly string[];
@@ -197,7 +207,26 @@ export interface ProofStoreTransaction {
     request: ProofRecordDeletionRequest,
   ): Promise<ProofRecordDeletionResult>;
   insertDeletion(sessionId: ProofSessionId, deletion: ProofDeletionRecord): Promise<void>;
+  /** `{ sessionId, eventId, sequence, nodeId, event }` for one interaction event, if present. */
+  readInteractionEvent(
+    sessionId: ProofSessionId,
+    eventId: InteractionEventId,
+  ): Promise<unknown | undefined>;
+  /** The highest interaction-event sequence in the session, or 0. Called under the session lock. */
+  lastInteractionSequence(sessionId: ProofSessionId): Promise<number>;
+  insertInteractionEvent(sessionId: ProofSessionId, event: InteractionEvent): Promise<void>;
+  /** Interaction-event records in increasing sequence order, in the read-record shape. */
+  listInteractionEvents(
+    sessionId: ProofSessionId,
+    query: InteractionEventQuery,
+  ): Promise<readonly unknown[]>;
 }
+
+export type InteractionEventQuery = Readonly<{
+  nodeId?: ProofNode["id"] | undefined;
+  afterSequence: number;
+  limit: number;
+}>;
 
 export interface ProofStore {
   transaction<Result>(
@@ -248,6 +277,9 @@ export type RepositoryDiagnosticCode =
   | "invalid-deletion-record"
   | "serialized-stale-delete"
   | "serialized-stale-command"
+  | "interaction-event-rejected"
+  | "interaction-event-conflict"
+  | "invalid-interaction-event-record"
   | "storage-failure"
   | "commit-unknown";
 
@@ -291,8 +323,29 @@ export type RecordMovePreviewResult =
       status: "committed";
       preview: MovePreview;
       replayed: boolean;
+      /**
+       * Present when the preview with the requested ID was built from definitions that have since
+       * changed: `preview` is then a regenerated preview and this is the stale preview's ID.
+       */
+      regeneratedFrom?: MovePreviewId;
     }>
   | RepositoryFailure;
+
+export type RecordMovePreviewOptions = Readonly<{
+  definitions?: DefinitionCatalog;
+  /**
+   * Allows regenerating a stale preview for this command and records who caused it. Without it
+   * a preview ID whose stored evidence differs from the request is rejected.
+   */
+  regeneration?: Readonly<{ commandId: ApplyKernelCommand["commandId"]; actor: Actor }>;
+  now?: () => Date;
+}>;
+
+export type RecordInteractionEventResult =
+  Readonly<{ status: "committed"; event: InteractionEvent; replayed: boolean }> | RepositoryFailure;
+
+export type ListInteractionEventsResult =
+  Readonly<{ status: "loaded"; events: readonly InteractionEvent[] }> | RepositoryFailure;
 
 /**
  * The chosen move still needs menu choices. Nothing was recorded; the caller shows `menus` and
@@ -368,6 +421,8 @@ export type MaterializedMovePreviewRequest = Readonly<{
   operation: MovePreview["operation"];
   /** Present when the move displayed a choice menu or the caller chose menu items. */
   menuSelection?: MoveMenuSelection;
+  /** Content hashes of the move and library definitions the materialization used. */
+  definitions: readonly DefinitionReference[];
 }>;
 
 const initializeInputSchema = z
@@ -615,6 +670,7 @@ export async function materializeMoveChoice(
   store: ProofStore,
   sessionIdInput: unknown,
   choiceInput: unknown,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
 ): Promise<MaterializeMoveChoiceResult> {
   const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
   const choice = safeParse(moveChoiceSchema, choiceInput);
@@ -628,7 +684,7 @@ export async function materializeMoveChoice(
 
   try {
     return await store.transaction(async (transaction) => {
-      const loadedSession = await loadSession(transaction, sessionId);
+      const loadedSession = await loadSession(transaction, sessionId, definitions);
       if (!loadedSession.ok) return loadedSession.failure;
       const { session, environment } = loadedSession;
       const deleted = await deletedCommandFailure(transaction, session.id, choice.commandId);
@@ -690,6 +746,7 @@ export async function materializeMoveChoice(
         environment,
         choice.commandId,
         menuChoices,
+        definitions,
       );
       if (!materialized.ok) {
         if (materialized.requiresInput === undefined) return materialized.failure;
@@ -700,7 +757,7 @@ export async function materializeMoveChoice(
           ...materialized.requiresInput,
         };
       }
-      const { moveId, result } = materialized;
+      const { moveId, result, references } = materialized;
       const menuSelection = recordedMenuSelection(result.menus, menuChoices);
       if (menuSelection === null) {
         return repositoryFailure(
@@ -716,17 +773,10 @@ export async function materializeMoveChoice(
         moveId: moveId as MovePreview["moveId"],
         operation: result.operation,
         ...(menuSelection === undefined ? {} : { menuSelection }),
+        definitions: references,
       };
-      if (existingInput !== undefined) {
-        const existing = safeParse(createMovePreviewSchema(environment), existingInput);
-        if (existing === undefined || !movePreviewRequestMatches(existing, request)) {
-          return repositoryFailure(
-            "rejected",
-            "preview-rejected",
-            "The command ID is already linked to different or invalid move-preview evidence.",
-          );
-        }
-      }
+      // An existing preview for this command ID is compared by `recordMovePreview`, which
+      // regenerates it when only the approved definitions behind it changed.
       return {
         status: "materialized" as const,
         request,
@@ -737,11 +787,19 @@ export async function materializeMoveChoice(
   }
 }
 
-/** Persist one concrete move preview without advancing the proof session. */
+/**
+ * Persist one concrete move preview without advancing the proof session.
+ *
+ * With `options.regeneration`, a preview ID whose stored evidence was built for the same displayed
+ * choice but from different approved definitions (or a different resulting operation) is stale:
+ * a fresh preview is recorded under a derived ID, together with a `preview-regenerated`
+ * interaction event, and returned with `regeneratedFrom` (refinement §12.2).
+ */
 export async function recordMovePreview(
   store: ProofStore,
   sessionIdInput: unknown,
   requestInput: unknown,
+  options: RecordMovePreviewOptions = {},
 ): Promise<RecordMovePreviewResult> {
   const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
   const previewId = movePreviewIdFromUnknown(requestInput, "id");
@@ -756,53 +814,84 @@ export async function recordMovePreview(
 
   try {
     return await store.transaction(async (transaction) => {
-      const sessionInput = await transaction.lockSession(sessionId);
-      if (sessionInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "session-not-found",
-          "The proof session does not exist.",
-        );
-      }
-      const session = safeParse(proofSessionSchema, sessionInput);
-      if (session === undefined || session.id !== sessionId) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-session-record",
-          "The stored proof session failed runtime validation or identity checks.",
-        );
-      }
-      const environment = frozenEnvironment(session.operators);
-      if (environment === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-session-record",
-          "The stored operator environment could not be detached safely.",
-        );
-      }
+      const loadedSession = await loadSession(
+        transaction,
+        sessionId,
+        options.definitions ?? APPROVED_DEFINITIONS,
+      );
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
 
       const existingInput = await transaction.readPreview(session.id, previewId);
+      let stale: MovePreview | undefined;
       if (existingInput !== undefined) {
         const existing = safeParse(createMovePreviewSchema(environment), existingInput);
-        if (
-          existing === undefined ||
-          existing.id !== previewId ||
-          !movePreviewRequestMatches(existing, requestInput)
-        ) {
+        if (existing === undefined || existing.id !== previewId) {
           return repositoryFailure(
             "rejected",
             "invalid-preview-record",
-            "The stored move preview failed validation or the preview ID was reused for a different request.",
+            "The stored move preview failed runtime validation or identity checks.",
           );
         }
-        const detached = freezeDetached(existing);
-        return detached === undefined
-          ? repositoryFailure(
+        if (!movePreviewRequestMatches(existing, requestInput)) {
+          if (options.regeneration === undefined || !sameDisplayedChoice(existing, requestInput)) {
+            return repositoryFailure(
+              "rejected",
+              "preview-rejected",
+              "The preview ID is already linked to a different move-preview request.",
+            );
+          }
+          if (await previewWasApplied(transaction, session.id, existing.id)) {
+            // History is static: an applied preview is replayed, never regenerated.
+            const detached = freezeDetached(existing);
+            return detached === undefined
+              ? repositoryFailure(
+                  "rejected",
+                  "invalid-preview-record",
+                  "The stored move preview could not be detached safely.",
+                )
+              : { status: "committed" as const, preview: detached, replayed: true };
+          }
+          stale = existing;
+        } else {
+          const detached = freezeDetached(existing);
+          return detached === undefined
+            ? repositoryFailure(
+                "rejected",
+                "invalid-preview-record",
+                "The stored move preview could not be detached safely.",
+              )
+            : { status: "committed" as const, preview: detached, replayed: true };
+        }
+      }
+
+      const freshId =
+        stale === undefined ? previewId : regeneratedPreviewId(stale.id, requestInput);
+      const freshRequest =
+        stale === undefined ? requestInput : { ...(requestInput as object), id: freshId };
+      if (stale !== undefined) {
+        const regeneratedInput = await transaction.readPreview(session.id, freshId);
+        if (regeneratedInput !== undefined) {
+          const regenerated = safeParse(createMovePreviewSchema(environment), regeneratedInput);
+          const detached = regenerated === undefined ? undefined : freezeDetached(regenerated);
+          if (
+            detached === undefined ||
+            detached.id !== freshId ||
+            !movePreviewRequestMatches(detached, freshRequest)
+          ) {
+            return repositoryFailure(
               "rejected",
               "invalid-preview-record",
-              "The stored move preview could not be detached safely.",
-            )
-          : { status: "committed" as const, preview: detached, replayed: true };
+              "The stored regenerated preview failed validation or identity checks.",
+            );
+          }
+          return {
+            status: "committed" as const,
+            preview: detached,
+            replayed: true,
+            regeneratedFrom: stale.id,
+          };
+        }
       }
 
       const suggestionSetInput = await transaction.readSuggestionSet(session.id, suggestionSetId);
@@ -822,29 +911,18 @@ export async function recordMovePreview(
         );
       }
 
-      const currentInput = await transaction.readNode(session.id, session.currentNodeId);
-      if (currentInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "current-node-not-found",
-          "The current proof node does not exist.",
-        );
-      }
-      const currentNode = parseNodeRecord(
-        currentInput,
+      const loadedCurrentNode = await loadNode(
+        transaction,
         session,
         environment,
         session.currentNodeId,
+        "current-node-not-found",
+        "invalid-current-node",
       );
-      if (currentNode === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-current-node",
-          "The stored current proof node failed runtime validation or identity checks.",
-        );
-      }
+      if (!loadedCurrentNode.ok) return loadedCurrentNode.failure;
+      const currentNode = loadedCurrentNode.node;
 
-      const prepared = prepareMovePreview(currentNode, suggestionSet, requestInput, environment);
+      const prepared = prepareMovePreview(currentNode, suggestionSet, freshRequest, environment);
       if (!prepared.ok) {
         return repositoryFailure(
           "rejected",
@@ -853,11 +931,377 @@ export async function recordMovePreview(
         );
       }
       await transaction.insertPreview(session.id, prepared.preview);
-      return { status: "committed" as const, preview: prepared.preview, replayed: false };
+      if (stale === undefined || options.regeneration === undefined) {
+        return { status: "committed" as const, preview: prepared.preview, replayed: false };
+      }
+
+      const event = await appendInteractionEvent(
+        transaction,
+        session.id,
+        currentNode,
+        options.regeneration.actor,
+        options.now,
+        {
+          id: `event:${freshId}`,
+          kind: "preview-regenerated",
+          commandId: options.regeneration.commandId,
+          stalePreviewId: stale.id,
+          previewId: prepared.preview.id,
+          operationChanged:
+            stale.moveId !== prepared.preview.moveId ||
+            !jsonEquals(stale.operation, prepared.preview.operation),
+          changedDefinitions: definitionChanges(
+            stale.definitions ?? [],
+            prepared.preview.definitions ?? [],
+          ),
+        },
+      );
+      if (event === undefined) {
+        // Throwing rolls the regenerated preview back with the event.
+        throw new Error("The preview-regeneration event failed runtime validation.");
+      }
+      return {
+        status: "committed" as const,
+        preview: prepared.preview,
+        replayed: false,
+        regeneratedFrom: stale.id,
+      };
     });
   } catch (error: unknown) {
     return transactionFailure(error, "The move-preview transaction failed.");
   }
+}
+
+/** The stored preview and the request name the same displayed choice and menu choices. */
+function sameDisplayedChoice(preview: MovePreview, request: unknown): boolean {
+  return (
+    isDataRecord(request) &&
+    request.suggestionSetId === preview.suggestionSetId &&
+    request.chosenSuggestionId === preview.chosenSuggestionId &&
+    jsonEquals(
+      isDataRecord(request.menuSelection) ? request.menuSelection.choices : undefined,
+      preview.menuSelection?.choices,
+    )
+  );
+}
+
+async function previewWasApplied(
+  transaction: ProofStoreTransaction,
+  sessionId: ProofSessionId,
+  previewId: MovePreviewId,
+): Promise<boolean> {
+  const edges = await transaction.listEdges(sessionId);
+  return edges.some((row) => isDataRecord(row) && row.previewId === previewId);
+}
+
+/** A deterministic ID for the regeneration of `stalePreviewId` with this exact content. */
+function regeneratedPreviewId(stalePreviewId: MovePreviewId, request: unknown): MovePreviewId {
+  const content = isDataRecord(request)
+    ? {
+        moveId: request.moveId,
+        operation: request.operation,
+        menuSelection: request.menuSelection,
+        definitions: request.definitions,
+      }
+    : {};
+  const digest = definitionHash(content).slice("sha256:".length, "sha256:".length + 16);
+  return `${stalePreviewId}:regenerated:${digest}` as MovePreviewId;
+}
+
+type InteractionEventFields = Readonly<Record<string, unknown>> &
+  Readonly<{ id: string; kind: InteractionEvent["kind"] }>;
+
+/** Assign the next sequence number and insert one validated event anchored at `node`. */
+async function appendInteractionEvent(
+  transaction: ProofStoreTransaction,
+  sessionId: ProofSessionId,
+  node: ProofNode,
+  actor: Actor,
+  now: (() => Date) | undefined,
+  fields: InteractionEventFields,
+): Promise<InteractionEvent | undefined> {
+  const last = await transaction.lastInteractionSequence(sessionId);
+  if (!Number.isSafeInteger(last) || last < 0) {
+    throw new Error("The stored interaction-event sequence is invalid.");
+  }
+  const parsed = safeParse(interactionEventSchema, {
+    ...fields,
+    sequence: last + 1,
+    nodeId: node.id,
+    stateId: node.state.id,
+    actor: { id: actor.id, kind: actor.kind },
+    recordedAt: (now?.() ?? new Date()).toISOString(),
+  });
+  const event = parsed === undefined ? undefined : freezeDetached(parsed);
+  if (event === undefined) return undefined;
+  await transaction.insertInteractionEvent(sessionId, event);
+  return event;
+}
+
+/**
+ * Record one client interaction event (refinement §12.1). It is anchored to an existing node of
+ * the session and receives the next per-session sequence number. Retrying the same event ID with
+ * the same content replays the stored event; different content under that ID is rejected.
+ */
+export async function recordInteractionEvent(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  requestInput: unknown,
+  trustedActorInput: unknown,
+  options: Readonly<{ now?: () => Date }> = {},
+): Promise<RecordInteractionEventResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const request = safeParse(recordInteractionEventRequestSchema, requestInput);
+  const actor = safeParse(actorSchema, trustedActorInput);
+  if (sessionId === undefined || request === undefined || actor === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "interaction-event-rejected",
+      "The session ID, interaction event, or trusted actor is invalid.",
+    );
+  }
+
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
+
+      const existingInput = await transaction.readInteractionEvent(
+        session.id,
+        request.id as InteractionEventId,
+      );
+      if (existingInput !== undefined) {
+        const existing = parseInteractionEventRecord(existingInput, session, request.id);
+        if (existing === undefined) {
+          return repositoryFailure(
+            "rejected",
+            "invalid-interaction-event-record",
+            "The stored interaction event failed runtime validation or identity checks.",
+          );
+        }
+        if (
+          !jsonEquals(interactionEventRequestFields(existing), request) ||
+          existing.actor.id !== actor.id ||
+          existing.actor.kind !== actor.kind
+        ) {
+          return repositoryFailure(
+            "rejected",
+            "interaction-event-conflict",
+            "The interaction-event ID is already recorded with different content.",
+          );
+        }
+        return { status: "committed" as const, event: existing, replayed: true };
+      }
+
+      const loadedNode = await loadNode(
+        transaction,
+        session,
+        environment,
+        request.nodeId as ProofNode["id"],
+        "interaction-event-rejected",
+        "invalid-current-node",
+      );
+      if (!loadedNode.ok) return loadedNode.failure;
+      const node = loadedNode.node;
+      const invalid = await interactionEventReferenceFailure(transaction, session, node, request);
+      if (invalid !== undefined) {
+        return repositoryFailure("rejected", "interaction-event-rejected", invalid);
+      }
+      const event = await appendInteractionEvent(
+        transaction,
+        session.id,
+        node,
+        actor,
+        options.now,
+        request,
+      );
+      return event === undefined
+        ? repositoryFailure(
+            "rejected",
+            "interaction-event-rejected",
+            "The interaction event failed runtime validation against its anchor node.",
+          )
+        : { status: "committed" as const, event, replayed: false };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The interaction event could not be recorded.");
+  }
+}
+
+/** Why an event's references do not belong to its anchor node, or undefined when they do. */
+async function interactionEventReferenceFailure(
+  transaction: ProofStoreTransaction,
+  session: ProofSession,
+  node: ProofNode,
+  request: z.infer<typeof recordInteractionEventRequestSchema>,
+): Promise<string | undefined> {
+  const targets = new Set([
+    ...node.state.goals.map(({ id }) => `goal\u0000${id}`),
+    ...node.state.obligations.map(({ id }) => `obligation\u0000${id}`),
+  ]);
+  const hasTarget = (target: Readonly<{ kind: string; id: string }>) =>
+    targets.has(`${target.kind}\u0000${target.id}`);
+  const anchoredSet = async (
+    suggestionSetId: SuggestionSetId,
+  ): Promise<DisplayedSuggestionSet | string> => {
+    const loaded = await loadSuggestionSet(transaction, session, suggestionSetId);
+    if (!loaded.ok) return "The referenced suggestion set does not exist in this session.";
+    return loaded.suggestionSet.nodeId === node.id
+      ? loaded.suggestionSet
+      : "The referenced suggestion set is anchored to a different proof node.";
+  };
+
+  switch (request.kind) {
+    case "selection-changed":
+      return request.selections.every(
+        ({ anchor }) => anchor.stateId === node.state.id && hasTarget(anchor.target),
+      )
+        ? undefined
+        : "Every selection must be anchored to a goal or obligation of the event's node.";
+    case "suggestions-requested": {
+      // The request precedes the set; if it already exists it must belong to this node.
+      const input = await transaction.readSuggestionSet(
+        session.id,
+        request.suggestionSetId as SuggestionSetId,
+      );
+      if (input === undefined) return undefined;
+      const set = await anchoredSet(request.suggestionSetId as SuggestionSetId);
+      return typeof set === "string" ? set : undefined;
+    }
+    case "suggestions-displayed": {
+      const set = await anchoredSet(request.suggestionSetId as SuggestionSetId);
+      if (typeof set === "string") return set;
+      const order = set.suggestions.map(({ id }) => id);
+      let cursor = 0;
+      for (const id of request.suggestionIds) {
+        const index = order.indexOf(id, cursor);
+        if (index < 0) return "Displayed suggestions must appear in the set, in stored order.";
+        cursor = index + 1;
+      }
+      return undefined;
+    }
+    case "preview-requested":
+    case "menu-expanded": {
+      const set = await anchoredSet(request.suggestionSetId as SuggestionSetId);
+      if (typeof set === "string") return set;
+      const suggestionId =
+        request.kind === "preview-requested" ? request.chosenSuggestionId : request.suggestionId;
+      return set.suggestions.some(({ id }) => id === suggestionId)
+        ? undefined
+        : "The referenced suggestion was not displayed in that suggestion set.";
+    }
+    case "preview-rejected": {
+      const input = await transaction.readPreview(session.id, request.previewId as MovePreviewId);
+      return isDataRecord(input) && input.id === request.previewId && input.nodeId === node.id
+        ? undefined
+        : "The rejected preview does not exist at the event's proof node.";
+    }
+    case "focus-changed":
+      return hasTarget(request.target)
+        ? undefined
+        : "The focus target is not a goal or obligation of the event's node.";
+    case "objective-changed":
+      return undefined;
+    case "interaction-ended-without-action": {
+      if (request.suggestionSetId === undefined) return undefined;
+      const set = await anchoredSet(request.suggestionSetId as SuggestionSetId);
+      return typeof set === "string" ? set : undefined;
+    }
+  }
+}
+
+/** Read a session's interaction events in sequence order, optionally for one anchor node. */
+export async function listInteractionEvents(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  queryInput: unknown = {},
+): Promise<ListInteractionEventsResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const query = safeParse(interactionEventQuerySchema, queryInput);
+  if (sessionId === undefined || query === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "interaction-event-rejected",
+      "The session ID or interaction-event query is invalid.",
+    );
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session } = loadedSession;
+      const rows = await transaction.listInteractionEvents(session.id, {
+        ...(query.nodeId === undefined ? {} : { nodeId: query.nodeId as ProofNode["id"] }),
+        afterSequence: query.afterSequence ?? 0,
+        limit: query.limit ?? MAX_INTERACTION_EVENTS_PER_READ,
+      });
+      if (!Array.isArray(rows)) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-interaction-event-record",
+          "The stored interaction-event collection is invalid.",
+        );
+      }
+      const events: InteractionEvent[] = [];
+      for (const row of rows) {
+        const eventId = isDataRecord(row) ? row.eventId : undefined;
+        const event =
+          typeof eventId === "string"
+            ? parseInteractionEventRecord(row, session, eventId)
+            : undefined;
+        const previous = events.at(-1);
+        if (
+          event === undefined ||
+          event.sequence <= (query.afterSequence ?? 0) ||
+          (query.nodeId !== undefined && event.nodeId !== query.nodeId) ||
+          (previous !== undefined && event.sequence <= previous.sequence)
+        ) {
+          return repositoryFailure(
+            "rejected",
+            "invalid-interaction-event-record",
+            "A stored interaction event failed validation, identity, or ordering checks.",
+          );
+        }
+        events.push(event);
+      }
+      return { status: "loaded" as const, events };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The interaction events could not be read.");
+  }
+}
+
+const MAX_INTERACTION_EVENTS_PER_READ = 1000;
+
+export const interactionEventQuerySchema = z
+  .object({
+    nodeId: proofNodeIdSchema.optional(),
+    afterSequence: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(MAX_INTERACTION_EVENTS_PER_READ).optional(),
+  })
+  .strict();
+
+function parseInteractionEventRecord(
+  input: unknown,
+  session: ProofSession,
+  expectedEventId: string,
+): InteractionEvent | undefined {
+  if (!isStrictDataRecord(input, ["sessionId", "eventId", "sequence", "nodeId", "event"])) {
+    return undefined;
+  }
+  const event = safeParse(interactionEventSchema, input.event);
+  if (
+    event === undefined ||
+    safeParse(proofSessionIdSchema, input.sessionId) !== session.id ||
+    safeParse(interactionEventIdSchema, input.eventId) !== expectedEventId ||
+    event.id !== expectedEventId ||
+    input.sequence !== event.sequence ||
+    input.nodeId !== event.nodeId
+  ) {
+    return undefined;
+  }
+  return freezeDetached(event);
 }
 
 /** Load the complete validated rooted discovery tree using only retained records. */
@@ -1178,6 +1622,7 @@ export async function executeProofCommand(
   sessionIdInput: unknown,
   commandInput: unknown,
   trustedActorInput: unknown,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
 ): Promise<ExecuteProofCommandResult> {
   const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
   const trustedActor = safeParse(actorSchema, trustedActorInput);
@@ -1207,7 +1652,7 @@ export async function executeProofCommand(
           "The stored proof session failed runtime validation or identity checks.",
         );
       }
-      const environment = frozenEnvironment(session.operators);
+      const environment = frozenEnvironment(session.operators, definitions);
       if (environment === undefined) {
         return repositoryFailure(
           "rejected",
@@ -1368,6 +1813,7 @@ type MaterializedSuggestion =
       ok: true;
       moveId: string;
       result: Extract<MaterializationResult, { ok: true }>;
+      references: readonly DefinitionReference[];
     }>
   | Readonly<{
       ok: false;
@@ -1387,6 +1833,7 @@ function materializeSuggestion(
   environment: ProtocolEnvironment,
   commandId: ApplyKernelCommand["commandId"],
   menuChoices: MoveMenuChoices,
+  definitions: DefinitionCatalog,
 ): MaterializedSuggestion {
   const idGenerator = commandIdGenerator(commandId);
   const rejected = (message: string): MaterializedSuggestion => ({
@@ -1396,8 +1843,9 @@ function materializeSuggestion(
 
   let moveId: string | undefined;
   let result: MaterializationResult;
+  const references: DefinitionReference[] = [];
   if (suggestion.source === "move") {
-    const move = HAND_AUTHORED_MOVES.find((definition) => definition.id === suggestion.artifactId);
+    const move = definitions.moves.find((definition) => definition.id === suggestion.artifactId);
     if (move === undefined) {
       return rejected(
         "The displayed move is not available in the approved deterministic move catalog.",
@@ -1413,6 +1861,7 @@ function materializeSuggestion(
       selections[match.selectionSlotId] = moveSelectionInput(selection);
     }
     moveId = move.id;
+    references.push({ kind: "move", id: move.id, hash: definitionHash(move) });
     result = materializeMoveOperation({
       state: node.state,
       move,
@@ -1422,9 +1871,9 @@ function materializeSuggestion(
       env: environment,
     });
   } else {
-    const libraryResult = approvedCatalog(environment.operators ?? []).results.find(
-      ({ id }) => id === suggestion.artifactId,
-    );
+    const libraryResult = definitions
+      .catalog(environment.operators ?? [])
+      .results.find(({ id }) => id === suggestion.artifactId);
     const pattern = libraryResult?.patterns.find(({ id }) => id === suggestion.patternId);
     const match =
       suggestion.selectionMatches.find(({ patternId }) => patternId === suggestion.patternId) ??
@@ -1449,13 +1898,22 @@ function materializeSuggestion(
       environment,
       idGenerator,
     );
+    references.push({
+      kind: "library-result",
+      id: libraryResult.id,
+      hash: definitionHash(libraryResult),
+    });
     if (result.ok) {
       const kind = result.operation.kind;
-      moveId = HAND_AUTHORED_MOVES.find(
+      const move = definitions.moves.find(
         (definition) =>
           RESULT_APPLICATION_MOVE_IDS.includes(definition.id) &&
           definition.implementation.operationKind === kind,
-      )?.id;
+      );
+      moveId = move?.id;
+      if (move !== undefined) {
+        references.push({ kind: "move", id: move.id, hash: definitionHash(move) });
+      }
     }
   }
 
@@ -1480,7 +1938,19 @@ function materializeSuggestion(
   if (moveId === undefined || !suggestionAuthorizesMove(suggestion, moveId, result.operation)) {
     return rejected("The materialized operation is not authorized by the displayed suggestion.");
   }
-  return { ok: true, moveId, result };
+  // Definition references are ordered by kind, then ID ("library-result" < "move").
+  references.sort((left, right) =>
+    left.kind === right.kind
+      ? left.id < right.id
+        ? -1
+        : left.id > right.id
+          ? 1
+          : 0
+      : left.kind < right.kind
+        ? -1
+        : 1,
+  );
+  return { ok: true, moveId, result, references };
 }
 
 /**
@@ -1554,18 +2024,18 @@ function derivedStateId(commandId: ApplyKernelCommand["commandId"]): ProofNode["
 
 function movePreviewRequestMatches(preview: MovePreview, request: unknown): boolean {
   const keys = ["id", "suggestionSetId", "chosenSuggestionId", "moveId", "operation"];
+  if (!isDataRecord(request)) return false;
+  if (request.menuSelection !== undefined) keys.push("menuSelection");
+  if (request.definitions !== undefined) keys.push("definitions");
   return (
-    isDataRecord(request) &&
-    isStrictDataRecord(
-      request,
-      request.menuSelection === undefined ? keys : [...keys, "menuSelection"],
-    ) &&
+    isStrictDataRecord(request, keys) &&
     request.id === preview.id &&
     request.suggestionSetId === preview.suggestionSetId &&
     request.chosenSuggestionId === preview.chosenSuggestionId &&
     request.moveId === preview.moveId &&
     jsonEquals(request.operation, preview.operation) &&
-    jsonEquals(request.menuSelection, preview.menuSelection)
+    jsonEquals(request.menuSelection, preview.menuSelection) &&
+    jsonEquals(request.definitions, preview.definitions)
   );
 }
 
@@ -1779,10 +2249,11 @@ function movePreviewIdFromUnknown(
 /** The session's operators and the approved results adapted to them, detached and frozen. */
 function frozenEnvironment(
   operators: readonly OperatorDeclaration[],
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
 ): ProtocolEnvironment | undefined {
   try {
     createProofNodeSchema({ operators });
-    const results = approvedResultEnvironment(operators);
+    const results = definitions.catalog(operators).kernelResults;
     if (results === undefined) return undefined;
     return deepFreeze({ operators: structuredClone(operators), results: structuredClone(results) });
   } catch {
@@ -1797,6 +2268,7 @@ type LoadedSession =
 async function loadSession(
   transaction: ProofStoreTransaction,
   expectedSessionId: ProofSessionId,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
 ): Promise<LoadedSession> {
   const sessionInput = await transaction.lockSession(expectedSessionId);
   if (sessionInput === undefined) {
@@ -1820,7 +2292,7 @@ async function loadSession(
       ),
     };
   }
-  const environment = frozenEnvironment(parsed.operators);
+  const environment = frozenEnvironment(parsed.operators, definitions);
   const session = freezeDetached(parsed);
   if (environment === undefined || session === undefined) {
     return {

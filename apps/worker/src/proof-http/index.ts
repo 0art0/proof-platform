@@ -1,6 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { HAND_AUTHORED_MOVES } from "@proof/moves";
 import {
   actorSchema,
   createMovePreviewSchema,
@@ -9,9 +8,13 @@ import {
   deletePreviousMoveCommandSchema,
   deletePreviousMoveReceiptSchema,
   displayedSuggestionSetSchema,
+  interactionEventListSchema,
+  interactionEventSchema,
   moveRequiresInputResponseSchema,
+  previewRegeneratedResponseSchema,
   proofCommandReceiptSchema,
   proofSessionMetadataSchema,
+  recordInteractionEventRequestSchema,
   stableIdentifierSchema,
   suggestionIdSchema,
   suggestionSetIdSchema,
@@ -21,7 +24,7 @@ import {
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import type { Pool } from "pg";
 import { z } from "zod";
-import { approvedCatalog } from "../approved-catalog";
+import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "../approved-catalog";
 import { postgresProofStore } from "../postgres-proof-store";
 import {
   backtrackProofSession,
@@ -29,6 +32,8 @@ import {
   deletePreviousMove,
   derivedMoveRecordIds,
   executeProofCommand,
+  interactionEventQuerySchema,
+  listInteractionEvents,
   loadProofHistory,
   loadCurrentProofSession,
   materializeMoveChoice,
@@ -37,6 +42,7 @@ import {
   proofSessionIdSchema,
   readDisplayedSuggestionSet,
   recordDisplayedSuggestionSet,
+  recordInteractionEvent,
   recordMovePreview,
   type ProofSession,
   type MaterializeMoveChoiceResult,
@@ -133,7 +139,22 @@ export const proofHttpSuggestionResponseSchema = z
   .strict();
 
 export const proofHttpPreviewResponseSchema = z
-  .object({ preview: z.unknown(), replayed: z.boolean() })
+  .object({
+    preview: z.unknown(),
+    replayed: z.boolean(),
+    /** Present when a stale preview for this command was regenerated from current definitions. */
+    regeneratedFrom: stableIdentifierSchema.optional(),
+  })
+  .strict();
+
+export const proofHttpInteractionEventRequestSchema = recordInteractionEventRequestSchema;
+
+export const proofHttpInteractionEventResponseSchema = z
+  .object({ event: interactionEventSchema, replayed: z.boolean() })
+  .strict();
+
+export const proofHttpInteractionEventListResponseSchema = z
+  .object({ events: interactionEventListSchema })
   .strict();
 
 export const proofHttpCommandResponseSchema = z
@@ -181,10 +202,30 @@ export type ProofHttpService = Readonly<{
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 
+export type ProofHttpServiceOptions = Readonly<{
+  /** The approved move and library definitions; tests inject changed definitions. */
+  definitions?: DefinitionCatalog;
+  now?: () => Date;
+}>;
+
+type HandlerContext = Readonly<{
+  store: ProofStore;
+  definitions: DefinitionCatalog;
+  now: (() => Date) | undefined;
+}>;
+
 /** Create the dependency-free product HTTP boundary over a proof repository. */
-export function createProofHttpService(store: ProofStore): ProofHttpService {
+export function createProofHttpService(
+  store: ProofStore,
+  options: ProofHttpServiceOptions = {},
+): ProofHttpService {
+  const context: HandlerContext = {
+    store,
+    definitions: options.definitions ?? APPROVED_DEFINITIONS,
+    now: options.now,
+  };
   const server = createServer((request, response) => {
-    void handleRequest(store, request, response).catch(() => {
+    void handleRequest(context, request, response).catch(() => {
       if (!response.headersSent) {
         writeJson(response, 500, {
           diagnostics: [{ code: "internal-error", message: "The request could not be handled." }],
@@ -222,7 +263,7 @@ export function createPostgresProofHttpService(pool: Pool): ProofHttpService {
 }
 
 async function handleRequest(
-  store: ProofStore,
+  { store, definitions, now }: HandlerContext,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
@@ -285,7 +326,7 @@ async function handleRequest(
       writeRepositoryFailure(response, loaded);
       return;
     }
-    const index = approvedRetrievalIndex(loaded.session.operators);
+    const index = approvedRetrievalIndex(definitions, loaded.session.operators);
     if (!index.ok) {
       writeJson(response, 500, {
         diagnostics: [{ code: "invalid-catalog", message: index.message }],
@@ -313,7 +354,7 @@ async function handleRequest(
     writeValidatedJson(response, recorded.replayed ? 200 : 201, proofHttpSuggestionResponseSchema, {
       suggestionSet: recorded.suggestionSet,
       replayed: recorded.replayed,
-      transitionClasses: transitionClassesFor(recorded.suggestionSet),
+      transitionClasses: transitionClassesFor(definitions, recorded.suggestionSet),
     });
     return;
   }
@@ -326,7 +367,7 @@ async function handleRequest(
     }
     writeValidatedJson(response, 200, proofHttpSuggestionResponseSchema, {
       suggestionSet: loaded.suggestionSet,
-      transitionClasses: transitionClassesFor(loaded.suggestionSet),
+      transitionClasses: transitionClassesFor(definitions, loaded.suggestionSet),
     });
     return;
   }
@@ -337,12 +378,21 @@ async function handleRequest(
       writeJson(response, choice.status, invalidRequest(choice.message));
       return;
     }
-    const materialized = await materializeMoveChoice(store, route.sessionId, choice.value);
+    const materialized = await materializeMoveChoice(
+      store,
+      route.sessionId,
+      choice.value,
+      definitions,
+    );
     if (materialized.status !== "materialized") {
       writeMaterializationFailure(response, materialized);
       return;
     }
-    const recorded = await recordMovePreview(store, route.sessionId, materialized.request);
+    const recorded = await recordMovePreview(store, route.sessionId, materialized.request, {
+      definitions,
+      regeneration: { commandId: choice.value.commandId, actor: WEB_ACTOR },
+      ...(now === undefined ? {} : { now }),
+    });
     if (recorded.status !== "committed") {
       writeRepositoryFailure(response, recorded);
       return;
@@ -369,6 +419,9 @@ async function handleRequest(
     writeValidatedJson(response, recorded.replayed ? 200 : 201, schema, {
       preview: recorded.preview,
       replayed: recorded.replayed,
+      ...(recorded.regeneratedFrom === undefined
+        ? {}
+        : { regeneratedFrom: recorded.regeneratedFrom }),
     });
     return;
   }
@@ -379,14 +432,52 @@ async function handleRequest(
       writeJson(response, choice.status, invalidRequest(choice.message));
       return;
     }
-    const materialized = await materializeMoveChoice(store, route.sessionId, choice.value);
+    const materialized = await materializeMoveChoice(
+      store,
+      route.sessionId,
+      choice.value,
+      definitions,
+    );
     if (materialized.status !== "materialized") {
       writeMaterializationFailure(response, materialized);
       return;
     }
-    const recordedPreview = await recordMovePreview(store, route.sessionId, materialized.request);
+    const recordedPreview = await recordMovePreview(store, route.sessionId, materialized.request, {
+      definitions,
+      regeneration: { commandId: choice.value.commandId, actor: WEB_ACTOR },
+      ...(now === undefined ? {} : { now }),
+    });
     if (recordedPreview.status !== "committed") {
       writeRepositoryFailure(response, recordedPreview);
+      return;
+    }
+    if (recordedPreview.regeneratedFrom !== undefined && !recordedPreview.replayed) {
+      // The previewed definitions changed. The fresh preview is recorded, never applied unseen:
+      // the client shows it and confirms by repeating the command.
+      const loaded = await loadCurrentProofSession(store, route.sessionId);
+      if (loaded.status !== "loaded") {
+        writeRepositoryFailure(response, loaded);
+        return;
+      }
+      writeValidatedJson(
+        response,
+        409,
+        previewRegeneratedResponseSchema.extend({
+          preview: createMovePreviewSchema({ operators: loaded.session.operators }),
+        }),
+        {
+          status: "preview-regenerated",
+          stalePreviewId: recordedPreview.regeneratedFrom,
+          preview: recordedPreview.preview,
+          diagnostics: [
+            {
+              code: "preview-regenerated",
+              message:
+                "The approved definitions behind the preview changed; review the regenerated preview before applying.",
+            },
+          ],
+        },
+      );
       return;
     }
     const ids = derivedMoveRecordIds(choice.value.commandId);
@@ -411,6 +502,7 @@ async function handleRequest(
           : { menuSelection: recordedPreview.preview.menuSelection }),
       },
       WEB_ACTOR,
+      definitions,
     );
     if (executed.status !== "committed") {
       writeRepositoryFailure(response, executed);
@@ -429,6 +521,49 @@ async function handleRequest(
       node: loaded.node,
       receipt: executed.result.receipt,
       replayed: executed.replayed,
+    });
+    return;
+  }
+
+  if (route.kind === "interaction-events" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(request, proofHttpInteractionEventRequestSchema);
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const recorded = await recordInteractionEvent(
+      store,
+      route.sessionId,
+      requested.value,
+      WEB_ACTOR,
+      now === undefined ? {} : { now },
+    );
+    if (recorded.status !== "committed") {
+      writeRepositoryFailure(response, recorded);
+      return;
+    }
+    writeValidatedJson(
+      response,
+      recorded.replayed ? 200 : 201,
+      proofHttpInteractionEventResponseSchema,
+      { event: recorded.event, replayed: recorded.replayed },
+    );
+    return;
+  }
+
+  if (route.kind === "interaction-events" && request.method === "GET") {
+    const query = interactionEventQuery(request.url);
+    if (query === undefined) {
+      writeJson(response, 400, invalidRequest("The interaction-event query is invalid."));
+      return;
+    }
+    const listed = await listInteractionEvents(store, route.sessionId, query);
+    if (listed.status !== "loaded") {
+      writeRepositoryFailure(response, listed);
+      return;
+    }
+    writeValidatedJson(response, 200, proofHttpInteractionEventListResponseSchema, {
+      events: listed.events,
     });
     return;
   }
@@ -518,9 +653,11 @@ async function handleRequest(
 
   response.setHeader(
     "allow",
-    route.kind === "session" || route.kind === "suggestion" || route.kind === "history"
-      ? "GET"
-      : "POST",
+    route.kind === "interaction-events"
+      ? "GET, POST"
+      : route.kind === "session" || route.kind === "suggestion" || route.kind === "history"
+        ? "GET"
+        : "POST",
   );
   writeJson(response, 405, invalidRequest("The HTTP method is not supported for this resource."));
 }
@@ -533,7 +670,8 @@ type ParsedRoute =
   | Readonly<{ kind: "command-collection"; sessionId: string }>
   | Readonly<{ kind: "history"; sessionId: string }>
   | Readonly<{ kind: "backtrack"; sessionId: string }>
-  | Readonly<{ kind: "delete-previous-move"; sessionId: string }>;
+  | Readonly<{ kind: "delete-previous-move"; sessionId: string }>
+  | Readonly<{ kind: "interaction-events"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
   try {
@@ -561,6 +699,9 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       if (segments[2] === "delete-previous-move") {
         return { kind: "delete-previous-move", sessionId: sessionId.data };
       }
+      if (segments[2] === "interaction-events") {
+        return { kind: "interaction-events", sessionId: sessionId.data };
+      }
       return undefined;
     }
     if (segments[2] !== "suggestion-sets" || segments.length !== 4 || segments[3] === undefined) {
@@ -575,14 +716,43 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
   }
 }
 
+/** `?nodeId=…&after=…&limit=…`; each parameter at most once. */
+function interactionEventQuery(
+  requestTarget: string | undefined,
+): z.infer<typeof interactionEventQuerySchema> | undefined {
+  try {
+    const url = new URL(requestTarget ?? "/", "http://proof.local");
+    const allowed = ["nodeId", "after", "limit"];
+    const keys = [...url.searchParams.keys()];
+    if (keys.some((key) => !allowed.includes(key)) || new Set(keys).size !== keys.length) {
+      return undefined;
+    }
+    const integer = (value: string | null): number | undefined | null =>
+      value === null ? undefined : /^(0|[1-9][0-9]{0,9})$/.test(value) ? Number(value) : null;
+    const after = integer(url.searchParams.get("after"));
+    const limit = integer(url.searchParams.get("limit"));
+    if (after === null || limit === null) return undefined;
+    const nodeId = url.searchParams.get("nodeId");
+    const parsed = interactionEventQuerySchema.safeParse({
+      ...(nodeId === null ? {} : { nodeId }),
+      ...(after === undefined ? {} : { afterSequence: after }),
+      ...(limit === undefined ? {} : { limit }),
+    });
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function approvedRetrievalIndex(
+  definitions: DefinitionCatalog,
   operators: NonNullable<ProtocolEnvironment["operators"]>,
 ): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
-  const catalog = approvedCatalog(operators);
+  const catalog = definitions.catalog(operators);
   const result = createRetrievalIndex(
     {
       results: catalog.results,
-      moves: HAND_AUTHORED_MOVES,
+      moves: definitions.moves,
       variantFamilies: catalog.variantFamilies,
     },
     { operators },
@@ -657,13 +827,15 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
             code === "serialized-stale-backtrack" ||
             code === "serialized-stale-delete" ||
             code === "delete-requires-confirmation" ||
-            code === "command-deleted"
+            code === "command-deleted" ||
+            code === "interaction-event-conflict"
           ? 409
           : code === "suggestion-set-rejected" ||
               code === "preview-rejected" ||
               code === "command-rejected" ||
               code === "backtrack-rejected" ||
-              code === "delete-rejected"
+              code === "delete-rejected" ||
+              code === "interaction-event-rejected"
             ? 400
             : 500;
   writeJson(response, status, { diagnostics: failure.diagnostics });
@@ -685,10 +857,11 @@ function writeMaterializationFailure(
 }
 
 function transitionClassesFor(
+  definitions: DefinitionCatalog,
   suggestionSet: z.infer<typeof displayedSuggestionSetSchema>,
 ): readonly z.infer<typeof proofHttpTransitionClassificationSchema>[] {
-  const moves = new Map<string, (typeof HAND_AUTHORED_MOVES)[number]>(
-    HAND_AUTHORED_MOVES.map((move) => [move.id, move]),
+  const moves = new Map<string, DefinitionCatalog["moves"][number]>(
+    definitions.moves.map((move) => [move.id, move]),
   );
   return suggestionSet.suggestions.flatMap((suggestion) => {
     if (suggestion.source !== "move") return [];

@@ -144,7 +144,13 @@ const movePreviewApiSuccessSchema = z
   .object({
     ok: z.literal(true),
     // The caller validates this with createMovePreviewSchema({ operators }) from its session.
-    data: z.object({ preview: z.unknown(), replayed: z.boolean() }).strict(),
+    data: z
+      .object({
+        preview: z.unknown(),
+        replayed: z.boolean(),
+        regeneratedFrom: protocolStableIdentifierSchema.optional(),
+      })
+      .strict(),
   })
   .strict();
 

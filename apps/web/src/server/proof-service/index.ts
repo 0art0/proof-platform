@@ -5,13 +5,17 @@ import {
   createProofEdgeSchema,
   createProofNodeSchema,
   displayedSuggestionSetSchema,
+  interactionEventSchema,
   moveRequiresInputResponseSchema,
   operatorDeclarationSchema,
   proofCommandReceiptSchema,
+  previewRegeneratedResponseSchema,
   proofNodeIdSchema,
+  recordInteractionEventRequestSchema,
   stableIdentifierSchema,
   suggestionSetIdSchema,
   type DisplayedSuggestionSet,
+  type InteractionEvent,
   type MovePreview,
   type OperatorDeclaration,
   type ProofCommandReceipt,
@@ -60,6 +64,9 @@ const repositoryDiagnosticCodeSchema = z.enum([
   "not-found",
   "internal-error",
   "invalid-catalog",
+  "interaction-event-rejected",
+  "interaction-event-conflict",
+  "invalid-interaction-event-record",
 ]);
 
 const proofServiceFailureSchema = z
@@ -107,7 +114,15 @@ const storedSuggestionEnvelopeSchema = z
   .strict();
 
 const movePreviewEnvelopeSchema = z
-  .object({ preview: z.unknown(), replayed: z.boolean() })
+  .object({
+    preview: z.unknown(),
+    replayed: z.boolean(),
+    regeneratedFrom: stableIdentifierSchema.optional(),
+  })
+  .strict();
+
+const interactionEventEnvelopeSchema = z
+  .object({ event: interactionEventSchema, replayed: z.boolean() })
   .strict();
 
 const commandEnvelopeSchema = z
@@ -158,7 +173,11 @@ export type RecordedSuggestionSet = Readonly<{
 export type RecordedMovePreview = Readonly<{
   preview: MovePreview;
   replayed: boolean;
+  /** The stale preview this one regenerated after the approved definitions changed. */
+  regeneratedFrom?: string;
 }>;
+
+export type RecordedInteractionEvent = Readonly<{ event: InteractionEvent; replayed: boolean }>;
 
 export type AppliedProofCommand = Readonly<{
   session: ProofSession;
@@ -185,6 +204,7 @@ export type ProofServiceErrorCode =
   | z.infer<typeof repositoryDiagnosticCodeSchema>
   | "invalid_request"
   | "requires-input"
+  | "preview-regenerated"
   | "service_unavailable"
   | "invalid_upstream_response";
 
@@ -345,7 +365,48 @@ export async function createStoredMovePreview(
   ) {
     throw invalidUpstreamResponse();
   }
-  return { preview, replayed: envelope.data.replayed };
+  return {
+    preview,
+    replayed: envelope.data.replayed,
+    ...(envelope.data.regeneratedFrom === undefined
+      ? {}
+      : { regeneratedFrom: envelope.data.regeneratedFrom }),
+  };
+}
+
+/** Record one ordered, node-anchored interaction event; the worker assigns its sequence. */
+export async function recordStoredInteractionEvent(
+  sessionIdInput: unknown,
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<RecordedInteractionEvent> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const request = recordInteractionEventRequestSchema.safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The interaction event is invalid.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/interaction-events`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200 && response.status !== 201) {
+    throw failureForResponse(response.status, value);
+  }
+  const envelope = interactionEventEnvelopeSchema.safeParse(value);
+  if (
+    !envelope.success ||
+    envelope.data.replayed !== (response.status === 200) ||
+    envelope.data.event.id !== request.data.id ||
+    envelope.data.event.nodeId !== request.data.nodeId ||
+    envelope.data.event.kind !== request.data.kind
+  ) {
+    throw invalidUpstreamResponse();
+  }
+  return envelope.data;
 }
 
 /** Execute one exact displayed choice through the worker's command service. */
@@ -645,6 +706,15 @@ function failureForResponse(status: number, value: unknown): ProofServiceError {
   const requiresInput = moveRequiresInputResponseSchema.safeParse(value);
   if (status === 422 && requiresInput.success) {
     return new ProofServiceError("requires-input", requiresInput.data.diagnostics[0].message, 422);
+  }
+  // A stale preview was regenerated and recorded instead of applied; the client re-previews.
+  const regenerated = previewRegeneratedResponseSchema.safeParse(value);
+  if (status === 409 && regenerated.success) {
+    return new ProofServiceError(
+      "preview-regenerated",
+      regenerated.data.diagnostics[0].message,
+      409,
+    );
   }
   const failure = proofServiceFailureSchema.safeParse(value);
   if (!failure.success || status < 400 || status > 599) throw invalidUpstreamResponse();

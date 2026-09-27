@@ -29,6 +29,7 @@ import {
   type MoveChoiceRequest,
   type ProofSelectionDescriptor,
 } from "./api-contract";
+import { createInteractionRecorder } from "./interaction-recorder";
 import styles from "./stored-proof-workspace.module.css";
 
 export type StoredProofSession = Readonly<{
@@ -105,6 +106,10 @@ function StatefulStoredWorkspace({
   const mutationPendingRef = useRef(false);
   // Whether the last reported selection was empty. A snapshot starts with no selection.
   const selectionEmpty = useRef(true);
+  const recordInteraction = useMemo(() => createInteractionRecorder(session.id), [session.id]);
+  // The displayed suggestion set and the shown preview, for interaction events.
+  const displayedSetId = useRef<string | undefined>(undefined);
+  const shownPreview = useRef<MovePreview | undefined>(undefined);
 
   const loadHistory = useCallback(async () => {
     const generation = ++historyGeneration.current;
@@ -135,9 +140,27 @@ function StatefulStoredWorkspace({
     activeRequest.current = undefined;
     commandIds.current.clear();
     selectionEmpty.current = true;
+    displayedSetId.current = undefined;
+    shownPreview.current = undefined;
     setSuggestions({ kind: "idle" });
     setMoveState({ kind: "idle" });
   }, []);
+
+  /** Record that the shown preview was left without being applied. */
+  const rejectShownPreview = useCallback(
+    (reason: "superseded" | "selection-changed") => {
+      const preview = shownPreview.current;
+      if (preview === undefined) return;
+      shownPreview.current = undefined;
+      recordInteraction({
+        kind: "preview-rejected",
+        nodeId: preview.nodeId,
+        previewId: preview.id,
+        reason,
+      });
+    },
+    [recordInteraction],
+  );
 
   const handleSelectionChange = useCallback(
     (selections: readonly AnchoredProofSelection[]) => {
@@ -147,6 +170,19 @@ function StatefulStoredWorkspace({
       const empty = selections.length === 0;
       if (empty && selectionEmpty.current) return;
       selectionEmpty.current = empty;
+      rejectShownPreview("selection-changed");
+      if (empty) {
+        recordInteraction({ kind: "selection-changed", nodeId: node.id, selections: [] });
+        if (displayedSetId.current !== undefined) {
+          recordInteraction({
+            kind: "interaction-ended-without-action",
+            nodeId: node.id,
+            suggestionSetId: displayedSetId.current,
+            reason: "selection-cleared",
+          });
+        }
+      }
+      displayedSetId.current = undefined;
       const generation = ++requestGeneration.current;
       actionGeneration.current += 1;
       activeRequest.current?.abort();
@@ -176,6 +212,16 @@ function StatefulStoredWorkspace({
         });
         return;
       }
+      recordInteraction({
+        kind: "selection-changed",
+        nodeId: node.id,
+        selections: request.data.selections,
+      });
+      recordInteraction({
+        kind: "suggestions-requested",
+        nodeId: node.id,
+        suggestionSetId: request.data.id,
+      });
       const controller = new AbortController();
       activeRequest.current = controller;
       setSuggestions({ kind: "loading" });
@@ -197,6 +243,13 @@ function StatefulStoredWorkspace({
           });
           return;
         }
+        displayedSetId.current = suggestionSet.id;
+        recordInteraction({
+          kind: "suggestions-displayed",
+          nodeId: node.id,
+          suggestionSetId: suggestionSet.id,
+          suggestionIds: suggestionSet.suggestions.map(({ id }) => id),
+        });
         setSuggestions({
           kind: suggestionSet.suggestions.length === 0 ? "empty" : "ready",
           suggestionSet,
@@ -204,7 +257,7 @@ function StatefulStoredWorkspace({
         });
       });
     },
-    [node.id, node.state.id, session.id],
+    [node.id, node.state.id, recordInteraction, rejectShownPreview, session.id],
   );
 
   const commandIdFor = useCallback(
@@ -223,15 +276,22 @@ function StatefulStoredWorkspace({
     async (set: DisplayedSuggestionSet, suggestionId: SuggestionId) => {
       const generation = ++actionGeneration.current;
       const commandId = commandIdFor(set.id, suggestionId);
+      const chosenSuggestionId = suggestionIdSchema.parse(suggestionId);
+      if (shownPreview.current?.chosenSuggestionId !== suggestionId) {
+        rejectShownPreview("superseded");
+      }
+      recordInteraction({
+        kind: "preview-requested",
+        nodeId: node.id,
+        suggestionSetId: set.id,
+        chosenSuggestionId,
+        commandId,
+      });
       setNotice(undefined);
       setMoveState({ kind: "previewing", suggestionId });
       const result = await requestMovePreview(
         session.id,
-        {
-          commandId,
-          suggestionSetId: set.id,
-          chosenSuggestionId: suggestionIdSchema.parse(suggestionId),
-        },
+        { commandId, suggestionSetId: set.id, chosenSuggestionId },
         session.operators,
       );
       if (actionGeneration.current !== generation) return;
@@ -249,10 +309,19 @@ function StatefulStoredWorkspace({
           message: "The preview belongs to a different proof snapshot or choice.",
         });
       } else {
+        shownPreview.current = result.preview;
         setMoveState({ kind: "previewed", suggestionId, commandId, preview: result.preview });
       }
     },
-    [commandIdFor, node.id, node.state.id, session.id, session.operators],
+    [
+      commandIdFor,
+      node.id,
+      node.state.id,
+      recordInteraction,
+      rejectShownPreview,
+      session.id,
+      session.operators,
+    ],
   );
 
   const applySuggestion = useCallback(
@@ -273,6 +342,16 @@ function StatefulStoredWorkspace({
       mutationPendingRef.current = false;
       setMutationPending(false);
       if (actionGeneration.current !== generation) return;
+      if (!result.ok && result.code === "preview-regenerated") {
+        // The approved definitions changed since the preview: show the regenerated preview,
+        // which the next Apply of the same command confirms.
+        await previewSuggestion(set, suggestionId);
+        setNotice({
+          state: "rejected",
+          message: `Apply paused: ${result.message}`,
+        });
+        return;
+      }
       if (!result.ok) {
         setMoveState(retryState);
         setNotice({ state: "rejected", message: `Apply rejected: ${result.message}` });
@@ -287,7 +366,7 @@ function StatefulStoredWorkspace({
       });
       void loadHistory();
     },
-    [loadHistory, moveState, resetTransientState, session.id, session.operators],
+    [loadHistory, moveState, previewSuggestion, resetTransientState, session.id, session.operators],
   );
 
   const backtrackTo = useCallback(
@@ -448,6 +527,27 @@ function StatefulStoredWorkspace({
                     <div className={styles.missingInput} role="note">
                       <strong>Additional input required</strong>
                       <span>{missingInputText(suggestion)}</span>
+                      <details
+                        onToggle={(event) => {
+                          if (!event.currentTarget.open) return;
+                          recordInteraction({
+                            kind: "menu-expanded",
+                            nodeId: node.id,
+                            suggestionSetId: suggestions.suggestionSet.id,
+                            suggestionId: suggestionIdSchema.parse(suggestion.id),
+                          });
+                        }}
+                      >
+                        <summary>Input menus</summary>
+                        <ul aria-label={`Input menus for ${suggestion.name}`}>
+                          {[
+                            ...suggestion.unresolvedSelectionSlots,
+                            ...suggestion.unresolvedParameters,
+                          ].map((input) => (
+                            <li key={input}>{`Choose ${input}`}</li>
+                          ))}
+                        </ul>
+                      </details>
                     </div>
                   ) : null}
                   <div className={styles.cardActions}>
@@ -760,7 +860,13 @@ async function requestApply(
     const response = await postChoice(sessionId, "commands", choice);
     const parsed = commandApiResponseSchema.safeParse(await response.json());
     if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
-    if (!parsed.data.ok) return { ok: false as const, message: parsed.data.error.message };
+    if (!parsed.data.ok) {
+      return {
+        ok: false as const,
+        code: parsed.data.error.code,
+        message: parsed.data.error.message,
+      };
+    }
     const node = createProofNodeSchema({ operators }).safeParse(parsed.data.data.node);
     if (!node.success || parsed.data.data.session.currentNodeId !== node.data.id)
       return invalidActionResponse();
@@ -839,7 +945,7 @@ function postChoice(
   });
 }
 
-type ActionFailure = { ok: false; message: string };
+type ActionFailure = { ok: false; message: string; code?: string };
 function invalidBrowserResponse() {
   return {
     ok: false as const,

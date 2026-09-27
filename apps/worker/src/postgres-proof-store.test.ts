@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  interactionEventSchema,
   proofDeletionRecordSchema,
   proofNodeSchema,
   type DisplayedSuggestionSet,
@@ -528,6 +529,7 @@ describe("PostgresProofStore deletion", () => {
       transaction.deleteProofRecords(sessionId, deletionRequest),
     );
     expect(removed).toEqual({
+      interactionEventIds: ["node:command:d"],
       eventIds: ["event:command:d"],
       edgeIds: ["edge:command:d"],
       previewIds: ["node:command:d"],
@@ -537,6 +539,7 @@ describe("PostgresProofStore deletion", () => {
     });
     const deletes = client.calls.filter(({ text }) => text.trim().startsWith("DELETE"));
     expect(deletes.map(({ text }) => /DELETE FROM (\w+)/.exec(text)?.[1])).toEqual([
+      "proof_interaction_events",
       "proof_events",
       "proof_edges",
       "proof_previews",
@@ -549,10 +552,13 @@ describe("PostgresProofStore deletion", () => {
       expect(call.text).not.toContain("command:d");
       expect(call.values?.[0]).toBe("session:one");
     }
-    expect(deletes[2]?.text).toContain("NOT EXISTS");
-    expect(deletes[2]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
+    expect(deletes[0]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
+    expect(deletes[0]?.text).toContain("stale_preview_id = ANY ($3::text[])");
+    expect(deletes[3]?.text).toContain("NOT EXISTS");
+    expect(deletes[3]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
     expect(client.calls.map(({ text }) => text.trim().split(/\s+/)[0])).toEqual([
       "BEGIN",
+      "DELETE",
       "DELETE",
       "DELETE",
       "DELETE",
@@ -609,5 +615,104 @@ describe("PostgresProofStore deletion", () => {
     expect(String(insert?.values?.[11])).not.toMatch(/"state"|"goals"/);
     expect(select?.text).toContain("ANY (deleted_command_ids)");
     expect(select?.values).toEqual(["session:one", "command:d"]);
+  });
+});
+
+class InteractionEventClient implements SqlClient {
+  calls: QueryCall[] = [];
+  released = false;
+  rows: Readonly<Record<string, unknown>>[] = [];
+
+  async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
+    this.calls.push({ text, values });
+    if (text.includes("MAX(sequence)")) return { rows: [{ sequence: 4 }], rowCount: 1 };
+    if (text.includes("FROM proof_interaction_events")) {
+      return { rows: this.rows, rowCount: this.rows.length };
+    }
+    return { rows: [], rowCount: 1 };
+  }
+
+  release(): void {
+    this.released = true;
+  }
+}
+
+describe("PostgresProofStore interaction events", () => {
+  const event = interactionEventSchema.parse({
+    id: "interaction:one",
+    sequence: 5,
+    nodeId: "node:root",
+    stateId: "state:root",
+    actor: { id: "actor:web", kind: "human" },
+    recordedAt: "2026-09-27T12:00:00.000Z",
+    kind: "preview-regenerated",
+    commandId: "command:one",
+    stalePreviewId: "preview:command:one",
+    previewId: "preview:command:one:regenerated:0123456789abcdef",
+    operationChanged: false,
+    changedDefinitions: [],
+  });
+
+  it("reads the last sequence and inserts relational columns beside the JSONB record", async () => {
+    const client = new InteractionEventClient();
+    const store = new PostgresProofStore({ connect: async () => client });
+    const last = await store.transaction(async (transaction) => {
+      const sequence = await transaction.lastInteractionSequence(sessionId);
+      await transaction.insertInteractionEvent(sessionId, event);
+      return sequence;
+    });
+    expect(last).toBe(4);
+    const insert = client.calls.find(({ text }) => text.includes("INSERT INTO"));
+    expect(insert?.text).toContain("proof_interaction_events");
+    expect(insert?.values).toEqual([
+      "session:one",
+      "interaction:one",
+      5,
+      "node:root",
+      "state:root",
+      "preview-regenerated",
+      "actor:web",
+      "human",
+      null,
+      "preview:command:one:regenerated:0123456789abcdef",
+      "preview:command:one",
+      "2026-09-27T12:00:00.000Z",
+      JSON.stringify(event),
+    ]);
+    expect(insert?.text).not.toContain("interaction:one");
+    expect(client.released).toBe(true);
+  });
+
+  it("reads and lists events in the repository record shape with parameterized filters", async () => {
+    const client = new InteractionEventClient();
+    client.rows = [
+      {
+        session_id: "session:one",
+        id: "interaction:one",
+        sequence: 5,
+        node_id: "node:root",
+        record: event,
+      },
+    ];
+    const store = new PostgresProofStore({ connect: async () => client });
+    const [read, listed] = await store.transaction(async (transaction) => [
+      await transaction.readInteractionEvent(sessionId, event.id),
+      await transaction.listInteractionEvents(sessionId, {
+        nodeId: "node:root" as ProofNode["id"],
+        afterSequence: 2,
+        limit: 10,
+      }),
+    ]);
+    const expected = {
+      sessionId: "session:one",
+      eventId: "interaction:one",
+      sequence: 5,
+      nodeId: "node:root",
+      event,
+    };
+    expect(read).toEqual(expected);
+    expect(listed).toEqual([expected]);
+    const list = client.calls.find(({ text }) => text.includes("ORDER BY sequence"));
+    expect(list?.values).toEqual(["session:one", 2, "node:root", 10]);
   });
 });
