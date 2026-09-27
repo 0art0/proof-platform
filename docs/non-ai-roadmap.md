@@ -3,7 +3,7 @@
 Durable TODO list for every deterministic (no LLM) capability in
 [`platform-design-plan.md`](../platform-design-plan.md) and
 [`platform-design-refinement.md`](../platform-design-refinement.md) that is not yet implemented.
-It was produced on 2026-09-25 from an audit of `main` at `618c1cf`. It replaces the task tracking of the former agentctl control plane.
+It was produced on 2026-09-25 from an audit of `main` at `618c1cf`.
 
 LLM roles (topic extraction, librarian, formalizer, shortlister, executor, attestor, gatekeeper, generality
 reviewer, move proposal, stateful agent memory) are out of scope. Where an AI feature has a deterministic
@@ -27,26 +27,6 @@ otherwise automate — the substrate is in scope.
 - Checks per task: `npm run lint`, `npm run typecheck`, `npm test` (or `-w @proof/<pkg>` for one
   package), and `npx prettier --check .`. No live PostgreSQL is available in the development
   sandbox. Persistence is tested through the existing fake `SqlClient` and the in-memory store.
-
-## Reusable work from the agentctl setup
-
-agentctl was removed on 2026-09-26. Its task worktree sources, `.agent-state/`, and its separate git
-metadata `.git-data/` (every `agent/*` and `integration/*` branch) are archived at
-`~/proof-platform-agentctl-archive-2026-09-26.tar.gz`. The paths below are relative to `.worktrees/` inside
-that archive.
-
-- `add-classical-case-split-and-398e39ef`: kernel primitives `close-reflexive-equality`,
-  `split-classical-cases` and `add-temporary-hypothesis` (weakening), reviewer-approved. The task was
-  blocked only because `packages/moves` lacked mappings for the new kinds. It is imported as the start of
-  N08/N09.
-- `wire-mathlive-gesture-select-a21c632f`: `SelectionGestureOutcome` feedback (replaced / expanded /
-  saturated / added / removed / overlap-rejected / cleared) and a `repeatable` flag in
-  `apps/web/src/features/proof-workspace/selection-state.ts`. Reuse it in N29 for snapping feedback.
-- `resume-and-fix-stored-sessio-8e5b6321`: `postgres-proof-store.ts` releases the pg client with
-  `release(true)` (discard) when a transaction fails. This is not on main; fold it into N36.
-- `pgfix2-harden-postgresql-tra-a83fde18`: `migrations/0003_proof_event_provenance.sql` adds a generated
-  `provenance_key` column and a foreign key, so that an event's suggestion/preview provenance must equal its
-  edge's. This is not on main; port it into N36 as a new-numbered migration and mirror it in the memory store.
 
 ## Phase 0 — Local operability
 
@@ -368,7 +348,7 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
 
 - 2026-09-25 — N08, N09 — kernel naming:
   - Kept `split-classical-cases`, not `case-split`.
-  - `assume-hypothesis` is renamed from agentctl's `add-temporary-hypothesis`.
+  - Renamed `add-temporary-hypothesis` to `assume-hypothesis`.
 
   New operations and API:
   - `close-by-contradiction`.

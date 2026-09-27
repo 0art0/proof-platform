@@ -18,7 +18,7 @@ import {
   readMathLiveSelection,
   renderInteractiveLatex,
   type MathLiveSelectionPort,
-} from "./mathlive-selection";
+} from "../features/proof-workspace/mathlive-selection";
 
 export const INITIAL_STATEMENT = [
   "Equal",

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { proofStateIdSchema, statementIdSchema, type PlainMathJson } from "@proof/mathjson-model";
+import { createPresentation } from "@proof/language";
+import {
+  operatorDeclarationSchema,
+  proofStateIdSchema,
+  statementIdSchema,
+  type PlainMathJson,
+} from "@proof/mathjson-model";
 import type { StatementAnchor } from "@proof/selections";
 import {
   operandPathFromElementData,
@@ -8,7 +14,25 @@ import {
   renderInteractiveLatex,
   type MathLiveSelectionPort,
 } from "./mathlive-selection";
-import { INITIAL_STATEMENT } from "./mathjson-spike";
+import { INITIAL_STATEMENT } from "../../app/mathjson-spike";
+import { splitNaturalLanguage } from "./presentation";
+
+const PRECEDES = operatorDeclarationSchema.parse({
+  id: "operator:precedes",
+  symbol: "Precedes",
+  signature: {
+    parameters: [
+      { kind: "named", id: "sort:real" },
+      { kind: "named", id: "sort:real" },
+    ],
+    result: { kind: "proposition" },
+  },
+  presentation: {
+    displayName: "precedes",
+    latex: { template: "#2 \\succ #1", precedence: "relation" },
+    naturalLanguage: [{ template: "#1 precedes #2" }],
+  },
+});
 
 function selectionPort(
   options: Readonly<{
@@ -44,6 +68,18 @@ describe("interactive LaTeX metadata", () => {
     expect(JSON.stringify(INITIAL_STATEMENT)).toBe(before);
   });
 
+  it("keeps operand metadata in path order when a presentation template reorders leaves", () => {
+    const expression: PlainMathJson = ["Precedes", "a", "b"];
+    const presented = createPresentation({ operators: [PRECEDES] }).latex(expression);
+    expect(presented).toBe("b \\succ a");
+    expect(presented.indexOf("b")).toBeLessThan(presented.indexOf("a"));
+
+    const annotated = renderInteractiveLatex(expression);
+    expect(annotated).toContain("proof-path-1=0}{a}");
+    expect(annotated).toContain("proof-path-1=1}{b}");
+    expect(annotated.indexOf("proof-path-1=0")).toBeLessThan(annotated.indexOf("proof-path-1=1"));
+  });
+
   it("chooses the deepest nested path exposed by MathLive", () => {
     expect(
       operandPathFromElementData({
@@ -52,6 +88,24 @@ describe("interactive LaTeX metadata", () => {
         "proof-path-3": "0.1.1",
       }),
     ).toEqual([0, 1, 1]);
+  });
+});
+
+describe("natural-language presentation splitting", () => {
+  it("separates inline mathematics from prose", () => {
+    expect(splitNaturalLanguage("for every $x$, $x > 0$")).toEqual([
+      { kind: "text", value: "for every " },
+      { kind: "math", value: "x" },
+      { kind: "text", value: ", " },
+      { kind: "math", value: "x > 0" },
+    ]);
+  });
+
+  it("treats an unmatched dollar sign as prose", () => {
+    expect(splitNaturalLanguage("costs $5")).toEqual([
+      { kind: "text", value: "costs " },
+      { kind: "text", value: "5" },
+    ]);
   });
 });
 
