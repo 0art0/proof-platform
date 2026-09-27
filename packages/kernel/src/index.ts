@@ -1,5 +1,7 @@
 import {
   assumptionIdSchema,
+  attestationIdSchema,
+  constructionPlaceholderOperators,
   createExecutableProofStateSchema,
   createStatementViewSchema,
   freeSymbolNames,
@@ -12,6 +14,7 @@ import {
   substituteMathJson,
   type AdditionalAssumption,
   type AssumptionId,
+  type AttestationId,
   type ContextualSequent,
   type Declaration,
   type ExecutableProofState,
@@ -35,7 +38,18 @@ import {
   type RewriteLens,
   type RewriteSource,
 } from "./deep-rewrite";
-import { operatorOperands, symbolValue } from "./expression";
+import {
+  CONSTRUCTION_OPERATION_KINDS,
+  abandonPlaceholder,
+  addCandidate,
+  addRequirement,
+  introducePlaceholder,
+  mentionsOpenPlaceholder,
+  parseConstructionOperation,
+  resolvePlaceholder,
+  type ConstructionOperation,
+} from "./constructions";
+import { operatorOperands, readBuiltinQuantifier } from "./expression";
 import { closesByAssumption, sorryClosure } from "./obligations";
 import {
   instantiateResultInContext,
@@ -96,9 +110,14 @@ export const TRANSITION_EVIDENCE_KINDS = [
 ] as const;
 export type TransitionEvidence = (typeof TRANSITION_EVIDENCE_KINDS)[number];
 
-/** Opaque reference to an externally recorded attestation. The kernel never dereferences it. */
-export const attestationIdSchema = stableIdentifierSchema.brand("AttestationId");
-export type AttestationId = ReturnType<typeof attestationIdSchema.parse>;
+export { attestationIdSchema, type AttestationId } from "@proof/mathjson-model";
+export {
+  CONSTRUCTION_OPERATION_KINDS,
+  substitutePlaceholder,
+  type ConstructionOperation,
+  type ConstructionOperationKind,
+  type PlaceholderOrigin,
+} from "./constructions";
 
 export type TransitionTarget = Readonly<{
   kind: "goal" | "obligation";
@@ -132,6 +151,14 @@ export type TransitionStatementTarget =
  * `split-goal-conjunction` and every rewritten obligation keep the parent's
  * provenance. Obligations a transition does not touch, and the state's
  * additional assumptions, are always preserved unchanged.
+ *
+ * These are the proof primitives, each with one hand-authored move. The
+ * construction-task operations (`CONSTRUCTION_OPERATION_KINDS`:
+ * `introduce-placeholder`, `add-requirement`, `add-candidate`,
+ * `resolve-placeholder`, `abandon-placeholder`) are also kernel operations
+ * applied through `applyTransition`, but act on construction-task records and
+ * have no moves yet; `resolve-placeholder` creates `construction-requirement`
+ * obligations.
  */
 export const KERNEL_OPERATION_KINDS = [
   "close-by-hypothesis",
@@ -166,7 +193,13 @@ export const KERNEL_OPERATION_KINDS = [
 ] as const;
 export type KernelOperationKind = (typeof KERNEL_OPERATION_KINDS)[number];
 
-type OperationBase = Readonly<{
+/**
+ * The shared shape of every kernel operation. The target is the goal or
+ * obligation the operation acts on; for a construction-task operation other
+ * than an existential `introduce-placeholder` it is the target the operation
+ * was invoked from, and the target itself is left unchanged.
+ */
+export type OperationBase = Readonly<{
   expectedStateId: ProofStateId;
   resultStateId: ProofStateId;
   target: TransitionTarget;
@@ -302,7 +335,8 @@ export type KernelOperation =
         assumptionId: AssumptionId;
         /** Terms for a prefix of the assumption's leading universal binders, keyed by symbol. */
         instantiation: ResultInstantiation;
-      }>);
+      }>)
+  | ConstructionOperation;
 
 type SorryId = ReturnType<typeof stableIdentifierSchema.parse>;
 
@@ -352,7 +386,15 @@ export type KernelDiagnosticCode =
   | "premise-mismatch"
   | "polarity-not-permitted"
   | "assumption-not-found"
-  | "construction-metavariable-dependency";
+  | "construction-metavariable-dependency"
+  | "task-not-found"
+  | "task-not-open"
+  | "candidate-not-found"
+  | "invalid-requirement"
+  | "illegal-dependency"
+  | "cyclic-dependency"
+  | "signature-mismatch"
+  | "placeholder-in-use";
 
 export type KernelDiagnostic = Readonly<{
   code: KernelDiagnosticCode;
@@ -455,7 +497,16 @@ export function applyTransition(
     return failure(state, "target-not-found", "The target does not exist in that collection.");
   }
 
-  const transition = applyValidatedOperation(working, located, operation, operators, results);
+  // Open placeholders are registered operators wherever the state's statements are checked.
+  const stateOperators = [...operators, ...constructionPlaceholderOperators(inputState.data)];
+  const transition = applyValidatedOperation(
+    working,
+    located,
+    operation,
+    stateOperators,
+    results,
+    operators,
+  );
   if (!transition.ok) return { ...transition, state };
 
   const candidate: ProofState = { ...transition.state, id: operation.resultStateId };
@@ -495,6 +546,7 @@ function applyValidatedOperation(
   operation: KernelOperation,
   operators: readonly OperatorDeclaration[],
   results: readonly KernelResult[],
+  environmentOperators: readonly OperatorDeclaration[],
 ): InternalResult {
   switch (operation.kind) {
     case "close-by-hypothesis": {
@@ -1018,7 +1070,30 @@ function applyValidatedOperation(
       // evidence of the transition that created it, so this step is structural.
       return success(replaceTarget(state, operation.target, target.index, []), "equivalence");
     }
+    case "introduce-placeholder":
+      return constructionResult(
+        state,
+        introducePlaceholder(state, operation, environmentOperators),
+      );
+    case "add-requirement":
+      return constructionResult(state, addRequirement(state, operation, environmentOperators));
+    case "add-candidate":
+      return constructionResult(state, addCandidate(state, operation, environmentOperators));
+    case "resolve-placeholder":
+      return constructionResult(state, resolvePlaceholder(state, operation, environmentOperators));
+    case "abandon-placeholder":
+      return constructionResult(state, abandonPlaceholder(state, operation));
   }
+}
+
+/** Construction-task transitions are structurally checked by the kernel. */
+function constructionResult(
+  state: ProofState,
+  outcome: ReturnType<typeof introducePlaceholder>,
+): InternalResult {
+  return outcome.ok
+    ? success(outcome.state, outcome.transitionClass)
+    : internalFailure(state, outcome.code, outcome.message);
 }
 
 /**
@@ -1040,6 +1115,15 @@ function markSorry(
       state,
       "identifier-collision",
       `The supplied assumption ID is not fresh: ${operation.assumptionId}.`,
+    );
+  }
+  // A closed assumption cannot mention a choice still to be made.
+  const placeholder = mentionsOpenPlaceholder(state, target.entry.sequent);
+  if (placeholder !== undefined) {
+    return internalFailure(
+      state,
+      "construction-metavariable-dependency",
+      `The target depends on the open placeholder ${placeholder}; resolve it before marking the target as a sorry.`,
     );
   }
   const closure = sorryClosure(target.entry.sequent, operators);
@@ -1318,18 +1402,6 @@ function isPropositionInContext(
   } catch {
     return false;
   }
-}
-
-function readBuiltinQuantifier(
-  expression: PlainMathJson,
-  operator: "ForAll" | "Exists",
-): Readonly<{ symbol: string; body: PlainMathJson }> | undefined {
-  const operands = operatorOperands(expression, operator);
-  const symbol = operands === undefined ? undefined : symbolValue(operands[0] as PlainMathJson);
-  const body = operands?.[1];
-  return operands?.length === 2 && symbol !== undefined && body !== undefined
-    ? { symbol, body }
-    : undefined;
 }
 
 function substituteBoundSymbol(
@@ -1796,6 +1868,14 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     "mark-sorry": ["assumptionId"],
     "close-by-assumption": ["assumptionId", "instantiation"],
   };
+  if ((CONSTRUCTION_OPERATION_KINDS as readonly string[]).includes(value.kind)) {
+    const constructionBase = parseOperationBase(value);
+    if (!constructionBase.success) return constructionBase;
+    const parsed = parseConstructionOperation(value, constructionBase.data);
+    return parsed.ok
+      ? { success: true, data: parsed.operation }
+      : runtimeFailure(parsed.message, parsed.path);
+  }
   if (!(KERNEL_OPERATION_KINDS as readonly string[]).includes(value.kind)) {
     return runtimeFailure("The kernel operation kind is unknown.", ["kind"]);
   }
@@ -1818,16 +1898,8 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     return runtimeFailure("The kernel operation contains missing or unknown fields.", []);
   }
 
-  if (!proofStateIdSchema.safeParse(value.expectedStateId).success) {
-    return runtimeFailure("The expected state ID is invalid.", ["expectedStateId"]);
-  }
-  if (!proofStateIdSchema.safeParse(value.resultStateId).success) {
-    return runtimeFailure("The result state ID is invalid.", ["resultStateId"]);
-  }
-  const target = transitionTargetSchema.safeParse(value.target);
-  if (!target.success) {
-    return runtimeFailure(target.error.issues[0]?.message ?? "The target is invalid.", ["target"]);
-  }
+  const base = parseOperationBase(value);
+  if (!base.success) return base;
 
   for (const field of [
     "hypothesisId",
@@ -1925,11 +1997,7 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
     );
   }
 
-  const common: OperationBase = {
-    expectedStateId: proofStateIdSchema.parse(value.expectedStateId),
-    resultStateId: proofStateIdSchema.parse(value.resultStateId),
-    target: target.data,
-  };
+  const common = base.data;
   switch (value.kind) {
     case "close-by-hypothesis":
     case "close-false-hypothesis":
@@ -2156,6 +2224,31 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
       };
   }
   return runtimeFailure("The kernel operation kind is unknown.", ["kind"]);
+}
+
+function parseOperationBase(
+  value: Readonly<Record<string, unknown>>,
+): RuntimeParseResult<OperationBase> {
+  const expectedStateId = proofStateIdSchema.safeParse(value.expectedStateId);
+  if (!expectedStateId.success) {
+    return runtimeFailure("The expected state ID is invalid.", ["expectedStateId"]);
+  }
+  const resultStateId = proofStateIdSchema.safeParse(value.resultStateId);
+  if (!resultStateId.success) {
+    return runtimeFailure("The result state ID is invalid.", ["resultStateId"]);
+  }
+  const target = transitionTargetSchema.safeParse(value.target);
+  if (!target.success) {
+    return runtimeFailure(target.error.issues[0]?.message ?? "The target is invalid.", ["target"]);
+  }
+  return {
+    success: true,
+    data: {
+      expectedStateId: expectedStateId.data,
+      resultStateId: resultStateId.data,
+      target: target.data,
+    },
+  };
 }
 
 function copyPlainMathJson(value: unknown): PlainMathJson {

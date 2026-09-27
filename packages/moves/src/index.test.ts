@@ -4,6 +4,7 @@ import {
   type KernelEnvironment,
   type KernelResult,
   type KernelOperation,
+  type KernelOperationKind,
 } from "@proof/kernel";
 import {
   PROPOSITION_SORT,
@@ -173,7 +174,7 @@ describe("deterministic move planning", () => {
     ]);
     const cases: readonly (readonly [
       ExecutableProofState,
-      KernelOperation["kind"],
+      KernelOperationKind,
       Readonly<Record<string, unknown>>,
     ])[] = [
       [state(["Equal", "p", "p"]), "close-reflexive-equality", {}],
@@ -307,7 +308,7 @@ describe("deterministic move planning", () => {
     };
     const cases: readonly (readonly [
       ExecutableProofState,
-      KernelOperation["kind"],
+      KernelOperationKind,
       Readonly<Record<string, unknown>>,
     ])[] = [
       [
@@ -376,7 +377,7 @@ describe("deterministic move planning", () => {
     };
     const cases: readonly (readonly [
       ExecutableProofState,
-      KernelOperation["kind"],
+      KernelOperationKind,
       Readonly<Record<string, unknown>>,
       "structural" | "library-result",
     ])[] = [

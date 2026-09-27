@@ -36,6 +36,30 @@ export type ProofStateId = z.infer<typeof proofStateIdSchema>;
 export const wildcardIdSchema = stableIdentifierSchema.brand("WildcardId");
 export type WildcardId = z.infer<typeof wildcardIdSchema>;
 
+/** Opaque reference to an externally recorded attestation. The kernel never dereferences it. */
+export const attestationIdSchema = stableIdentifierSchema.brand("AttestationId");
+export type AttestationId = z.infer<typeof attestationIdSchema>;
+
+/** Construction tasks (refinement §5) and the records they accumulate. */
+export const constructionTaskIdSchema = stableIdentifierSchema.brand("ConstructionTaskId");
+export type ConstructionTaskId = z.infer<typeof constructionTaskIdSchema>;
+
+export const constructionRequirementIdSchema = stableIdentifierSchema.brand(
+  "ConstructionRequirementId",
+);
+export type ConstructionRequirementId = z.infer<typeof constructionRequirementIdSchema>;
+
+export const constructionCandidateIdSchema =
+  stableIdentifierSchema.brand("ConstructionCandidateId");
+export type ConstructionCandidateId = z.infer<typeof constructionCandidateIdSchema>;
+
+/**
+ * Opaque reference to the discovery attempt (a command, edge, or branch) that produced a
+ * construction record. It is recorded, never dereferenced.
+ */
+export const constructionAttemptIdSchema = stableIdentifierSchema.brand("ConstructionAttemptId");
+export type ConstructionAttemptId = z.infer<typeof constructionAttemptIdSchema>;
+
 /** A Zod boundary for persisted, unboxed MathJSON. It does not transform its input. */
 export const plainMathJsonSchema = z.custom<PlainMathJson>(isPlainMathJson, {
   message: "Expected serializable plain MathJSON.",
@@ -1768,6 +1792,14 @@ export const obligationProvenanceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("user") }).strict(),
   z.object({ kind: z.literal("case") }).strict(),
   z.object({ kind: z.literal("suffices") }).strict(),
+  /** A sufficient requirement of a construction task, created when the task was resolved. */
+  z
+    .object({
+      kind: z.literal("construction-requirement"),
+      taskId: constructionTaskIdSchema,
+      requirementId: constructionRequirementIdSchema,
+    })
+    .strict(),
 ]);
 export type ObligationProvenance = z.infer<typeof obligationProvenanceSchema>;
 
@@ -1830,6 +1862,214 @@ const additionalAssumptionShapeSchema = z
 
 export type AdditionalAssumption = z.infer<typeof additionalAssumptionShapeSchema>;
 
+const targetReferenceSchema = z
+  .object({ kind: z.enum(["goal", "obligation"]), id: statementIdSchema })
+  .strict();
+
+/**
+ * How a requirement's role is supported (refinement §5.2). `target` records that the requirement
+ * was the conclusion of an open goal or obligation of the proof state, which the state already
+ * requires, so it is (jointly) sufficient. `attestation` records an external argument that the
+ * kernel does not judge. `none` means no implication is established; it is the only evidence of
+ * a heuristic requirement and never evidence for a necessary or sufficient one.
+ */
+export const constructionRequirementEvidenceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("target"), target: targetReferenceSchema }).strict(),
+  z.object({ kind: z.literal("attestation"), attestationId: attestationIdSchema }).strict(),
+  z.object({ kind: z.literal("none") }).strict(),
+]);
+export type ConstructionRequirementEvidence = z.infer<typeof constructionRequirementEvidenceSchema>;
+
+/**
+ * Necessary: the intended property implies it, so it can exclude candidates. Sufficient: it
+ * implies the intended property. Heuristic: worth investigating, with no established
+ * implication. Only sufficient requirements ever become obligations, and no requirement ever
+ * becomes a hypothesis.
+ */
+export const CONSTRUCTION_REQUIREMENT_ROLES = ["necessary", "sufficient", "heuristic"] as const;
+export type ConstructionRequirementRole = (typeof CONSTRUCTION_REQUIREMENT_ROLES)[number];
+
+/** A requirement is a proposition over the task's scope that mentions its placeholder. */
+export const constructionRequirementSchema = z
+  .object({
+    id: constructionRequirementIdSchema,
+    role: z.enum(CONSTRUCTION_REQUIREMENT_ROLES),
+    statement: rawStatementViewSchema,
+    evidence: constructionRequirementEvidenceSchema,
+    attemptId: constructionAttemptIdSchema,
+  })
+  .strict();
+export type ConstructionRequirement = z.infer<typeof constructionRequirementSchema>;
+
+/** A candidate construction: a term over the task's allowed dependencies. */
+export const constructionCandidateSchema = z
+  .object({
+    id: constructionCandidateIdSchema,
+    value: plainMathJsonSchema,
+    attemptId: constructionAttemptIdSchema,
+  })
+  .strict();
+export type ConstructionCandidate = z.infer<typeof constructionCandidateSchema>;
+
+/**
+ * Where a construction task came from. An existential goal records the target and its
+ * existential conclusion at introduction. An auxiliary request may name the task that requested
+ * it; that task is then allowed to depend on it.
+ */
+export const constructionOriginSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("existential-goal"),
+      target: targetReferenceSchema,
+      statement: rawStatementViewSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("auxiliary-request"),
+      description: z.string().min(1),
+      requestedBy: constructionTaskIdSchema.optional(),
+    })
+    .strict(),
+]);
+export type ConstructionOrigin = z.infer<typeof constructionOriginSchema>;
+
+export const CONSTRUCTION_TASK_STATUSES = [
+  "unresolved",
+  "partially-specified",
+  "resolved",
+  "abandoned",
+] as const;
+export type ConstructionTaskStatus = (typeof CONSTRUCTION_TASK_STATUSES)[number];
+
+const constructionTaskBaseShape = {
+  id: constructionTaskIdSchema,
+  /** The registered placeholder operator. Occurrences apply it to the allowed declarations. */
+  symbol: symbolSchema,
+  displayName: z.string().min(1),
+  sort: sortSchema,
+  origin: constructionOriginSchema,
+  /** The local context in which the task was introduced. */
+  scope: proofContextShapeSchema,
+  allowedDependencies: z
+    .object({
+      /** Scope declarations the construction may mention, in placeholder-parameter order. */
+      declarations: z.array(symbolSchema),
+      /** Other tasks whose placeholders it may use, directly or through their dependencies. */
+      tasks: z.array(constructionTaskIdSchema),
+    })
+    .strict(),
+  requirements: z.array(constructionRequirementSchema),
+  candidates: z.array(constructionCandidateSchema),
+};
+
+/**
+ * A construction task (refinement §5.1). `unresolved` has no requirements yet and
+ * `partially-specified` has at least one; both are open, and only open placeholders may occur in
+ * goals and obligations. A resolved task names the chosen candidate and the obligations its
+ * remaining sufficient requirements became. Closed task records are static history.
+ */
+export const constructionTaskShapeSchema = z.discriminatedUnion("status", [
+  z.object({ ...constructionTaskBaseShape, status: z.literal("unresolved") }).strict(),
+  z.object({ ...constructionTaskBaseShape, status: z.literal("partially-specified") }).strict(),
+  z
+    .object({
+      ...constructionTaskBaseShape,
+      status: z.literal("resolved"),
+      resolution: z
+        .object({
+          candidateId: constructionCandidateIdSchema,
+          attemptId: constructionAttemptIdSchema,
+          obligationIds: z.array(statementIdSchema),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      ...constructionTaskBaseShape,
+      status: z.literal("abandoned"),
+      abandonment: z.object({ attemptId: constructionAttemptIdSchema }).strict(),
+    })
+    .strict(),
+]);
+export type ConstructionTask = z.infer<typeof constructionTaskShapeSchema>;
+
+export function isOpenConstructionTask(task: Pick<ConstructionTask, "status">): boolean {
+  return task.status === "unresolved" || task.status === "partially-specified";
+}
+
+/**
+ * The registered placeholder operator of a task: its parameters are the sorts of the allowed
+ * scope declarations, in order, and its result is the task's sort. Undefined when an allowed
+ * declaration is missing from the scope.
+ */
+export function constructionPlaceholderOperator(
+  task: ConstructionTask,
+): OperatorDeclaration | undefined {
+  const parameters: Sort[] = [];
+  for (const symbol of task.allowedDependencies.declarations) {
+    const declaration = task.scope.declarations.find((candidate) => candidate.symbol === symbol);
+    if (declaration === undefined) return undefined;
+    parameters.push(declaration.sort);
+  }
+  const id = operatorIdSchema.safeParse(`construction-placeholder:${task.id}`);
+  if (!id.success) return undefined;
+  return {
+    id: id.data,
+    symbol: task.symbol,
+    signature: { parameters, result: task.sort },
+    presentation: { displayName: task.displayName },
+  };
+}
+
+/**
+ * Placeholder operators of a state's construction tasks: by default only the open ones, which
+ * are the ones goals and obligations may mention.
+ */
+export function constructionPlaceholderOperators(
+  state: Readonly<{ constructions?: readonly ConstructionTask[] | undefined }>,
+  options: Readonly<{ includeClosed?: boolean }> = {},
+): readonly OperatorDeclaration[] {
+  return (state.constructions ?? [])
+    .filter((task) => options.includeClosed === true || isOpenConstructionTask(task))
+    .map(constructionPlaceholderOperator)
+    .filter((operator): operator is OperatorDeclaration => operator !== undefined);
+}
+
+/**
+ * The tasks each task may depend on: the transitive closure of `allowedDependencies.tasks`.
+ * Returns undefined when the allowed-dependency graph has a cycle or names an unknown task.
+ */
+export function constructionDependencyClosure(
+  tasks: readonly Pick<ConstructionTask, "id" | "allowedDependencies">[],
+): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+  const byId = new Map(tasks.map((task) => [task.id as string, task]));
+  const closures = new Map<string, ReadonlySet<string>>();
+  const visiting = new Set<string>();
+  const visit = (id: string): ReadonlySet<string> | undefined => {
+    const known = closures.get(id);
+    if (known !== undefined) return known;
+    const task = byId.get(id);
+    if (task === undefined || visiting.has(id)) return undefined;
+    visiting.add(id);
+    const closure = new Set<string>();
+    for (const dependency of task.allowedDependencies.tasks) {
+      const nested = visit(dependency);
+      if (nested === undefined) return undefined;
+      closure.add(dependency);
+      nested.forEach((member) => closure.add(member));
+    }
+    visiting.delete(id);
+    closures.set(id, closure);
+    return closure;
+  };
+  for (const task of tasks) {
+    if (visit(task.id) === undefined) return undefined;
+  }
+  return closures;
+}
+
 const rawProofStateSchema = z
   .object({
     id: proofStateIdSchema,
@@ -1837,6 +2077,8 @@ const rawProofStateSchema = z
     obligations: z.array(obligationShapeSchema),
     /** State-global closed assumptions; absent means none. */
     assumptions: z.array(additionalAssumptionShapeSchema).optional(),
+    /** Construction tasks and their placeholders (refinement §5); absent means none. */
+    constructions: z.array(constructionTaskShapeSchema).optional(),
   })
   .strict();
 
@@ -1853,7 +2095,7 @@ function createValidatedProofStateSchema(
   options: ProofStateSchemaOptions = {},
   executable: boolean,
 ): z.ZodType<ProofState> {
-  const operators = operatorDeclarationsSchema.parse(options.operators ?? []);
+  const environmentOperators = operatorDeclarationsSchema.parse(options.operators ?? []);
   return rawProofStateSchema.superRefine((proofState, context) => {
     addUniqueFieldIssues(
       [...proofState.goals, ...proofState.obligations],
@@ -1862,6 +2104,11 @@ function createValidatedProofStateSchema(
       context,
     );
 
+    // Goals and obligations may mention the placeholders of open construction tasks.
+    const operators = [
+      ...environmentOperators,
+      ...addConstructionIssues(proofState.constructions ?? [], environmentOperators, context),
+    ];
     proofState.goals.forEach((goal, index) => {
       addStatementIssues(goal.sequent, operators, context, ["goals", index, "sequent"]);
       if (executable) {
@@ -1879,12 +2126,198 @@ function createValidatedProofStateSchema(
       }
     });
 
+    // Additional assumptions are closed and never mention a placeholder.
     const assumptions = proofState.assumptions ?? [];
     addUniqueFieldIssues(assumptions, "id", "assumption ID", context, ["assumptions"]);
     assumptions.forEach((assumption, index) => {
-      addAssumptionIssues(assumption, operators, context, ["assumptions", index]);
+      addAssumptionIssues(assumption, environmentOperators, context, ["assumptions", index]);
     });
   });
+}
+
+/**
+ * Validate construction tasks and return the placeholder operators of the open ones. Records of
+ * an open task may mention only open placeholders; records of a closed task are history and may
+ * mention any task's placeholder.
+ */
+function addConstructionIssues(
+  tasks: readonly ConstructionTask[],
+  operators: readonly OperatorDeclaration[],
+  context: z.RefinementCtx,
+): readonly OperatorDeclaration[] {
+  if (tasks.length === 0) return [];
+  const prefix = ["constructions"];
+  addUniqueFieldIssues(tasks, "id", "construction task ID", context, prefix);
+  addUniqueFieldIssues(tasks, "symbol", "placeholder symbol", context, prefix);
+  const operatorSymbols = new Set(operators.map((operator) => operator.symbol));
+  const taskIds = new Set<string>(tasks.map((task) => task.id));
+  const placeholders = new Map<string, OperatorDeclaration>();
+
+  tasks.forEach((task, index) => {
+    const path = [...prefix, index];
+    if (RESERVED_BUILTIN_SYMBOLS.has(task.symbol) || operatorSymbols.has(task.symbol)) {
+      context.addIssue({
+        code: "custom",
+        message: "A placeholder symbol cannot be a built-in or environment operator.",
+        path: [...path, "symbol"],
+      });
+      return;
+    }
+    const scopeSymbols = new Set(task.scope.declarations.map((declaration) => declaration.symbol));
+    const allowed = task.allowedDependencies;
+    allowed.declarations.forEach((symbol, position) => {
+      if (!scopeSymbols.has(symbol) || allowed.declarations.indexOf(symbol) !== position) {
+        context.addIssue({
+          code: "custom",
+          message: "Allowed declarations must be distinct symbols declared in the task's scope.",
+          path: [...path, "allowedDependencies", "declarations", position],
+        });
+      }
+    });
+    allowed.tasks.forEach((id, position) => {
+      if (!taskIds.has(id) || id === task.id || allowed.tasks.indexOf(id) !== position) {
+        context.addIssue({
+          code: "custom",
+          message: "Allowed task dependencies must be distinct other tasks of the same state.",
+          path: [...path, "allowedDependencies", "tasks", position],
+        });
+      }
+    });
+    const operator = constructionPlaceholderOperator(task);
+    if (operator !== undefined) placeholders.set(task.id, operator);
+  });
+
+  const closures = constructionDependencyClosure(
+    tasks.map((task) => ({
+      id: task.id,
+      allowedDependencies: {
+        ...task.allowedDependencies,
+        tasks: task.allowedDependencies.tasks.filter((id) => taskIds.has(id)),
+      },
+    })),
+  );
+  if (closures === undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "Construction task dependencies cannot be cyclic.",
+      path: prefix,
+    });
+  }
+
+  const allPlaceholders = [...placeholders.values()];
+  const openPlaceholders = tasks
+    .filter((task) => isOpenConstructionTask(task) && placeholders.has(task.id))
+    .map((task) => placeholders.get(task.id) as OperatorDeclaration);
+  const taskBySymbol = new Map(tasks.map((task) => [task.symbol, task]));
+
+  tasks.forEach((task, index) => {
+    const path = [...prefix, index];
+    const recordOperators = [
+      ...operators,
+      ...(isOpenConstructionTask(task) ? openPlaceholders : allPlaceholders),
+    ];
+    const environment = addContextIssues(
+      task.scope,
+      recordOperators,
+      context,
+      [...path, "scope"],
+      false,
+    );
+    addUniqueFieldIssues(task.requirements, "id", "requirement ID", context, [
+      ...path,
+      "requirements",
+    ]);
+    addUniqueFieldIssues(task.candidates, "id", "candidate ID", context, [...path, "candidates"]);
+
+    if (task.status === "unresolved" && task.requirements.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "A task with requirements is partially specified, not unresolved.",
+        path: [...path, "status"],
+      });
+    }
+    if (task.status === "partially-specified" && task.requirements.length === 0) {
+      context.addIssue({
+        code: "custom",
+        message: "A partially specified task must have at least one requirement.",
+        path: [...path, "status"],
+      });
+    }
+    if (
+      task.status === "resolved" &&
+      !task.candidates.some((candidate) => candidate.id === task.resolution.candidateId)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "A resolved task must name one of its recorded candidates.",
+        path: [...path, "resolution", "candidateId"],
+      });
+    }
+
+    task.requirements.forEach((requirement, requirementIndex) => {
+      const requirementPath = [...path, "requirements", requirementIndex];
+      if (!isPropositionExpression(requirement.statement.expression, environment)) {
+        context.addIssue({
+          code: "custom",
+          message: "A requirement must be a proposition in its task's scope.",
+          path: [...requirementPath, "statement", "expression"],
+        });
+      }
+      if (!requirementEvidenceMatchesRole(requirement)) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "A heuristic requirement has no evidence; a necessary one needs an attestation; a sufficient one needs an attestation or an open target.",
+          path: [...requirementPath, "evidence"],
+        });
+      }
+    });
+
+    const parameters = task.scope.declarations.filter((declaration) =>
+      task.allowedDependencies.declarations.includes(declaration.symbol),
+    );
+    const candidateEnvironment: ValidatedStatementEnvironment = {
+      declarations: parameters,
+      operators: recordOperators,
+      bindings: new Map(parameters.map((declaration) => [declaration.symbol, declaration.sort])),
+    };
+    const reachable = closures?.get(task.id) ?? new Set<string>();
+    task.candidates.forEach((candidate, candidateIndex) => {
+      const candidatePath = [...path, "candidates", candidateIndex, "value"];
+      const usesForbiddenTask = [...freeSymbolNames(candidate.value, operators)].some((symbol) => {
+        const used = taskBySymbol.get(symbol);
+        return used !== undefined && !reachable.has(used.id);
+      });
+      if (usesForbiddenTask) {
+        context.addIssue({
+          code: "custom",
+          message: "A candidate may use only placeholders of the task's allowed dependencies.",
+          path: candidatePath,
+        });
+      } else if (!validatesAsSort(candidate.value, task.sort, candidateEnvironment)) {
+        context.addIssue({
+          code: "custom",
+          message: "A candidate must have the task's sort using only the allowed declarations.",
+          path: candidatePath,
+        });
+      }
+    });
+  });
+  return openPlaceholders;
+}
+
+/**
+ * The role/evidence rule: a heuristic requirement has evidence `none`, and only a heuristic one
+ * does; `target` evidence supports only a sufficient requirement.
+ */
+export function requirementEvidenceMatchesRole(
+  requirement: Pick<ConstructionRequirement, "role" | "evidence">,
+): boolean {
+  const evidence = requirement.evidence.kind;
+  return (
+    (requirement.role === "heuristic") === (evidence === "none") &&
+    (evidence !== "target" || requirement.role === "sufficient")
+  );
 }
 
 function addAssumptionIssues(

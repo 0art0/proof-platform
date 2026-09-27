@@ -520,7 +520,10 @@ function edgeEvidence(
   }
   // A primitive may admit one evidence kind or several (a rewrite whose source is a hypothesis or
   // an approved result); several are disambiguated by whether the operation names a result.
-  const recorded: unknown = PRIMITIVE_TRANSITION_EVIDENCE[edge.operation.kind];
+  // Construction-task operations have no primitive entry and are structural.
+  const recorded: unknown = (PRIMITIVE_TRANSITION_EVIDENCE as Readonly<Record<string, unknown>>)[
+    edge.operation.kind
+  ];
   const admitted = (Array.isArray(recorded) ? recorded : [recorded]).filter(
     (kind): kind is DiscoveryEvidence => DISCOVERY_EVIDENCE_KINDS.some((known) => known === kind),
   );
