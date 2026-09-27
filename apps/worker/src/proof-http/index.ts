@@ -2,6 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import {
   actorSchema,
+  backtrackAnalysisRequestSchema,
+  backtrackAnalysisSchema,
+  backtrackWithInformationCommandSchema,
   createMovePreviewSchema,
   createProofEdgeSchema,
   createProofNodeSchema,
@@ -27,8 +30,10 @@ import { z } from "zod";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "../approved-catalog";
 import { postgresProofStore } from "../postgres-proof-store";
 import {
+  analyzeBacktrackWithInformation,
   backtrackProofSession,
   backtrackProofSessionSchema,
+  backtrackWithInformation,
   deletePreviousMove,
   derivedMoveRecordIds,
   executeProofCommand,
@@ -126,6 +131,11 @@ export const proofHttpDeletePreviousMoveRequestSchema = deletePreviousMoveComman
   actor: true,
 });
 
+/** Backtracking with information (design plan §16.3); the service supplies the actor. */
+export const proofHttpBacktrackWithInformationRequestSchema =
+  backtrackWithInformationCommandSchema.omit({ actor: true });
+export const proofHttpBacktrackAnalysisRequestSchema = backtrackAnalysisRequestSchema;
+
 export const proofHttpTransitionClassificationSchema = z
   .object({ suggestionId: suggestionIdSchema, transitionClass: transitionClassSchema })
   .strict();
@@ -183,6 +193,21 @@ export const proofHttpDeletePreviousMoveResponseSchema = z
     session: proofHttpSessionSchema,
     node: z.unknown(),
     receipt: deletePreviousMoveReceiptSchema,
+    replayed: z.boolean(),
+  })
+  .strict();
+
+export const proofHttpBacktrackAnalysisResponseSchema = z
+  .object({ analysis: backtrackAnalysisSchema })
+  .strict();
+
+export const proofHttpBacktrackWithInformationResponseSchema = z
+  .object({
+    session: proofHttpSessionSchema,
+    /** The node the cursor moved to; `backtrack.focusTarget` is its open case. */
+    node: z.unknown(),
+    receipts: z.array(proofCommandReceiptSchema).min(1).max(2),
+    backtrack: interactionEventSchema,
     replayed: z.boolean(),
   })
   .strict();
@@ -651,6 +676,56 @@ async function handleRequest(
     return;
   }
 
+  if (route.kind === "backtrack-analysis" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(request, proofHttpBacktrackAnalysisRequestSchema);
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const analyzed = await analyzeBacktrackWithInformation(store, route.sessionId, requested.value);
+    if (analyzed.status !== "loaded") {
+      writeRepositoryFailure(response, analyzed);
+      return;
+    }
+    writeValidatedJson(response, 200, proofHttpBacktrackAnalysisResponseSchema, {
+      analysis: analyzed.analysis,
+    });
+    return;
+  }
+
+  if (route.kind === "backtrack-with-information" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(
+      request,
+      proofHttpBacktrackWithInformationRequestSchema,
+    );
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const backtracked = await backtrackWithInformation(
+      store,
+      route.sessionId,
+      { ...requested.value, actor: WEB_ACTOR },
+      WEB_ACTOR,
+      { definitions, ...(now === undefined ? {} : { now }) },
+    );
+    if (backtracked.status !== "committed") {
+      writeRepositoryFailure(response, backtracked);
+      return;
+    }
+    const schema = proofHttpBacktrackWithInformationResponseSchema.extend({
+      node: createProofNodeSchema({ operators: backtracked.session.operators }),
+    });
+    writeValidatedJson(response, backtracked.replayed ? 200 : 201, schema, {
+      session: withoutMetadata(backtracked.session),
+      node: backtracked.node,
+      receipts: backtracked.receipts,
+      backtrack: backtracked.backtrack,
+      replayed: backtracked.replayed,
+    });
+    return;
+  }
+
   response.setHeader(
     "allow",
     route.kind === "interaction-events"
@@ -671,6 +746,8 @@ type ParsedRoute =
   | Readonly<{ kind: "history"; sessionId: string }>
   | Readonly<{ kind: "backtrack"; sessionId: string }>
   | Readonly<{ kind: "delete-previous-move"; sessionId: string }>
+  | Readonly<{ kind: "backtrack-analysis"; sessionId: string }>
+  | Readonly<{ kind: "backtrack-with-information"; sessionId: string }>
   | Readonly<{ kind: "interaction-events"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
@@ -698,6 +775,12 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       if (segments[2] === "backtrack") return { kind: "backtrack", sessionId: sessionId.data };
       if (segments[2] === "delete-previous-move") {
         return { kind: "delete-previous-move", sessionId: sessionId.data };
+      }
+      if (segments[2] === "backtrack-analysis") {
+        return { kind: "backtrack-analysis", sessionId: sessionId.data };
+      }
+      if (segments[2] === "backtrack-with-information") {
+        return { kind: "backtrack-with-information", sessionId: sessionId.data };
       }
       if (segments[2] === "interaction-events") {
         return { kind: "interaction-events", sessionId: sessionId.data };
@@ -828,16 +911,20 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
             code === "serialized-stale-delete" ||
             code === "delete-requires-confirmation" ||
             code === "command-deleted" ||
-            code === "interaction-event-conflict"
+            code === "interaction-event-conflict" ||
+            code === "backtrack-with-information-conflict"
           ? 409
-          : code === "suggestion-set-rejected" ||
-              code === "preview-rejected" ||
-              code === "command-rejected" ||
-              code === "backtrack-rejected" ||
-              code === "delete-rejected" ||
-              code === "interaction-event-rejected"
-            ? 400
-            : 500;
+          : code === "backtrack-symbols-unavailable"
+            ? 422
+            : code === "suggestion-set-rejected" ||
+                code === "preview-rejected" ||
+                code === "command-rejected" ||
+                code === "backtrack-rejected" ||
+                code === "delete-rejected" ||
+                code === "interaction-event-rejected" ||
+                code === "backtrack-with-information-rejected"
+              ? 400
+              : 500;
   writeJson(response, status, { diagnostics: failure.diagnostics });
 }
 

@@ -87,6 +87,14 @@ that have since changed, the worker records a regenerated preview (ID
 409 instead of applying; repeating the command applies the regenerated preview. A preview already
 applied by an edge is never regenerated.
 
+`0008_backtrack_interaction_event.sql` widens the interaction-event `kind` check with the
+worker-only `backtracked-with-information` kind (design plan §16.3). Backtracking with information
+inserts a classical case split on a proposition `P` as a new child of an ancestor (and, when the
+ancestor's goal is `P` or `Not P`, the closing step), each as an ordinary command record, moves the
+cursor there, and records one such event anchored at that node. The event holds the source node and
+target, `P`, the eligible ancestors (closest first), the chosen ancestor, the auto-closed case and
+the focused case; it also makes the command idempotent. `MemoryProofStore` mirrors the check.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -94,6 +102,13 @@ migrations. Its PostgreSQL-backed endpoints are:
 
 - `GET /proof-sessions/:sessionId` for the runtime-validated session and current proof node.
 - `POST /proof-sessions/:sessionId/suggestion-sets` to record deterministic retrieval evidence.
+- `POST /proof-sessions/:sessionId/backtrack-analysis` with
+  `{ sourceNodeId, sourceTarget?, proposition }` lists the source's ancestors closest first with
+  each one's eligibility; nothing is recorded.
+- `POST /proof-sessions/:sessionId/backtrack-with-information` with
+  `{ commandId, expectedCurrentNodeId, sourceNodeId, sourceTarget?, proposition, ancestorNodeId? }`
+  returns `{ session, node, receipts, backtrack, replayed }` (201, or 200 for a retry). A conflicting
+  reuse of the command ID or a stale cursor returns 409; unavailable symbols return 422.
 - `POST /proof-sessions/:sessionId/delete-previous-move` with
   `{ commandId, expectedCurrentNodeId, confirmDescendants?, reason? }`. It returns the session,
   the parent node and `{ deletedNodeIds, deletedEdgeIds, currentNodeId }`. A stale cursor, deleting

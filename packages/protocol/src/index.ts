@@ -51,6 +51,7 @@ export type { OperatorDeclaration, PlainMathJson } from "@proof/mathjson-model";
 export * from "./session-metadata";
 export * from "./discovery-tree";
 export * from "./move-deletion";
+export * from "./backtracking";
 export * from "./parameter-menus";
 export * from "./interaction-events";
 

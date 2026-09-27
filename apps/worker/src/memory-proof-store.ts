@@ -25,7 +25,8 @@ import {
  * Committed rows of the in-memory store, mirroring the PostgreSQL tables in
  * `migrations/0001_proof_commands.sql` (plus the nullable `proof_sessions.metadata` object from
  * `0004_session_metadata.sql`), the `proof_deletions` tombstones of `0006_proof_deletions.sql`,
- * and the `proof_interaction_events` log of `0007_interaction_events.sql`.
+ * and the `proof_interaction_events` log of `0007_interaction_events.sql` (kinds widened by
+ * `0008_backtrack_interaction_event.sql`).
  * Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */
@@ -605,6 +606,9 @@ class MemoryTransactionContext {
             if (!Number.isInteger(row.sequence) || row.sequence < 1) {
               violation("proof_interaction_events check: sequence must be positive.");
             }
+            if (!INTERACTION_EVENT_KINDS.has(row.kind)) {
+              violation(`proof_interaction_events_kind_check: ${String(row.kind)} is not a kind.`);
+            }
             if (
               this.sessionRows("interactionEvents", sessionId).some(
                 (existing) => existing.sequence === row.sequence,
@@ -727,6 +731,21 @@ class MemoryTransactionContext {
     }
   }
 }
+
+/** The `kind` check of `0007_interaction_events.sql`, as widened by migration `0008`. */
+const INTERACTION_EVENT_KINDS: ReadonlySet<string> = new Set<InteractionEvent["kind"]>([
+  "selection-changed",
+  "suggestions-requested",
+  "suggestions-displayed",
+  "preview-requested",
+  "preview-rejected",
+  "menu-expanded",
+  "focus-changed",
+  "objective-changed",
+  "interaction-ended-without-action",
+  "preview-regenerated",
+  "backtracked-with-information",
+]);
 
 /** The preview IDs an interaction event names (`preview_id` and `stale_preview_id`). */
 function interactionPreviewIds(event: InteractionEvent): string[] {
