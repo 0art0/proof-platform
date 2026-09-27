@@ -146,7 +146,7 @@ that archive.
   Polarity is computed by the same function the selection resolver uses (move it into mathjson-model or
   kernel, whichever keeps dependencies acyclic). _Accept:_ polarity property tests and golden rewrites.
 
-- [ ] **N11 Construction metavariables (refinement §5).** Add construction-task records with these fields:
+- [x] **N11 Construction metavariables (refinement §5).** Add construction-task records with these fields:
       origin (existential goal or auxiliary request), sort, scope, allowed dependencies, requirements, and
       status (unresolved / partially specified / resolved / abandoned).
   - Each requirement has a role (necessary / sufficient / heuristic), evidence, and the attempt that
@@ -237,7 +237,7 @@ that archive.
 
   _Accept:_ tests for ordering, idempotency, and the stale-definition path.
 
-- [ ] **N20 Backtracking with information (§16.3).** Given a proposition `P` from a descendant snapshot:
+- [x] **N20 Backtracking with information (§16.3).** Given a proposition `P` from a descendant snapshot:
   - compute its free symbols, operators, and definitions;
   - find the closest ancestor where all are available, and list the other eligible ancestors;
   - create a new child of the chosen ancestor via `case-split` on `P`, auto-closing a case whose goal is
@@ -497,3 +497,49 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     yet, and the web app has no GET proxy for the log.
   - Events reference suggestion sets and previews by ID only (a request precedes its set); only the
     anchor node is a foreign key. Deletion tombstones do not list removed interaction-event IDs.
+- 2026-09-27 — N20 — `512e8f2` — protocol `backtracking.ts`: `analyzeBacktrack` and
+  `planBacktrackWithInformation` are pure functions over stored nodes and edges. They report `P`'s free
+  symbols, operator heads and source declarations, trace the source target's lineage up the path, and list
+  every strict ancestor (closest first) with `eligible`, `wellFormed` and `unavailableSymbols`. A symbol is
+  available when the lineage target declares it with the same sort and it is not only bound there (the
+  kernel pre-declares quantified symbols). The closest eligible ancestor is chosen unless `ancestorNodeId`
+  names another. The plan is `split-classical-cases` on the lineage target plus `close-by-hypothesis`
+  (`<id>:auto-close`) on the case whose conclusion is alpha-equivalent to `P` or `Not P`; focus goes to
+  the remaining case.
+  - Worker `backtrackWithInformation` prepares each step with `prepareProofCommand` against its own parent
+    before writing, inserts ordinary node/edge/event/command rows, moves the cursor, and records a
+    worker-only `backtracked-with-information` interaction event (migration `0008`; `MemoryProofStore`
+    now checks kinds). The event makes the command idempotent: identical retry replays; conflicting
+    content gets 409 `backtrack-with-information-conflict`; stale cursor 409; deleted step
+    `command-deleted`. HTTP: `POST /proof-sessions/:id/backtrack-analysis` and
+    `/backtrack-with-information` (201/200 replay, 422 unavailable symbols, 400 invalid). Tests assert
+    the original branch's rows stay byte-identical.
+  - Gaps: §16.3 step 5 (reattach existing work under the case) is left for N21. Auto-close only handles
+    the case hypothesis itself. Focus is returned and recorded but there is no session focus field. The
+    source node is never a candidate. Kernel steps carry no `moveId`. No web UI or proxy yet (N31).
+- 2026-09-27 — N11 — `b3841f4` — construction tasks (refinement §5). mathjson-model adds
+  `ProofState.constructions`: strict, status-discriminated `ConstructionTask` records (origin
+  `existential-goal` or `auxiliary-request`, sort, scope, `allowedDependencies` over scope declarations and
+  task ids, requirements with role/evidence/`attemptId`, candidates, and resolution/abandonment records),
+  branded task/requirement/candidate/attempt ids, and obligation provenance `construction-requirement`.
+  `attestationIdSchema` moved to mathjson-model.
+  - A placeholder is a registered operator derived from its task, applied Skolem-style to its allowed
+    declarations (`["m", "eps"]`), so later variables cannot leak into the choice. State validation
+    rejects closed placeholders left in statements and placeholders in assumptions, and checks an acyclic
+    transitive task-dependency graph, in-scope requirements, the role/evidence rule (heuristic ⇔ no
+    evidence; `target` evidence only for sufficient; necessary needs an attestation), and candidate
+    sort/scope.
+  - Kernel `CONSTRUCTION_OPERATION_KINDS` (separate from `KERNEL_OPERATION_KINDS`), all via
+    `applyTransition`: `introduce-placeholder` (equivalence when dependencies cover the sequent's free
+    symbols, else strengthening), `add-requirement`, `add-candidate`, `resolve-placeholder`
+    (strengthening; capture-free substitution; remaining sufficient requirements become obligations;
+    never closes a target) and `abandon-placeholder` (only when unused). `mark-sorry` rejects targets
+    mentioning an open placeholder. fast-check properties: no requirement becomes a hypothesis, and
+    introduction is an equivalence exactly when dependencies are complete.
+  - Gaps: no moves, menus, protocol helpers, routes or UI for construction operations (`planMoveSequence`
+    rejects them; N25/N34). No withdraw-requirement or candidate-generator record. Typed binders are not
+    supported by `introduce-placeholder`. Selections, retrieval and `moves/context-terms` do not register
+    placeholder operators; rendering shows them as plain applications; discovery-tree edges report them as
+    structural; `sorryClosure`/`derived.ts` do not see placeholder heads.
+  - The kernel property tests in `obligations.test.ts` and `deep-rewrite.test.ts` run close to vitest's
+    5 s timeout under machine load.
