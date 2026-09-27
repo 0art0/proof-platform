@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { isPlainMathJson, type PlainMathJson } from "./index";
+import {
+  binderShape,
+  readBinderDeclaration,
+  type BinderDeclaration,
+  type BinderShape,
+} from "./binders";
 
 const STABLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
@@ -152,6 +158,27 @@ export const RESERVED_BUILTIN_SYMBOLS: ReadonlySet<string> = new Set([
   "Abs",
   "Max",
   "Min",
+  // Term-language constructors and binders (design plan §5.2, §5.4).
+  "Function",
+  "Apply",
+  "Tuple",
+  "Set",
+  "List",
+  "At",
+  "Sum",
+  "Product",
+  "Integrate",
+  "Limit",
+  "Limits",
+  "PositiveInfinity",
+  "NegativeInfinity",
+  // Standard sets, usable as the domain of a typed binder `["Element", x, S]`.
+  "NonNegativeIntegers",
+  "Integers",
+  "RationalNumbers",
+  "RealNumbers",
+  "ComplexNumbers",
+  "Booleans",
 ]);
 
 const declarationBaseShape = {
@@ -714,6 +741,23 @@ const DICTIONARY_SORT = Object.freeze({
   kind: "named" as const,
   id: "sort:dictionary" as SortId,
 });
+const SET_SORT_ID = "sort:set" as SortId;
+const LIST_SORT_ID = "sort:list" as SortId;
+const TUPLE_SORT_ID = "sort:tuple" as SortId;
+const SEQUENCE_SORT_ID = "sort:sequence" as SortId;
+const NATURAL_SORT: NamedSort = Object.freeze({ kind: "named", id: "sort:natural" as SortId });
+const INTEGER_SORT: NamedSort = Object.freeze({ kind: "named", id: "sort:integer" as SortId });
+const REAL_SORT: NamedSort = Object.freeze({ kind: "named", id: "sort:real" as SortId });
+
+/** Member sorts of the standard Compute Engine sets that may type a binder. */
+const STANDARD_SET_MEMBER_SORTS: ReadonlyMap<string, Sort> = new Map<string, Sort>([
+  ["NonNegativeIntegers", NATURAL_SORT],
+  ["Integers", INTEGER_SORT],
+  ["RationalNumbers", Object.freeze({ kind: "named", id: "sort:rational" as SortId })],
+  ["RealNumbers", REAL_SORT],
+  ["ComplexNumbers", Object.freeze({ kind: "named", id: "sort:complex" as SortId })],
+  ["Booleans", PROPOSITION_SORT],
+]);
 
 type ScopedEnvironment = Omit<ValidatedStatementEnvironment, "bindings"> &
   Readonly<{ bindings: ReadonlyMap<string, InferredSort> }>;
@@ -729,13 +773,58 @@ function arityMatches(actual: number, expected: number | "variadic"): boolean {
   return expected === "variadic" ? actual >= 2 : actual === expected;
 }
 
+/**
+ * Check an expression against an expected sort. Collection, tuple, and lambda literals are checked
+ * structurally, so `["Set"]`, `["Tuple", 1, 2]`, and `["Function", 1, "x"]` validate where their
+ * sort is known from context although it cannot be inferred bottom-up. An untyped lambda
+ * parameter takes the expected parameter sort. Everything else is inferred and compared.
+ */
 function validatesAsSort(
   expression: PlainMathJson,
   expected: Sort,
   environment: ScopedEnvironment,
 ): boolean {
+  const structural = checkLiteralAgainstSort(expression, expected, environment);
+  if (structural !== undefined) return structural;
   const actual = inferExpressionSort(expression, environment);
   return actual !== undefined && inferredSortMatches(actual, expected);
+}
+
+function checkLiteralAgainstSort(
+  expression: PlainMathJson,
+  expected: Sort,
+  environment: ScopedEnvironment,
+): boolean | undefined {
+  const parts = functionParts(expression);
+  if (parts === undefined || environment.bindings.has(parts.operator)) return undefined;
+  const { operator, operands } = parts;
+  if ((operator === "Set" || operator === "List") && expected.kind === "named") {
+    const member = collectionMemberSort(expected, operator === "Set" ? SET_SORT_ID : LIST_SORT_ID);
+    if (member === undefined) return undefined;
+    return operands.every((operand) => validatesAsSort(operand, member, environment));
+  }
+  if (operator === "Tuple" && expected.kind === "named" && expected.id === TUPLE_SORT_ID) {
+    const components = expected.arguments ?? [];
+    return (
+      operands.length >= 1 &&
+      components.length === operands.length &&
+      operands.every((operand, index) =>
+        validatesAsSort(operand, components[index] as Sort, environment),
+      )
+    );
+  }
+  if (operator === "Function" && expected.kind === "function") {
+    const scope = functionLiteralScope(operands, environment, expected.signature.parameters);
+    return (
+      scope !== undefined &&
+      scope.parameters.length === expected.signature.parameters.length &&
+      scope.parameters.every((parameter, index) =>
+        sortEquals(parameter, expected.signature.parameters[index] as Sort),
+      ) &&
+      validatesAsSort(operands[0] as PlainMathJson, expected.signature.result, scope.environment)
+    );
+  }
+  return undefined;
 }
 
 function inferExpressionSort(
@@ -747,7 +836,10 @@ function inferExpressionSort(
   const symbol = symbolValue(expression);
   if (symbol !== undefined) {
     if (symbol === "True" || symbol === "False") return PROPOSITION_SORT;
-    return environment.bindings.get(symbol);
+    const bound = environment.bindings.get(symbol);
+    if (bound !== undefined) return bound;
+    const member = STANDARD_SET_MEMBER_SORTS.get(symbol);
+    return member === undefined ? undefined : setSort(member);
   }
 
   const numberValue = expressionObjectValue(expression, "num");
@@ -758,9 +850,11 @@ function inferExpressionSort(
   const parts = functionParts(expression);
   if (parts === undefined) return undefined;
 
-  if (parts.operator === "ForAll" || parts.operator === "Exists") {
-    return inferBuiltinBinderSort(parts.operands, environment);
-  }
+  // A locally bound head is a function variable, never a built-in constructor.
+  const termSort = environment.bindings.has(parts.operator)
+    ? undefined
+    : inferTermConstructorSort(parts.operator, parts.operands, environment);
+  if (termSort !== undefined) return termSort === "invalid" ? undefined : termSort;
 
   const logicalArity = LOGICAL_ARITIES[parts.operator];
   if (logicalArity !== undefined) {
@@ -802,22 +896,397 @@ function inferExpressionSort(
     : undefined;
 }
 
-function inferBuiltinBinderSort(
+/**
+ * Sort rules for the built-in term constructors and binders (design plan §5.2, §5.4). Returns
+ * undefined for any other head and `"invalid"` for an ill-formed use of a constructor head.
+ *
+ * - `ForAll`/`Exists` bind a symbol (sorted by the enclosing bindings, as before) or a typed
+ *   `["Element", x, S]` whose domain `S` has sort `set<T>`, giving `x : T`. Bodies are
+ *   propositions. Quantified variables may have function and predicate sorts.
+ * - `["Function", body, p1, …, pn]` has sort `(T1, …, Tn) -> B` for parameter sorts `Ti` and body
+ *   sort `B`.
+ * - `["Apply", f, a1, …, an]` applies a function-sorted term; so does a bound or declared function
+ *   variable in head position.
+ * - `Tuple` has sort `tuple<T1, …, Tn>`; `Set` and `List` literals have sort `set<T>`/`list<T>`.
+ * - `["At", c, i]` indexes a `list<T>` or `sequence<T>` by an integer, a tuple by a literal
+ *   position (1-based), or a unary function (an indexed family) by its parameter sort.
+ * - `["Sum" | "Product", body, ["Limits", k, lower, upper]]` sums a numeric body over an integer
+ *   (or natural) index; the index may instead range over `["Element", k, S]`.
+ * - `["Integrate", body, ["Limits", x, a, b]]` is a real definite integral.
+ * - `["Limit", f, point]` takes the limit of a unary numeric function literal or term at a point.
+ *   An untyped lambda parameter takes the point's sort, or `real` for a literal point.
+ *
+ * Summation, integration, and limit bounds may be `PositiveInfinity` or `NegativeInfinity`.
+ */
+function inferTermConstructorSort(
+  operator: string,
+  operands: readonly PlainMathJson[],
+  environment: ScopedEnvironment,
+): InferredSort | "invalid" | undefined {
+  switch (operator) {
+    case "ForAll":
+    case "Exists": {
+      const scope = binderScope(operator, operands, environment, () => []);
+      return scope !== undefined &&
+        validatesAsSort(operands[1] as PlainMathJson, PROPOSITION_SORT, scope)
+        ? PROPOSITION_SORT
+        : "invalid";
+    }
+    case "Function":
+      return inferFunctionLiteralSort(operands, environment, []) ?? "invalid";
+    case "Apply": {
+      const [head, ...argumentsList] = operands;
+      if (head === undefined) return "invalid";
+      const applicable = inferApplicableSignature(head, argumentsList, environment);
+      if (applicable === undefined) return "invalid";
+      const { parameters, result } = applicable;
+      return parameters.length === argumentsList.length &&
+        argumentsList.every((argument, index) =>
+          validatesAsSort(argument, parameters[index] as Sort, environment),
+        )
+        ? result
+        : "invalid";
+    }
+    case "Tuple": {
+      if (operands.length === 0) return "invalid";
+      const components = operands.map((operand) => concreteSort(operand, environment));
+      return components.every((component) => component !== undefined)
+        ? namedSort(TUPLE_SORT_ID, components as Sort[])
+        : "invalid";
+    }
+    case "Set":
+    case "List": {
+      if (operands.length === 0) return "invalid";
+      const member = inferCompatibleOperandSort(operands, environment, true);
+      return member !== undefined && !isNumericLiteralSort(member)
+        ? namedSort(operator === "Set" ? SET_SORT_ID : LIST_SORT_ID, [member])
+        : "invalid";
+    }
+    case "At":
+      return operands.length === 2
+        ? (inferIndexSort(
+            operands[0] as PlainMathJson,
+            operands[1] as PlainMathJson,
+            environment,
+          ) ?? "invalid")
+        : "invalid";
+    case "Sum":
+    case "Product": {
+      const scope = binderScope(operator, operands, environment, () => []);
+      if (scope === undefined) return "invalid";
+      const body = inferExpressionSort(operands[0] as PlainMathJson, scope);
+      return body !== undefined && isNumericInferredSort(body) ? body : "invalid";
+    }
+    case "Integrate": {
+      const scope = binderScope(operator, operands, environment, () => []);
+      return scope !== undefined && validatesAsSort(operands[0] as PlainMathJson, REAL_SORT, scope)
+        ? REAL_SORT
+        : "invalid";
+    }
+    case "Limit":
+      return inferLimitSort(operands, environment) ?? "invalid";
+    case "Limits":
+    case "PositiveInfinity":
+    case "NegativeInfinity":
+      // Declaration and bound markers are only meaningful inside their binders.
+      return "invalid";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Validate a binder node's declarations and return the scope of its scoped operands.
+ * `untypedParameterSorts` supplies sorts for bare symbol declarations (by declaration position);
+ * without one, a bare symbol takes its sort from the enclosing bindings.
+ */
+function binderScope(
+  operator: string,
+  operands: readonly PlainMathJson[],
+  environment: ScopedEnvironment,
+  untypedParameterSorts: () => readonly (Sort | undefined)[],
+): ScopedEnvironment | undefined {
+  const shape = binderShape(operator, operands.length, environment.operators);
+  if (shape === undefined || !builtinBinderArityMatches(operator, operands.length)) {
+    return undefined;
+  }
+  const declarations = readShapeDeclarations(operands, shape);
+  if (declarations === undefined) return undefined;
+  const bindings = new Map(environment.bindings);
+  const names = new Set<string>();
+  const overrides = untypedParameterSorts();
+  for (const [position, declaration] of declarations.entries()) {
+    if (
+      names.has(declaration.name) ||
+      RESERVED_BUILTIN_SYMBOLS.has(declaration.name) ||
+      environment.operators.some((candidate) => candidate.symbol === declaration.name)
+    ) {
+      return undefined;
+    }
+    const sort = declarationSort(
+      operator,
+      operands[shape.boundOperands[position] as number] as PlainMathJson,
+      declaration,
+      environment,
+      overrides[position],
+    );
+    if (sort === undefined) return undefined;
+    names.add(declaration.name);
+    bindings.set(declaration.name, sort);
+  }
+  return { ...environment, bindings };
+}
+
+/**
+ * The sorts a built-in binder node gives the symbols it binds, inside its scope, given the sorts
+ * of the enclosing bindings. Returns undefined for a non-binder head or an ill-formed binder.
+ * Custom binders take their bound sorts from their signatures instead.
+ */
+export function builtinBinderSorts(
+  operator: string,
+  operands: readonly PlainMathJson[],
+  bindings: ReadonlyMap<string, Sort>,
+  operators: readonly OperatorDeclaration[],
+): ReadonlyMap<string, Sort> | undefined {
+  if (!["ForAll", "Exists", "Function", "Sum", "Product", "Integrate"].includes(operator)) {
+    return undefined;
+  }
+  const scope = binderScope(
+    operator,
+    operands,
+    { declarations: [], operators, bindings },
+    () => [],
+  );
+  const shape = binderShape(operator, operands.length, operators);
+  const declarations = shape === undefined ? undefined : readShapeDeclarations(operands, shape);
+  if (scope === undefined || declarations === undefined) return undefined;
+  return new Map(
+    declarations.map((declaration) => [
+      declaration.name,
+      scope.bindings.get(declaration.name) as Sort,
+    ]),
+  );
+}
+
+function builtinBinderArityMatches(operator: string, operandCount: number): boolean {
+  return operator === "Function" ? operandCount >= 2 : operandCount === 2;
+}
+
+function readShapeDeclarations(
+  operands: readonly PlainMathJson[],
+  shape: BinderShape,
+): readonly BinderDeclaration[] | undefined {
+  const declarations: BinderDeclaration[] = [];
+  for (const index of shape.boundOperands) {
+    const operand = operands[index];
+    const declaration =
+      operand === undefined ? undefined : readBinderDeclaration(operand, shape.forms);
+    if (declaration === undefined) return undefined;
+    declarations.push(declaration);
+  }
+  return declarations;
+}
+
+/** The sort a declaration gives its bound symbol. Domains and bounds use the enclosing scope. */
+function declarationSort(
+  operator: string,
+  operand: PlainMathJson,
+  declaration: BinderDeclaration,
+  environment: ScopedEnvironment,
+  untypedSort: Sort | undefined,
+): Sort | undefined {
+  if (declaration.form === "symbol") {
+    const bound = untypedSort ?? environment.bindings.get(declaration.name);
+    return bound === undefined || isNumericLiteralSort(bound) ? undefined : bound;
+  }
+  const declarationOperands = functionParts(operand)?.operands ?? [];
+  if (declaration.form === "element") {
+    const domain = inferExpressionSort(declarationOperands[1] as PlainMathJson, environment);
+    if (domain === undefined || isNumericLiteralSort(domain) || domain.kind !== "named") {
+      return undefined;
+    }
+    return collectionMemberSort(domain, SET_SORT_ID);
+  }
+
+  const bounds = [declarationOperands[1], declarationOperands[2]] as PlainMathJson[];
+  const finite = bounds.filter((bound) => !isInfinitySymbol(bound));
+  if (operator === "Integrate") {
+    return finite.every((bound) => validatesAsSort(bound, REAL_SORT, environment))
+      ? REAL_SORT
+      : undefined;
+  }
+  // Sum/Product: an integer index, natural when every finite bound is natural.
+  if (finite.length === 0) return undefined;
+  const boundSort = inferCompatibleOperandSort(finite, environment, false);
+  if (boundSort === undefined) return undefined;
+  if (isNumericLiteralSort(boundSort)) {
+    if (!boundSort.integer) return undefined;
+    return finite.every((bound) => validatesAsSort(bound, NATURAL_SORT, environment))
+      ? NATURAL_SORT
+      : INTEGER_SORT;
+  }
+  return sortEquals(boundSort, NATURAL_SORT) || sortEquals(boundSort, INTEGER_SORT)
+    ? boundSort
+    : undefined;
+}
+
+function inferFunctionLiteralSort(
+  operands: readonly PlainMathJson[],
+  environment: ScopedEnvironment,
+  untypedParameterSorts: readonly (Sort | undefined)[],
+): FunctionSort | undefined {
+  const signature = inferLambdaSignature(operands, environment, untypedParameterSorts);
+  return signature === undefined || isNumericLiteralSort(signature.result)
+    ? undefined
+    : {
+        kind: "function",
+        signature: { parameters: signature.parameters, result: signature.result },
+      };
+}
+
+/**
+ * A lambda literal's parameter sorts and body sort. The body may be an unresolved numeric literal
+ * (a constant function), which only an application or a limit can use without an expected sort.
+ */
+function inferLambdaSignature(
+  operands: readonly PlainMathJson[],
+  environment: ScopedEnvironment,
+  untypedParameterSorts: readonly (Sort | undefined)[],
+): Readonly<{ parameters: readonly Sort[]; result: InferredSort }> | undefined {
+  const scope = functionLiteralScope(operands, environment, untypedParameterSorts);
+  if (scope === undefined) return undefined;
+  const result = inferExpressionSort(operands[0] as PlainMathJson, scope.environment);
+  return result === undefined ? undefined : { parameters: scope.parameters, result };
+}
+
+function functionLiteralScope(
+  operands: readonly PlainMathJson[],
+  environment: ScopedEnvironment,
+  untypedParameterSorts: readonly (Sort | undefined)[],
+): Readonly<{ environment: ScopedEnvironment; parameters: readonly Sort[] }> | undefined {
+  const scope = binderScope("Function", operands, environment, () => untypedParameterSorts);
+  if (scope === undefined) return undefined;
+  const parameters = operands.slice(1).map((operand) => {
+    const name = readBinderDeclaration(operand, ["symbol", "element"])?.name;
+    return scope.bindings.get(name as string) as Sort;
+  });
+  return { environment: scope, parameters };
+}
+
+/**
+ * The signature of an applied head. A lambda literal's untyped parameters are sorted by the
+ * concrete sorts of the arguments.
+ */
+function inferApplicableSignature(
+  head: PlainMathJson,
+  argumentsList: readonly PlainMathJson[],
+  environment: ScopedEnvironment,
+  untypedParameterSorts?: readonly (Sort | undefined)[],
+): Readonly<{ parameters: readonly Sort[]; result: InferredSort }> | undefined {
+  const parts = functionParts(head);
+  if (parts?.operator === "Function") {
+    const argumentSorts =
+      untypedParameterSorts ?? argumentsList.map((argument) => concreteSort(argument, environment));
+    return inferLambdaSignature(parts.operands, environment, argumentSorts);
+  }
+  const sort = inferExpressionSort(head, environment);
+  return sort !== undefined && !isNumericLiteralSort(sort) && sort.kind === "function"
+    ? sort.signature
+    : undefined;
+}
+
+function inferIndexSort(
+  container: PlainMathJson,
+  index: PlainMathJson,
+  environment: ScopedEnvironment,
+): Sort | undefined {
+  const sort = inferExpressionSort(container, environment);
+  if (sort === undefined || isNumericLiteralSort(sort)) return undefined;
+  if (sort.kind === "function") {
+    const [parameter, ...rest] = sort.signature.parameters;
+    return parameter !== undefined &&
+      rest.length === 0 &&
+      validatesAsSort(index, parameter, environment)
+      ? sort.signature.result
+      : undefined;
+  }
+  if (sort.kind !== "named") return undefined;
+  if (sort.id === TUPLE_SORT_ID) {
+    const position = integerLiteralValue(index);
+    const components = sort.arguments ?? [];
+    return position !== undefined && position >= 1 && position <= components.length
+      ? components[position - 1]
+      : undefined;
+  }
+  const member =
+    collectionMemberSort(sort, LIST_SORT_ID) ?? collectionMemberSort(sort, SEQUENCE_SORT_ID);
+  return member !== undefined &&
+    (validatesAsSort(index, NATURAL_SORT, environment) ||
+      validatesAsSort(index, INTEGER_SORT, environment))
+    ? member
+    : undefined;
+}
+
+function inferLimitSort(
   operands: readonly PlainMathJson[],
   environment: ScopedEnvironment,
 ): InferredSort | undefined {
-  if (operands.length !== 2) return undefined;
-  const boundSymbol = symbolValue(operands[0] as PlainMathJson);
-  if (boundSymbol === undefined) return undefined;
+  const [functionTerm, point] = operands;
+  if (operands.length !== 2 || functionTerm === undefined || point === undefined) return undefined;
+  const infinite = isInfinitySymbol(point);
+  const pointSort = infinite ? undefined : inferExpressionSort(point, environment);
+  if (!infinite && pointSort === undefined) return undefined;
+  const literalParameter =
+    pointSort === undefined || isNumericLiteralSort(pointSort) ? REAL_SORT : pointSort;
+  const signature = inferApplicableSignature(
+    functionTerm,
+    [],
+    environment,
+    // An untyped limit variable takes the point's sort.
+    [literalParameter],
+  );
+  if (signature === undefined) return undefined;
+  const [parameter, ...rest] = signature.parameters;
+  if (
+    parameter === undefined ||
+    rest.length > 0 ||
+    !isNumericSort(parameter) ||
+    !isNumericInferredSort(signature.result)
+  ) {
+    return undefined;
+  }
+  return infinite || validatesAsSort(point, parameter, environment) ? signature.result : undefined;
+}
 
-  const boundSort = environment.bindings.get(boundSymbol);
-  if (boundSort === undefined) return undefined;
-  const bindings = new Map(environment.bindings);
-  bindings.set(boundSymbol, boundSort);
-  const scopedEnvironment: ScopedEnvironment = { ...environment, bindings };
-  return validatesAsSort(operands[1] as PlainMathJson, PROPOSITION_SORT, scopedEnvironment)
-    ? PROPOSITION_SORT
-    : undefined;
+/** An inferred sort that is not an unresolved numeric literal. */
+function concreteSort(expression: PlainMathJson, environment: ScopedEnvironment): Sort | undefined {
+  const sort = inferExpressionSort(expression, environment);
+  return sort === undefined || isNumericLiteralSort(sort) ? undefined : sort;
+}
+
+function collectionMemberSort(sort: NamedSort, id: SortId): Sort | undefined {
+  return sort.id === id && sort.arguments?.length === 1 ? sort.arguments[0] : undefined;
+}
+
+function namedSort(id: SortId, argumentsList: readonly Sort[]): NamedSort {
+  return { kind: "named", id, arguments: argumentsList };
+}
+
+function setSort(member: Sort): NamedSort {
+  return namedSort(SET_SORT_ID, [member]);
+}
+
+function isInfinitySymbol(expression: PlainMathJson): boolean {
+  const symbol = symbolValue(expression);
+  return symbol === "PositiveInfinity" || symbol === "NegativeInfinity";
+}
+
+function integerLiteralValue(expression: PlainMathJson): number | undefined {
+  const value =
+    typeof expression === "number"
+      ? expression
+      : Number(expressionObjectValue(expression, "num") ?? Number.NaN);
+  return Number.isSafeInteger(value) ? value : undefined;
 }
 
 function validateSignatureApplication(
@@ -875,13 +1344,16 @@ function validateRelationOperands(
 ): boolean {
   if (operator === "Element" || operator === "NotElement") {
     const element = inferExpressionSort(operands[0] as PlainMathJson, environment);
-    const container = inferExpressionSort(operands[1] as PlainMathJson, environment);
-    if (element === undefined || container === undefined) return false;
-    if (!isNumericLiteralSort(container) && container.kind === "named") {
-      const memberSort = container.id === "sort:set" ? container.arguments?.[0] : undefined;
-      return memberSort !== undefined && inferredSortMatches(element, memberSort);
+    if (element === undefined) return false;
+    if (!isNumericLiteralSort(element)) {
+      return validatesAsSort(operands[1] as PlainMathJson, setSort(element), environment);
     }
-    return false;
+    const container = inferExpressionSort(operands[1] as PlainMathJson, environment);
+    if (container === undefined || isNumericLiteralSort(container) || container.kind !== "named") {
+      return false;
+    }
+    const memberSort = collectionMemberSort(container, SET_SORT_ID);
+    return memberSort !== undefined && inferredSortMatches(element, memberSort);
   }
 
   const isEquality = operator === "Equal" || operator === "NotEqual";
@@ -908,9 +1380,14 @@ function inferCompatibleOperandSort(
   let concrete: Sort | undefined;
   let fallback: InferredSort | undefined;
 
+  let deferred = false;
   for (const operand of operands) {
     const current = inferExpressionSort(operand, environment);
-    if (current === undefined) return undefined;
+    if (current === undefined) {
+      // A literal such as `["Set"]` or an untyped lambda may still check against a sibling's sort.
+      deferred = true;
+      continue;
+    }
     fallback ??= current;
     if (isNumericLiteralSort(current)) continue;
     if (!allowProposition && current.kind === "proposition") return undefined;
@@ -923,7 +1400,7 @@ function inferCompatibleOperandSort(
       ? concrete
       : undefined;
   }
-  return fallback;
+  return deferred ? undefined : fallback;
 }
 
 function inferredSortMatches(actual: InferredSort, expected: Sort): boolean {
@@ -1030,26 +1507,38 @@ function freeSymbolNames(
   if (parts === undefined) return result;
   if (!boundNames.has(parts.operator)) result.add(parts.operator);
 
-  const binder =
-    parts.operator === "ForAll" || parts.operator === "Exists"
-      ? BUILTIN_BINDER_SPECIFICATIONS[parts.operator]
-      : operators.find((operator) => operator.symbol === parts.operator)?.binder;
+  const binder = boundNames.has(parts.operator)
+    ? undefined
+    : binderShape(parts.operator, parts.operands.length, operators);
   if (binder === undefined) {
     parts.operands.forEach((operand) => freeSymbolNames(operand, operators, boundNames, result));
     return result;
   }
 
-  const boundOperands = new Set(binder.boundOperands);
   const scopedOperands = new Set(binder.scopedOperands);
   const nestedNames = new Set(boundNames);
+  const declarations = new Map<number, BinderDeclaration>();
   binder.boundOperands.forEach((index) => {
     const operand = parts.operands[index];
-    const name = operand === undefined ? undefined : symbolValue(operand);
-    if (name !== undefined) nestedNames.add(name);
+    const declaration =
+      operand === undefined ? undefined : readBinderDeclaration(operand, binder.forms);
+    if (declaration === undefined) return;
+    declarations.set(index, declaration);
+    nestedNames.add(declaration.name);
   });
 
   parts.operands.forEach((operand, index) => {
-    if (boundOperands.has(index)) return;
+    const declaration = declarations.get(index);
+    if (declaration !== undefined) {
+      // A declaration's domain or bounds are evaluated outside the binder's scope.
+      const declarationOperands = functionParts(operand)?.operands ?? [];
+      declaration.outerOperands.forEach((outerIndex) => {
+        const outer = declarationOperands[outerIndex];
+        if (outer !== undefined) freeSymbolNames(outer, operators, boundNames, result);
+      });
+      return;
+    }
+    if (binder.boundOperands.includes(index)) return;
     freeSymbolNames(
       operand,
       operators,

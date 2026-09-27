@@ -14,7 +14,7 @@ import {
   type LogicalPolarity,
   type SemanticRole,
 } from "@proof/selections";
-import { binderFor, functionParts, symbolValue } from "./expression";
+import { binderFor, boundDeclaration, functionParts } from "./expression";
 import { kernelResultIdSchema, type KernelResultId, type ResultInstantiation } from "./results";
 import { hasExactKeys, isStrictRecord } from "./runtime";
 
@@ -61,14 +61,20 @@ export function locateRewriteOccurrence(
 ): RewriteOccurrence | undefined {
   let current = expression;
   const boundSymbols = new Set<string>();
-  for (const operandIndex of path) {
+  for (const [pathIndex, operandIndex] of path.entries()) {
     const parts = functionParts(current);
     if (parts === undefined) return undefined;
-    const binder = binderFor(parts.operator, operators);
-    if (binder?.boundOperands.includes(operandIndex)) return undefined;
+    const binder = boundSymbols.has(parts.operator) ? undefined : binderFor(parts, operators);
+    if (binder?.boundOperands.includes(operandIndex)) {
+      // Only the domain or bounds of a typed declaration are rewritable; the bound symbol is not.
+      const declaration = boundDeclaration(parts, binder, operandIndex);
+      const next = path[pathIndex + 1];
+      if (declaration === undefined || next === undefined) return undefined;
+      if (!declaration.outerOperands.includes(next)) return undefined;
+    }
     if (binder?.scopedOperands.includes(operandIndex)) {
       binder.boundOperands.forEach((boundIndex) => {
-        const name = symbolValue(parts.operands[boundIndex] as PlainMathJson);
+        const name = boundDeclaration(parts, binder, boundIndex)?.name;
         if (name !== undefined) boundSymbols.add(name);
       });
     }

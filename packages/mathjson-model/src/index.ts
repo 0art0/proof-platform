@@ -268,3 +268,4 @@ export function renderMathJson(expression: PlainMathJson): MathJsonRenderResult 
 
 export * from "./contracts";
 export * from "./binding";
+export * from "./binders";

@@ -18,7 +18,7 @@ import {
   type StatementView,
 } from "@proof/mathjson-model";
 import { alphaEquivalentWithOperators, sameNodeMetadata } from "./alpha-equivalence";
-import { binderFor, functionParts, symbolValue } from "./expression";
+import { binderFor, boundDeclaration, functionParts, symbolValue } from "./expression";
 import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 
 /**
@@ -41,10 +41,11 @@ export type KernelResultParameter = Readonly<{ symbol: string; sort: Sort }>;
  * library package; callers adapt library results into this shape.
  *
  * Premises and the conclusion are propositions whose free symbols are
- * parameters. Because built-in quantifiers take their bound symbol's sort from
- * the declarations in scope, a symbol bound by `ForAll`/`Exists` must also be
- * listed as a parameter; such a parameter never occurs free, so it needs no
- * instantiation.
+ * parameters. Because an untyped built-in binder (`["ForAll", "x", body]`)
+ * takes its bound symbol's sort from the declarations in scope, such a bound
+ * symbol must also be listed as a parameter; it never occurs free, so it needs
+ * no instantiation. Typed binders (`["ForAll", ["Element", "x", S], body]`)
+ * are self-contained and need no such parameter.
  */
 export type KernelResult = Readonly<{
   id: KernelResultId;
@@ -487,7 +488,7 @@ function matchPattern(
   if (headIsParameter) {
     if (
       subjectScope.has(subjectParts.operator) ||
-      binderFor(subjectParts.operator, operators) !== undefined ||
+      binderFor(subjectParts, operators) !== undefined ||
       !bindParameter(
         patternParts.operator,
         subjectParts.operator,
@@ -507,7 +508,7 @@ function matchPattern(
   const binder =
     headIsParameter || patternScope.has(patternParts.operator)
       ? undefined
-      : binderFor(patternParts.operator, operators);
+      : binderFor(patternParts, operators);
   if (binder === undefined) {
     return patternParts.operands.every((operand, index) =>
       matchPattern(
@@ -527,21 +528,42 @@ function matchPattern(
   const subjectInner = new Map(subjectScope);
   let innerDepth = depth;
   for (const index of binder.boundOperands) {
-    const patternBound = patternParts.operands[index];
-    const subjectBound = subjectParts.operands[index];
-    const patternName = patternBound === undefined ? undefined : symbolValue(patternBound);
-    const subjectName = subjectBound === undefined ? undefined : symbolValue(subjectBound);
+    const patternDeclaration = boundDeclaration(patternParts, binder, index);
+    const subjectDeclaration = boundDeclaration(subjectParts, binder, index);
     if (
-      patternBound === undefined ||
-      subjectBound === undefined ||
-      patternName === undefined ||
-      subjectName === undefined ||
-      !sameNodeMetadata(patternBound, subjectBound, "sym")
+      patternDeclaration === undefined ||
+      subjectDeclaration === undefined ||
+      patternDeclaration.form !== subjectDeclaration.form ||
+      !sameNodeMetadata(patternDeclaration.symbol, subjectDeclaration.symbol, "sym")
     ) {
       return false;
     }
-    patternInner.set(patternName, innerDepth);
-    subjectInner.set(subjectName, innerDepth);
+    if (patternDeclaration.form !== "symbol") {
+      // Typed domains and bounds are matched in the enclosing scope.
+      const patternNode = patternParts.operands[index] as PlainMathJson;
+      const subjectNode = subjectParts.operands[index] as PlainMathJson;
+      const patternOperands = functionParts(patternNode)?.operands ?? [];
+      const subjectOperands = functionParts(subjectNode)?.operands ?? [];
+      if (
+        !sameNodeMetadata(patternNode, subjectNode, "fn") ||
+        !patternDeclaration.outerOperands.every((outer) =>
+          matchPattern(
+            patternOperands[outer] as PlainMathJson,
+            subjectOperands[outer] as PlainMathJson,
+            patternScope,
+            subjectScope,
+            depth,
+            parameters,
+            bindings,
+            operators,
+          ),
+        )
+      ) {
+        return false;
+      }
+    }
+    patternInner.set(patternDeclaration.name, innerDepth);
+    subjectInner.set(subjectDeclaration.name, innerDepth);
     innerDepth += 1;
   }
   const boundOperands = new Set(binder.boundOperands);
