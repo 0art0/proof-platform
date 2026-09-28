@@ -31,6 +31,11 @@ import type { Pool } from "pg";
 import { z } from "zod";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "../approved-catalog";
 import {
+  executeTryResultCommand,
+  hypothesisInvestigationRequestSchema,
+  investigateHypothesis,
+} from "../inquiry-methods";
+import {
   inquiryRecordQuerySchema,
   listInquiryRecords,
   recordInquiryCommand,
@@ -170,6 +175,13 @@ export const proofHttpSuggestionRequestSchema = z
   .strict();
 
 export const proofHttpMoveChoiceRequestSchema = moveChoiceSchema;
+/**
+ * Applying a displayed choice. `inquiryMethod: "try-result"` applies a result suggestion as
+ * "Try this theorem" and records its inquiry records with the transition (refinement §3.4).
+ */
+export const proofHttpCommandRequestSchema = moveChoiceSchema.extend({
+  inquiryMethod: z.literal("try-result").optional(),
+});
 export const proofHttpBacktrackRequestSchema = backtrackProofSessionSchema;
 /** The web actor is supplied by the service; clients never name the actor. */
 export const proofHttpDeletePreviousMoveRequestSchema = deletePreviousMoveCommandSchema.omit({
@@ -228,8 +240,13 @@ export const proofHttpCommandResponseSchema = z
     node: z.unknown(),
     receipt: proofCommandReceiptSchema,
     replayed: z.boolean(),
+    /** The "Try this theorem" inquiry records, when the command named that method. */
+    inquiryRecords: inquiryRecordListSchema.min(1).optional(),
   })
   .strict();
+
+/** "Investigate this hypothesis" (refinement §6, §10); the service supplies the actor. */
+export const proofHttpHypothesisInvestigationRequestSchema = hypothesisInvestigationRequestSchema;
 
 export const proofHttpHistoryResponseSchema = z
   .object({
@@ -507,24 +524,20 @@ async function handleRequest(
   }
 
   if (route.kind === "command-collection" && request.method === "POST") {
-    const choice = await readStrictJsonRequest(request, proofHttpMoveChoiceRequestSchema);
-    if (!choice.ok) {
-      writeJson(response, choice.status, invalidRequest(choice.message));
+    const command = await readStrictJsonRequest(request, proofHttpCommandRequestSchema);
+    if (!command.ok) {
+      writeJson(response, command.status, invalidRequest(command.message));
       return;
     }
-    const materialized = await materializeMoveChoice(
-      store,
-      route.sessionId,
-      choice.value,
-      definitions,
-    );
+    const { inquiryMethod, ...choice } = command.value;
+    const materialized = await materializeMoveChoice(store, route.sessionId, choice, definitions);
     if (materialized.status !== "materialized") {
       writeMaterializationFailure(response, materialized);
       return;
     }
     const recordedPreview = await recordMovePreview(store, route.sessionId, materialized.request, {
       definitions,
-      regeneration: { commandId: choice.value.commandId, actor: WEB_ACTOR },
+      regeneration: { commandId: choice.commandId, actor: WEB_ACTOR },
       ...(now === undefined ? {} : { now }),
     });
     if (recordedPreview.status !== "committed") {
@@ -560,30 +573,31 @@ async function handleRequest(
       );
       return;
     }
-    const ids = derivedMoveRecordIds(choice.value.commandId);
-    const executed = await executeProofCommand(
-      store,
-      route.sessionId,
-      {
-        commandId: choice.value.commandId,
-        kind: "apply-kernel-operation",
-        actor: WEB_ACTOR,
-        parentNodeId: recordedPreview.preview.nodeId,
-        resultNodeId: ids.resultNodeId,
-        edgeId: ids.edgeId,
-        eventId: ids.eventId,
-        moveId: recordedPreview.preview.moveId,
-        suggestionSetId: recordedPreview.preview.suggestionSetId,
-        chosenSuggestionId: recordedPreview.preview.chosenSuggestionId,
-        previewId: recordedPreview.preview.id,
-        operation: recordedPreview.preview.operation,
-        ...(recordedPreview.preview.menuSelection === undefined
-          ? {}
-          : { menuSelection: recordedPreview.preview.menuSelection }),
-      },
-      WEB_ACTOR,
-      definitions,
-    );
+    const ids = derivedMoveRecordIds(choice.commandId);
+    const proofCommand = {
+      commandId: choice.commandId,
+      kind: "apply-kernel-operation",
+      actor: WEB_ACTOR,
+      parentNodeId: recordedPreview.preview.nodeId,
+      resultNodeId: ids.resultNodeId,
+      edgeId: ids.edgeId,
+      eventId: ids.eventId,
+      moveId: recordedPreview.preview.moveId,
+      suggestionSetId: recordedPreview.preview.suggestionSetId,
+      chosenSuggestionId: recordedPreview.preview.chosenSuggestionId,
+      previewId: recordedPreview.preview.id,
+      operation: recordedPreview.preview.operation,
+      ...(recordedPreview.preview.menuSelection === undefined
+        ? {}
+        : { menuSelection: recordedPreview.preview.menuSelection }),
+    };
+    const executed =
+      inquiryMethod === "try-result"
+        ? await executeTryResultCommand(store, route.sessionId, proofCommand, WEB_ACTOR, {
+            definitions,
+            ...(now === undefined ? {} : { now }),
+          })
+        : await executeProofCommand(store, route.sessionId, proofCommand, WEB_ACTOR, definitions);
     if (executed.status !== "committed") {
       writeRepositoryFailure(response, executed);
       return;
@@ -601,7 +615,37 @@ async function handleRequest(
       node: loaded.node,
       receipt: executed.result.receipt,
       replayed: executed.replayed,
+      ...("records" in executed ? { inquiryRecords: executed.records } : {}),
     });
+    return;
+  }
+
+  if (route.kind === "hypothesis-investigations" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(
+      request,
+      proofHttpHypothesisInvestigationRequestSchema,
+    );
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const recorded = await investigateHypothesis(
+      store,
+      route.sessionId,
+      requested.value,
+      WEB_ACTOR,
+      { definitions, ...(now === undefined ? {} : { now }) },
+    );
+    if (recorded.status !== "committed") {
+      writeRepositoryFailure(response, recorded);
+      return;
+    }
+    writeValidatedJson(
+      response,
+      recorded.replayed ? 200 : 201,
+      proofHttpInquiryCommandResponseSchema,
+      { records: recorded.records, replayed: recorded.replayed },
+    );
     return;
   }
 
@@ -932,7 +976,8 @@ type ParsedRoute =
   | Readonly<{ kind: "replay"; sessionId: string }>
   | Readonly<{ kind: "interaction-events"; sessionId: string }>
   | Readonly<{ kind: "inquiry-commands"; sessionId: string }>
-  | Readonly<{ kind: "inquiry-records"; sessionId: string }>;
+  | Readonly<{ kind: "inquiry-records"; sessionId: string }>
+  | Readonly<{ kind: "hypothesis-investigations"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
   try {
@@ -978,6 +1023,9 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       }
       if (segments[2] === "inquiry-records") {
         return { kind: "inquiry-records", sessionId: sessionId.data };
+      }
+      if (segments[2] === "hypothesis-investigations") {
+        return { kind: "hypothesis-investigations", sessionId: sessionId.data };
       }
       return undefined;
     }

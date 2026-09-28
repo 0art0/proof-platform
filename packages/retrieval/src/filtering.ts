@@ -111,6 +111,12 @@ export type PredictedObligation = Readonly<{
   /** Zero-based position among the result's premises or side conditions. */
   index: number;
   description: string;
+  /**
+   * Zero-based position among the premises a result application instantiates: the explicit
+   * premises, then the side conditions that have a statement, in declaration order. Absent for a
+   * purely descriptive side condition, which no application checks.
+   */
+  applicationPremiseIndex?: number | undefined;
 }>;
 
 export type PremiseEvaluation = Readonly<{
@@ -172,15 +178,27 @@ export function evaluateResultPremises(
     if (isAvailable(premise.expression)) {
       availablePremiseCount += 1;
     } else {
-      obligations.push({ kind: "premise", index, description: `premise ${index + 1}` });
+      obligations.push({
+        kind: "premise",
+        index,
+        description: `premise ${index + 1}`,
+        applicationPremiseIndex: index,
+      });
     }
   });
+  let applicationPremiseIndex = result.premises.length;
   result.sideConditions.forEach((condition, index) => {
     if (condition.statement !== undefined && isAvailable(condition.statement.expression)) {
       availablePremiseCount += 1;
     } else {
-      obligations.push({ kind: "side-condition", index, description: condition.description });
+      obligations.push({
+        kind: "side-condition",
+        index,
+        description: condition.description,
+        ...(condition.statement === undefined ? {} : { applicationPremiseIndex }),
+      });
     }
+    if (condition.statement !== undefined) applicationPremiseIndex += 1;
   });
   return { unresolvedParameters, availablePremiseCount, obligations };
 }

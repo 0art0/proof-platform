@@ -2472,168 +2472,173 @@ export async function executeProofCommand(
   }
 
   try {
-    return await store.transaction(async (transaction) => {
-      const sessionInput = await transaction.lockSession(sessionId);
-      if (sessionInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "session-not-found",
-          "The proof session does not exist.",
-        );
-      }
-      const session = safeParse(proofSessionSchema, sessionInput);
-      if (session === undefined || session.id !== sessionId) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-session-record",
-          "The stored proof session failed runtime validation or identity checks.",
-        );
-      }
-      const environment = frozenEnvironment(session.operators, definitions);
-      if (environment === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-session-record",
-          "The stored operator environment could not be detached safely.",
-        );
-      }
-
-      const commandId = commandIdFromUnknown(commandInput);
-      const previousInput =
-        commandId === undefined ? undefined : await transaction.readCommand(session.id, commandId);
-      const previous =
-        previousInput === undefined
-          ? undefined
-          : safeParse(createPrepareProofCommandSuccessSchema(environment), previousInput);
-      if (
-        previousInput !== undefined &&
-        (previous === undefined || previous.prepared.command.commandId !== commandId)
-      ) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-command-record",
-          "The stored command result failed runtime validation or identity checks.",
-        );
-      }
-      if (previous === undefined && commandId !== undefined) {
-        const deleted = await deletedCommandFailure(transaction, session.id, commandId);
-        if (deleted !== undefined) return deleted;
-      }
-
-      const suggestionSetId = suggestionSetIdFromUnknown(commandInput, "suggestionSetId");
-      const suggestionSetInput =
-        suggestionSetId === undefined
-          ? undefined
-          : await transaction.readSuggestionSet(session.id, suggestionSetId);
-      if (suggestionSetId !== undefined && suggestionSetInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "suggestion-set-not-found",
-          "The command references a suggestion set that does not exist in this session.",
-        );
-      }
-      const suggestionSet =
-        suggestionSetInput === undefined || suggestionSetId === undefined
-          ? undefined
-          : parseSuggestionSetRecord(suggestionSetInput, session, suggestionSetId);
-      if (suggestionSetInput !== undefined && suggestionSet === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-suggestion-set-record",
-          "The stored suggestion set failed runtime validation or identity checks.",
-        );
-      }
-      const previewId = movePreviewIdFromUnknown(commandInput, "previewId");
-      const previewInput =
-        previewId === undefined ? undefined : await transaction.readPreview(session.id, previewId);
-      if (previewId !== undefined && previewInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "preview-not-found",
-          "The command references a move preview that does not exist in this session.",
-        );
-      }
-      const preview =
-        previewInput === undefined
-          ? undefined
-          : safeParse(createMovePreviewSchema(environment), previewInput);
-      if (previewInput !== undefined && (preview === undefined || preview.id !== previewId)) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-preview-record",
-          "The stored move preview failed runtime validation or identity checks.",
-        );
-      }
-
-      const currentInput = await transaction.readNode(session.id, session.currentNodeId);
-      if (currentInput === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "current-node-not-found",
-          "The current proof node does not exist.",
-        );
-      }
-      const currentNode = parseNodeRecord(
-        currentInput,
-        session,
-        environment,
-        session.currentNodeId,
-      );
-      if (currentNode === undefined) {
-        return repositoryFailure(
-          "rejected",
-          "invalid-current-node",
-          "The stored current proof node failed runtime validation or identity checks.",
-        );
-      }
-
-      const prepared = prepareProofCommand(currentNode, commandInput, {
-        trustedActor,
-        ...(environment.operators === undefined ? {} : { operators: environment.operators }),
-        ...(environment.results === undefined ? {} : { results: environment.results }),
-        ...(previous === undefined ? {} : { previous }),
-        ...(suggestionSet === undefined ? {} : { suggestionSet }),
-        ...(preview === undefined ? {} : { preview }),
-      });
-      if (!prepared.ok) {
-        const diagnostic = prepared.diagnostics[0];
-        const serializedStale =
-          diagnostic?.code === "stale-parent" ||
-          (diagnostic?.code === "kernel-rejected" && diagnostic.message.includes("stale-state"));
-        return repositoryFailure(
-          "rejected",
-          serializedStale ? "serialized-stale-command" : "command-rejected",
-          diagnostic?.message ?? "The proof command was rejected.",
-        );
-      }
-      if (previous !== undefined) {
-        if (session.currentNodeId !== previous.prepared.node.id) {
-          return repositoryFailure(
-            "rejected",
-            "serialized-stale-command",
-            "The recorded command was superseded by navigation or a different branch.",
-          );
-        }
-        return { status: "committed" as const, result: prepared, replayed: true };
-      }
-
-      await transaction.insertNode(session.id, prepared.prepared.node);
-      await transaction.insertEdge(session.id, prepared.prepared.edge);
-      await transaction.insertEvent(session.id, prepared.prepared.event);
-      await transaction.insertCommand(session.id, prepared);
-      const advanced = await transaction.advanceCurrentNode(
-        session.id,
-        currentNode.id,
-        prepared.prepared.node.id,
-      );
-      if (!advanced) {
-        throw new SerializedStaleCommandError();
-      }
-      return { status: "committed" as const, result: prepared, replayed: false };
-    });
+    return await store.transaction((transaction) =>
+      executeProofCommandWithin(transaction, sessionId, commandInput, trustedActor, definitions),
+    );
   } catch (error: unknown) {
     return transactionFailure(error, "The proof command transaction failed.");
   }
+}
+
+/**
+ * Execute or replay one command inside the caller's transaction, taking the session row lock. A
+ * rejection writes nothing; the caller's transaction commits or rolls back what it holds.
+ */
+export async function executeProofCommandWithin(
+  transaction: ProofStoreTransaction,
+  sessionId: ProofSessionId,
+  commandInput: unknown,
+  trustedActor: Actor,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+): Promise<ExecuteProofCommandResult> {
+  const sessionInput = await transaction.lockSession(sessionId);
+  if (sessionInput === undefined) {
+    return repositoryFailure("rejected", "session-not-found", "The proof session does not exist.");
+  }
+  const session = safeParse(proofSessionSchema, sessionInput);
+  if (session === undefined || session.id !== sessionId) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-session-record",
+      "The stored proof session failed runtime validation or identity checks.",
+    );
+  }
+  const environment = frozenEnvironment(session.operators, definitions);
+  if (environment === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-session-record",
+      "The stored operator environment could not be detached safely.",
+    );
+  }
+
+  const commandId = commandIdFromUnknown(commandInput);
+  const previousInput =
+    commandId === undefined ? undefined : await transaction.readCommand(session.id, commandId);
+  const previous =
+    previousInput === undefined
+      ? undefined
+      : safeParse(createPrepareProofCommandSuccessSchema(environment), previousInput);
+  if (
+    previousInput !== undefined &&
+    (previous === undefined || previous.prepared.command.commandId !== commandId)
+  ) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-command-record",
+      "The stored command result failed runtime validation or identity checks.",
+    );
+  }
+  if (previous === undefined && commandId !== undefined) {
+    const deleted = await deletedCommandFailure(transaction, session.id, commandId);
+    if (deleted !== undefined) return deleted;
+  }
+
+  const suggestionSetId = suggestionSetIdFromUnknown(commandInput, "suggestionSetId");
+  const suggestionSetInput =
+    suggestionSetId === undefined
+      ? undefined
+      : await transaction.readSuggestionSet(session.id, suggestionSetId);
+  if (suggestionSetId !== undefined && suggestionSetInput === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "suggestion-set-not-found",
+      "The command references a suggestion set that does not exist in this session.",
+    );
+  }
+  const suggestionSet =
+    suggestionSetInput === undefined || suggestionSetId === undefined
+      ? undefined
+      : parseSuggestionSetRecord(suggestionSetInput, session, suggestionSetId);
+  if (suggestionSetInput !== undefined && suggestionSet === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-suggestion-set-record",
+      "The stored suggestion set failed runtime validation or identity checks.",
+    );
+  }
+  const previewId = movePreviewIdFromUnknown(commandInput, "previewId");
+  const previewInput =
+    previewId === undefined ? undefined : await transaction.readPreview(session.id, previewId);
+  if (previewId !== undefined && previewInput === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "preview-not-found",
+      "The command references a move preview that does not exist in this session.",
+    );
+  }
+  const preview =
+    previewInput === undefined
+      ? undefined
+      : safeParse(createMovePreviewSchema(environment), previewInput);
+  if (previewInput !== undefined && (preview === undefined || preview.id !== previewId)) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-preview-record",
+      "The stored move preview failed runtime validation or identity checks.",
+    );
+  }
+
+  const currentInput = await transaction.readNode(session.id, session.currentNodeId);
+  if (currentInput === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "current-node-not-found",
+      "The current proof node does not exist.",
+    );
+  }
+  const currentNode = parseNodeRecord(currentInput, session, environment, session.currentNodeId);
+  if (currentNode === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "invalid-current-node",
+      "The stored current proof node failed runtime validation or identity checks.",
+    );
+  }
+
+  const prepared = prepareProofCommand(currentNode, commandInput, {
+    trustedActor,
+    ...(environment.operators === undefined ? {} : { operators: environment.operators }),
+    ...(environment.results === undefined ? {} : { results: environment.results }),
+    ...(previous === undefined ? {} : { previous }),
+    ...(suggestionSet === undefined ? {} : { suggestionSet }),
+    ...(preview === undefined ? {} : { preview }),
+  });
+  if (!prepared.ok) {
+    const diagnostic = prepared.diagnostics[0];
+    const serializedStale =
+      diagnostic?.code === "stale-parent" ||
+      (diagnostic?.code === "kernel-rejected" && diagnostic.message.includes("stale-state"));
+    return repositoryFailure(
+      "rejected",
+      serializedStale ? "serialized-stale-command" : "command-rejected",
+      diagnostic?.message ?? "The proof command was rejected.",
+    );
+  }
+  if (previous !== undefined) {
+    if (session.currentNodeId !== previous.prepared.node.id) {
+      return repositoryFailure(
+        "rejected",
+        "serialized-stale-command",
+        "The recorded command was superseded by navigation or a different branch.",
+      );
+    }
+    return { status: "committed" as const, result: prepared, replayed: true };
+  }
+
+  await transaction.insertNode(session.id, prepared.prepared.node);
+  await transaction.insertEdge(session.id, prepared.prepared.edge);
+  await transaction.insertEvent(session.id, prepared.prepared.event);
+  await transaction.insertCommand(session.id, prepared);
+  const advanced = await transaction.advanceCurrentNode(
+    session.id,
+    currentNode.id,
+    prepared.prepared.node.id,
+  );
+  if (!advanced) {
+    throw new SerializedStaleCommandError();
+  }
+  return { status: "committed" as const, result: prepared, replayed: false };
 }
 
 type DisplayedSuggestion = DisplayedSuggestionSet["suggestions"][number];

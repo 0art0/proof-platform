@@ -20,5 +20,8 @@
     "@proof/retrieval": "*",
     "@proof/selections": "*",
     "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@proof/language": "*"
   }
 }

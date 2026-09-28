@@ -117,6 +117,15 @@ function uniqueArray<Item extends z.ZodType>(item: Item, min: number, max: numbe
     );
 }
 
+/** A premise or side condition of a library result, by its position in the result. */
+export const resultConditionSchema = z
+  .object({
+    kind: z.enum(["premise", "side-condition"]),
+    index: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ResultCondition = z.infer<typeof resultConditionSchema>;
+
 /**
  * A reference to mathematics stored in a proof node: a goal or obligation (its sequent), one of
  * its statements, a subexpression at an operand path, a construction task, or a requirement of
@@ -158,6 +167,19 @@ export const inquiryMathReferenceSchema = z.discriminatedUnion("kind", [
       requirementId: constructionRequirementIdSchema,
     })
     .strict(),
+  /**
+   * A premise or side condition of a displayed result suggestion that its stored match found
+   * unavailable (retrieval's predicted obligation), at the suggestion set's node.
+   */
+  z
+    .object({
+      kind: z.literal("result-condition"),
+      nodeId: proofNodeIdSchema,
+      suggestionSetId: suggestionSetIdSchema,
+      suggestionId: suggestionIdSchema,
+      condition: resultConditionSchema,
+    })
+    .strict(),
 ]);
 export type InquiryMathReference = z.infer<typeof inquiryMathReferenceSchema>;
 
@@ -197,10 +219,27 @@ export const propositionReferenceSchema = z.discriminatedUnion("kind", [
 ]);
 export type PropositionReference = z.infer<typeof propositionReferenceSchema>;
 
-/** A method tried or proposed: an approved move, an approved library result, or manual work. */
+/**
+ * The platform's inquiry methods (refinement §6, §10): actions whose stated semantics create
+ * inquiry records. `try-result` applies a displayed result suggestion ("Try this theorem"),
+ * `investigate-hypothesis` tests the role of a hypothesis, and `extract-conditional-lemma`
+ * extracts an established claim as a derived result.
+ */
+export const INQUIRY_METHOD_IDS = Object.freeze([
+  "try-result",
+  "investigate-hypothesis",
+  "extract-conditional-lemma",
+] as const);
+export type InquiryMethodId = (typeof INQUIRY_METHOD_IDS)[number];
+
+/**
+ * A method tried or proposed: an approved move, an approved library result, one of the
+ * platform's inquiry methods, or manual work.
+ */
 export const methodReferenceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("move"), moveId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("library-result"), resultId: stableIdentifierSchema }).strict(),
+  z.object({ kind: z.literal("inquiry-method"), methodId: z.enum(INQUIRY_METHOD_IDS) }).strict(),
   z.object({ kind: z.literal("manual") }).strict(),
 ]);
 export type MethodReference = z.infer<typeof methodReferenceSchema>;
@@ -675,6 +714,15 @@ export function inquiryRecordSuggestionSetIds(record: InquiryRecordInput): reado
       if (option.kind === "suggestion") ids.push(option.suggestionSetId);
     }
   }
+  const references =
+    record.kind === "observation"
+      ? (record.references ?? [])
+      : record.kind === "question" && record.question.form === "explore"
+        ? record.question.objects
+        : [];
+  for (const reference of references) {
+    if (reference.kind === "result-condition") ids.push(reference.suggestionSetId);
+  }
   return [...new Set(ids)].sort();
 }
 
@@ -742,7 +790,12 @@ export type InquiryContextNode = Readonly<{ id: string; state: ProofState }>;
 export type InquiryContextSuggestionSet = Readonly<{
   id: string;
   nodeId: string;
-  suggestions: readonly Readonly<{ id: string; source: "result" | "move"; artifactId: string }>[];
+  suggestions: readonly Readonly<{
+    id: string;
+    source: "result" | "move";
+    artifactId: string;
+    predictedObligations?: readonly ResultCondition[] | undefined;
+  }>[];
 }>;
 export type InquiryContextEdge = Readonly<{
   parentNodeId: string;
@@ -1021,6 +1074,30 @@ class CommandValidator {
       case "construction-requirement":
         this.constructionRequirement(reference.nodeId, reference.taskId, reference.requirementId);
         return;
+      case "result-condition": {
+        this.node(reference.nodeId);
+        const set = this.context.suggestionSets.get(reference.suggestionSetId);
+        const suggestion = set?.suggestions.find(({ id }) => id === reference.suggestionId);
+        if (set === undefined || set.nodeId !== reference.nodeId || suggestion === undefined) {
+          reject(
+            "unknown-reference",
+            "The result condition's suggestion was not displayed at that proof node.",
+          );
+        }
+        const { kind, index } = reference.condition;
+        if (
+          suggestion.source !== "result" ||
+          !(suggestion.predictedObligations ?? []).some(
+            (condition) => condition.kind === kind && condition.index === index,
+          )
+        ) {
+          reject(
+            "invalid-math-reference",
+            `The displayed match did not find ${kind} ${index} of that result unavailable.`,
+          );
+        }
+        return;
+      }
     }
   }
 

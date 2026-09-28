@@ -246,9 +246,9 @@ otherwise automate — the substrate is in scope.
   command service and persistence (migration). _Accept:_ schema invariants (e.g. `wouldSufficeFor` needs
   evidence or an explicit informal status; later interpretations are never contemporaneous).
 
-- [ ] **N23 Deterministic explanation templates (refinement §3.4).** `packages/language` renders the
+- [x] **N23 Deterministic explanation templates (refinement §3.4).** `packages/language` renders the
       template sentences over inquiry records using N04 for the mathematics. _Accept:_ golden tests.
-- [ ] **N24 Method-created records and failure diagnostics (refinement §3.4, §6).** Add these behaviours:
+- [x] **N24 Method-created records and failure diagnostics (refinement §3.4, §6).** Add these behaviours:
   - Choosing "Try this theorem" creates an Attempt with missing-premise Objectives automatically.
   - Failed premise matches produce Obstructions naming the specific unmet condition.
   - Hypothesis-role investigation creates a `Determine` question for the statement with that hypothesis
@@ -577,3 +577,43 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     previews must use the commit's `commandId` for overrides to carry. The whole report is not persisted.
     Deletion tombstones do not list removed replay-step rows. Assignment search is capped at 24 attempts
     per step. No web dialog (N31).
+- 2026-09-28 — N23 — `13635e2` — language `inquiry-explanation.ts`: `createInquiryExplainer` renders the
+  refinement §3.4 template sentences over stored inquiry records, using N04 for all mathematics. Input is
+  explicit stored data (`InquiryExplanationContext`: node snapshots, records by id, transitions by child
+  node, method names, displayed-suggestion labels); missing data is named by id, so rendering is total.
+  Language sits below protocol, so the input is a structural `InquiryRecordView`; protocol's
+  `inquiry-language-contract.test.ts` (N24) asserts at compile time that `InquiryRecord` is assignable.
+  - One template per record kind and relation, plus `explainSufficiency`. Requirement roles are phrased
+    separately. Every reason shows its provenance; method-encoded reasons read as the method's objective,
+    and later interpretations always read "On a later interpretation, …". Evidence wording names
+    equivalence, strengthening, weakening ("does not by itself show sufficiency"), sorry and informal
+    status. Goldens cover 46 fixture records and an 8 × 4 relation/provenance matrix.
+  - Gaps: placeholders render as plain applications; "the next attempt uses [change]" is not rendered (no
+    record links successor attempts); raw ids appear in evidence and fallback phrases; result conditions
+    are named by position only. No web UI (N34).
+- 2026-09-28 — N24 — `bf630c3` — retrieval result suggestions store `predictedObligations` (unavailable
+  premises and side conditions, with `applicationPremiseIndex`). `inquiry.ts` adds a `result-condition`
+  math reference (validated against the stored displayed match) and an `inquiry-method` method reference
+  (`try-result`, `investigate-hypothesis`, `extract-conditional-lemma`). protocol `inquiry-methods.ts`
+  holds pure derivations to one inquiry command each:
+  - `deriveTryResultInquiry` ("Try this theorem"): reuses or creates the Establish question and required
+    objective, records an attempt (result + displayed suggestion), an Establish question, required
+    objective and `requires` relation per premise target the application created, `wouldSufficeFor` with
+    transition support, and per stored unmet condition an `unmet-condition` observation naming it plus an
+    obstruction that the premise objective `addresses` (method-encoded reason).
+  - `deriveHypothesisInvestigation`: `Determine(target withoutHypotheses:[h])` by identity, an elective
+    objective, and `tests` against an existing Establish question.
+  - `planConditionalLemma` + `deriveConditionalLemmaInquiry`: N17 route analysis over the node's subtree;
+    closures through `mark-sorry`/`close-by-assumption` are refused.
+  - No derivation records `motivatedBy`, decisions, status changes or non-method provenance (fast-check).
+    Worker `executeTryResultCommand` applies the move and records `<commandId>:try-result` in one
+    transaction; `investigateHypothesis`; `extractConditionalLemma` is the minimal N12 hook
+    (`extractDerivedResult` → draft derived-layer artifact → inquiry command, linked by id, idempotent,
+    not atomic). HTTP: `POST /commands` accepts `inquiryMethod: "try-result"` and returns
+    `inquiryRecords`; `POST /proof-sessions/:id/hypothesis-investigations`.
+  - Gaps: no HTTP route for conditional lemmas (library store not wired into the HTTP service); the lemma
+    is always a draft, keeps every hypothesis, and the caller supplies renderings. Objective reuse matches
+    only the exact node and target. More than about 4 unmet premises exceeds the 32-record command limit.
+    Suggestion sets stored earlier have no `predictedObligations`. Premise-free result rewrites are not
+    treated as "Try this theorem". The `requires-input` path is untested. No agent actor over HTTP; no web
+    UI (N34).
