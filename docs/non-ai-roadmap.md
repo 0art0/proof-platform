@@ -246,7 +246,7 @@ that archive.
 
   _Accept:_ tests for ancestor choice, unavailable-symbol rejection, and the auto-close case.
 
-- [ ] **N21 Semantic replay (§16.4).** Record every applied step as a semantic plan: the move/result id,
+- [x] **N21 Semantic replay (§16.4).** Record every applied step as a semantic plan: the move/result id,
       selections described by statement role + pattern match rather than raw paths, and parameters by menu
       origin. Replay a sequence onto a target node, re-matching each step. The report lists adapted steps,
       changed substitutions, new obligations, the first failure, and candidate repairs (alternate matching
@@ -255,7 +255,7 @@ that archive.
 
 ## Phase 5 — Inquiry language (refinement §3–§4, §6)
 
-- [ ] **N22 Inquiry records and store.** Add these records:
+- [x] **N22 Inquiry records and store.** Add these records:
   - Questions (`Establish`, `Construct`, `Determine`, `Explore`), Objectives, Attempts, Requirements,
     Observations, Obstructions, and Decisions.
   - Relationships: `wouldSufficeFor`, `requires`, `motivatedBy`, `addresses`, `specializes`,
@@ -543,3 +543,57 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     structural; `sorryClosure`/`derived.ts` do not see placeholder heads.
   - The kernel property tests in `obligations.test.ts` and `deep-rewrite.test.ts` run close to vitest's
     5 s timeout under machine load.
+- 2026-09-28 — N22 — `e7c2f7a` — protocol `inquiry.ts`: strict records for questions (`establish`,
+  `construct`, `determine`, `explore`), objectives, attempts, requirements, observations, obstructions,
+  decisions, relationships (`wouldSufficeFor`, `requires`, `motivatedBy`, `addresses`, `specializes`,
+  `generalizes`, `tests`, `reuses`) and explicit status changes, with branded `InquiryRecordId`s. Records
+  reference mathematics by identity only (node + target, statement, operand-path occurrence, N11 task or
+  requirement). Reasons carry provenance `explicit-user`, `agent`, `method-encoded` (naming its method)
+  or `later-interpretation`.
+  - A command `{ commandId, nodeId, records }` records up to 32 records at an anchor node; a record may
+    reference only earlier records. `prepareInquiryCommand` is pure: it validates every reference against
+    stored nodes, suggestion sets, transitions and earlier records, and assigns sequences.
+  - Invariants: `wouldSufficeFor` needs a non-weakening transition covering the targets it changed, an
+    established sufficient N11 requirement, or an explicit `informal` status. Heuristic requirements have
+    no logical support. `explicit-user`/`agent` provenance must match the actor. A later interpretation
+    concerns only earlier commands; intention-bearing relations are contemporaneous only when their
+    `from` records are in the same command. fast-check covers the provenance/contemporaneity rule.
+  - Worker `recordInquiryCommand`/`listInquiryRecords` insert atomically under the session lock;
+    identical retries replay, conflicts get 409 `inquiry-command-conflict`. Migration `0009` adds
+    `proof_inquiry_records` (mirrored in `MemoryProofStore`) with GIN-indexed referenced node/record ids;
+    "Delete previous move" removes dependent records recursively. HTTP: `POST
+/proof-sessions/:id/inquiry-commands` and `GET /proof-sessions/:id/inquiry-records`.
+  - Gaps: HTTP always records as the human web actor (agent provenance only via the repository; N25).
+    Library methods are checked against the approved catalog only. No attestation store, no strategy
+    records. Unassigned construct objects are not linked to later N11 tasks. Inquiry command ids are a
+    separate namespace. Deletion can remove part of an inquiry command, after which replay gets 409. Ten
+    `proof-repository` helpers are now exported. No web proxy or UI (N34).
+- 2026-09-28 — N21 — `ee4b0cc` — protocol `semantic-replay.ts`: `deriveSemanticStep` builds a strict
+  `SemanticStep` from records stored at apply time (parent/child snapshots, edge, displayed suggestion
+  set): move or result id with direction and substitutions, each selection as slot/target/statement
+  role/occurrence plus a fragment whose free declared symbols are its pattern variables, menu parameters
+  by origin and value, the operation, transition class and created obligation conclusions.
+  - `planSemanticReplay` re-matches each step on the snapshot the previous replayed step produced, using
+    the new kernel export `matchExpressionPattern` (binder-aware, sort-checked). Candidates are classed
+    identical / renamed / conflict / shape-only and ranked by match, carried target and hypothesis
+    correspondence, role and path. Symbol and statement-id correspondences carry forward; menu parameters
+    are re-chosen by mapped value, then origin, then pattern instance. Each step is materialized and
+    validated by `prepareProofCommand` as an ordinary `apply-kernel-operation` (`<replay>:replay:<n>`),
+    creating fresh records.
+  - The report marks steps exact or adapted, with new/changed substitutions, changed parameters, created
+    obligations (`inSource`), alternatives, and the first failure with repair candidates that callers
+    can force through `overrides`; later steps are not-attempted.
+  - Migration `0010` adds `proof_replay_steps` (mirrored in memory) holding each replayed step's plan,
+    report and request, so replayed branches can be replayed again and the commit is idempotent.
+    Worker `previewSemanticReplay` (writes nothing) and `commitSemanticReplay`; HTTP `POST
+/proof-sessions/:id/replay-preview` and `/replay` (201/200 retry, 422 failed step with report and
+    nothing written, 409 conflict/stale, 400 bad request).
+  - Tests include a fast-check property that replay is invariant under symbol/goal-id renaming and
+    declaration order, a perturbed target, a failing step repaired by overrides, and the N20 follow-up
+    (§16.3 step 5): replaying the original branch onto the focused case after backtracking.
+  - Gaps: steps applied without a displayed suggestion (backtracking splits and auto-closes, raw kernel
+    commands) have no plan and fail as `step-not-replayable`. Plans of ordinary steps are derived when
+    needed; only replayed steps persist one. Later-step candidate ids include predicted statement ids, so
+    previews must use the commit's `commandId` for overrides to carry. The whole report is not persisted.
+    Deletion tombstones do not list removed replay-step rows. Assignment search is capped at 24 attempts
+    per step. No web dialog (N31).
