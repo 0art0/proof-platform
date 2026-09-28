@@ -61,6 +61,44 @@ import {
   type ProofStore,
   type RepositoryFailure,
 } from "../proof-repository";
+import {
+  semanticReplayCommandSchema,
+  semanticReplayPreviewRequestSchema,
+  semanticReplayReportSchema,
+} from "@proof/protocol";
+import { commitSemanticReplay, previewSemanticReplay } from "../proof-repository";
+
+/** Semantic replay (design plan §16.4); the service supplies the actor. */
+export const proofHttpReplayPreviewRequestSchema = semanticReplayPreviewRequestSchema;
+export const proofHttpReplayRequestSchema = semanticReplayCommandSchema.omit({ actor: true });
+
+export const proofHttpReplayPreviewResponseSchema = z
+  .object({ report: semanticReplayReportSchema, finalNode: z.unknown() })
+  .strict();
+
+export const proofHttpReplayResponseSchema = z
+  .object({
+    session: proofSessionSchema.refine(
+      (session) => session.metadata === undefined,
+      "HTTP session objects omit metadata.",
+    ),
+    node: z.unknown(),
+    receipts: z.array(proofCommandReceiptSchema).min(1),
+    report: semanticReplayReportSchema,
+    replayed: z.boolean(),
+  })
+  .strict();
+
+/** A step did not re-match; nothing was recorded. */
+export const proofHttpReplayFailedResponseSchema = z
+  .object({
+    status: z.literal("replay-failed"),
+    report: semanticReplayReportSchema,
+    diagnostics: z.tuple([
+      z.object({ code: z.literal("replay-failed"), message: z.string().min(1) }).strict(),
+    ]),
+  })
+  .strict();
 
 /**
  * Session objects in HTTP responses never carry metadata: existing clients parse them strictly.
@@ -789,6 +827,82 @@ async function handleRequest(
     return;
   }
 
+  if (route.kind === "replay-preview" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(request, proofHttpReplayPreviewRequestSchema);
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const previewed = await previewSemanticReplay(
+      store,
+      route.sessionId,
+      requested.value,
+      WEB_ACTOR,
+      { definitions },
+    );
+    if (previewed.status !== "loaded") {
+      writeRepositoryFailure(response, previewed);
+      return;
+    }
+    const loaded = await loadCurrentProofSession(store, route.sessionId);
+    if (loaded.status !== "loaded") {
+      writeRepositoryFailure(response, loaded);
+      return;
+    }
+    writeValidatedJson(
+      response,
+      200,
+      proofHttpReplayPreviewResponseSchema.extend({
+        finalNode: createProofNodeSchema({ operators: loaded.session.operators }),
+      }),
+      { report: previewed.report, finalNode: previewed.finalNode },
+    );
+    return;
+  }
+
+  if (route.kind === "replay" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(request, proofHttpReplayRequestSchema);
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const committed = await commitSemanticReplay(
+      store,
+      route.sessionId,
+      { ...requested.value, actor: WEB_ACTOR },
+      WEB_ACTOR,
+      { definitions, ...(now === undefined ? {} : { now }) },
+    );
+    if (committed.status === "replay-failed") {
+      writeValidatedJson(response, 422, proofHttpReplayFailedResponseSchema, {
+        status: "replay-failed",
+        report: committed.report,
+        diagnostics: [
+          {
+            code: "replay-failed",
+            message: committed.report.firstFailure?.diagnostic.message ?? "A replayed step failed.",
+          },
+        ],
+      });
+      return;
+    }
+    if (committed.status !== "committed") {
+      writeRepositoryFailure(response, committed);
+      return;
+    }
+    const schema = proofHttpReplayResponseSchema.extend({
+      node: createProofNodeSchema({ operators: committed.session.operators }),
+    });
+    writeValidatedJson(response, committed.replayed ? 200 : 201, schema, {
+      session: withoutMetadata(committed.session),
+      node: committed.node,
+      receipts: committed.receipts,
+      report: committed.report,
+      replayed: committed.replayed,
+    });
+    return;
+  }
+
   response.setHeader(
     "allow",
     route.kind === "interaction-events"
@@ -814,6 +928,8 @@ type ParsedRoute =
   | Readonly<{ kind: "delete-previous-move"; sessionId: string }>
   | Readonly<{ kind: "backtrack-analysis"; sessionId: string }>
   | Readonly<{ kind: "backtrack-with-information"; sessionId: string }>
+  | Readonly<{ kind: "replay-preview"; sessionId: string }>
+  | Readonly<{ kind: "replay"; sessionId: string }>
   | Readonly<{ kind: "interaction-events"; sessionId: string }>
   | Readonly<{ kind: "inquiry-commands"; sessionId: string }>
   | Readonly<{ kind: "inquiry-records"; sessionId: string }>;
@@ -850,6 +966,10 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       if (segments[2] === "backtrack-with-information") {
         return { kind: "backtrack-with-information", sessionId: sessionId.data };
       }
+      if (segments[2] === "replay-preview") {
+        return { kind: "replay-preview", sessionId: sessionId.data };
+      }
+      if (segments[2] === "replay") return { kind: "replay", sessionId: sessionId.data };
       if (segments[2] === "interaction-events") {
         return { kind: "interaction-events", sessionId: sessionId.data };
       }
@@ -1017,7 +1137,8 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
             code === "command-deleted" ||
             code === "interaction-event-conflict" ||
             code === "inquiry-command-conflict" ||
-            code === "backtrack-with-information-conflict"
+            code === "backtrack-with-information-conflict" ||
+            code === "replay-conflict"
           ? 409
           : code === "backtrack-symbols-unavailable"
             ? 422
@@ -1028,7 +1149,8 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
                 code === "delete-rejected" ||
                 code === "interaction-event-rejected" ||
                 code === "inquiry-command-rejected" ||
-                code === "backtrack-with-information-rejected"
+                code === "backtrack-with-information-rejected" ||
+                code === "replay-rejected"
               ? 400
               : 500;
   writeJson(response, status, { diagnostics: failure.diagnostics });

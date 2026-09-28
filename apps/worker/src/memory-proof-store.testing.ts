@@ -51,6 +51,9 @@ export class InspectableMemoryProofStore extends MemoryProofStore {
   get interactionEvents() {
     return this.tables.interactionEvents;
   }
+  get replaySteps() {
+    return this.tables.replaySteps;
+  }
   get inquiryRecords() {
     return this.tables.inquiryRecords;
   }

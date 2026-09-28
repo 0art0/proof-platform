@@ -14,6 +14,7 @@ import {
   type SuggestionSetId,
   type TransitionEvent,
 } from "@proof/protocol";
+import type { SemanticReplayStepRecord } from "@proof/protocol";
 import {
   ProofStoreTransactionError,
   type ProofRecordDeletionRequest,
@@ -44,6 +45,8 @@ export type MemoryProofTables = Readonly<{
   commands: Map<string, PrepareProofCommandSuccess>;
   deletions: Map<string, ProofDeletionRecord>;
   interactionEvents: Map<string, InteractionEvent>;
+  /** `proof_replay_steps` of `0010_semantic_replay_steps.sql`, keyed by step command ID. */
+  replaySteps: Map<string, SemanticReplayStepRecord>;
   inquiryRecords: Map<string, InquiryRecord>;
 }>;
 
@@ -62,6 +65,7 @@ const TABLE_NAMES = [
   "commands",
   "deletions",
   "interactionEvents",
+  "replaySteps",
   "inquiryRecords",
 ] as const satisfies readonly TableName[];
 
@@ -105,6 +109,7 @@ export class MemoryProofStore implements ProofStore {
     commands: new Map(),
     deletions: new Map(),
     interactionEvents: new Map(),
+    replaySteps: new Map(),
     inquiryRecords: new Map(),
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
@@ -166,6 +171,7 @@ class MemoryTransactionContext {
     commands: new Map(),
     deletions: new Map(),
     interactionEvents: new Map(),
+    replaySteps: new Map(),
     inquiryRecords: new Map(),
   };
   /** Keys deleted by this transaction; a later insert of the same key re-stages the row. */
@@ -179,6 +185,7 @@ class MemoryTransactionContext {
     commands: new Set(),
     deletions: new Set(),
     interactionEvents: new Set(),
+    replaySteps: new Set(),
     inquiryRecords: new Set(),
   };
   private readonly locks = new Map<string, Promise<() => void>>();
@@ -344,6 +351,13 @@ class MemoryTransactionContext {
       violation("proof_previews suggestion-set foreign key: a deleted set is still referenced.");
     }
     this.requireUnreferenced(sessionId, "suggestionSetId", removedSets, "proof_suggestion_sets");
+    // Replayed-step records reference their step's command and node.
+    this.remove(
+      "replaySteps",
+      sessionId,
+      (row) => commandIds.has(row.commandId) || nodeIds.has(row.nodeId),
+      (row) => row.commandId,
+    );
     const removedCommandIds = this.remove(
       "commands",
       sessionId,
@@ -365,6 +379,14 @@ class MemoryTransactionContext {
         ),
       );
     if (nodeReferenced) violation("proof_nodes foreign key: a deleted node is still referenced.");
+    const removedCommands = new Set(removedCommandIds);
+    if (
+      this.sessionRows("replaySteps", sessionId).some(
+        (row) => removedNodes.has(row.nodeId) || removedCommands.has(row.commandId),
+      )
+    ) {
+      violation("proof_replay_steps foreign key: a deleted command or node is still referenced.");
+    }
     return {
       interactionEventIds,
       eventIds,
@@ -611,6 +633,38 @@ class MemoryTransactionContext {
         return found === undefined ? undefined : structuredClone(found);
       },
       deleteProofRecords: async (sessionId, request) => this.deleteProofRecords(sessionId, request),
+      readReplayStep: async (sessionId, commandId) =>
+        this.read("replaySteps", memoryProofRecordKey(sessionId, commandId)),
+      insertReplayStep: async (sessionId, record) =>
+        this.insert(
+          "replaySteps",
+          sessionId,
+          memoryProofRecordKey(sessionId, record.commandId),
+          record,
+          (row) => {
+            if (
+              row.index < 1 ||
+              row.count < row.index ||
+              row.commandId !== `${row.replayCommandId}:replay:${row.index}`
+            ) {
+              violation("proof_replay_steps check: the step identities are inconsistent.");
+            }
+            if (
+              this.row("commands", memoryProofRecordKey(sessionId, row.commandId)) === undefined
+            ) {
+              violation(`proof_replay_steps command foreign key: ${row.commandId} does not exist.`);
+            }
+            this.requireNode(sessionId, row.nodeId);
+            if (
+              this.sessionRows("replaySteps", sessionId).some(
+                (existing) =>
+                  existing.replayCommandId === row.replayCommandId && existing.index === row.index,
+              )
+            ) {
+              violation(`proof_replay_steps unique step: ${row.commandId} exists.`);
+            }
+          },
+        ),
       readInteractionEvent: async (sessionId, eventId) => {
         const event = this.read("interactionEvents", memoryProofRecordKey(sessionId, eventId));
         return event === undefined

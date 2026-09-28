@@ -27,6 +27,7 @@ import {
   type TransitionEvent,
   type SuggestionSetId,
 } from "@proof/protocol";
+import type { SemanticReplayStepRecord } from "@proof/protocol";
 
 export type SqlQueryResult = Readonly<{
   rows: readonly Readonly<Record<string, unknown>>[];
@@ -444,6 +445,13 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
        RETURNING id`,
       [request.nodeIds],
     );
+    // Replayed-step records reference their step's command and node.
+    await this.client.query(
+      `DELETE FROM proof_replay_steps
+       WHERE session_id = $1 AND (command_id = ANY ($2::text[]) OR node_id = ANY ($3::text[]))
+       RETURNING command_id AS id`,
+      [sessionId, request.commandIds, request.nodeIds],
+    );
     const commandIds = await ids(
       `DELETE FROM proof_commands
        WHERE session_id = $1 AND command_id = ANY ($2::text[])
@@ -465,6 +473,42 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
       commandIds,
       nodeIds,
     };
+  }
+
+  async readReplayStep(
+    sessionId: ProofSessionId,
+    commandId: ApplyKernelCommand["commandId"],
+  ): Promise<unknown | undefined> {
+    const result = await this.client.query(
+      `SELECT record
+       FROM proof_replay_steps
+       WHERE session_id = $1 AND command_id = $2`,
+      [sessionId, commandId],
+    );
+    return result.rows[0]?.record;
+  }
+
+  async insertReplayStep(
+    sessionId: ProofSessionId,
+    record: SemanticReplayStepRecord,
+  ): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_replay_steps
+         (session_id, command_id, replay_command_id, step_index, step_count, node_id,
+          source_edge_id, recorded_at, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::jsonb)`,
+      [
+        sessionId,
+        record.commandId,
+        record.replayCommandId,
+        record.index,
+        record.count,
+        record.nodeId,
+        record.sourceEdgeId,
+        record.recordedAt,
+        JSON.stringify(record),
+      ],
+    );
   }
 
   async insertDeletion(sessionId: ProofSessionId, deletion: ProofDeletionRecord): Promise<void> {

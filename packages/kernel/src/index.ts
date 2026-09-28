@@ -68,6 +68,7 @@ export {
   RESULT_APPLICATION_DIRECTIONS,
   freeResultParameters,
   kernelResultIdSchema,
+  matchExpressionPattern,
   matchResultConclusion,
   parseKernelResultCatalog,
   type KernelResult,

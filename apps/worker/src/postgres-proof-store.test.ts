@@ -545,6 +545,7 @@ describe("PostgresProofStore deletion", () => {
       "proof_edges",
       "proof_previews",
       "proof_suggestion_sets",
+      "proof_replay_steps",
       "proof_commands",
       "proof_nodes",
     ]);
@@ -561,8 +562,14 @@ describe("PostgresProofStore deletion", () => {
     expect(deletes[1]?.values).toEqual(["session:one", ["node:command:d"]]);
     expect(deletes[4]?.text).toContain("NOT EXISTS");
     expect(deletes[4]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
+    const replaySteps = deletes.find(({ text }) => text.includes("proof_replay_steps"));
+    expect(replaySteps?.text).toContain(
+      "command_id = ANY ($2::text[]) OR node_id = ANY ($3::text[])",
+    );
+    expect(replaySteps?.values).toEqual(["session:one", ["command:d"], ["node:command:d"]]);
     expect(client.calls.map(({ text }) => text.trim().split(/\s+/)[0])).toEqual([
       "BEGIN",
+      "DELETE",
       "DELETE",
       "DELETE",
       "DELETE",

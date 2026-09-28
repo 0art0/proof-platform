@@ -443,6 +443,45 @@ export function matchResultConclusion(
   }
 }
 
+/**
+ * First-order matching of an arbitrary expression (term or proposition) against a subject, with
+ * the same rules as `matchResultConclusion`: the free occurrences of `parameters` in `pattern` are
+ * pattern variables, bound symbols match up to renaming, and a variable never captures a symbol
+ * bound inside the subject. Returns the bindings of the variables that occur, or undefined when
+ * the subject is not an instance. Sorts are not checked.
+ */
+export function matchExpressionPattern(
+  pattern: PlainMathJson,
+  subject: PlainMathJson,
+  parameters: readonly string[],
+  environment: Readonly<{ operators?: readonly OperatorDeclaration[] }> = {},
+): ResultInstantiation | undefined {
+  try {
+    const operators = operatorDeclarationsSchema.safeParse(environment.operators ?? []);
+    if (
+      !operators.success ||
+      !plainMathJsonSchema.safeParse(pattern).success ||
+      !plainMathJsonSchema.safeParse(subject).success
+    ) {
+      return undefined;
+    }
+    const bindings = new Map<string, PlainMathJson>();
+    const matched = matchPattern(
+      pattern,
+      subject,
+      new Map(),
+      new Map(),
+      0,
+      new Set(parameters),
+      bindings,
+      operators.data,
+    );
+    return matched ? deepFreeze(Object.fromEntries(bindings)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Bound symbols map to the binder depth that introduced them. */
 type Scope = ReadonlyMap<string, number>;
 

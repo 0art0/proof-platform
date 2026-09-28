@@ -113,6 +113,18 @@ sequence)`). Retrying a command ID with identical records replays them; differen
   then, recursively, every record that references a removed record, before it removes the nodes.
   `MemoryProofStore` mirrors the table, its checks and this deletion.
 
+`0010_semantic_replay_steps.sql` adds `proof_replay_steps` for semantic replay (design plan
+§16.4). A replay re-matches the semantic plans of the steps on a source path onto a target node and
+applies each as an ordinary validated command (node, edge, event and command rows, with the step's
+move but no displayed suggestion). One row per replayed step holds the step's plan in the replayed
+branch's terms, so the step can itself be replayed, its report, and the replay request.
+
+- `PRIMARY KEY (session_id, command_id)` keys a row by the step's command
+  (`<replay command>:replay:<index>`), which references `proof_commands` and the step's result node.
+  The first step's row makes the replay command idempotent.
+- The source edge is recorded by ID only. "Delete previous move" removes the rows of deleted
+  commands and nodes before it removes them. `MemoryProofStore` mirrors the table and its checks.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -127,6 +139,14 @@ migrations. Its PostgreSQL-backed endpoints are:
   `{ commandId, expectedCurrentNodeId, sourceNodeId, sourceTarget?, proposition, ancestorNodeId? }`
   returns `{ session, node, receipts, backtrack, replayed }` (201, or 200 for a retry). A conflicting
   reuse of the command ID or a stale cursor returns 409; unavailable symbols return 422.
+- `POST /proof-sessions/:sessionId/replay-preview` with
+  `{ source: { fromNodeId, toNodeId }, targetNodeId?, focus?, overrides?, commandId? }` returns
+  `{ report, finalNode }`: a dry run that records nothing. Pass the commit's `commandId` so the
+  candidate IDs of later steps match the commit.
+- `POST /proof-sessions/:sessionId/replay` with the same fields plus `commandId` and
+  `expectedCurrentNodeId` returns `{ session, node, receipts, report, replayed }` (201, or 200 for a
+  retry). A step that fails to re-match returns 422 with the report and records nothing; a
+  conflicting reuse of the command ID or a stale cursor returns 409.
 - `POST /proof-sessions/:sessionId/delete-previous-move` with
   `{ commandId, expectedCurrentNodeId, confirmDescendants?, reason? }`. It returns the session,
   the parent node and `{ deletedNodeIds, deletedEdgeIds, currentNodeId }`. A stale cursor, deleting
