@@ -1002,6 +1002,10 @@ describe("typed unification and side-condition evaluation", () => {
     expect(partial.suggestions[0]?.reasons).toContain(
       "Applies if premise 2 is proved; it becomes a new obligation.",
     );
+    // The unmet conditions are stored structurally for failure diagnostics.
+    expect(partial.suggestions[0]?.predictedObligations).toEqual([
+      { kind: "premise", index: 1, description: "premise 2", applicationPremiseIndex: 1 },
+    ]);
 
     const complete = index.query(
       state(
@@ -1020,6 +1024,7 @@ describe("typed unification and side-condition evaluation", () => {
     expect(complete.suggestions[0]?.reasons).toContain(
       "Every premise and side condition is already available as a hypothesis.",
     );
+    expect(complete.suggestions[0]).not.toHaveProperty("predictedObligations");
   });
 
   it("predicts obligations for prose side conditions and input for undetermined parameters", () => {
@@ -1043,6 +1048,10 @@ describe("typed unification and side-condition evaluation", () => {
       reasons: expect.arrayContaining([
         'Applies if side condition "the carrier is nonempty" holds; it becomes a new obligation.',
       ]),
+      // A descriptive side condition is not a premise of any application.
+      predictedObligations: [
+        { kind: "side-condition", index: 0, description: "the carrier is nonempty" },
+      ],
     });
     expect(
       result.suggestions.find(({ artifactId }) => artifactId === "result:undetermined"),

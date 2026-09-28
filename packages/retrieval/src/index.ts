@@ -104,6 +104,13 @@ export type RetrievalSuggestion = RankedCandidate &
     applicability: "applicable" | "requires-input";
     abstractionFit: "not-used" | "compatible" | "unknown";
     variantFamilyId?: string | undefined;
+    /**
+     * For a result suggestion, the premises and side conditions the match found unavailable as
+     * hypotheses (the near-miss "applies if …" conditions), in premise then side-condition order.
+     * Absent when there are none. Stored with the displayed set, so failure diagnostics name the
+     * unmet condition from the match that was shown rather than from a recomputation.
+     */
+    predictedObligations?: readonly PredictedObligation[] | undefined;
   }>;
 
 export type RetrievalSelectionMatch = Readonly<{
@@ -1322,6 +1329,9 @@ function buildSuggestion(
     ...(candidate.source === "result" && candidate.artifact.variantFamilyId !== undefined
       ? { variantFamilyId: candidate.artifact.variantFamilyId }
       : {}),
+    ...(noNewObligations
+      ? {}
+      : { predictedObligations: evidence.predictedObligations.map((entry) => ({ ...entry })) }),
   };
 }
 

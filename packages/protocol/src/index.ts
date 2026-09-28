@@ -56,6 +56,7 @@ export * from "./semantic-replay";
 export * from "./parameter-menus";
 export * from "./interaction-events";
 export * from "./inquiry";
+export * from "./inquiry-methods";
 
 export const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 export type ActorId = z.infer<typeof actorIdSchema>;
@@ -236,9 +237,28 @@ export const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
     applicability: z.enum(["applicable", "requires-input"]),
     abstractionFit: z.enum(["not-used", "compatible", "unknown"]),
     variantFamilyId: stableIdentifierSchema.optional(),
+    predictedObligations: z
+      .array(
+        z
+          .object({
+            kind: z.enum(["premise", "side-condition"]),
+            index: z.number().int().nonnegative(),
+            description: z.string().min(1),
+            applicationPremiseIndex: z.number().int().nonnegative().optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .optional(),
   })
   .strict()
   .superRefine((suggestion, context) => {
+    if (suggestion.predictedObligations !== undefined) {
+      const keys = suggestion.predictedObligations.map(({ kind, index }) => `${kind}:${index}`);
+      if (suggestion.source !== "result" || new Set(keys).size !== keys.length) {
+        addLinkIssue(context, "Predicted obligations belong to a result suggestion, once each.");
+      }
+    }
     const symbols = suggestion.substitutions.map(({ symbol }) => symbol);
     if (new Set(symbols).size !== symbols.length || !isSortedStrings(symbols)) {
       addLinkIssue(context, "Suggestion substitutions must use unique, sorted symbols.");
