@@ -95,6 +95,24 @@ cursor there, and records one such event anchored at that node. The event holds 
 target, `P`, the eligible ancestors (closest first), the chosen ancestor, the auto-closed case and
 the focused case; it also makes the command idempotent. `MemoryProofStore` mirrors the check.
 
+`0009_inquiry_records.sql` adds `proof_inquiry_records`, the inquiry records of refinement §3–§4:
+questions (`establish`, `construct`, `determine`, `explore`), objectives, attempts, requirements,
+observations, obstructions, decisions, relationships (`wouldSufficeFor`, `requires`,
+`motivatedBy`, `addresses`, `specializes`, `generalizes`, `tests`, `reuses`) and explicit status
+changes. None of them changes proof state.
+
+- One inquiry command records one or more records atomically at an anchor node. The worker assigns
+  each record the session's next `sequence` under the session row lock (`UNIQUE (session_id,
+sequence)`). Retrying a command ID with identical records replays them; different content, or a
+  record ID already used by another command, is rejected.
+- Records reference proof nodes, targets, statements, subexpressions, construction tasks,
+  suggestion sets, transitions and earlier records by identity; the repository validates every
+  reference with the protocol `prepareInquiryCommand` before inserting. `referenced_node_ids`
+  (which includes the anchor) and `referenced_record_ids` record those references relationally.
+- Records are never updated. "Delete previous move" removes records that reference a deleted node,
+  then, recursively, every record that references a removed record, before it removes the nodes.
+  `MemoryProofStore` mirrors the table, its checks and this deletion.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -120,6 +138,12 @@ migrations. Its PostgreSQL-backed endpoints are:
   `{ event, replayed }` (201, or 200 for an identical retry); a conflicting reuse of the ID returns 409.
 - `GET /proof-sessions/:sessionId/interaction-events?nodeId=&after=&limit=` lists events in
   sequence order.
+- `POST /proof-sessions/:sessionId/inquiry-commands` with a strict protocol
+  `recordInquiryCommandRequestSchema` body (`{ commandId, nodeId, records }`). It returns
+  `{ records, replayed }` (201, or 200 for an identical retry). Invalid references or unsupported
+  claims return 400; a conflicting reuse of the command or a record ID returns 409.
+- `GET /proof-sessions/:sessionId/inquiry-records?nodeId=&commandId=&after=&limit=` lists inquiry
+  records in sequence order.
 
 The POST body is `{ "id": "...", "selections": [...] }`. Each selection must be only a strict
 snapshot-anchored exact occurrence or supported associative range. Resolved fragments, contexts,

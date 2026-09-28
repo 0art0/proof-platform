@@ -540,6 +540,7 @@ describe("PostgresProofStore deletion", () => {
     const deletes = client.calls.filter(({ text }) => text.trim().startsWith("DELETE"));
     expect(deletes.map(({ text }) => /DELETE FROM (\w+)/.exec(text)?.[1])).toEqual([
       "proof_interaction_events",
+      "proof_inquiry_records",
       "proof_events",
       "proof_edges",
       "proof_previews",
@@ -554,10 +555,15 @@ describe("PostgresProofStore deletion", () => {
     }
     expect(deletes[0]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
     expect(deletes[0]?.text).toContain("stale_preview_id = ANY ($3::text[])");
-    expect(deletes[3]?.text).toContain("NOT EXISTS");
-    expect(deletes[3]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
+    expect(deletes[1]?.text).toContain("WITH RECURSIVE doomed");
+    expect(deletes[1]?.text).toContain("referenced_node_ids && $2::text[]");
+    expect(deletes[1]?.text).toContain("ANY (dependent.referenced_record_ids)");
+    expect(deletes[1]?.values).toEqual(["session:one", ["node:command:d"]]);
+    expect(deletes[4]?.text).toContain("NOT EXISTS");
+    expect(deletes[4]?.values).toEqual(["session:one", ["node:command:d"], ["preview:command:d"]]);
     expect(client.calls.map(({ text }) => text.trim().split(/\s+/)[0])).toEqual([
       "BEGIN",
+      "DELETE",
       "DELETE",
       "DELETE",
       "DELETE",

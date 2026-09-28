@@ -11,12 +11,14 @@ import {
   deletePreviousMoveCommandSchema,
   deletePreviousMoveReceiptSchema,
   displayedSuggestionSetSchema,
+  inquiryRecordListSchema,
   interactionEventListSchema,
   interactionEventSchema,
   moveRequiresInputResponseSchema,
   previewRegeneratedResponseSchema,
   proofCommandReceiptSchema,
   proofSessionMetadataSchema,
+  recordInquiryCommandRequestSchema,
   recordInteractionEventRequestSchema,
   stableIdentifierSchema,
   suggestionIdSchema,
@@ -28,6 +30,11 @@ import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "../approved-catalog";
+import {
+  inquiryRecordQuerySchema,
+  listInquiryRecords,
+  recordInquiryCommand,
+} from "../inquiry-repository";
 import { postgresProofStore } from "../postgres-proof-store";
 import {
   analyzeBacktrackWithInformation,
@@ -165,6 +172,16 @@ export const proofHttpInteractionEventResponseSchema = z
 
 export const proofHttpInteractionEventListResponseSchema = z
   .object({ events: interactionEventListSchema })
+  .strict();
+
+export const proofHttpInquiryCommandRequestSchema = recordInquiryCommandRequestSchema;
+
+export const proofHttpInquiryCommandResponseSchema = z
+  .object({ records: inquiryRecordListSchema.min(1), replayed: z.boolean() })
+  .strict();
+
+export const proofHttpInquiryRecordListResponseSchema = z
+  .object({ records: inquiryRecordListSchema })
   .strict();
 
 export const proofHttpCommandResponseSchema = z
@@ -593,6 +610,52 @@ async function handleRequest(
     return;
   }
 
+  if (route.kind === "inquiry-commands" && request.method === "POST") {
+    const requested = await readStrictJsonRequest(request, proofHttpInquiryCommandRequestSchema);
+    if (!requested.ok) {
+      writeJson(response, requested.status, invalidRequest(requested.message));
+      return;
+    }
+    const recorded = await recordInquiryCommand(
+      store,
+      route.sessionId,
+      requested.value,
+      WEB_ACTOR,
+      {
+        definitions,
+        ...(now === undefined ? {} : { now }),
+      },
+    );
+    if (recorded.status !== "committed") {
+      writeRepositoryFailure(response, recorded);
+      return;
+    }
+    writeValidatedJson(
+      response,
+      recorded.replayed ? 200 : 201,
+      proofHttpInquiryCommandResponseSchema,
+      { records: recorded.records, replayed: recorded.replayed },
+    );
+    return;
+  }
+
+  if (route.kind === "inquiry-records" && request.method === "GET") {
+    const query = inquiryRecordQuery(request.url);
+    if (query === undefined) {
+      writeJson(response, 400, invalidRequest("The inquiry-record query is invalid."));
+      return;
+    }
+    const listed = await listInquiryRecords(store, route.sessionId, query);
+    if (listed.status !== "loaded") {
+      writeRepositoryFailure(response, listed);
+      return;
+    }
+    writeValidatedJson(response, 200, proofHttpInquiryRecordListResponseSchema, {
+      records: listed.records,
+    });
+    return;
+  }
+
   if (route.kind === "history" && request.method === "GET") {
     const history = await loadProofHistory(store, route.sessionId);
     if (history.status !== "loaded") {
@@ -730,7 +793,10 @@ async function handleRequest(
     "allow",
     route.kind === "interaction-events"
       ? "GET, POST"
-      : route.kind === "session" || route.kind === "suggestion" || route.kind === "history"
+      : route.kind === "session" ||
+          route.kind === "suggestion" ||
+          route.kind === "history" ||
+          route.kind === "inquiry-records"
         ? "GET"
         : "POST",
   );
@@ -748,7 +814,9 @@ type ParsedRoute =
   | Readonly<{ kind: "delete-previous-move"; sessionId: string }>
   | Readonly<{ kind: "backtrack-analysis"; sessionId: string }>
   | Readonly<{ kind: "backtrack-with-information"; sessionId: string }>
-  | Readonly<{ kind: "interaction-events"; sessionId: string }>;
+  | Readonly<{ kind: "interaction-events"; sessionId: string }>
+  | Readonly<{ kind: "inquiry-commands"; sessionId: string }>
+  | Readonly<{ kind: "inquiry-records"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
   try {
@@ -785,6 +853,12 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       if (segments[2] === "interaction-events") {
         return { kind: "interaction-events", sessionId: sessionId.data };
       }
+      if (segments[2] === "inquiry-commands") {
+        return { kind: "inquiry-commands", sessionId: sessionId.data };
+      }
+      if (segments[2] === "inquiry-records") {
+        return { kind: "inquiry-records", sessionId: sessionId.data };
+      }
       return undefined;
     }
     if (segments[2] !== "suggestion-sets" || segments.length !== 4 || segments[3] === undefined) {
@@ -818,6 +892,36 @@ function interactionEventQuery(
     const nodeId = url.searchParams.get("nodeId");
     const parsed = interactionEventQuerySchema.safeParse({
       ...(nodeId === null ? {} : { nodeId }),
+      ...(after === undefined ? {} : { afterSequence: after }),
+      ...(limit === undefined ? {} : { limit }),
+    });
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `?nodeId=…&commandId=…&after=…&limit=…`; each parameter at most once. */
+function inquiryRecordQuery(
+  requestTarget: string | undefined,
+): z.infer<typeof inquiryRecordQuerySchema> | undefined {
+  try {
+    const url = new URL(requestTarget ?? "/", "http://proof.local");
+    const allowed = ["nodeId", "commandId", "after", "limit"];
+    const keys = [...url.searchParams.keys()];
+    if (keys.some((key) => !allowed.includes(key)) || new Set(keys).size !== keys.length) {
+      return undefined;
+    }
+    const integer = (value: string | null): number | undefined | null =>
+      value === null ? undefined : /^(0|[1-9][0-9]{0,9})$/.test(value) ? Number(value) : null;
+    const after = integer(url.searchParams.get("after"));
+    const limit = integer(url.searchParams.get("limit"));
+    if (after === null || limit === null) return undefined;
+    const nodeId = url.searchParams.get("nodeId");
+    const commandId = url.searchParams.get("commandId");
+    const parsed = inquiryRecordQuerySchema.safeParse({
+      ...(nodeId === null ? {} : { nodeId }),
+      ...(commandId === null ? {} : { commandId }),
       ...(after === undefined ? {} : { afterSequence: after }),
       ...(limit === undefined ? {} : { limit }),
     });
@@ -912,6 +1016,7 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
             code === "delete-requires-confirmation" ||
             code === "command-deleted" ||
             code === "interaction-event-conflict" ||
+            code === "inquiry-command-conflict" ||
             code === "backtrack-with-information-conflict"
           ? 409
           : code === "backtrack-symbols-unavailable"
@@ -922,6 +1027,7 @@ function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFai
                 code === "backtrack-rejected" ||
                 code === "delete-rejected" ||
                 code === "interaction-event-rejected" ||
+                code === "inquiry-command-rejected" ||
                 code === "backtrack-with-information-rejected"
               ? 400
               : 500;

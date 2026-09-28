@@ -51,6 +51,9 @@ export class InspectableMemoryProofStore extends MemoryProofStore {
   get interactionEvents() {
     return this.tables.interactionEvents;
   }
+  get inquiryRecords() {
+    return this.tables.inquiryRecords;
+  }
 
   protected override instrument(inner: ProofStoreTransaction): ProofStoreTransaction {
     const fail = (point: MemoryProofStoreFailurePoint): void => {

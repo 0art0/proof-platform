@@ -1,15 +1,18 @@
-import type {
-  ApplyKernelCommand,
-  DisplayedSuggestionSet,
-  InteractionEvent,
-  MovePreview,
-  MovePreviewId,
-  PrepareProofCommandSuccess,
-  ProofDeletionRecord,
-  ProofEdge,
-  ProofNode,
-  SuggestionSetId,
-  TransitionEvent,
+import {
+  inquiryRecordNodeIds,
+  inquiryRecordReferenceIds,
+  type ApplyKernelCommand,
+  type DisplayedSuggestionSet,
+  type InquiryRecord,
+  type InteractionEvent,
+  type MovePreview,
+  type MovePreviewId,
+  type PrepareProofCommandSuccess,
+  type ProofDeletionRecord,
+  type ProofEdge,
+  type ProofNode,
+  type SuggestionSetId,
+  type TransitionEvent,
 } from "@proof/protocol";
 import {
   ProofStoreTransactionError,
@@ -26,7 +29,8 @@ import {
  * `migrations/0001_proof_commands.sql` (plus the nullable `proof_sessions.metadata` object from
  * `0004_session_metadata.sql`), the `proof_deletions` tombstones of `0006_proof_deletions.sql`,
  * and the `proof_interaction_events` log of `0007_interaction_events.sql` (kinds widened by
- * `0008_backtrack_interaction_event.sql`).
+ * `0008_backtrack_interaction_event.sql`), and the `proof_inquiry_records` of
+ * `0009_inquiry_records.sql`.
  * Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */
@@ -40,6 +44,7 @@ export type MemoryProofTables = Readonly<{
   commands: Map<string, PrepareProofCommandSuccess>;
   deletions: Map<string, ProofDeletionRecord>;
   interactionEvents: Map<string, InteractionEvent>;
+  inquiryRecords: Map<string, InquiryRecord>;
 }>;
 
 type TableName = keyof MemoryProofTables;
@@ -57,6 +62,7 @@ const TABLE_NAMES = [
   "commands",
   "deletions",
   "interactionEvents",
+  "inquiryRecords",
 ] as const satisfies readonly TableName[];
 
 /** The composite `(session_id, id)` key used by every session-scoped memory table. */
@@ -99,6 +105,7 @@ export class MemoryProofStore implements ProofStore {
     commands: new Map(),
     deletions: new Map(),
     interactionEvents: new Map(),
+    inquiryRecords: new Map(),
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
@@ -159,6 +166,7 @@ class MemoryTransactionContext {
     commands: new Map(),
     deletions: new Map(),
     interactionEvents: new Map(),
+    inquiryRecords: new Map(),
   };
   /** Keys deleted by this transaction; a later insert of the same key re-stages the row. */
   private readonly deleted: { [Name in TableName]: Set<string> } = {
@@ -171,6 +179,7 @@ class MemoryTransactionContext {
     commands: new Set(),
     deletions: new Set(),
     interactionEvents: new Set(),
+    inquiryRecords: new Set(),
   };
   private readonly locks = new Map<string, Promise<() => void>>();
   private closed = false;
@@ -301,6 +310,7 @@ class MemoryTransactionContext {
         interactionPreviewIds(row).some((previewId) => chosenPreviewIds.has(previewId)),
       idOf,
     );
+    this.removeInquiryRecords(sessionId, nodeIds);
     const eventIds = this.remove("events", sessionId, (row) => edgeIds.has(row.edgeId), idOf);
     const removedEdgeIds = this.remove("edges", sessionId, (row) => edgeIds.has(row.id), idOf);
     const removedEdges = new Set(removedEdgeIds);
@@ -346,6 +356,7 @@ class MemoryTransactionContext {
       this.sessionRows("interactionEvents", sessionId).some((row) =>
         removedNodes.has(row.nodeId),
       ) ||
+      this.sessionRows("inquiryRecords", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
       this.sessionRows("suggestionSets", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
       this.sessionRows("previews", sessionId).some((row) => removedNodes.has(row.nodeId)) ||
       (["edges", "events"] as const).some((table) =>
@@ -363,6 +374,29 @@ class MemoryTransactionContext {
       commandIds: removedCommandIds,
       nodeIds: removedNodeIds,
     };
+  }
+
+  /**
+   * Mirrors the inquiry-record step of `PostgresProofStore.deleteProofRecords`: records that
+   * reference a deleted node, then transitively every record that references a removed record.
+   */
+  private removeInquiryRecords(sessionId: string, nodeIds: ReadonlySet<string>): string[] {
+    const doomed = new Set<string>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const row of this.sessionRows("inquiryRecords", sessionId)) {
+        if (doomed.has(row.id)) continue;
+        if (
+          inquiryNodeIds(row).some((nodeId) => nodeIds.has(nodeId)) ||
+          inquiryRecordReferenceIds(row).some((recordId) => doomed.has(recordId))
+        ) {
+          doomed.add(row.id);
+          changed = true;
+        }
+      }
+    }
+    return this.remove("inquiryRecords", sessionId, (row) => doomed.has(row.id), idOf);
   }
 
   private requireUnreferenced(
@@ -637,6 +671,58 @@ class MemoryTransactionContext {
             event: structuredClone(event),
           }));
       },
+      readInquiryRecord: async (sessionId, recordId) => {
+        const record = this.read("inquiryRecords", memoryProofRecordKey(sessionId, recordId));
+        return record === undefined ? undefined : inquiryReadRecord(sessionId, record);
+      },
+      lastInquirySequence: async (sessionId) => {
+        await this.lock(sessionId);
+        return Math.max(
+          0,
+          ...this.sessionRows("inquiryRecords", sessionId).map(({ sequence }) => sequence),
+        );
+      },
+      insertInquiryRecord: async (sessionId, record) =>
+        this.insert(
+          "inquiryRecords",
+          sessionId,
+          memoryProofRecordKey(sessionId, record.id),
+          record,
+          (row) => {
+            if (!Number.isInteger(row.sequence) || row.sequence < 1) {
+              violation("proof_inquiry_records check: sequence must be positive.");
+            }
+            if (!INQUIRY_RECORD_KINDS.has(row.kind)) {
+              violation(`proof_inquiry_records_kind_check: ${String(row.kind)} is not a kind.`);
+            }
+            if (inquiryRecordReferenceIds(row).includes(row.id)) {
+              violation("proof_inquiry_records check: a record cannot reference itself.");
+            }
+            if (
+              this.sessionRows("inquiryRecords", sessionId).some(
+                (existing) => existing.sequence === row.sequence,
+              )
+            ) {
+              violation(`proof_inquiry_records unique sequence: ${row.sequence} exists.`);
+            }
+            this.requireNode(sessionId, row.nodeId, row.stateId);
+          },
+        ),
+      listInquiryRecords: async (sessionId, query) => {
+        this.assertOpen();
+        return this.sessionRows("inquiryRecords", sessionId)
+          .filter(
+            (record) =>
+              record.sequence > query.afterSequence &&
+              (query.nodeId === undefined || record.nodeId === query.nodeId) &&
+              (query.commandId === undefined || record.commandId === query.commandId) &&
+              (query.referencing === undefined ||
+                inquiryRecordReferenceIds(record).includes(query.referencing)),
+          )
+          .sort((left, right) => left.sequence - right.sequence)
+          .slice(0, query.limit)
+          .map((record) => inquiryReadRecord(sessionId, structuredClone(record)));
+      },
       insertDeletion: async (sessionId, deletion) =>
         this.insert(
           "deletions",
@@ -746,6 +832,35 @@ const INTERACTION_EVENT_KINDS: ReadonlySet<string> = new Set<InteractionEvent["k
   "preview-regenerated",
   "backtracked-with-information",
 ]);
+
+/** The `kind` check of `0009_inquiry_records.sql`. */
+const INQUIRY_RECORD_KINDS: ReadonlySet<string> = new Set<InquiryRecord["kind"]>([
+  "question",
+  "objective",
+  "attempt",
+  "requirement",
+  "observation",
+  "obstruction",
+  "decision",
+  "relationship",
+  "status-change",
+]);
+
+/** The `referenced_node_ids` column: the anchor and every referenced proof node. */
+function inquiryNodeIds(record: InquiryRecord): string[] {
+  return [record.nodeId, ...inquiryRecordNodeIds(record)];
+}
+
+function inquiryReadRecord(sessionId: string, record: InquiryRecord): unknown {
+  return {
+    sessionId,
+    recordId: record.id,
+    sequence: record.sequence,
+    commandId: record.commandId,
+    nodeId: record.nodeId,
+    record,
+  };
+}
 
 /** The preview IDs an interaction event names (`preview_id` and `stale_preview_id`). */
 function interactionPreviewIds(event: InteractionEvent): string[] {

@@ -43,6 +43,7 @@ import {
   type DisplayedSuggestionSet,
   type InteractionEvent,
   type InteractionEventId,
+  type InquiryRecord,
   type MovePreview,
   type MovePreviewId,
   type MoveMenuSelection,
@@ -228,7 +229,27 @@ export interface ProofStoreTransaction {
     sessionId: ProofSessionId,
     query: InteractionEventQuery,
   ): Promise<readonly unknown[]>;
+  /** `{ sessionId, recordId, sequence, commandId, nodeId, record }` for one inquiry record. */
+  readInquiryRecord(sessionId: ProofSessionId, recordId: string): Promise<unknown | undefined>;
+  /** The highest inquiry-record sequence in the session, or 0. Called under the session lock. */
+  lastInquirySequence(sessionId: ProofSessionId): Promise<number>;
+  insertInquiryRecord(sessionId: ProofSessionId, record: InquiryRecord): Promise<void>;
+  /** Inquiry-record read records in increasing sequence order. */
+  listInquiryRecords(
+    sessionId: ProofSessionId,
+    query: InquiryRecordQuery,
+  ): Promise<readonly unknown[]>;
 }
+
+export type InquiryRecordQuery = Readonly<{
+  nodeId?: ProofNode["id"] | undefined;
+  /** Only the records of this inquiry command. */
+  commandId?: string | undefined;
+  /** Only records that reference this inquiry record. */
+  referencing?: string | undefined;
+  afterSequence: number;
+  limit: number;
+}>;
 
 export type InteractionEventQuery = Readonly<{
   nodeId?: ProofNode["id"] | undefined;
@@ -291,6 +312,9 @@ export type RepositoryDiagnosticCode =
   | "interaction-event-rejected"
   | "interaction-event-conflict"
   | "invalid-interaction-event-record"
+  | "inquiry-command-rejected"
+  | "inquiry-command-conflict"
+  | "invalid-inquiry-record"
   | "storage-failure"
   | "commit-unknown";
 
@@ -2525,7 +2549,7 @@ async function loadProofHistoryInTransaction(
   return { status: "loaded", session, nodes, edges: historyEdges };
 }
 
-function parseEdgeRecord(
+export function parseEdgeRecord(
   input: unknown,
   session: ProofSession,
   environment: ProtocolEnvironment,
@@ -2615,7 +2639,7 @@ type LoadedSession =
   | Readonly<{ ok: true; session: ProofSession; environment: ProtocolEnvironment }>
   | Readonly<{ ok: false; failure: RepositoryFailure }>;
 
-async function loadSession(
+export async function loadSession(
   transaction: ProofStoreTransaction,
   expectedSessionId: ProofSessionId,
   definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
@@ -2660,7 +2684,7 @@ async function loadSession(
 type LoadedNode =
   Readonly<{ ok: true; node: ProofNode }> | Readonly<{ ok: false; failure: RepositoryFailure }>;
 
-async function loadNode(
+export async function loadNode(
   transaction: ProofStoreTransaction,
   session: ProofSession,
   environment: ProtocolEnvironment,
@@ -2693,7 +2717,7 @@ type LoadedSuggestionSet =
   | Readonly<{ ok: true; suggestionSet: DisplayedSuggestionSet }>
   | Readonly<{ ok: false; failure: RepositoryFailure }>;
 
-async function loadSuggestionSet(
+export async function loadSuggestionSet(
   transaction: ProofStoreTransaction,
   session: ProofSession,
   suggestionSetId: SuggestionSetId,
@@ -2780,7 +2804,7 @@ function parseSuggestionSetRecord(
   return freezeDetached(suggestionSet);
 }
 
-function transactionFailure(error: unknown, fallbackMessage: string): RepositoryFailure {
+export function transactionFailure(error: unknown, fallbackMessage: string): RepositoryFailure {
   // Stores wrap callback failures in a rolled-back error; the stale-pointer cause stays meaningful.
   const staleCause =
     error instanceof ProofStoreTransactionError &&
@@ -2804,7 +2828,7 @@ function transactionFailure(error: unknown, fallbackMessage: string): Repository
   );
 }
 
-function freezeDetached<Value>(value: Value): Value | undefined {
+export function freezeDetached<Value>(value: Value): Value | undefined {
   try {
     return deepFreeze(structuredClone(value) as Value);
   } catch {
@@ -2812,7 +2836,7 @@ function freezeDetached<Value>(value: Value): Value | undefined {
   }
 }
 
-function repositoryFailure<Status extends "rejected" | "uncertain">(
+export function repositoryFailure<Status extends "rejected" | "uncertain">(
   status: Status,
   code: RepositoryDiagnosticCode,
   message: string,
@@ -2820,7 +2844,7 @@ function repositoryFailure<Status extends "rejected" | "uncertain">(
   return { status, diagnostics: [{ code, message }] };
 }
 
-function safeParse<Output>(schema: z.ZodType<Output>, value: unknown): Output | undefined {
+export function safeParse<Output>(schema: z.ZodType<Output>, value: unknown): Output | undefined {
   try {
     const result = schema.safeParse(value);
     return result.success ? result.data : undefined;
@@ -2838,7 +2862,7 @@ function isDataRecord(value: unknown): value is Readonly<Record<string, unknown>
   );
 }
 
-function isStrictDataRecord(
+export function isStrictDataRecord(
   value: unknown,
   expectedKeys: readonly string[],
 ): value is Readonly<Record<string, unknown>> {
@@ -2850,7 +2874,7 @@ function isStrictDataRecord(
   );
 }
 
-function jsonEquals(left: unknown, right: unknown): boolean {
+export function jsonEquals(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
     return (
