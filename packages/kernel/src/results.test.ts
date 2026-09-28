@@ -12,6 +12,7 @@ import {
   alphaEquivalent,
   applyTransition,
   kernelOperationSchema,
+  matchExpressionPattern,
   matchResultConclusion,
   parseKernelResultCatalog,
   type KernelEnvironment,
@@ -841,5 +842,52 @@ describe("result application invariants", () => {
       }),
       { numRuns: 100 },
     );
+  });
+});
+
+describe("matchExpressionPattern", () => {
+  it("binds free parameters of a term or proposition pattern consistently", () => {
+    expect(
+      matchExpressionPattern(
+        ["Add", "a", ["Add", "a", "b"]],
+        ["Add", "x", ["Add", "x", 1]],
+        ["a", "b"],
+      ),
+    ).toEqual({
+      a: "x",
+      b: 1,
+    });
+    expect(matchExpressionPattern(["Add", "a", "a"], ["Add", "x", "y"], ["a"])).toBeUndefined();
+    // A symbol that is not a parameter must occur literally.
+    expect(matchExpressionPattern(["Less", "a", "y"], ["Less", "x", "z"], ["a"])).toBeUndefined();
+  });
+
+  it("matches binders up to renaming and never captures a bound symbol", () => {
+    expect(
+      matchExpressionPattern(
+        ["Every", "m", ["Less", "m", "a"]],
+        ["Every", "k", ["Less", "k", "x"]],
+        ["a"],
+        {
+          operators,
+        },
+      ),
+    ).toEqual({ a: "x" });
+    expect(
+      matchExpressionPattern(
+        ["Every", "m", ["Less", "m", "a"]],
+        ["Every", "k", ["Less", "k", "k"]],
+        ["a"],
+        {
+          operators,
+        },
+      ),
+    ).toBeUndefined();
+    expect(matchExpressionPattern(["ForAll", "p", "p"], ["ForAll", "q", "q"], [])).toEqual({});
+  });
+
+  it("rejects invalid inputs without throwing", () => {
+    expect(matchExpressionPattern(Number.NaN as unknown as PlainMathJson, "x", [])).toBeUndefined();
+    expect(Object.isFrozen(matchExpressionPattern("a", "x", ["a"]))).toBe(true);
   });
 });

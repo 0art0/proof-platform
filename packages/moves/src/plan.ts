@@ -13,6 +13,7 @@ import {
   kernelOperationSchema,
   type KernelEnvironment,
   type KernelOperation,
+  type KernelOperationKind,
   type KernelResultId,
   type TransitionClass,
   type TransitionEvidence,
@@ -25,6 +26,11 @@ export const movePlanStepSchema = z
   .object({ id: stableIdentifierSchema, operationKind: z.enum(KERNEL_OPERATION_KINDS) })
   .strict();
 export type MovePlanStep = z.infer<typeof movePlanStepSchema>;
+
+/** Plans consist of primitives only; construction-task operations have no move definition. */
+function isPrimitiveKind(kind: KernelOperation["kind"]): kind is KernelOperationKind {
+  return (KERNEL_OPERATION_KINDS as readonly string[]).includes(kind);
+}
 
 /**
  * The implementation kind of a multi-step move. It is not yet a member of
@@ -155,6 +161,7 @@ export function planMoveSequence(
       }
       const kind = operation.data.kind;
       if (
+        !isPrimitiveKind(kind) ||
         transition.transitionClass !== PRIMITIVE_TRANSITION_CLASSES[kind] ||
         !PRIMITIVE_TRANSITION_EVIDENCE[kind].includes(transition.evidence)
       ) {

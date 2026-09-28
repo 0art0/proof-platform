@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import {
   ProofStoreTransactionError,
+  type InquiryRecordQuery,
   type InteractionEventQuery,
   type ProofRecordDeletionRequest,
   type ProofRecordDeletionResult,
@@ -9,20 +10,24 @@ import {
   type ProofStore,
   type ProofStoreTransaction,
 } from "./proof-repository";
-import type {
-  ApplyKernelCommand,
-  DisplayedSuggestionSet,
-  InteractionEvent,
-  InteractionEventId,
-  MovePreview,
-  MovePreviewId,
-  PrepareProofCommandSuccess,
-  ProofDeletionRecord,
-  ProofEdge,
-  ProofNode,
-  TransitionEvent,
-  SuggestionSetId,
+import {
+  inquiryRecordNodeIds,
+  inquiryRecordReferenceIds,
+  type ApplyKernelCommand,
+  type DisplayedSuggestionSet,
+  type InquiryRecord,
+  type InteractionEvent,
+  type InteractionEventId,
+  type MovePreview,
+  type MovePreviewId,
+  type PrepareProofCommandSuccess,
+  type ProofDeletionRecord,
+  type ProofEdge,
+  type ProofNode,
+  type TransitionEvent,
+  type SuggestionSetId,
 } from "@proof/protocol";
+import type { SemanticReplayStepRecord } from "@proof/protocol";
 
 export type SqlQueryResult = Readonly<{
   rows: readonly Readonly<Record<string, unknown>>[];
@@ -392,6 +397,25 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
        RETURNING id`,
       [request.nodeIds, request.chosenPreviewIds],
     );
+    // Inquiry records referencing a deleted node, then every record referencing a removed one.
+    await ids(
+      `DELETE FROM proof_inquiry_records AS record
+       WHERE record.session_id = $1
+         AND record.id IN (
+           WITH RECURSIVE doomed (id) AS (
+             SELECT id FROM proof_inquiry_records
+             WHERE session_id = $1 AND referenced_node_ids && $2::text[]
+             UNION
+             SELECT dependent.id
+             FROM proof_inquiry_records AS dependent
+             JOIN doomed ON doomed.id = ANY (dependent.referenced_record_ids)
+             WHERE dependent.session_id = $1
+           )
+           SELECT id FROM doomed
+         )
+       RETURNING record.id`,
+      [request.nodeIds],
+    );
     const eventIds = await ids(
       `DELETE FROM proof_events
        WHERE session_id = $1 AND edge_id = ANY ($2::text[])
@@ -421,6 +445,13 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
        RETURNING id`,
       [request.nodeIds],
     );
+    // Replayed-step records reference their step's command and node.
+    await this.client.query(
+      `DELETE FROM proof_replay_steps
+       WHERE session_id = $1 AND (command_id = ANY ($2::text[]) OR node_id = ANY ($3::text[]))
+       RETURNING command_id AS id`,
+      [sessionId, request.commandIds, request.nodeIds],
+    );
     const commandIds = await ids(
       `DELETE FROM proof_commands
        WHERE session_id = $1 AND command_id = ANY ($2::text[])
@@ -442,6 +473,42 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
       commandIds,
       nodeIds,
     };
+  }
+
+  async readReplayStep(
+    sessionId: ProofSessionId,
+    commandId: ApplyKernelCommand["commandId"],
+  ): Promise<unknown | undefined> {
+    const result = await this.client.query(
+      `SELECT record
+       FROM proof_replay_steps
+       WHERE session_id = $1 AND command_id = $2`,
+      [sessionId, commandId],
+    );
+    return result.rows[0]?.record;
+  }
+
+  async insertReplayStep(
+    sessionId: ProofSessionId,
+    record: SemanticReplayStepRecord,
+  ): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_replay_steps
+         (session_id, command_id, replay_command_id, step_index, step_count, node_id,
+          source_edge_id, recorded_at, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::jsonb)`,
+      [
+        sessionId,
+        record.commandId,
+        record.replayCommandId,
+        record.index,
+        record.count,
+        record.nodeId,
+        record.sourceEdgeId,
+        record.recordedAt,
+        JSON.stringify(record),
+      ],
+    );
   }
 
   async insertDeletion(sessionId: ProofSessionId, deletion: ProofDeletionRecord): Promise<void> {
@@ -531,6 +598,93 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     );
     return result.rows.map(interactionEventRecord);
   }
+
+  async readInquiryRecord(
+    sessionId: ProofSessionId,
+    recordId: string,
+  ): Promise<unknown | undefined> {
+    const result = await this.client.query(
+      `SELECT session_id, id, sequence, command_id, node_id, record
+       FROM proof_inquiry_records
+       WHERE session_id = $1 AND id = $2`,
+      [sessionId, recordId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : inquiryReadRecord(row);
+  }
+
+  async lastInquirySequence(sessionId: ProofSessionId): Promise<number> {
+    // The caller holds the session row lock, so no concurrent insert can take the next number.
+    const result = await this.client.query(
+      `SELECT COALESCE(MAX(sequence), 0) AS sequence
+       FROM proof_inquiry_records
+       WHERE session_id = $1`,
+      [sessionId],
+    );
+    return Number(result.rows[0]?.sequence ?? 0);
+  }
+
+  async insertInquiryRecord(sessionId: ProofSessionId, record: InquiryRecord): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_inquiry_records
+         (session_id, id, sequence, command_id, kind, node_id, state_id, actor_id, actor_kind,
+          recorded_at, referenced_node_ids, referenced_record_ids, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11::text[], $12::text[],
+               $13::jsonb)`,
+      [
+        sessionId,
+        record.id,
+        record.sequence,
+        record.commandId,
+        record.kind,
+        record.nodeId,
+        record.stateId,
+        record.actor.id,
+        record.actor.kind,
+        record.recordedAt,
+        [...new Set([record.nodeId, ...inquiryRecordNodeIds(record)])].sort(),
+        [...inquiryRecordReferenceIds(record)],
+        JSON.stringify(record),
+      ],
+    );
+  }
+
+  async listInquiryRecords(
+    sessionId: ProofSessionId,
+    query: InquiryRecordQuery,
+  ): Promise<readonly unknown[]> {
+    const result = await this.client.query(
+      `SELECT session_id, id, sequence, command_id, node_id, record
+       FROM proof_inquiry_records
+       WHERE session_id = $1
+         AND sequence > $2
+         AND ($3::text IS NULL OR node_id = $3)
+         AND ($4::text IS NULL OR command_id = $4)
+         AND ($5::text IS NULL OR $5 = ANY (referenced_record_ids))
+       ORDER BY sequence
+       LIMIT $6`,
+      [
+        sessionId,
+        query.afterSequence,
+        query.nodeId ?? null,
+        query.commandId ?? null,
+        query.referencing ?? null,
+        query.limit,
+      ],
+    );
+    return result.rows.map(inquiryReadRecord);
+  }
+}
+
+function inquiryReadRecord(row: Readonly<Record<string, unknown>>): unknown {
+  return {
+    sessionId: row.session_id,
+    recordId: row.id,
+    sequence: typeof row.sequence === "string" ? Number(row.sequence) : row.sequence,
+    commandId: row.command_id,
+    nodeId: row.node_id,
+    record: row.record,
+  };
 }
 
 function interactionEventRecord(row: Readonly<Record<string, unknown>>): unknown {

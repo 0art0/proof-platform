@@ -77,3 +77,16 @@ export function boundDeclaration(
   const operand = parts.operands[index];
   return operand === undefined ? undefined : readBinderDeclaration(operand, binder.forms);
 }
+
+/** A built-in `ForAll`/`Exists` over one untyped symbol, the only quantifier shape the kernel's quantifier rules accept. */
+export function readBuiltinQuantifier(
+  expression: PlainMathJson,
+  operator: "ForAll" | "Exists",
+): Readonly<{ symbol: string; body: PlainMathJson }> | undefined {
+  const operands = operatorOperands(expression, operator);
+  const symbol = operands === undefined ? undefined : symbolValue(operands[0] as PlainMathJson);
+  const body = operands?.[1];
+  return operands?.length === 2 && symbol !== undefined && body !== undefined
+    ? { symbol, body }
+    : undefined;
+}

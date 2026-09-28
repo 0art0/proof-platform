@@ -9,6 +9,7 @@
  * apply can detect that the approved definitions changed and regenerate the preview.
  */
 import {
+  plainMathJsonSchema,
   proofStateIdSchema,
   stableIdentifierSchema,
   statementIdSchema,
@@ -187,11 +188,35 @@ const regeneratedPayloadShape = {
   changedDefinitions: z.array(definitionChangeSchema).max(16),
 } as const;
 
+/**
+ * Recorded only by the worker, in the transaction of a backtracking-with-information command
+ * (design plan §16.3). It is anchored at the node the cursor moved to and records where `P` came
+ * from, the eligible ancestors shown, the one chosen, and the case left in focus.
+ */
+const backtrackedPayloadShape = {
+  commandId: commandIdSchema,
+  sourceNodeId: proofNodeIdSchema,
+  sourceTarget: focusTargetSchema,
+  proposition: plainMathJsonSchema,
+  /** Present when the caller chose the ancestor instead of accepting the closest eligible one. */
+  requestedAncestorNodeId: proofNodeIdSchema.optional(),
+  ancestorNodeId: proofNodeIdSchema,
+  /** Every eligible strict ancestor of the source, closest first. */
+  eligibleAncestorNodeIds: z.array(proofNodeIdSchema).min(1).max(10_000),
+  splitTarget: focusTargetSchema,
+  /** The new child of the ancestor produced by the case split. */
+  caseSplitNodeId: proofNodeIdSchema,
+  /** The case closed by its own case hypothesis, when there was one. */
+  autoClosedTarget: focusTargetSchema.optional(),
+  focusTarget: focusTargetSchema,
+} as const;
+
 export const CLIENT_INTERACTION_EVENT_KINDS = Object.freeze(
   Object.keys(clientPayloadShapes) as (keyof typeof clientPayloadShapes)[],
 );
 export type ClientInteractionEventKind = keyof typeof clientPayloadShapes;
-export type InteractionEventKind = ClientInteractionEventKind | "preview-regenerated";
+export type InteractionEventKind =
+  ClientInteractionEventKind | "preview-regenerated" | "backtracked-with-information";
 
 const requestBaseShape = { id: interactionEventIdSchema, nodeId: proofNodeIdSchema } as const;
 
@@ -249,6 +274,13 @@ export const interactionEventSchema = z
         ...regeneratedPayloadShape,
       })
       .strict(),
+    z
+      .object({
+        ...recordedBaseShape,
+        kind: z.literal("backtracked-with-information"),
+        ...backtrackedPayloadShape,
+      })
+      .strict(),
   ])
   .superRefine((event, context) => {
     if (event.kind === "selection-changed") {
@@ -269,6 +301,31 @@ export const interactionEventSchema = z
         code: "custom",
         message: "A regenerated preview must have a new preview ID.",
       });
+    }
+    if (event.kind === "backtracked-with-information") {
+      const eligible = event.eligibleAncestorNodeIds;
+      if (
+        new Set(eligible).size !== eligible.length ||
+        !eligible.includes(event.ancestorNodeId) ||
+        (event.requestedAncestorNodeId !== undefined &&
+          event.requestedAncestorNodeId !== event.ancestorNodeId) ||
+        (event.requestedAncestorNodeId === undefined && eligible[0] !== event.ancestorNodeId)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "The chosen ancestor must be the requested one, or else the closest eligible one.",
+        });
+      }
+      if (
+        event.focusTarget.id === event.autoClosedTarget?.id ||
+        event.focusTarget.kind !== event.splitTarget.kind
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Focus must move to an open case of the split target.",
+        });
+      }
     }
   });
 export type InteractionEvent = z.infer<typeof interactionEventSchema>;

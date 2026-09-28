@@ -126,7 +126,7 @@ otherwise automate — the substrate is in scope.
   Polarity is computed by the same function the selection resolver uses (move it into mathjson-model or
   kernel, whichever keeps dependencies acyclic). _Accept:_ polarity property tests and golden rewrites.
 
-- [ ] **N11 Construction metavariables (refinement §5).** Add construction-task records with these fields:
+- [x] **N11 Construction metavariables (refinement §5).** Add construction-task records with these fields:
       origin (existential goal or auxiliary request), sort, scope, allowed dependencies, requirements, and
       status (unresolved / partially specified / resolved / abandoned).
   - Each requirement has a role (necessary / sufficient / heuristic), evidence, and the attempt that
@@ -217,7 +217,7 @@ otherwise automate — the substrate is in scope.
 
   _Accept:_ tests for ordering, idempotency, and the stale-definition path.
 
-- [ ] **N20 Backtracking with information (§16.3).** Given a proposition `P` from a descendant snapshot:
+- [x] **N20 Backtracking with information (§16.3).** Given a proposition `P` from a descendant snapshot:
   - compute its free symbols, operators, and definitions;
   - find the closest ancestor where all are available, and list the other eligible ancestors;
   - create a new child of the chosen ancestor via `case-split` on `P`, auto-closing a case whose goal is
@@ -226,7 +226,7 @@ otherwise automate — the substrate is in scope.
 
   _Accept:_ tests for ancestor choice, unavailable-symbol rejection, and the auto-close case.
 
-- [ ] **N21 Semantic replay (§16.4).** Record every applied step as a semantic plan: the move/result id,
+- [x] **N21 Semantic replay (§16.4).** Record every applied step as a semantic plan: the move/result id,
       selections described by statement role + pattern match rather than raw paths, and parameters by menu
       origin. Replay a sequence onto a target node, re-matching each step. The report lists adapted steps,
       changed substitutions, new obligations, the first failure, and candidate repairs (alternate matching
@@ -235,7 +235,7 @@ otherwise automate — the substrate is in scope.
 
 ## Phase 5 — Inquiry language (refinement §3–§4, §6)
 
-- [ ] **N22 Inquiry records and store.** Add these records:
+- [x] **N22 Inquiry records and store.** Add these records:
   - Questions (`Establish`, `Construct`, `Determine`, `Explore`), Objectives, Attempts, Requirements,
     Observations, Obstructions, and Decisions.
   - Relationships: `wouldSufficeFor`, `requires`, `motivatedBy`, `addresses`, `specializes`,
@@ -477,3 +477,103 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     yet, and the web app has no GET proxy for the log.
   - Events reference suggestion sets and previews by ID only (a request precedes its set); only the
     anchor node is a foreign key. Deletion tombstones do not list removed interaction-event IDs.
+- 2026-09-27 — N20 — `512e8f2` — protocol `backtracking.ts`: `analyzeBacktrack` and
+  `planBacktrackWithInformation` are pure functions over stored nodes and edges. They report `P`'s free
+  symbols, operator heads and source declarations, trace the source target's lineage up the path, and list
+  every strict ancestor (closest first) with `eligible`, `wellFormed` and `unavailableSymbols`. A symbol is
+  available when the lineage target declares it with the same sort and it is not only bound there (the
+  kernel pre-declares quantified symbols). The closest eligible ancestor is chosen unless `ancestorNodeId`
+  names another. The plan is `split-classical-cases` on the lineage target plus `close-by-hypothesis`
+  (`<id>:auto-close`) on the case whose conclusion is alpha-equivalent to `P` or `Not P`; focus goes to
+  the remaining case.
+  - Worker `backtrackWithInformation` prepares each step with `prepareProofCommand` against its own parent
+    before writing, inserts ordinary node/edge/event/command rows, moves the cursor, and records a
+    worker-only `backtracked-with-information` interaction event (migration `0008`; `MemoryProofStore`
+    now checks kinds). The event makes the command idempotent: identical retry replays; conflicting
+    content gets 409 `backtrack-with-information-conflict`; stale cursor 409; deleted step
+    `command-deleted`. HTTP: `POST /proof-sessions/:id/backtrack-analysis` and
+    `/backtrack-with-information` (201/200 replay, 422 unavailable symbols, 400 invalid). Tests assert
+    the original branch's rows stay byte-identical.
+  - Gaps: §16.3 step 5 (reattach existing work under the case) is left for N21. Auto-close only handles
+    the case hypothesis itself. Focus is returned and recorded but there is no session focus field. The
+    source node is never a candidate. Kernel steps carry no `moveId`. No web UI or proxy yet (N31).
+- 2026-09-27 — N11 — `b3841f4` — construction tasks (refinement §5). mathjson-model adds
+  `ProofState.constructions`: strict, status-discriminated `ConstructionTask` records (origin
+  `existential-goal` or `auxiliary-request`, sort, scope, `allowedDependencies` over scope declarations and
+  task ids, requirements with role/evidence/`attemptId`, candidates, and resolution/abandonment records),
+  branded task/requirement/candidate/attempt ids, and obligation provenance `construction-requirement`.
+  `attestationIdSchema` moved to mathjson-model.
+  - A placeholder is a registered operator derived from its task, applied Skolem-style to its allowed
+    declarations (`["m", "eps"]`), so later variables cannot leak into the choice. State validation
+    rejects closed placeholders left in statements and placeholders in assumptions, and checks an acyclic
+    transitive task-dependency graph, in-scope requirements, the role/evidence rule (heuristic ⇔ no
+    evidence; `target` evidence only for sufficient; necessary needs an attestation), and candidate
+    sort/scope.
+  - Kernel `CONSTRUCTION_OPERATION_KINDS` (separate from `KERNEL_OPERATION_KINDS`), all via
+    `applyTransition`: `introduce-placeholder` (equivalence when dependencies cover the sequent's free
+    symbols, else strengthening), `add-requirement`, `add-candidate`, `resolve-placeholder`
+    (strengthening; capture-free substitution; remaining sufficient requirements become obligations;
+    never closes a target) and `abandon-placeholder` (only when unused). `mark-sorry` rejects targets
+    mentioning an open placeholder. fast-check properties: no requirement becomes a hypothesis, and
+    introduction is an equivalence exactly when dependencies are complete.
+  - Gaps: no moves, menus, protocol helpers, routes or UI for construction operations (`planMoveSequence`
+    rejects them; N25/N34). No withdraw-requirement or candidate-generator record. Typed binders are not
+    supported by `introduce-placeholder`. Selections, retrieval and `moves/context-terms` do not register
+    placeholder operators; rendering shows them as plain applications; discovery-tree edges report them as
+    structural; `sorryClosure`/`derived.ts` do not see placeholder heads.
+  - The kernel property tests in `obligations.test.ts` and `deep-rewrite.test.ts` run close to vitest's
+    5 s timeout under machine load.
+- 2026-09-28 — N22 — `e7c2f7a` — protocol `inquiry.ts`: strict records for questions (`establish`,
+  `construct`, `determine`, `explore`), objectives, attempts, requirements, observations, obstructions,
+  decisions, relationships (`wouldSufficeFor`, `requires`, `motivatedBy`, `addresses`, `specializes`,
+  `generalizes`, `tests`, `reuses`) and explicit status changes, with branded `InquiryRecordId`s. Records
+  reference mathematics by identity only (node + target, statement, operand-path occurrence, N11 task or
+  requirement). Reasons carry provenance `explicit-user`, `agent`, `method-encoded` (naming its method)
+  or `later-interpretation`.
+  - A command `{ commandId, nodeId, records }` records up to 32 records at an anchor node; a record may
+    reference only earlier records. `prepareInquiryCommand` is pure: it validates every reference against
+    stored nodes, suggestion sets, transitions and earlier records, and assigns sequences.
+  - Invariants: `wouldSufficeFor` needs a non-weakening transition covering the targets it changed, an
+    established sufficient N11 requirement, or an explicit `informal` status. Heuristic requirements have
+    no logical support. `explicit-user`/`agent` provenance must match the actor. A later interpretation
+    concerns only earlier commands; intention-bearing relations are contemporaneous only when their
+    `from` records are in the same command. fast-check covers the provenance/contemporaneity rule.
+  - Worker `recordInquiryCommand`/`listInquiryRecords` insert atomically under the session lock;
+    identical retries replay, conflicts get 409 `inquiry-command-conflict`. Migration `0009` adds
+    `proof_inquiry_records` (mirrored in `MemoryProofStore`) with GIN-indexed referenced node/record ids;
+    "Delete previous move" removes dependent records recursively. HTTP: `POST
+/proof-sessions/:id/inquiry-commands` and `GET /proof-sessions/:id/inquiry-records`.
+  - Gaps: HTTP always records as the human web actor (agent provenance only via the repository; N25).
+    Library methods are checked against the approved catalog only. No attestation store, no strategy
+    records. Unassigned construct objects are not linked to later N11 tasks. Inquiry command ids are a
+    separate namespace. Deletion can remove part of an inquiry command, after which replay gets 409. Ten
+    `proof-repository` helpers are now exported. No web proxy or UI (N34).
+- 2026-09-28 — N21 — `ee4b0cc` — protocol `semantic-replay.ts`: `deriveSemanticStep` builds a strict
+  `SemanticStep` from records stored at apply time (parent/child snapshots, edge, displayed suggestion
+  set): move or result id with direction and substitutions, each selection as slot/target/statement
+  role/occurrence plus a fragment whose free declared symbols are its pattern variables, menu parameters
+  by origin and value, the operation, transition class and created obligation conclusions.
+  - `planSemanticReplay` re-matches each step on the snapshot the previous replayed step produced, using
+    the new kernel export `matchExpressionPattern` (binder-aware, sort-checked). Candidates are classed
+    identical / renamed / conflict / shape-only and ranked by match, carried target and hypothesis
+    correspondence, role and path. Symbol and statement-id correspondences carry forward; menu parameters
+    are re-chosen by mapped value, then origin, then pattern instance. Each step is materialized and
+    validated by `prepareProofCommand` as an ordinary `apply-kernel-operation` (`<replay>:replay:<n>`),
+    creating fresh records.
+  - The report marks steps exact or adapted, with new/changed substitutions, changed parameters, created
+    obligations (`inSource`), alternatives, and the first failure with repair candidates that callers
+    can force through `overrides`; later steps are not-attempted.
+  - Migration `0010` adds `proof_replay_steps` (mirrored in memory) holding each replayed step's plan,
+    report and request, so replayed branches can be replayed again and the commit is idempotent.
+    Worker `previewSemanticReplay` (writes nothing) and `commitSemanticReplay`; HTTP `POST
+/proof-sessions/:id/replay-preview` and `/replay` (201/200 retry, 422 failed step with report and
+    nothing written, 409 conflict/stale, 400 bad request).
+  - Tests include a fast-check property that replay is invariant under symbol/goal-id renaming and
+    declaration order, a perturbed target, a failing step repaired by overrides, and the N20 follow-up
+    (§16.3 step 5): replaying the original branch onto the focused case after backtracking.
+  - Gaps: steps applied without a displayed suggestion (backtracking splits and auto-closes, raw kernel
+    commands) have no plan and fail as `step-not-replayable`. Plans of ordinary steps are derived when
+    needed; only replayed steps persist one. Later-step candidate ids include predicted statement ids, so
+    previews must use the commit's `commandId` for overrides to carry. The whole report is not persisted.
+    Deletion tombstones do not list removed replay-step rows. Assignment search is capped at 24 attempts
+    per step. No web dialog (N31).
