@@ -1235,13 +1235,17 @@ describe("starter domain packs", () => {
     variantFamilies: packs.flatMap((pack) => pack.variantFamilies),
   };
 
-  it("indexes every pack result and variant family in the set operators' environment", () => {
-    const created = createRetrievalIndex(catalog, { operators: SET_OPERATOR_DECLARATIONS });
+  it("indexes every pack result and variant family in the packs' operator environment", () => {
+    const operators = packs.flatMap((pack) => pack.operators);
+    expect(operators.slice(0, 2)).toEqual(SET_OPERATOR_DECLARATIONS);
+    const created = createRetrievalIndex(catalog, { operators });
     expect(created.ok).toBe(true);
     if (!created.ok) throw new Error(created.diagnostics[0].message);
     expect(created.index.resultCount).toBe(catalog.results.length);
-    // Without the set operators the set results are ill-typed, so callers must gate the pack.
+    // Without their operators the notation packs' results are ill-typed, so callers must gate
+    // the packs.
     expect(createRetrievalIndex(catalog).ok).toBe(false);
+    expect(createRetrievalIndex(catalog, { operators: SET_OPERATOR_DECLARATIONS }).ok).toBe(false);
   });
 
   it("groups a transitivity law with its variants for an order goal", () => {
