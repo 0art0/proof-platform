@@ -231,13 +231,30 @@ test("a sibling branch is reviewed and replayed at the current node", async ({ p
   expect(await currentNodeId(page)).not.toBe(splitId);
 });
 
-test("export links the stored artifact and the full tree is marked unavailable", async ({
-  page,
-}) => {
+test("export links the stored artifact and the full tree links to its viewer", async ({ page }) => {
   const sessionId = await openFreshSession(page);
   await expect(page.getByRole("link", { name: "Export proof" })).toHaveAttribute(
     "href",
     `/api/proof-sessions/${encodeURIComponent(sessionId)}/export`,
   );
-  await expect(page.getByRole("button", { name: "Open full discovery tree" })).toBeDisabled();
+  await expect(page.getByRole("link", { name: "Open full discovery tree" })).toHaveAttribute(
+    "href",
+    `/sessions/${encodeURIComponent(sessionId)}/tree`,
+  );
+});
+
+test("the tree link opens the static viewers, which read the stored session", async ({ page }) => {
+  const sessionId = await openFreshSession(page);
+  await page.getByRole("link", { name: "Open full discovery tree" }).click();
+  await expect(page).toHaveURL(`/sessions/${encodeURIComponent(sessionId)}/tree`);
+  await expect(page.getByRole("heading", { name: "Commute a conjunction" })).toBeVisible(COMMAND);
+  await expect(page.getByTestId("tree-outline").getByRole("listitem")).toHaveCount(1);
+  await expect(page.getByTestId("node-detail").getByTestId("state-snapshot")).toBeVisible();
+
+  const views = page.getByRole("navigation", { name: "Stored views" });
+  await views.getByRole("link", { name: "Playback" }).click();
+  await expect(page.getByText("The stored history has nothing to play back.")).toBeVisible(COMMAND);
+  await views.getByRole("link", { name: "Pruned proof" }).click();
+  await expect(page.getByRole("heading", { name: "No pruned proof" })).toBeVisible(COMMAND);
+  await expect(page.getByTestId("solved-status")).toHaveText(/Not solved/);
 });
