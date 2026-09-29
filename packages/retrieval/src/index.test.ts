@@ -138,7 +138,7 @@ function suggestionIds(
 describe("deterministic structural retrieval", () => {
   it("indexes every theorem variant and move pattern", () => {
     const index = indexFor();
-    expect(index).toMatchObject({ resultCount: 3, moveCount: 29, patternCount: 33 });
+    expect(index).toMatchObject({ resultCount: 3, moveCount: 29, patternCount: 34 });
   });
 
   it("matches representation variants and ranks exact, obligation-free results deterministically", () => {
@@ -891,6 +891,40 @@ describe("variadic associative matching", () => {
         ({ artifactId }) => artifactId === "move:expand-hypothesis-conjunction",
       ),
     ).toMatchObject({ applicability: "applicable", unresolvedSelectionSlots: [] });
+  });
+
+  it("offers the conjunction expansion for a goal-only selection as requires-input when a local conjunction exists", () => {
+    const goalOnly = indexFor().query(developmentState(), selection(), { limit: 100 });
+    expect(goalOnly.ok).toBe(true);
+    if (!goalOnly.ok) return;
+    expect(
+      goalOnly.suggestions.find(
+        ({ artifactId }) => artifactId === "move:expand-hypothesis-conjunction",
+      ),
+    ).toMatchObject({
+      applicability: "requires-input",
+      unresolvedSelectionSlots: ["conjunction"],
+    });
+
+    // The default limit truncates, and the move must survive it: the witnessed conjunction makes
+    // it more specific than the catch-all requires-input moves.
+    expect(
+      suggestionIds(indexFor(), developmentState()).some((id) =>
+        id.includes("move:expand-hypothesis-conjunction"),
+      ),
+    ).toBe(true);
+
+    const noConjunction = indexFor().query(
+      state(["And", "p", "p", "q"], [{ id: "hypothesis:q", expression: "q" }]),
+      selection(),
+    );
+    expect(noConjunction.ok).toBe(true);
+    if (!noConjunction.ok) return;
+    expect(
+      noConjunction.suggestions.some(
+        ({ artifactId }) => artifactId === "move:expand-hypothesis-conjunction",
+      ),
+    ).toBe(false);
   });
 
   it("matches a ternary conjunction hypothesis with the binary move pattern", () => {

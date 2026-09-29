@@ -260,6 +260,12 @@ type MoveCatalogInput = Readonly<{
   parameters: readonly MoveParameter[];
   positive: readonly [string, string];
   negative: string;
+  /**
+   * Patterns on selection slots other than the primitive's primary pattern
+   * slot. A move whose primary pattern lives on a non-target slot uses one to
+   * remain reachable, as a partly-filled selection, from its target slot.
+   */
+  extraPatterns?: readonly Readonly<{ slotId: string; pattern: PlainMathJson }>[];
 }>;
 
 const catalogInputs: readonly MoveCatalogInput[] = [
@@ -406,6 +412,7 @@ const catalogInputs: readonly MoveCatalogInput[] = [
       "Expand all operands of a variadic conjunction hypothesis.",
     ],
     "The selected hypothesis is not a conjunction.",
+    [{ slotId: "target", pattern: "t" }],
   ),
   catalogEntry(
     "split-hypothesis-disjunction",
@@ -729,6 +736,11 @@ export const HAND_AUTHORED_MOVES: readonly MoveDefinition[] = deepFreeze(
           selectionSlotId: PRIMITIVE_PATTERN_SLOTS[input.operationKind],
           expression: input.pattern,
         },
+        ...(input.extraPatterns ?? []).map(({ slotId, pattern }) => ({
+          id: `move-pattern:${input.suffix}-${slotId}`,
+          selectionSlotId: slotId,
+          expression: pattern,
+        })),
       ],
       contextRequirements: ["All selected statements belong to the target contextual sequent."],
       sideConditions: ["The kernel must validate the complete primitive operation."],
@@ -857,6 +869,7 @@ function catalogEntry(
   parameters: readonly MoveParameter[],
   positive: readonly [string, string],
   negative: string,
+  extraPatterns?: MoveCatalogInput["extraPatterns"],
 ): MoveCatalogInput {
   return {
     suffix: operationKind,
@@ -868,6 +881,7 @@ function catalogEntry(
     parameters,
     positive,
     negative,
+    ...(extraPatterns === undefined ? {} : { extraPatterns }),
   };
 }
 

@@ -166,6 +166,8 @@ type IndexedMovePattern = IndexedPatternBase &
     source: "move";
     artifact: MoveDefinition;
     slot: MoveSelectionSlot;
+    /** Best pattern specificity per selection slot of the move, for slots still to be filled. */
+    slotSpecificity: ReadonlyMap<string, number>;
   }>;
 
 type IndexedPattern = IndexedResultPattern | IndexedMovePattern;
@@ -1097,6 +1099,17 @@ function buildDiscriminationTree(
     });
   });
   catalog.moves.forEach((move) => {
+    const slotSpecificity = new Map<string, number>();
+    move.patterns.forEach((pattern) => {
+      const specificity = patternSpecificity(
+        pattern.expression,
+        collectMoveWildcardSymbols(pattern, operators),
+      );
+      slotSpecificity.set(
+        pattern.selectionSlotId,
+        Math.max(slotSpecificity.get(pattern.selectionSlotId) ?? specificity, specificity),
+      );
+    });
     move.patterns.forEach((pattern) => {
       const slot = move.selectionContract.slots.find(
         (candidate) => candidate.id === pattern.selectionSlotId,
@@ -1109,6 +1122,7 @@ function buildDiscriminationTree(
         pattern: pattern.expression,
         patternId: pattern.id,
         slot,
+        slotSpecificity,
         wildcardSymbols,
         specificity: patternSpecificity(pattern.expression, wildcardSymbols),
         bucket: moveBucket(slot),
@@ -1149,7 +1163,11 @@ function moveContextIsAvailableForAssignments(
   state: ProofState,
 ): boolean {
   const operationKind = move.implementation.operationKind;
-  if (operationKind !== "close-by-hypothesis" && operationKind !== "apply-implication-hypothesis") {
+  if (
+    operationKind !== "close-by-hypothesis" &&
+    operationKind !== "apply-implication-hypothesis" &&
+    operationKind !== "expand-hypothesis-conjunction"
+  ) {
     return true;
   }
   const referenceSelection = assignments[0]?.subject.selection;
@@ -1159,6 +1177,16 @@ function moveContextIsAvailableForAssignments(
   const target = collection.find((entry) => entry.id === referenceSelection.anchor.target.id);
   if (target === undefined) return false;
   const bySlot = new Map(assignments.map(({ slot, subject }) => [slot.id, subject]));
+  if (operationKind === "expand-hypothesis-conjunction") {
+    // A partly-filled selection is offered only when a local conjunction could still fill the
+    // missing slot.
+    return (
+      bySlot.has("conjunction") ||
+      target.sequent.context.hypotheses.some(
+        (hypothesis) => functionParts(hypothesis.statement.expression)?.operator === "And",
+      )
+    );
+  }
   if (operationKind === "close-by-hypothesis") {
     const targetSubject = bySlot.get("target");
     const fact = bySlot.get("fact");
@@ -1265,6 +1293,17 @@ function buildSuggestion(
       ? 10
       : Math.max(0, 10 - candidate.artifact.selectionContract.slots.length);
   const priority = candidate.source === "result" ? candidate.artifact.priority : 50;
+  // A partly-filled move is as specific as the structure its still-missing slots will demand, so a
+  // placeholder pattern on the selected slot does not rank it with the catch-all moves.
+  const specificity =
+    candidate.source === "move"
+      ? Math.max(
+          candidate.specificity,
+          ...evidence.unresolvedSelectionSlots.map(
+            (slotId) => candidate.slotSpecificity.get(slotId) ?? candidate.specificity,
+          ),
+        )
+      : candidate.specificity;
   const selectionMatches = [...evidence.selectionMatches].sort(compareSelectionMatches);
   const id = stableSuggestionId(candidate, selectionMatches);
   const reasons = [
@@ -1314,7 +1353,7 @@ function buildSuggestion(
       noNewObligations ? 1 : 0,
       evidence.applicability === "applicable" ? 1 : 0,
       evidence.exactTypeFit ? 1 : 0,
-      candidate.specificity,
+      specificity,
       directProgress ? 1 : 0,
       locality,
       priority,
