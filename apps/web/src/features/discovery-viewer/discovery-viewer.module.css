@@ -1,0 +1,341 @@
+.viewer {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.viewerHeader,
+.detail,
+.outline {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  padding: 1rem 1.15rem;
+}
+
+.viewerHeader {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.viewerHeader h1 {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  overflow-wrap: anywhere;
+}
+
+.viewerHeader p,
+.detail p {
+  margin: 0;
+}
+
+.eyebrow,
+.muted {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.headerFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
+  font-size: 0.85rem;
+}
+
+.viewerNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.viewerNav a {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+  padding: 0.4rem 0.75rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.viewerNav a[aria-current="page"] {
+  background: var(--accent);
+  color: var(--surface-strong);
+}
+
+.viewerNav a[aria-current="page"]::before {
+  content: "✓ " / "";
+}
+
+.toolbarRow,
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: center;
+}
+
+.viewToggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+}
+
+.viewToggle button,
+.controls button,
+.detail button,
+.outline button {
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  padding: 0.35rem 0.7rem;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.viewToggle button {
+  border: 0;
+  border-radius: 0;
+}
+
+.viewToggle button + button {
+  border-left: 1px solid var(--border);
+}
+
+.viewToggle button[aria-pressed="true"],
+.outline button[aria-pressed="true"],
+.outline button[aria-current="step"] {
+  background: var(--accent);
+  color: var(--surface-strong);
+}
+
+.viewToggle button[aria-pressed="true"]::before {
+  content: "✓ " / "";
+}
+
+.controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.viewToggle button:focus-visible,
+.controls button:focus-visible,
+.detail button:focus-visible,
+.outline button:focus-visible,
+.viewerNav a:focus-visible,
+.playback:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.treeLayout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.outline {
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.outline ol {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outline li {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+  border-inline-start: 2px solid var(--border-soft);
+}
+
+.outline button {
+  border-radius: 0.5rem;
+  text-align: start;
+}
+
+.edgeSummary {
+  font-size: 0.78rem;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.chip {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  padding: 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.chip[data-route-status="abandoned"] {
+  border-style: dashed;
+  color: var(--warning-text);
+}
+
+.chosen {
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  padding: 0 0.5rem;
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.detail {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.detail h2,
+.detail h3,
+.detail h4 {
+  margin: 0;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.2rem 1rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.facts dt {
+  color: var(--text-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.snapshot,
+.sequent {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.target {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.target[data-kind="goal"] {
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+  color: var(--goal-fg);
+}
+
+.target[data-kind="obligation"] {
+  border-color: var(--obligation-border);
+  background: var(--obligation-bg);
+  color: var(--obligation-fg);
+}
+
+.hypotheses,
+.assumptions,
+.reasons {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding-inline-start: 1.1rem;
+}
+
+.assumptions li {
+  border-inline-start: 3px solid var(--obligation-border);
+  padding-inline-start: 0.5rem;
+}
+
+.hypotheses li {
+  color: var(--hypothesis-fg);
+}
+
+.roleTag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.suggestionSet {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.8rem;
+}
+
+.suggestionSet ol {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding-inline-start: 1.3rem;
+}
+
+.proofSteps,
+.records {
+  display: grid;
+  gap: 0.9rem;
+  margin: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.proofSteps li,
+.records li {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  padding: 0.7rem 0.9rem;
+}
+
+.proofSteps h3 {
+  margin: 0;
+}
+
+.playback {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.detail pre {
+  max-height: 20rem;
+  margin: 0.5rem 0 0;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+  padding: 0.75rem;
+  font-size: 0.72rem;
+}
+
+@media (max-width: 52rem) {
+  .treeLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .outline {
+    max-height: 24rem;
+  }
+}

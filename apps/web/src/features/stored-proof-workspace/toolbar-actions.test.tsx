@@ -632,8 +632,7 @@ describe("WorkspaceToolbar export and tree", () => {
     expect(link).toHaveAttribute("download", "session-test.proof.json");
     expect(exportHref("session:a b")).toBe("/api/proof-sessions/session%3Aa%20b/export");
     expect(exportFileName("session:x/y")).toBe("session-x-y.proof.json");
-    const tree = screen.getByRole("button", { name: "Open full discovery tree" });
-    expect(tree).toBeDisabled();
-    expect(tree).toHaveAccessibleDescription(/not available yet/);
+    const tree = screen.getByRole("link", { name: "Open full discovery tree" });
+    expect(tree).toHaveAttribute("href", "/sessions/session%3Atest/tree");
   });
 });

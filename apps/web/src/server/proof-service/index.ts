@@ -32,6 +32,7 @@ import {
   parseProofArtifact,
   proofArtifactImportResponseSchema,
   proofArtifactRejectionResponseSchema,
+  type ProofArtifact,
 } from "@proof/protocol";
 import {
   problemApprovalRequestSchema,
@@ -1105,6 +1106,30 @@ export async function exportProofArtifact(
     return { ok: true, status: 200, body: value };
   }
   return artifactFailureAnswer(response.status, value);
+}
+
+/**
+ * The stored artifact of a session, parsed, for the static viewers (roadmap N28). It reads stored
+ * rows only; the viewers never call the kernel, moves or retrieval.
+ */
+export async function readStoredProofArtifact(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProofArtifact> {
+  const answer = await exportProofArtifact(sessionIdInput, options);
+  if (!answer.ok) {
+    if (answer.status === 404) {
+      throw new ProofServiceError("invalid_request", "The proof session was not found.", 404);
+    }
+    throw new ProofServiceError(
+      "invalid_upstream_response",
+      answer.message ?? "The proof service could not export the session.",
+      answer.status,
+    );
+  }
+  const parsed = parseProofArtifact(answer.body);
+  if (!parsed.ok) throw invalidUpstreamResponse();
+  return parsed.artifact;
 }
 
 /**

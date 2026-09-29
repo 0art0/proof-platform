@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ProofNode } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
 import styles from "./stored-proof-workspace.module.css";
@@ -29,6 +30,11 @@ export function exportHref(sessionId: string): string {
   return `/api/proof-sessions/${encodeURIComponent(sessionId)}/export`;
 }
 
+/** The static discovery-tree viewer of a session (roadmap N28). */
+export function treeHref(sessionId: string): string {
+  return `/sessions/${encodeURIComponent(sessionId)}/tree`;
+}
+
 /** A download name that is safe on every file system. */
 export function exportFileName(sessionId: string): string {
   return `${sessionId.replace(/[^A-Za-z0-9._-]/g, "-")}.proof.json`;
@@ -46,7 +52,6 @@ export function WorkspaceToolbar({
   node,
   children,
 }: WorkspaceToolbarProps) {
-  const treeReasonId = useId();
   const [copy, setCopy] = useState<CopyState>({ kind: "idle" });
   const generation = useRef(0);
   useEffect(() => {
@@ -106,19 +111,9 @@ export function WorkspaceToolbar({
         >
           Export proof
         </a>
-        <span className={styles.toolbarNote}>
-          <button
-            type="button"
-            className={styles.toolbarButton}
-            disabled
-            aria-describedby={treeReasonId}
-          >
-            Open full discovery tree
-          </button>
-          <span id={treeReasonId}>
-            The full tree viewer is not available yet; the history below lists every retained node.
-          </span>
-        </span>
+        <Link className={styles.toolbarButton} href={treeHref(sessionId)}>
+          Open full discovery tree
+        </Link>
       </div>
       {children}
       <details className={styles.rawState}>
