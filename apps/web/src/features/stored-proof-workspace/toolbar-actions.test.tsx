@@ -24,7 +24,8 @@ import {
   selectedProposition,
   type HistoryEdge,
 } from "./toolbar-actions";
-import { WorkspaceToolbar, exportFileName, exportHref } from "./workspace-toolbar";
+import { exportFileName, exportHref } from "./export-action";
+import { WorkspaceToolbar } from "./workspace-toolbar";
 import type { ProtocolCommandOutcome } from "./toolbar-requests";
 
 const declaration = (symbol: string) => ({
@@ -618,7 +619,7 @@ describe("ToolbarActionBar", () => {
 });
 
 describe("WorkspaceToolbar export and tree", () => {
-  it("links the export download and shows the tree viewer as not yet available", () => {
+  it("offers the export action and links the tree viewer", () => {
     render(
       <WorkspaceToolbar
         view="formal"
@@ -627,10 +628,11 @@ describe("WorkspaceToolbar export and tree", () => {
         node={root}
       />,
     );
-    const link = screen.getByRole("link", { name: "Export proof" });
-    expect(link).toHaveAttribute("href", "/api/proof-sessions/session%3Atest/export");
-    expect(link).toHaveAttribute("download", "session-test.proof.json");
+    expect(screen.getByRole("button", { name: "Export proof" })).toBeEnabled();
     expect(exportHref("session:a b")).toBe("/api/proof-sessions/session%3Aa%20b/export");
+    expect(exportHref("session:a b", true)).toBe(
+      "/api/proof-sessions/session%3Aa%20b/export?confirmPrivateExport=true",
+    );
     expect(exportFileName("session:x/y")).toBe("session-x-y.proof.json");
     const tree = screen.getByRole("link", { name: "Open full discovery tree" });
     expect(tree).toHaveAttribute("href", "/sessions/session%3Atest/tree");

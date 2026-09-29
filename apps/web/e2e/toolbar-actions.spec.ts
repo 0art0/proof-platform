@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { createIsolatedSession, warmRoutes, type IsolatedDraft } from "./fixtures";
 
@@ -231,12 +232,28 @@ test("a sibling branch is reviewed and replayed at the current node", async ({ p
   expect(await currentNodeId(page)).not.toBe(splitId);
 });
 
-test("export links the stored artifact and the full tree links to its viewer", async ({ page }) => {
+test("export asks to confirm a private session, then downloads the artifact; the tree links to its viewer", async ({
+  page,
+}) => {
   const sessionId = await openFreshSession(page);
-  await expect(page.getByRole("link", { name: "Export proof" })).toHaveAttribute(
-    "href",
-    `/api/proof-sessions/${encodeURIComponent(sessionId)}/export`,
+  const dialog = page.getByRole("dialog", { name: "Export a private session" });
+  // A click before hydration does nothing, so retry it until the dialog opens.
+  await expect(async () => {
+    await page.getByRole("button", { name: "Export proof" }).click();
+    await expect(dialog).toBeVisible({ timeout: 4_000 });
+  }).toPass({ timeout: 60_000 });
+  await expect(dialog.getByText("This session is private. Export it anyway?")).toBeVisible();
+  const downloading = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "Export anyway" }).click();
+  const download = await downloading;
+  expect(download.url()).toContain(
+    `/api/proof-sessions/${encodeURIComponent(sessionId)}/export?confirmPrivateExport=true`,
   );
+  const artifact = JSON.parse(await readFile((await download.path()) ?? "", "utf8")) as {
+    kind?: string;
+  };
+  expect(artifact.kind).toBe("proof-artifact");
+  await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Open full discovery tree" })).toHaveAttribute(
     "href",
     `/sessions/${encodeURIComponent(sessionId)}/tree`,

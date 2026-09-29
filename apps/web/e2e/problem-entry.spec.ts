@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 async function fillPropositionalDraft(page: Page) {
@@ -67,19 +68,25 @@ test("the worker's diagnostics explain a rejected draft", async ({ page }) => {
 });
 
 test("an exported artifact uploads as a read-only session", async ({ page }) => {
-  const exported = await page.request.get(
-    "/api/proof-sessions/session%3Adevelopment/export?confirmPrivateExport=true",
-  );
-  expect(exported.status()).toBe(200);
-  expect(exported.headers()["content-disposition"]).toBe(
-    'attachment; filename="session-development.proof-artifact.json"',
-  );
-
   await page.goto("/");
+  // A click before hydration submits the form natively and reloads the page, so retry it.
+  await expect(async () => {
+    await page.getByLabel("Session ID to download", { exact: true }).fill("session:development");
+    await page.getByRole("button", { name: "Download artifact" }).click();
+    await expect(page.getByText("This session is private. Export it anyway?")).toBeVisible({
+      timeout: 4_000,
+    });
+  }).toPass({ timeout: 60_000 });
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export anyway" }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe("session-development.proof-artifact.json");
+  const exportedBody = await readFile((await download.path()) ?? "");
+
   await page.getByLabel("Artifact file", { exact: true }).setInputFiles({
     name: "session-development.proof-artifact.json",
     mimeType: "application/json",
-    buffer: await exported.body(),
+    buffer: exportedBody,
   });
   await page.getByRole("button", { name: "Upload artifact" }).click();
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)artifact(%3A|:)[0-9a-f]{32}$/);
