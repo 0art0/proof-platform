@@ -58,6 +58,7 @@ export * from "./interaction-events";
 export * from "./inquiry";
 export * from "./inquiry-methods";
 export * from "./command-protocol";
+export * from "./problem-setup";
 
 export const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 export type ActorId = z.infer<typeof actorIdSchema>;

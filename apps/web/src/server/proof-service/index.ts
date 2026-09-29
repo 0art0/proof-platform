@@ -28,6 +28,15 @@ import {
   type ProofEdge,
   type ProofNode,
 } from "@proof/protocol";
+import {
+  problemApprovalRequestSchema,
+  problemDraftValidationResponseSchema,
+  problemSetupDiagnosticSchema,
+  problemSetupOptionsSchema,
+  proofSessionMetadataSchema,
+  type ProblemSetupOptions,
+  type ProofSessionMetadata,
+} from "@proof/protocol";
 import type { ResolvedProofSelection } from "@proof/selections";
 import { z } from "zod";
 import {
@@ -922,4 +931,138 @@ function resolvedSelectionMatchesDescriptor(
 
 function jsonEquals(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Manual problem and session creation (roadmap N26)
+// ---------------------------------------------------------------------------------------------
+
+/** The session ID `readConfiguredProofSession` loads (the development session by default). */
+export function configuredProofSessionId(): string {
+  return process.env.PROOF_SESSION_ID ?? DEFAULT_PROOF_SESSION_ID;
+}
+
+/** The entry form's menus: sorts, library layers and the reviewed starter packs. */
+export async function readProblemSetupOptions(
+  options: ProofServiceRequestOptions = {},
+): Promise<ProblemSetupOptions> {
+  const response = await requestProofService("/problem-setup/options", {
+    method: "GET",
+    ...signalOption(options.signal),
+  });
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200) throw invalidUpstreamResponse();
+  const parsed = problemSetupOptionsSchema.safeParse(value);
+  if (!parsed.success) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+const problemSetupFailureSchema = z.union([
+  z.object({ diagnostics: z.array(problemSetupDiagnosticSchema).min(1) }).strict(),
+  z
+    .object({
+      diagnostics: z.tuple([
+        z.object({ code: z.string().min(1), message: z.string().min(1) }).strict(),
+      ]),
+    })
+    .strict(),
+]);
+
+/**
+ * Validate a draft into a review; writes nothing. A 422 carries the draft diagnostics and is
+ * returned, not thrown, so the form can show every one of them.
+ */
+export async function validateProblemDraftRequest(
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const request = z.object({ draft: z.unknown() }).strict().safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The draft validation request is invalid.");
+  const response = await requestProofService("/problem-drafts/validate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request.data),
+    ...signalOption(options.signal),
+  });
+  const value = await readValidatedEnvelope(response);
+  const parsed = problemDraftValidationResponseSchema.safeParse(value);
+  if (response.status === 200 && parsed.success && parsed.data.ok) {
+    return { ok: true, status: 200, body: parsed.data };
+  }
+  if (response.status === 422 && parsed.success && !parsed.data.ok) {
+    const [first] = parsed.data.diagnostics;
+    return {
+      ok: false,
+      status: 422,
+      code: "invalid-draft",
+      message: first?.message ?? "The draft is invalid.",
+      body: { diagnostics: parsed.data.diagnostics },
+    };
+  }
+  return problemSetupFailureAnswer(response.status, value);
+}
+
+export type CreatedProblemSession = Readonly<{
+  session: ProofSession;
+  node: ProofNode;
+  metadata: ProofSessionMetadata;
+  replayed: boolean;
+}>;
+
+const createdProblemSessionEnvelopeSchema = z
+  .object({
+    session: proofSessionSchema,
+    node: z.unknown(),
+    metadata: proofSessionMetadataSchema,
+    replayed: z.boolean(),
+  })
+  .strict();
+
+/**
+ * Approve a reviewed draft: the worker re-validates it, checks the reviewed digest, and creates
+ * the session and root node together. 201 creates, 200 replays an identical approval.
+ */
+export async function createProblemSession(
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const request = problemApprovalRequestSchema.safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The approval request is invalid.");
+  const response = await requestProofService("/proof-sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request.data),
+    ...signalOption(options.signal),
+  });
+  const value = await readValidatedEnvelope(response);
+  if (response.status === 200 || response.status === 201) {
+    const envelope = createdProblemSessionEnvelopeSchema.safeParse(value);
+    if (!envelope.success) throw invalidUpstreamResponse();
+    const { session } = envelope.data;
+    const node = parseProofNode(envelope.data.node, session.operators);
+    if (
+      session.id !== request.data.sessionId ||
+      node === undefined ||
+      node.id !== session.rootNodeId ||
+      envelope.data.replayed !== (response.status === 200)
+    ) {
+      throw invalidUpstreamResponse();
+    }
+    const created: CreatedProblemSession = { ...envelope.data, session, node };
+    return { ok: true, status: response.status, body: created };
+  }
+  return problemSetupFailureAnswer(response.status, value);
+}
+
+function problemSetupFailureAnswer(status: number, value: unknown): ProtocolServiceAnswer {
+  const parsed = problemSetupFailureSchema.safeParse(value);
+  if (!parsed.success || status < 400 || status > 599) throw invalidUpstreamResponse();
+  const [first] = parsed.data.diagnostics;
+  return {
+    ok: false,
+    status: status === 422 ? 422 : publicFailureStatus(status),
+    code: first?.code ?? "invalid_upstream_response",
+    message: first?.message ?? "The proof service rejected the request.",
+    body: parsed.data,
+  };
 }

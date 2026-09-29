@@ -98,7 +98,7 @@ async function waitForWorkspace(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   const reset = await page.evaluate(async () => {
     const historyResponse = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
       cache: "no-store",
@@ -122,7 +122,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("the stored session and each contextual sequent survive reload", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
   await expect(page.getByText("session:development", { exact: true })).toBeVisible();
   await expect(page.getByText("state:development-root", { exact: true })).toBeVisible();
@@ -144,7 +144,7 @@ test("the stored session and each contextual sequent survive reload", async ({ p
 test("MathLive gestures retain occurrence identity, expand parents, and form associative lenses", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
   const goal = page.getByLabel("Goal 1 conclusion");
 
@@ -164,7 +164,7 @@ test("MathLive gestures retain occurrence identity, expand parents, and form ass
 });
 
 test("modifier multiselection controls two-selection applicability", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
   const goal = page.getByLabel("Goal 1 conclusion");
   const conjunction = page.getByLabel("Goal 1 hypothesis 1");
@@ -194,7 +194,7 @@ test("modifier multiselection controls two-selection applicability", async ({ pa
 test("stale anchors are rejected and the persisted order and reasons are read back unchanged", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
 
   const stale = await page.evaluate(async () => {
@@ -271,7 +271,7 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
 test("preview, apply, rejection, backtracking, and a second child preserve the discovery tree", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
 
   const initialHistory = await page.evaluate(async () => {
@@ -386,7 +386,7 @@ test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw 
 }) => {
   // It exercises several render paths; cold webpack compilation dominates its runtime.
   test.slow();
-  await page.goto("/");
+  await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
 
   await expect(page.getByRole("heading", { level: 1, name: "session:development" })).toBeVisible();
