@@ -5,6 +5,7 @@ import {
   createProofEdgeSchema,
   createProofNodeSchema,
   displayedSuggestionSetSchema,
+  inquiryRecordListSchema,
   interactionEventSchema,
   moveRequiresInputResponseSchema,
   observeQuerySchema,
@@ -1216,5 +1217,43 @@ async function readLibraryView<View extends { sessionId: string }>(
   if (response.status !== 200) throw failureForResponse(response.status, value);
   const parsed = schema.safeParse(value);
   if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+/** Query of `GET …/inquiry-records`: records of a node or command, paged by sequence. */
+export const inquiryRecordsQuerySchema = z
+  .object({
+    nodeId: stableIdentifierSchema.optional(),
+    commandId: stableIdentifierSchema.optional(),
+    after: z.number().int().min(0).max(2_147_483_647).optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+  })
+  .strict();
+
+const inquiryRecordsEnvelopeSchema = z.object({ records: inquiryRecordListSchema }).strict();
+
+/** A page of the session's stored inquiry records, in sequence order (roadmap N22, N34). */
+export async function readInquiryRecords(
+  sessionIdInput: unknown,
+  queryInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<z.infer<typeof inquiryRecordsEnvelopeSchema>> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const query = inquiryRecordsQuerySchema.safeParse(queryInput);
+  if (!query.success) throw invalidRequest("The inquiry-record query is invalid.");
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query.data)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/inquiry-records${
+      search.size === 0 ? "" : `?${search.toString()}`
+    }`,
+    { method: "GET", ...signalOption(options.signal) },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = inquiryRecordsEnvelopeSchema.safeParse(value);
+  if (!parsed.success) throw invalidUpstreamResponse();
   return parsed.data;
 }
