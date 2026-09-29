@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { ArtifactDownload, ArtifactUpload } from "./artifact-actions";
 import styles from "./problem-entry.module.css";
 
 /**
- * The landing page's three actions (design plan §4.1). Upload is not available yet (roadmap
- * N27); fetching a stored proof opens an existing session by ID.
+ * The landing page's three actions (design plan §4.1): a new problem, uploading an exported
+ * artifact as a read-only session (roadmap N27), and fetching a stored proof by session ID (or
+ * downloading it as an artifact).
  */
 export function LandingActions({
   developmentSessionId,
@@ -21,12 +23,13 @@ export function LandingActions({
         </Link>
       </section>
 
-      <section className={styles.actionCard} aria-labelledby="action-upload" aria-disabled="true">
+      <section className={styles.actionCard} aria-labelledby="action-upload">
         <h2 id="action-upload">Upload artifact</h2>
-        <p>Open a previously exported proof artifact. Available in a later version.</p>
-        <button type="button" className={styles.secondary} disabled>
-          Upload artifact
-        </button>
+        <p>
+          Open a previously exported proof artifact. It is revalidated in full and opens as a
+          read-only session.
+        </p>
+        <ArtifactUpload />
       </section>
 
       <section className={styles.actionCard} aria-labelledby="action-fetch">
@@ -45,6 +48,8 @@ export function LandingActions({
         <Link href={`/sessions/${encodeURIComponent(developmentSessionId)}`}>
           Open the development session
         </Link>
+        <p>Or download a stored session as a proof artifact.</p>
+        <ArtifactDownload />
       </section>
     </div>
   );
