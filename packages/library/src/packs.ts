@@ -8,12 +8,13 @@
  * error and throws when the packs are first built.
  *
  * Operators. Order and arithmetic use the reserved built-ins (`Less`, `LessEqual`, `Add`,
- * `Multiply`); the set pack declares `Union` and `Intersection` as registered global operators.
+ * `Multiply`); the set pack declares `Union` and `Intersection`, the divisibility pack `Divides`,
+ * and the closure pack `Closure` (research-style notation) as registered global operators.
  * A session can use a pack only when it declares every one of the pack's operators identically
  * (see `libraryPacksForOperators`), so a pack never adds notation to a session behind its back.
  *
  * Sorts. Equality, order and arithmetic are stated over `sort:real`; the set pack uses sets of the
- * generic element sort `sort:element`. The type system is monomorphic, so a session over another
+ * generic element sort `sort:element`, and divisibility is stated over `sort:integer`. The type system is monomorphic, so a session over another
  * number sort does not match these results.
  *
  * Variants. Only transformations that add a genuinely different application are requested per
@@ -58,6 +59,8 @@ export const LIBRARY_PACK_IDS = [
   "pack:order",
   "pack:arithmetic",
   "pack:sets",
+  "pack:divisibility",
+  "pack:closure",
 ] as const;
 export type LibraryPackId = (typeof LIBRARY_PACK_IDS)[number];
 
@@ -81,6 +84,9 @@ export const ELEMENT_SORT: Sort = deepFreeze(
 );
 export const ELEMENT_SET_SORT: Sort = deepFreeze(
   sortSchema.parse({ kind: "named", id: "sort:set", arguments: [ELEMENT_SORT] }),
+);
+export const INTEGER_SORT: Sort = deepFreeze(
+  sortSchema.parse({ kind: "named", id: "sort:integer" }),
 );
 const PROPOSITION_SORT: Sort = { kind: "proposition" };
 
@@ -109,6 +115,51 @@ export const SET_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
       latex: { template: String.raw`#1\cap #2`, precedence: "multiplicative" },
       naturalLanguage: [{ template: "the intersection of #1 and #2" }],
       domains: ["sets"],
+    },
+  },
+] as unknown as readonly OperatorDeclaration[];
+
+/** The divisibility pack's operator: the relation "m divides n" between integers. */
+export const DIVISIBILITY_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
+  {
+    id: "operator:divides",
+    symbol: "Divides",
+    signature: { parameters: [INTEGER_SORT, INTEGER_SORT], result: PROPOSITION_SORT },
+    presentation: {
+      displayName: "divides",
+      latex: {
+        template: String.raw`#1\mid #2`,
+        precedence: "relation",
+        parse: { trigger: String.raw`\mid`, notation: "infix" },
+      },
+      naturalLanguage: [
+        { template: "#1 divides #2", proposition: true, negated: "#1 does not divide #2" },
+      ],
+      domains: ["number-theory"],
+    },
+  },
+] as unknown as readonly OperatorDeclaration[];
+
+/**
+ * The closure pack's operator: a Kuratowski-style closure of a set of elements, the corpus's
+ * research-notation case (design plan §21.5). It is presented as `\operatorname{cl}(A)` and read
+ * "the closure of A"; its LaTeX parse trigger lets typed input produce the operator.
+ */
+export const CLOSURE_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
+  {
+    id: "operator:set-closure",
+    symbol: "Closure",
+    signature: { parameters: [ELEMENT_SET_SORT], result: ELEMENT_SET_SORT },
+    presentation: {
+      displayName: "closure",
+      latex: {
+        template: String.raw`\operatorname{cl}\left(#1\right)`,
+        precedence: "atom",
+        parse: { trigger: String.raw`\operatorname{cl}`, notation: "function" },
+      },
+      naturalLanguage: [{ template: "the closure of #1" }],
+      domains: ["topology"],
+      notations: ["kuratowski-closure"],
     },
   },
 ] as unknown as readonly OperatorDeclaration[];
@@ -207,6 +258,7 @@ const p = (symbol: string) => [symbol, PROPOSITION_SORT] as const;
 const real = (symbol: string) => [symbol, REAL_SORT] as const;
 const set = (symbol: string) => [symbol, ELEMENT_SET_SORT] as const;
 const element = (symbol: string) => [symbol, ELEMENT_SORT] as const;
+const integer = (symbol: string) => [symbol, INTEGER_SORT] as const;
 
 const LOGIC_PACK: PackSpec = {
   id: "pack:elementary-logic",
@@ -634,12 +686,146 @@ const SET_PACK: PackSpec = {
   ],
 };
 
+const DIVISIBILITY_PACK: PackSpec = {
+  id: "pack:divisibility",
+  name: "Divisibility",
+  description: "Reflexivity and transitivity of divisibility; divisors of sums and multiples.",
+  domain: "number-theory",
+  operators: DIVISIBILITY_OPERATOR_DECLARATIONS,
+  results: [
+    {
+      slug: "divides-reflexivity",
+      name: "Reflexivity of divisibility",
+      description: "Every integer divides itself.",
+      parameters: [integer("a")],
+      statement: ["Divides", "a", "a"],
+      latex: String.raw`a\mid a`,
+      naturalLanguage: "a divides a.",
+      // A fact without premises only closes a goal that is an instance of it.
+      directions: ["backward"],
+      patterns: [
+        {
+          suffix: "backward",
+          expression: ["Divides", "a", "a"],
+          direction: "backward",
+          requirement: GOAL,
+        },
+      ],
+    },
+    {
+      slug: "divides-transitivity",
+      name: "Transitivity of divisibility",
+      description: "Divisibility is transitive.",
+      parameters: [integer("a"), integer("b"), integer("c")],
+      premises: [
+        ["Divides", "a", "b"],
+        ["Divides", "b", "c"],
+      ],
+      statement: ["Divides", "a", "c"],
+      latex: String.raw`a\mid b,\ b\mid c\vdash a\mid c`,
+      naturalLanguage: "If a divides b and b divides c, then a divides c.",
+      directions: ["forward", "backward"],
+      patterns: rulePatterns(["Divides", "a", "b"], ["Divides", "a", "c"]),
+      variants: ["bundle-premises"],
+    },
+    {
+      slug: "divides-sum",
+      name: "Divisibility of a sum",
+      description: "A common divisor of two integers divides their sum.",
+      parameters: [integer("a"), integer("b"), integer("c")],
+      premises: [
+        ["Divides", "a", "b"],
+        ["Divides", "a", "c"],
+      ],
+      statement: ["Divides", "a", ["Add", "b", "c"]],
+      latex: String.raw`a\mid b,\ a\mid c\vdash a\mid b+c`,
+      naturalLanguage: "If a divides b and a divides c, then a divides b + c.",
+      directions: ["forward", "backward"],
+      patterns: rulePatterns(["Divides", "a", "b"], ["Divides", "a", ["Add", "b", "c"]]),
+    },
+    {
+      slug: "divides-multiple",
+      name: "Divisibility of a multiple",
+      description: "A divisor of an integer divides every multiple of it.",
+      parameters: [integer("a"), integer("b"), integer("c")],
+      premises: [["Divides", "a", "b"]],
+      statement: ["Divides", "a", ["Multiply", "b", "c"]],
+      latex: String.raw`a\mid b\vdash a\mid b\cdot c`,
+      naturalLanguage: "If a divides b, then a divides b times c.",
+      directions: ["forward", "backward"],
+      patterns: rulePatterns(["Divides", "a", "b"], ["Divides", "a", ["Multiply", "b", "c"]]),
+    },
+  ],
+};
+
+const CLOSURE_PACK: PackSpec = {
+  id: "pack:closure",
+  name: "Closure operators",
+  description: "Extensivity, monotonicity, and idempotence of a closure operator on sets.",
+  domain: "topology",
+  operators: CLOSURE_OPERATOR_DECLARATIONS,
+  results: [
+    {
+      slug: "closure-extensive",
+      name: "Extensivity of closure",
+      description: "Every set is contained in its closure.",
+      parameters: [set("A")],
+      statement: ["SubsetEqual", "A", ["Closure", "A"]],
+      latex: String.raw`A\subseteq\operatorname{cl}\left(A\right)`,
+      naturalLanguage: "A is a subset of the closure of A.",
+      directions: ["forward", "backward"],
+      patterns: [
+        // Forward from a selected closure term: the inclusion becomes a hypothesis.
+        {
+          suffix: "forward",
+          expression: ["Closure", "A"],
+          direction: "forward",
+          requirement: ANY_TERM,
+        },
+        {
+          suffix: "backward",
+          expression: ["SubsetEqual", "A", ["Closure", "A"]],
+          direction: "backward",
+          requirement: GOAL,
+        },
+      ],
+    },
+    {
+      slug: "closure-monotone",
+      name: "Monotonicity of closure",
+      description: "Closure preserves inclusion.",
+      parameters: [set("A"), set("B")],
+      premises: [["SubsetEqual", "A", "B"]],
+      statement: ["SubsetEqual", ["Closure", "A"], ["Closure", "B"]],
+      latex: String.raw`A\subseteq B\vdash\operatorname{cl}\left(A\right)\subseteq\operatorname{cl}\left(B\right)`,
+      naturalLanguage:
+        "If A is a subset of B, then the closure of A is a subset of the closure of B.",
+      directions: ["forward", "backward"],
+      patterns: rulePatterns(
+        ["SubsetEqual", "A", "B"],
+        ["SubsetEqual", ["Closure", "A"], ["Closure", "B"]],
+      ),
+    },
+    identity(
+      "closure-idempotent",
+      "Idempotence of closure",
+      "Taking the closure twice gives the closure.",
+      [set("A")],
+      ["Equal", ["Closure", ["Closure", "A"]], ["Closure", "A"]],
+      String.raw`\operatorname{cl}\left(\operatorname{cl}\left(A\right)\right)=\operatorname{cl}\left(A\right)`,
+      "The closure of the closure of A equals the closure of A.",
+    ),
+  ],
+};
+
 const PACK_SPECS: readonly PackSpec[] = [
   LOGIC_PACK,
   EQUALITY_PACK,
   ORDER_PACK,
   ARITHMETIC_PACK,
   SET_PACK,
+  DIVISIBILITY_PACK,
+  CLOSURE_PACK,
 ];
 
 let builtPacks: readonly LibraryPack[] | undefined;

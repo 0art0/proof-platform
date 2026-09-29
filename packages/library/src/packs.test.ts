@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createProofStateSchema, freeSymbolNames, type PlainMathJson } from "@proof/mathjson-model";
 import {
+  BENCHMARK_CORPUS,
+  CLOSURE_OPERATOR_DECLARATIONS,
   CORE_LOGIC_RESULTS,
+  DIVISIBILITY_OPERATOR_DECLARATIONS,
   ELEMENTARY_CORPUS,
   LIBRARY_PACK_IDS,
   SET_OPERATOR_DECLARATIONS,
@@ -37,6 +40,8 @@ describe("starter domain packs", () => {
       "pack:order": { results: 12, variants: 7, families: 5 },
       "pack:arithmetic": { results: 13, variants: 5, families: 5 },
       "pack:sets": { results: 5, variants: 1, families: 1 },
+      "pack:divisibility": { results: 5, variants: 1, families: 1 },
+      "pack:closure": { results: 3, variants: 0, families: 0 },
     });
     packs.forEach((pack) => {
       expect(Object.isFrozen(pack)).toBe(true);
@@ -172,26 +177,70 @@ describe("starter domain packs", () => {
   it("offers the set pack only to sessions declaring its operators identically", () => {
     const ids = (operators: Parameters<typeof libraryPacksForOperators>[0]) =>
       libraryPacksForOperators(operators).map((pack) => pack.id);
-    const withoutSets = LIBRARY_PACK_IDS.filter((id) => id !== "pack:sets");
-    expect(ids([])).toEqual(withoutSets);
-    expect(ids(SET_OPERATOR_DECLARATIONS)).toEqual([...LIBRARY_PACK_IDS]);
-    expect(ids(SET_OPERATOR_DECLARATIONS.slice(0, 1))).toEqual(withoutSets);
+    const withoutNotation: string[] = [
+      "pack:elementary-logic",
+      "pack:equality",
+      "pack:order",
+      "pack:arithmetic",
+    ];
+    const withSets = [...withoutNotation, "pack:sets"];
+    expect(ids([])).toEqual(withoutNotation);
+    expect(ids(SET_OPERATOR_DECLARATIONS)).toEqual(withSets);
+    expect(ids(SET_OPERATOR_DECLARATIONS.slice(0, 1))).toEqual(withoutNotation);
     const renamed = [
       { ...SET_OPERATOR_DECLARATIONS[0]!, id: "operator:other-union" },
       SET_OPERATOR_DECLARATIONS[1]!,
     ] as unknown as typeof SET_OPERATOR_DECLARATIONS;
-    expect(ids(renamed)).toEqual(withoutSets);
+    expect(ids(renamed)).toEqual(withoutNotation);
+    expect(ids(DIVISIBILITY_OPERATOR_DECLARATIONS)).toEqual([
+      ...withoutNotation,
+      "pack:divisibility",
+    ]);
+    // The closure pack's results also need no set-pack notation, but the corpus uses both.
+    expect(ids([...SET_OPERATOR_DECLARATIONS, ...CLOSURE_OPERATOR_DECLARATIONS])).toEqual([
+      ...withSets,
+      "pack:closure",
+    ]);
+    expect(
+      ids([
+        ...SET_OPERATOR_DECLARATIONS,
+        ...DIVISIBILITY_OPERATOR_DECLARATIONS,
+        ...CLOSURE_OPERATOR_DECLARATIONS,
+      ]),
+    ).toEqual([...LIBRARY_PACK_IDS]);
   });
 
-  it("registers the set operators in the global operator-registry shape", () => {
-    const sets = starterLibraryPack("pack:sets");
-    expect(sets.operators.map((operator) => operator.symbol)).toEqual(["Union", "Intersection"]);
-    expect(sets.operatorRegistrations.map(({ operator }) => operator)).toEqual(sets.operators);
-    expect(
-      starterLibraryPacks()
-        .filter((pack) => pack.id !== "pack:sets")
-        .every((pack) => pack.operators.length === 0),
-    ).toBe(true);
+  it("registers the notation packs' operators in the global operator-registry shape", () => {
+    const symbols = Object.fromEntries(
+      starterLibraryPacks().map((pack) => {
+        expect(pack.operatorRegistrations.map(({ operator }) => operator)).toEqual(pack.operators);
+        return [pack.id, pack.operators.map((operator) => operator.symbol)];
+      }),
+    );
+    expect(symbols).toEqual({
+      "pack:elementary-logic": [],
+      "pack:equality": [],
+      "pack:order": [],
+      "pack:arithmetic": [],
+      "pack:sets": ["Union", "Intersection"],
+      "pack:divisibility": ["Divides"],
+      "pack:closure": ["Closure"],
+    });
+  });
+
+  it("gives the research-notation closure operator validated presentation metadata", () => {
+    const [closure] = starterLibraryPack("pack:closure").operators;
+    expect(closure?.presentation).toEqual({
+      displayName: "closure",
+      latex: {
+        template: String.raw`\operatorname{cl}\left(#1\right)`,
+        precedence: "atom",
+        parse: { trigger: String.raw`\operatorname{cl}`, notation: "function" },
+      },
+      naturalLanguage: [{ template: "the closure of #1" }],
+      domains: ["topology"],
+      notations: ["kuratowski-closure"],
+    });
   });
 });
 
@@ -208,7 +257,7 @@ describe("elementary corpus", () => {
   });
 
   it("states every problem as a valid proof state in its operator environment", () => {
-    for (const problem of ELEMENTARY_CORPUS) {
+    for (const problem of BENCHMARK_CORPUS) {
       const parsed = createProofStateSchema({ operators: problem.operators }).safeParse(
         corpusRootState(problem, "state:corpus-root"),
       );
@@ -219,7 +268,7 @@ describe("elementary corpus", () => {
   });
 
   it("scripts choices only as displayed-suggestion references and menu values", () => {
-    for (const problem of ELEMENTARY_CORPUS) {
+    for (const problem of BENCHMARK_CORPUS) {
       const declared = new Set([
         ...problem.declarations.map(([symbol]) => symbol),
         ...problem.operators.map((operator) => operator.symbol),

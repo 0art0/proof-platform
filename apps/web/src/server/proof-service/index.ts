@@ -7,7 +7,13 @@ import {
   displayedSuggestionSetSchema,
   interactionEventSchema,
   moveRequiresInputResponseSchema,
+  observeQuerySchema,
+  observeResponseSchema,
   operatorDeclarationSchema,
+  protocolCommandEnvelopeSchema,
+  protocolCommandResponseSchema,
+  protocolDiagnosticsResponseSchema,
+  protocolRequiresInputResponseSchema,
   proofCommandReceiptSchema,
   previewRegeneratedResponseSchema,
   proofNodeIdSchema,
@@ -519,6 +525,112 @@ export async function backtrackProofSession(
     throw invalidUpstreamResponse();
   }
   return { session, node, replayed: envelope.data.replayed };
+}
+
+/**
+ * The worker's answer to a command envelope or an observation (roadmap N25). Structured
+ * failures (requires-input with aliased menus, replay-failed reports, regenerated previews and
+ * protocol diagnostics) are returned rather than thrown, so the caller can relay them intact.
+ */
+export type ProtocolServiceAnswer = Readonly<{
+  ok: boolean;
+  status: number;
+  code?: string;
+  message?: string;
+  body: unknown;
+}>;
+
+const protocolStructuredFailureSchema = z.union([
+  protocolRequiresInputResponseSchema,
+  previewRegeneratedResponseSchema,
+  z
+    .object({
+      status: z.literal("replay-failed"),
+      report: z.unknown(),
+      diagnostics: z.tuple([
+        z.object({ code: z.literal("replay-failed"), message: z.string().min(1) }).strict(),
+      ]),
+    })
+    .strict(),
+  protocolDiagnosticsResponseSchema,
+]);
+
+/** Send one command envelope, from a human or an agent, to the worker's command service. */
+export async function submitProtocolCommand(
+  sessionIdInput: unknown,
+  envelopeInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const envelope = protocolCommandEnvelopeSchema.safeParse(envelopeInput);
+  if (!envelope.success) throw invalidRequest("The command envelope is invalid.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/protocol-commands`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(envelope.data),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status === 200 || response.status === 201) {
+    const parsed = protocolCommandResponseSchema.safeParse(value);
+    if (
+      !parsed.success ||
+      parsed.data.commandId !== envelope.data.commandId ||
+      parsed.data.replayed !== (response.status === 200)
+    ) {
+      throw invalidUpstreamResponse();
+    }
+    return { ok: true, status: response.status, body: parsed.data };
+  }
+  return protocolFailureAnswer(response.status, value);
+}
+
+/** Observe the session: full snapshot with aliases, compact summary, or delta since a cursor. */
+export async function observeProofSession(
+  sessionIdInput: unknown,
+  queryInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const query = observeQuerySchema.safeParse(queryInput);
+  if (!query.success) throw invalidRequest("The observe query is invalid.");
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query.data)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/observe?${search.toString()}`,
+    { method: "GET", ...signalOption(options.signal) },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status === 200) {
+    const parsed = observeResponseSchema.safeParse(value);
+    if (
+      !parsed.success ||
+      parsed.data.view !== query.data.view ||
+      parsed.data.session.id !== sessionId
+    ) {
+      throw invalidUpstreamResponse();
+    }
+    return { ok: true, status: 200, body: parsed.data };
+  }
+  return protocolFailureAnswer(response.status, value);
+}
+
+function protocolFailureAnswer(status: number, value: unknown): ProtocolServiceAnswer {
+  const parsed = protocolStructuredFailureSchema.safeParse(value);
+  if (!parsed.success || status < 400 || status > 599) throw invalidUpstreamResponse();
+  const diagnostic = parsed.data.diagnostics[0];
+  return {
+    ok: false,
+    status: status === 422 ? 422 : publicFailureStatus(status),
+    code: diagnostic.code,
+    message: diagnostic.message,
+    body: parsed.data,
+  };
 }
 
 function parseIdentifier(input: unknown, label: string): string {

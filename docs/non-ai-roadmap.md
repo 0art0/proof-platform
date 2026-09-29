@@ -259,7 +259,7 @@ otherwise automate — the substrate is in scope.
 
 ## Phase 6 — Protocol, agent API, problem entry
 
-- [ ] **N25 Complete command protocol (§18, §20.3).** Add one command envelope for every mutation: kernel
+- [x] **N25 Complete command protocol (§18, §20.3).** Add one command envelope for every mutation: kernel
       operations with menu-sourced parameters, case split, sorry, delete, backtrack (cursor and with
       information), replay, library addition, and inquiry commands.
   - Stable compact aliases per snapshot (`g1`, `h2`, `s1`, `m3`).
@@ -335,7 +335,7 @@ otherwise automate — the substrate is in scope.
 
 - [ ] **N36 Migrations, privacy, deletion (§19.3).** Add an idempotent migration runner script, schema
       coverage for every new entity, private-by-default sessions, and session/export deletion APIs.
-- [ ] **N37 Corpus and performance (§21.5–§21.6).** Extend the corpus across logic, algebra, number
+- [x] **N37 Corpus and performance (§21.5–§21.6).** Extend the corpus across logic, algebra, number
       theory, sets, order, and a research-notation custom-operator case. Record deterministic coverage and
       interaction counts. Add performance budget tests for selection, suggestions, and previews.
 - [ ] **N38 End-to-end mouse-only flows (§21.4).** Add Playwright flows against the memory worker (N00):
@@ -617,3 +617,56 @@ Entries are appended as tasks complete: `date — task — commit — notes`.
     Suggestion sets stored earlier have no `predictedObligations`. Premise-free result rewrites are not
     treated as "Try this theorem". The `requires-input` path is untested. No agent actor over HTTP; no web
     UI (N34).
+- 2026-09-29 — N25 — `a4a2b25`, `0bdda72` — protocol `command-protocol.ts`: a strict
+  `protocolCommandEnvelopeSchema` `{ commandId, actor (human|agent), basis?: { nodeId, suggestionSetId? },
+command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id or alias;
+  `inquiryMethod: "try-result"`), `kernel-operation` (any kernel or N11 construction operation, with
+  aliases for targets, hypotheses and statements), `case-split`, `sorry`, `delete-previous-move`,
+  `backtrack`, `backtrack-with-information`, `replay`, `record-inquiry`, `investigate-hypothesis`,
+  `extract-conditional-lemma` and `add-library-result`. Each dispatches to the existing repository
+  function; the suggestion/preview/apply flows moved to `proof-http/shared.ts` and back both the old
+  routes and the envelope.
+  - Aliases are pure functions of a stored snapshot: `g`/`o` goals and obligations in state order, `h`
+    hypotheses by first appearance, `s` in the display order of the latest `suggestions-displayed` event,
+    `m` per menu round. fast-check covers determinism, JSON round trips and alias↔id injectivity. Aliases
+    resolve against the stored snapshot of `basis.nodeId`; failures on an old basis are 409 `stale-alias`,
+    unknown aliases 422, cursor-bound kinds without a basis 400 `basis-required`.
+  - Payload sources: MathJSON arrives by `occurrence` (snapshot, target, statement, operand path) or raw
+    with a `source`. Raw `setup` and `approved-generator` payloads are rejected; `validated-operation`
+    must occur verbatim in the snapshot; `reviewed-authoring` is accepted only from a human. Library
+    additions must be human `reviewed-authoring` by the approving reviewer.
+  - HTTP: `POST /proof-sessions/:id/protocol-commands` (201/200 replay) returns
+    `{ commandId, kind, actor, replayed, cursor, aliases, delta, result }`. `GET
+/proof-sessions/:id/observe?view=full|summary|delta`: full (node, aliases, open targets, displayed
+    suggestions, cursor `{ nodeId, stateId, eventSequence, inquirySequence }`), summary (LaTeX-free lines),
+    delta (`sinceNode` + `afterEvent`/`afterInquiry`). The library store is wired into the HTTP service and
+    startup (memory and Postgres). Web proxies `/api/proof-sessions/[sessionId]/protocol-commands` and
+    `/observe`. An agent-style session using only observe and aliased envelope commands solves
+    `corpus:modus-tollens` and `corpus:equality-chain`.
+  - Gaps: no authentication (the actor is trusted as sent, including through the proxy). No unified event
+    log; the delta cursor is node + interaction/inquiry sequences. Records inside `record-inquiry` use
+    stored ids, not aliases. `kernel-operation` has no generated ids or menus; construction operations
+    still have no moves or menus. Cursor `backtrack` records no actor. Observe reads whole event and
+    inquiry logs. Generator and derived-variant library additions are rejected rather than regenerated;
+    `global` layer additions are refused; retried library additions send a new `occurredAt` (replay
+    untested). The web adapter validates the observed node only structurally. No UI.
+- 2026-09-29 — N37 — `7b79da8` — `BENCHMARK_CORPUS` = `ELEMENTARY_CORPUS` + `EXTENDED_CORPUS` (library
+  `corpus.ts`, 37 problems): logic 5, algebra 4, number theory 5, sets 3, order 3, research notation 3.
+  New packs `pack:divisibility` (`Divides` over `sort:integer`) and `pack:closure` (`Closure`, the
+  research-notation case with N02 metadata `\operatorname{cl}(…)`, parse trigger and prose template),
+  admitted through the global gate and offered only when their operators are declared.
+  - `apps/worker/src/proof-http/benchmark-corpus.test.ts` (replacing `elementary-corpus.test.ts`; harness in
+    `corpus-harness.testing.ts`) solves every problem over HTTP from displayed suggestions and checks each
+    with `analyzeDiscoveryTree` and `prunedProof`. Per-problem interactions, displayed rank of the chosen
+    suggestion, kernel operations and transition classes are compared with the golden
+    `corpus-coverage.golden.json` (regenerate with vitest `-u`). Totals: 124 steps, 180 selections, 124
+    suggestion requests, 142 preview requests, 18 menu choices, 124 applies, 0 typed expressions; 29 of 124
+    choices were not ranked first. 31 catalog results are used; unused ones are listed in the golden.
+  - `corpus-performance.test.ts`: §21.6 budgets (selection 50 ms, suggestions 150 ms, previews 300 ms) on
+    the median of 7 runs after 2 warm-ups, at every step of the longest problem per domain. Worst medians
+    under parallel load: 0.5 / 42 / 84 ms.
+  - Gaps: backward applications needing an instantiation menu still rank outside the 8 displayed
+    suggestions (scripted forward instead). Set equations rewrite right to left only via a direction menu.
+    `apply-result-forward` edges are classified as equivalence even when they create obligations (N06(a)).
+    No script uses a derived variant. Combinatorics, linear algebra, real analysis and geometry have no
+    packs yet (monomorphic sorts, no operators).

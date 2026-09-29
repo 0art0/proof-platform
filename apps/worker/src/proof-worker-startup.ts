@@ -1,6 +1,8 @@
 import { Pool } from "pg";
 import { ensureDevelopmentProofSession } from "./development-session";
-import { MemoryProofStore } from "./memory-proof-store";
+import type { LibraryStore } from "./library-repository";
+import { MemoryLibraryStore } from "./memory-library-store";
+import { postgresLibraryStore } from "./postgres-library-store";
 import { postgresProofStore } from "./postgres-proof-store";
 import { createProofHttpService, type ProofHttpService } from "./proof-http";
 import type { ProofStore } from "./proof-repository";
@@ -8,8 +10,13 @@ import type { ProofStore } from "./proof-repository";
 export type ProofWorkerEnvironment = Readonly<Record<string, string | undefined>>;
 
 export type ProofStoreSelection =
-  | Readonly<{ ok: true; kind: "memory"; store: ProofStore; close: () => Promise<void> }>
-  | Readonly<{ ok: true; kind: "postgres"; store: ProofStore; close: () => Promise<void> }>
+  | Readonly<{
+      ok: true;
+      kind: "memory" | "postgres";
+      store: ProofStore;
+      library: LibraryStore;
+      close: () => Promise<void>;
+    }>
   | Readonly<{ ok: false; message: string }>;
 
 /**
@@ -20,10 +27,12 @@ export type ProofStoreSelection =
 export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelection {
   const requested = env.PROOF_STORE === undefined ? undefined : env.PROOF_STORE.trim();
   if (requested === "memory") {
+    const store = new MemoryLibraryStore();
     return Object.freeze({
       ok: true as const,
       kind: "memory" as const,
-      store: new MemoryProofStore(),
+      store,
+      library: store,
       close: async () => undefined,
     });
   }
@@ -47,6 +56,7 @@ export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelecti
     ok: true as const,
     kind: "postgres" as const,
     store: postgresProofStore(pool),
+    library: postgresLibraryStore(pool),
     close: () => pool.end(),
   });
 }
@@ -67,7 +77,7 @@ export async function startProofWorker(env: ProofWorkerEnvironment): Promise<Sta
     if (seeded.status !== "ready") {
       throw new Error(`Development session seeding failed: ${seeded.diagnostics[0].message}`);
     }
-    const service = createProofHttpService(selection.store);
+    const service = createProofHttpService(selection.store, { library: selection.library });
     const port = parsePort(env.PROOF_HTTP_PORT);
     const { origin } = await service.listen({ host: env.PROOF_HTTP_HOST ?? "127.0.0.1", port });
     return Object.freeze({

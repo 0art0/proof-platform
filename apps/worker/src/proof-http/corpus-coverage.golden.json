@@ -1,0 +1,1630 @@
+{
+  "description": "Deterministic coverage of the benchmark corpus (roadmap N37). Every problem is solved through the proof HTTP service by displayed suggestions and menu choices only; no expression is typed and no model is called.",
+  "totals": {
+    "problems": 37,
+    "steps": 124,
+    "selections": 180,
+    "suggestionRequests": 124,
+    "previewRequests": 142,
+    "menuChoices": 18,
+    "applies": 124,
+    "chosenBelowFirst": 29
+  },
+  "domains": {
+    "logic": {
+      "problems": 9,
+      "steps": 28,
+      "selections": 44,
+      "suggestionRequests": 28,
+      "previewRequests": 28,
+      "menuChoices": 0,
+      "applies": 28,
+      "chosenBelowFirst": 5
+    },
+    "equality": {
+      "problems": 1,
+      "steps": 3,
+      "selections": 4,
+      "suggestionRequests": 3,
+      "previewRequests": 3,
+      "menuChoices": 0,
+      "applies": 3,
+      "chosenBelowFirst": 1
+    },
+    "order": {
+      "problems": 7,
+      "steps": 19,
+      "selections": 28,
+      "suggestionRequests": 19,
+      "previewRequests": 20,
+      "menuChoices": 1,
+      "applies": 19,
+      "chosenBelowFirst": 7
+    },
+    "arithmetic": {
+      "problems": 2,
+      "steps": 10,
+      "selections": 14,
+      "suggestionRequests": 10,
+      "previewRequests": 14,
+      "menuChoices": 4,
+      "applies": 10,
+      "chosenBelowFirst": 1
+    },
+    "sets": {
+      "problems": 6,
+      "steps": 21,
+      "selections": 29,
+      "suggestionRequests": 21,
+      "previewRequests": 24,
+      "menuChoices": 3,
+      "applies": 21,
+      "chosenBelowFirst": 8
+    },
+    "algebra": {
+      "problems": 4,
+      "steps": 17,
+      "selections": 25,
+      "suggestionRequests": 17,
+      "previewRequests": 25,
+      "menuChoices": 8,
+      "applies": 17,
+      "chosenBelowFirst": 0
+    },
+    "number-theory": {
+      "problems": 5,
+      "steps": 16,
+      "selections": 22,
+      "suggestionRequests": 16,
+      "previewRequests": 16,
+      "menuChoices": 0,
+      "applies": 16,
+      "chosenBelowFirst": 6
+    },
+    "research-notation": {
+      "problems": 3,
+      "steps": 10,
+      "selections": 14,
+      "suggestionRequests": 10,
+      "previewRequests": 12,
+      "menuChoices": 2,
+      "applies": 10,
+      "chosenBelowFirst": 1
+    }
+  },
+  "results": {
+    "used": [
+      "result:add-associativity",
+      "result:add-commutativity",
+      "result:add-zero",
+      "result:closure-extensive",
+      "result:closure-idempotent",
+      "result:closure-monotone",
+      "result:de-morgan-conjunction",
+      "result:de-morgan-disjunction",
+      "result:disjunction-commutativity",
+      "result:disjunctive-syllogism",
+      "result:divides-multiple",
+      "result:divides-reflexivity",
+      "result:divides-sum",
+      "result:divides-transitivity",
+      "result:double-negation",
+      "result:equality-symmetry",
+      "result:equality-transitivity",
+      "result:intersection-membership",
+      "result:left-distributivity",
+      "result:less-add-monotonicity",
+      "result:less-equal-add-monotonicity",
+      "result:less-equal-antisymmetry",
+      "result:less-equal-transitivity",
+      "result:less-transitivity",
+      "result:modus-ponens",
+      "result:modus-tollens",
+      "result:multiply-commutativity",
+      "result:multiply-one",
+      "result:multiply-zero",
+      "result:subset-membership",
+      "result:subset-transitivity",
+      "result:union-membership"
+    ],
+    "unused": [
+      "result:add-associativity/symmetric-equality",
+      "result:add-zero/symmetric-equality",
+      "result:conjunction-commutativity",
+      "result:divides-transitivity/bundle-premises",
+      "result:equality-transitivity/bundle-premises",
+      "result:excluded-middle",
+      "result:left-distributivity/symmetric-equality",
+      "result:less-add-monotonicity/contrapositive",
+      "result:less-equal-add-monotonicity/contrapositive",
+      "result:less-equal-antisymmetry/bundle-premises",
+      "result:less-equal-transitivity/bundle-premises",
+      "result:less-equal-transitivity/contrapositive",
+      "result:less-transitivity/bundle-premises",
+      "result:less-transitivity/contrapositive",
+      "result:modus-tollens/bundle-premises",
+      "result:multiply-associativity",
+      "result:multiply-associativity/symmetric-equality",
+      "result:multiply-one/symmetric-equality",
+      "result:subset-transitivity/bundle-premises"
+    ]
+  },
+  "moves": [
+    "move:choose-goal-disjunct",
+    "move:close-by-contradiction",
+    "move:close-by-hypothesis",
+    "move:close-reflexive-equality",
+    "move:expand-hypothesis-conjunction",
+    "move:introduce-implication",
+    "move:rewrite-with-equality",
+    "move:split-goal-conjunction",
+    "move:split-hypothesis-disjunction"
+  ],
+  "operations": [
+    "apply-result-backward",
+    "apply-result-forward",
+    "choose-goal-disjunct",
+    "close-by-contradiction",
+    "close-by-hypothesis",
+    "close-reflexive-equality",
+    "expand-hypothesis-conjunction",
+    "introduce-implication",
+    "rewrite-with-equality",
+    "rewrite-with-equivalence",
+    "split-goal-conjunction",
+    "split-hypothesis-disjunction"
+  ],
+  "problems": [
+    {
+      "id": "corpus:modus-tollens",
+      "domain": "logic",
+      "packs": ["pack:elementary-logic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:modus-tollens",
+          "pattern": "pattern:modus-tollens-forward",
+          "rank": "2/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/2",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:disjunctive-syllogism",
+      "domain": "logic",
+      "packs": ["pack:elementary-logic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:disjunctive-syllogism",
+          "pattern": "pattern:disjunctive-syllogism-forward",
+          "rank": "1/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:de-morgan",
+      "domain": "logic",
+      "packs": ["pack:elementary-logic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:de-morgan-disjunction",
+          "pattern": "pattern:de-morgan-disjunction-forward",
+          "rank": "1/3",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "2/2",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:double-negation-commuted",
+      "domain": "logic",
+      "packs": ["pack:elementary-logic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:double-negation",
+          "pattern": "pattern:double-negation-forward",
+          "rank": "1/3",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:disjunction-commutativity",
+          "pattern": "pattern:disjunction-commutativity-forward",
+          "rank": "1/8",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "2/2",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:equality-chain",
+      "domain": "equality",
+      "packs": ["pack:equality"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:equality-symmetry",
+          "pattern": "pattern:equality-symmetry-forward",
+          "rank": "1/6",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:equality-transitivity",
+          "pattern": "pattern:equality-transitivity-forward",
+          "rank": "5/6",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/2",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:less-transitivity",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-transitivity",
+          "pattern": "pattern:less-transitivity-forward",
+          "rank": "3/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:antisymmetry",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 5,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-equal-antisymmetry",
+          "pattern": "pattern:less-equal-antisymmetry-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:shifted-chain",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 4,
+        "menuChoices": 1,
+        "applies": 3,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-equal-transitivity",
+          "pattern": "pattern:less-equal-transitivity-forward",
+          "rank": "4/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:less-equal-add-monotonicity",
+          "pattern": "pattern:less-equal-add-monotonicity-forward",
+          "rank": "2/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:strict-shift",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-add-monotonicity",
+          "pattern": "pattern:less-add-monotonicity-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:distributivity",
+      "domain": "arithmetic",
+      "packs": ["pack:arithmetic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 7,
+        "selections": 10,
+        "suggestionRequests": 7,
+        "previewRequests": 10,
+        "menuChoices": 3,
+        "applies": 7,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:left-distributivity",
+          "pattern": "pattern:left-distributivity-forward",
+          "rank": "1/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:add-commutativity",
+          "pattern": "pattern:add-commutativity-forward",
+          "rank": "2/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:multiply-commutativity",
+          "pattern": "pattern:multiply-commutativity-forward",
+          "rank": "1/1",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-reflexive-equality",
+          "rank": "1/8",
+          "operation": "close-reflexive-equality",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:identities",
+      "domain": "arithmetic",
+      "packs": ["pack:arithmetic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 4,
+        "menuChoices": 1,
+        "applies": 3,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:multiply-one",
+          "pattern": "pattern:multiply-one-forward",
+          "rank": "1/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:add-zero",
+          "pattern": "pattern:add-zero-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        }
+      ]
+    },
+    {
+      "id": "corpus:subset-transitivity",
+      "domain": "sets",
+      "packs": ["pack:sets"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:subset-transitivity",
+          "pattern": "pattern:subset-transitivity-forward",
+          "rank": "3/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:intersection-to-union",
+      "domain": "sets",
+      "packs": ["pack:sets"],
+      "interactions": {
+        "problems": 1,
+        "steps": 5,
+        "selections": 7,
+        "suggestionRequests": 5,
+        "previewRequests": 6,
+        "menuChoices": 1,
+        "applies": 5,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:intersection-membership",
+          "pattern": "pattern:intersection-membership-forward",
+          "rank": "1/2",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:expand-hypothesis-conjunction",
+          "rank": "1/1",
+          "operation": "expand-hypothesis-conjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:union-membership",
+          "pattern": "pattern:union-membership-forward",
+          "rank": "1/8",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:choose-goal-disjunct",
+          "rank": "4/8",
+          "operation": "choose-goal-disjunct",
+          "transition": "strengthening",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:superset-union",
+      "domain": "sets",
+      "packs": ["pack:sets"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 5,
+        "suggestionRequests": 4,
+        "previewRequests": 5,
+        "menuChoices": 1,
+        "applies": 4,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:union-membership",
+          "pattern": "pattern:union-membership-forward",
+          "rank": "1/8",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:choose-goal-disjunct",
+          "rank": "4/8",
+          "operation": "choose-goal-disjunct",
+          "transition": "strengthening",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:subset-membership",
+          "pattern": "pattern:subset-membership-forward",
+          "rank": "2/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:hypothetical-syllogism",
+      "domain": "logic",
+      "packs": [],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:modus-ponens",
+          "pattern": "pattern:modus-ponens",
+          "rank": "1/5",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:modus-ponens",
+          "pattern": "pattern:modus-ponens",
+          "rank": "1/5",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:contraposition",
+      "domain": "logic",
+      "packs": ["pack:elementary-logic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "move:introduce-implication",
+          "rank": "1/8",
+          "operation": "introduce-implication",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:modus-tollens",
+          "pattern": "pattern:modus-tollens-forward",
+          "rank": "2/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/2",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:conjunction-swap",
+      "domain": "logic",
+      "packs": [],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 7,
+        "suggestionRequests": 4,
+        "previewRequests": 4,
+        "menuChoices": 0,
+        "applies": 4,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "move:expand-hypothesis-conjunction",
+          "rank": "1/1",
+          "operation": "expand-hypothesis-conjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:split-goal-conjunction",
+          "rank": "3/8",
+          "operation": "split-goal-conjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:proof-by-cases",
+      "domain": "logic",
+      "packs": [],
+      "interactions": {
+        "problems": 1,
+        "steps": 5,
+        "selections": 8,
+        "suggestionRequests": 5,
+        "previewRequests": 5,
+        "menuChoices": 0,
+        "applies": 5,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "move:split-hypothesis-disjunction",
+          "rank": "1/1",
+          "operation": "split-hypothesis-disjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:modus-ponens",
+          "pattern": "pattern:modus-ponens",
+          "rank": "1/5",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:modus-ponens",
+          "pattern": "pattern:modus-ponens",
+          "rank": "1/5",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:negated-conjunction",
+      "domain": "logic",
+      "packs": ["pack:elementary-logic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 8,
+        "suggestionRequests": 4,
+        "previewRequests": 4,
+        "menuChoices": 0,
+        "applies": 4,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:de-morgan-conjunction",
+          "pattern": "pattern:de-morgan-conjunction-forward",
+          "rank": "1/3",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:split-hypothesis-disjunction",
+          "rank": "1/1",
+          "operation": "split-hypothesis-disjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-contradiction",
+          "rank": "1/1",
+          "operation": "close-by-contradiction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/2",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:regrouping",
+      "domain": "algebra",
+      "packs": ["pack:arithmetic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 5,
+        "selections": 7,
+        "suggestionRequests": 5,
+        "previewRequests": 7,
+        "menuChoices": 2,
+        "applies": 5,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:add-associativity",
+          "pattern": "pattern:add-associativity-forward",
+          "rank": "1/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:add-commutativity",
+          "pattern": "pattern:add-commutativity-forward",
+          "rank": "1/1",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-reflexive-equality",
+          "rank": "1/8",
+          "operation": "close-reflexive-equality",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:annihilation",
+      "domain": "algebra",
+      "packs": ["pack:arithmetic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 5,
+        "selections": 7,
+        "suggestionRequests": 5,
+        "previewRequests": 7,
+        "menuChoices": 2,
+        "applies": 5,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:multiply-zero",
+          "pattern": "pattern:multiply-zero-forward",
+          "rank": "1/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:add-commutativity",
+          "pattern": "pattern:add-commutativity-forward",
+          "rank": "1/1",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:add-zero",
+          "pattern": "pattern:add-zero-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        }
+      ]
+    },
+    {
+      "id": "corpus:equal-products",
+      "domain": "algebra",
+      "packs": [],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 3,
+        "menuChoices": 1,
+        "applies": 2,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-reflexive-equality",
+          "rank": "1/8",
+          "operation": "close-reflexive-equality",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:vanishing-chain",
+      "domain": "algebra",
+      "packs": ["pack:arithmetic"],
+      "interactions": {
+        "problems": 1,
+        "steps": 5,
+        "selections": 8,
+        "suggestionRequests": 5,
+        "previewRequests": 8,
+        "menuChoices": 3,
+        "applies": 5,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:multiply-commutativity",
+          "pattern": "pattern:multiply-commutativity-forward",
+          "rank": "1/1",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:multiply-zero",
+          "pattern": "pattern:multiply-zero-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        }
+      ]
+    },
+    {
+      "id": "corpus:divisibility-chain",
+      "domain": "number-theory",
+      "packs": ["pack:divisibility"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:divides-transitivity",
+          "pattern": "pattern:divides-transitivity-forward",
+          "rank": "4/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:divisibility-sum",
+      "domain": "number-theory",
+      "packs": ["pack:divisibility"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 5,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:divides-sum",
+          "pattern": "pattern:divides-sum-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:divisibility-linear",
+      "domain": "number-theory",
+      "packs": ["pack:divisibility"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 6,
+        "suggestionRequests": 4,
+        "previewRequests": 4,
+        "menuChoices": 0,
+        "applies": 4,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:divides-sum",
+          "pattern": "pattern:divides-sum-backward",
+          "rank": "8/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "result:divides-multiple",
+          "pattern": "pattern:divides-multiple-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:divisibility-self",
+      "domain": "number-theory",
+      "packs": ["pack:divisibility"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 4,
+        "suggestionRequests": 4,
+        "previewRequests": 4,
+        "menuChoices": 0,
+        "applies": 4,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:divides-sum",
+          "pattern": "pattern:divides-sum-backward",
+          "rank": "8/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "result:divides-reflexivity",
+          "pattern": "pattern:divides-reflexivity-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "result:divides-multiple",
+          "pattern": "pattern:divides-multiple-backward",
+          "rank": "8/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "result:divides-reflexivity",
+          "pattern": "pattern:divides-reflexivity-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        }
+      ]
+    },
+    {
+      "id": "corpus:divisibility-chain-multiple",
+      "domain": "number-theory",
+      "packs": ["pack:divisibility"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:divides-multiple",
+          "pattern": "pattern:divides-multiple-backward",
+          "rank": "8/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "result:divides-transitivity",
+          "pattern": "pattern:divides-transitivity-forward",
+          "rank": "4/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:subset-chain-membership",
+      "domain": "sets",
+      "packs": ["pack:sets"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:subset-membership",
+          "pattern": "pattern:subset-membership-forward",
+          "rank": "2/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:subset-membership",
+          "pattern": "pattern:subset-membership-forward",
+          "rank": "2/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:intersection-introduction",
+      "domain": "sets",
+      "packs": ["pack:sets"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 6,
+        "suggestionRequests": 4,
+        "previewRequests": 4,
+        "menuChoices": 0,
+        "applies": 4,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:intersection-membership",
+          "pattern": "pattern:intersection-membership-forward",
+          "rank": "1/8",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:split-goal-conjunction",
+          "rank": "4/8",
+          "operation": "split-goal-conjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:union-introduction",
+      "domain": "sets",
+      "packs": ["pack:sets"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 4,
+        "menuChoices": 1,
+        "applies": 3,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:union-membership",
+          "pattern": "pattern:union-membership-forward",
+          "rank": "1/8",
+          "operation": "rewrite-with-equivalence",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:choose-goal-disjunct",
+          "rank": "4/8",
+          "operation": "choose-goal-disjunct",
+          "transition": "strengthening",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:three-step-chain",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-transitivity",
+          "pattern": "pattern:less-transitivity-forward",
+          "rank": "3/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:less-transitivity",
+          "pattern": "pattern:less-transitivity-forward",
+          "rank": "3/3",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:weak-shift",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 3,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-equal-add-monotonicity",
+          "pattern": "pattern:less-equal-add-monotonicity-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:cyclic-antisymmetry",
+      "domain": "order",
+      "packs": ["pack:order"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 6,
+        "suggestionRequests": 4,
+        "previewRequests": 4,
+        "menuChoices": 0,
+        "applies": 4,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "result:less-equal-antisymmetry",
+          "pattern": "pattern:less-equal-antisymmetry-backward",
+          "rank": "8/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:less-equal-transitivity",
+          "pattern": "pattern:less-equal-transitivity-forward",
+          "rank": "4/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:closure-superset",
+      "domain": "research-notation",
+      "packs": ["pack:sets", "pack:closure"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 3,
+        "menuChoices": 0,
+        "applies": 3,
+        "chosenBelowFirst": 1
+      },
+      "steps": [
+        {
+          "suggestion": "result:closure-extensive",
+          "pattern": "pattern:closure-extensive-forward",
+          "rank": "1/1",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:subset-transitivity",
+          "pattern": "pattern:subset-transitivity-forward",
+          "rank": "4/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:closure-absorbs",
+      "domain": "research-notation",
+      "packs": ["pack:closure"],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 6,
+        "suggestionRequests": 4,
+        "previewRequests": 5,
+        "menuChoices": 1,
+        "applies": 4,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:closure-monotone",
+          "pattern": "pattern:closure-monotone-forward",
+          "rank": "1/4",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "result:closure-idempotent",
+          "pattern": "pattern:closure-idempotent-forward",
+          "rank": "1/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:closure-double",
+      "domain": "research-notation",
+      "packs": ["pack:closure"],
+      "interactions": {
+        "problems": 1,
+        "steps": 3,
+        "selections": 4,
+        "suggestionRequests": 3,
+        "previewRequests": 4,
+        "menuChoices": 1,
+        "applies": 3,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "result:closure-idempotent",
+          "pattern": "pattern:closure-idempotent-forward",
+          "rank": "1/2",
+          "operation": "apply-result-forward",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:rewrite-with-equality",
+          "rank": "1/1",
+          "operation": "rewrite-with-equality",
+          "transition": "equivalence",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "result:closure-extensive",
+          "pattern": "pattern:closure-extensive-backward",
+          "rank": "1/8",
+          "operation": "apply-result-backward",
+          "transition": "strengthening"
+        }
+      ]
+    }
+  ]
+}

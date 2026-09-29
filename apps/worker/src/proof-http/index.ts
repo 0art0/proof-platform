@@ -21,50 +21,50 @@ import {
   recordInquiryCommandRequestSchema,
   recordInteractionEventRequestSchema,
   stableIdentifierSchema,
-  suggestionIdSchema,
   suggestionSetIdSchema,
-  transitionClassSchema,
-  type ProtocolEnvironment,
+  observeQuerySchema,
+  protocolCommandEnvelopeSchema,
+  type ObserveQuery,
 } from "@proof/protocol";
-import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "../approved-catalog";
-import {
-  executeTryResultCommand,
-  hypothesisInvestigationRequestSchema,
-  investigateHypothesis,
-} from "../inquiry-methods";
+import { hypothesisInvestigationRequestSchema, investigateHypothesis } from "../inquiry-methods";
 import {
   inquiryRecordQuerySchema,
   listInquiryRecords,
   recordInquiryCommand,
 } from "../inquiry-repository";
+import type { LibraryStore } from "../library-repository";
 import { postgresProofStore } from "../postgres-proof-store";
+import { handleObserve, handleProtocolCommand } from "./protocol-commands";
+import {
+  applyMoveChoice,
+  previewMoveChoice,
+  proofHttpSelectionDescriptorSchema,
+  proofHttpTransitionClassificationSchema,
+  recordSuggestions,
+  repositoryFailureStatus,
+  transitionClassesFor,
+  type ServiceContext,
+} from "./shared";
 import {
   analyzeBacktrackWithInformation,
   backtrackProofSession,
   backtrackProofSessionSchema,
   backtrackWithInformation,
   deletePreviousMove,
-  derivedMoveRecordIds,
-  executeProofCommand,
   interactionEventQuerySchema,
   listInteractionEvents,
   loadProofHistory,
   loadCurrentProofSession,
-  materializeMoveChoice,
   moveChoiceSchema,
   proofSessionSchema,
   proofSessionIdSchema,
   readDisplayedSuggestionSet,
-  recordDisplayedSuggestionSet,
   recordInteractionEvent,
-  recordMovePreview,
   type ProofSession,
-  type MaterializeMoveChoiceResult,
   type ProofStore,
-  type RepositoryFailure,
 } from "../proof-repository";
 import {
   semanticReplayCommandSchema,
@@ -128,44 +128,7 @@ function includesMetadata(requestTarget: string | undefined): boolean {
   }
 }
 
-const operandPathSchema = z.array(z.number().int().nonnegative());
-const displayRangeSchema = z
-  .tuple([z.number().int().nonnegative(), z.number().int().nonnegative()])
-  .refine(([start, end]) => end > start, "A display range must be nonempty and ordered.");
-const statementAnchorSchema = z
-  .object({
-    stateId: stableIdentifierSchema,
-    target: z.object({ kind: z.enum(["goal", "obligation"]), id: stableIdentifierSchema }).strict(),
-    statement: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("conclusion") }).strict(),
-      z.object({ kind: z.literal("hypothesis"), id: stableIdentifierSchema }).strict(),
-    ]),
-  })
-  .strict();
-
-export const proofHttpSelectionDescriptorSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("exact"),
-      anchor: statementAnchorSchema,
-      path: operandPathSchema,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("associative"),
-      anchor: statementAnchorSchema,
-      containerPath: operandPathSchema,
-      startOperand: z.number().int().nonnegative(),
-      endOperand: z.number().int().nonnegative(),
-      displayRange: displayRangeSchema.optional(),
-    })
-    .strict()
-    .refine(
-      ({ startOperand, endOperand }) => endOperand - startOperand >= 2,
-      "An associative range must contain at least two operands.",
-    ),
-]);
+export { proofHttpSelectionDescriptorSchema, proofHttpTransitionClassificationSchema };
 
 export const proofHttpSuggestionRequestSchema = z
   .object({
@@ -192,10 +155,6 @@ export const proofHttpDeletePreviousMoveRequestSchema = deletePreviousMoveComman
 export const proofHttpBacktrackWithInformationRequestSchema =
   backtrackWithInformationCommandSchema.omit({ actor: true });
 export const proofHttpBacktrackAnalysisRequestSchema = backtrackAnalysisRequestSchema;
-
-export const proofHttpTransitionClassificationSchema = z
-  .object({ suggestionId: suggestionIdSchema, transitionClass: transitionClassSchema })
-  .strict();
 
 export const proofHttpSuggestionResponseSchema = z
   .object({
@@ -303,13 +262,11 @@ export type ProofHttpServiceOptions = Readonly<{
   /** The approved move and library definitions; tests inject changed definitions. */
   definitions?: DefinitionCatalog;
   now?: () => Date;
+  /** The session library store; library commands of the envelope need it. */
+  library?: LibraryStore;
 }>;
 
-type HandlerContext = Readonly<{
-  store: ProofStore;
-  definitions: DefinitionCatalog;
-  now: (() => Date) | undefined;
-}>;
+type HandlerContext = ServiceContext;
 
 /** Create the dependency-free product HTTP boundary over a proof repository. */
 export function createProofHttpService(
@@ -320,6 +277,7 @@ export function createProofHttpService(
     store,
     definitions: options.definitions ?? APPROVED_DEFINITIONS,
     now: options.now,
+    library: options.library,
   };
   const server = createServer((request, response) => {
     void handleRequest(context, request, response).catch(() => {
@@ -360,10 +318,11 @@ export function createPostgresProofHttpService(pool: Pool): ProofHttpService {
 }
 
 async function handleRequest(
-  { store, definitions, now }: HandlerContext,
+  context: HandlerContext,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
+  const { store, definitions, now } = context;
   const route = parseRoute(request.url);
   if (route === undefined) {
     writeJson(response, 404, notFound("The requested proof resource does not exist."));
@@ -418,34 +377,20 @@ async function handleRequest(
       return;
     }
 
-    const loaded = await loadCurrentProofSession(store, route.sessionId);
-    if (loaded.status !== "loaded") {
-      writeRepositoryFailure(response, loaded);
-      return;
-    }
-    const index = approvedRetrievalIndex(definitions, loaded.session.operators);
-    if (!index.ok) {
+    const recorded = await recordSuggestions(
+      context,
+      route.sessionId,
+      parsedRequest.data.id,
+      parsedRequest.data.selections,
+    );
+    if (recorded.status === "invalid-catalog") {
       writeJson(response, 500, {
-        diagnostics: [{ code: "invalid-catalog", message: index.message }],
+        diagnostics: [{ code: "invalid-catalog", message: recorded.message }],
       });
       return;
     }
-    const requestSelection =
-      parsedRequest.data.selections.length === 1
-        ? parsedRequest.data.selections[0]
-        : {
-            kind: "selection-query" as const,
-            selections: parsedRequest.data.selections.map((selection, index) => ({
-              id: `selection:request-${index + 1}`,
-              selection,
-            })),
-          };
-    const recorded = await recordDisplayedSuggestionSet(store, index.index, route.sessionId, {
-      id: parsedRequest.data.id,
-      selection: requestSelection,
-    });
-    if (recorded.status !== "committed") {
-      writeRepositoryFailure(response, recorded);
+    if (recorded.status === "failed") {
+      writeRepositoryFailure(response, recorded.failure);
       return;
     }
     writeValidatedJson(response, recorded.replayed ? 200 : 201, proofHttpSuggestionResponseSchema, {
@@ -475,31 +420,16 @@ async function handleRequest(
       writeJson(response, choice.status, invalidRequest(choice.message));
       return;
     }
-    const materialized = await materializeMoveChoice(
-      store,
-      route.sessionId,
-      choice.value,
-      definitions,
-    );
-    if (materialized.status !== "materialized") {
-      writeMaterializationFailure(response, materialized);
+    const previewed = await previewMoveChoice(context, route.sessionId, choice.value, WEB_ACTOR);
+    if (previewed.status === "requires-input") {
+      writeValidatedJson(response, 422, moveRequiresInputResponseSchema, previewed.input);
       return;
     }
-    const recorded = await recordMovePreview(store, route.sessionId, materialized.request, {
-      definitions,
-      regeneration: { commandId: choice.value.commandId, actor: WEB_ACTOR },
-      ...(now === undefined ? {} : { now }),
-    });
-    if (recorded.status !== "committed") {
-      writeRepositoryFailure(response, recorded);
+    if (previewed.status === "failed") {
+      writeRepositoryFailure(response, previewed.failure);
       return;
     }
-    const loaded = await loadCurrentProofSession(store, route.sessionId);
-    if (loaded.status !== "loaded") {
-      writeRepositoryFailure(response, loaded);
-      return;
-    }
-    if (recorded.preview.nodeId !== loaded.node.id) {
+    if (previewed.status === "stale-preview") {
       writeJson(response, 409, {
         diagnostics: [
           {
@@ -511,14 +441,14 @@ async function handleRequest(
       return;
     }
     const schema = proofHttpPreviewResponseSchema.extend({
-      preview: createMovePreviewSchema({ operators: loaded.session.operators }),
+      preview: createMovePreviewSchema({ operators: previewed.operators }),
     });
-    writeValidatedJson(response, recorded.replayed ? 200 : 201, schema, {
-      preview: recorded.preview,
-      replayed: recorded.replayed,
-      ...(recorded.regeneratedFrom === undefined
+    writeValidatedJson(response, previewed.replayed ? 200 : 201, schema, {
+      preview: previewed.preview,
+      replayed: previewed.replayed,
+      ...(previewed.regeneratedFrom === undefined
         ? {}
-        : { regeneratedFrom: recorded.regeneratedFrom }),
+        : { regeneratedFrom: previewed.regeneratedFrom }),
     });
     return;
   }
@@ -530,38 +460,34 @@ async function handleRequest(
       return;
     }
     const { inquiryMethod, ...choice } = command.value;
-    const materialized = await materializeMoveChoice(store, route.sessionId, choice, definitions);
-    if (materialized.status !== "materialized") {
-      writeMaterializationFailure(response, materialized);
+    const applied = await applyMoveChoice(
+      context,
+      route.sessionId,
+      choice,
+      inquiryMethod,
+      WEB_ACTOR,
+    );
+    if (applied.status === "requires-input") {
+      writeValidatedJson(response, 422, moveRequiresInputResponseSchema, applied.input);
       return;
     }
-    const recordedPreview = await recordMovePreview(store, route.sessionId, materialized.request, {
-      definitions,
-      regeneration: { commandId: choice.commandId, actor: WEB_ACTOR },
-      ...(now === undefined ? {} : { now }),
-    });
-    if (recordedPreview.status !== "committed") {
-      writeRepositoryFailure(response, recordedPreview);
+    if (applied.status === "failed") {
+      writeRepositoryFailure(response, applied.failure);
       return;
     }
-    if (recordedPreview.regeneratedFrom !== undefined && !recordedPreview.replayed) {
+    if (applied.status === "preview-regenerated") {
       // The previewed definitions changed. The fresh preview is recorded, never applied unseen:
       // the client shows it and confirms by repeating the command.
-      const loaded = await loadCurrentProofSession(store, route.sessionId);
-      if (loaded.status !== "loaded") {
-        writeRepositoryFailure(response, loaded);
-        return;
-      }
       writeValidatedJson(
         response,
         409,
         previewRegeneratedResponseSchema.extend({
-          preview: createMovePreviewSchema({ operators: loaded.session.operators }),
+          preview: createMovePreviewSchema({ operators: applied.operators }),
         }),
         {
           status: "preview-regenerated",
-          stalePreviewId: recordedPreview.regeneratedFrom,
-          preview: recordedPreview.preview,
+          stalePreviewId: applied.stalePreviewId,
+          preview: applied.preview,
           diagnostics: [
             {
               code: "preview-regenerated",
@@ -573,46 +499,13 @@ async function handleRequest(
       );
       return;
     }
-    const ids = derivedMoveRecordIds(choice.commandId);
-    const proofCommand = {
-      commandId: choice.commandId,
-      kind: "apply-kernel-operation",
-      actor: WEB_ACTOR,
-      parentNodeId: recordedPreview.preview.nodeId,
-      resultNodeId: ids.resultNodeId,
-      edgeId: ids.edgeId,
-      eventId: ids.eventId,
-      moveId: recordedPreview.preview.moveId,
-      suggestionSetId: recordedPreview.preview.suggestionSetId,
-      chosenSuggestionId: recordedPreview.preview.chosenSuggestionId,
-      previewId: recordedPreview.preview.id,
-      operation: recordedPreview.preview.operation,
-      ...(recordedPreview.preview.menuSelection === undefined
-        ? {}
-        : { menuSelection: recordedPreview.preview.menuSelection }),
-    };
-    const executed =
-      inquiryMethod === "try-result"
-        ? await executeTryResultCommand(store, route.sessionId, proofCommand, WEB_ACTOR, {
-            definitions,
-            ...(now === undefined ? {} : { now }),
-          })
-        : await executeProofCommand(store, route.sessionId, proofCommand, WEB_ACTOR, definitions);
-    if (executed.status !== "committed") {
-      writeRepositoryFailure(response, executed);
-      return;
-    }
-    const loaded = await loadCurrentProofSession(store, route.sessionId);
-    if (loaded.status !== "loaded") {
-      writeRepositoryFailure(response, loaded);
-      return;
-    }
+    const { executed } = applied;
     const schema = proofHttpCommandResponseSchema.extend({
-      node: createProofNodeSchema({ operators: loaded.session.operators }),
+      node: createProofNodeSchema({ operators: applied.session.operators }),
     });
     writeValidatedJson(response, executed.replayed ? 200 : 201, schema, {
-      session: withoutMetadata(loaded.session),
-      node: loaded.node,
+      session: withoutMetadata(applied.session),
+      node: applied.node,
       receipt: executed.result.receipt,
       replayed: executed.replayed,
       ...("records" in executed ? { inquiryRecords: executed.records } : {}),
@@ -947,6 +840,28 @@ async function handleRequest(
     return;
   }
 
+  if (route.kind === "protocol-commands" && request.method === "POST") {
+    const envelope = await readStrictJsonRequest(request, protocolCommandEnvelopeSchema);
+    if (!envelope.ok) {
+      writeJson(response, envelope.status, invalidRequest(envelope.message));
+      return;
+    }
+    const outcome = await handleProtocolCommand(context, route.sessionId, envelope.value);
+    writeJson(response, outcome.status, outcome.body);
+    return;
+  }
+
+  if (route.kind === "observe" && request.method === "GET") {
+    const query = observeQuery(request.url);
+    if (query === undefined) {
+      writeJson(response, 400, invalidRequest("The observe query is invalid."));
+      return;
+    }
+    const outcome = await handleObserve(context, route.sessionId, query);
+    writeJson(response, outcome.status, outcome.body);
+    return;
+  }
+
   response.setHeader(
     "allow",
     route.kind === "interaction-events"
@@ -954,7 +869,8 @@ async function handleRequest(
       : route.kind === "session" ||
           route.kind === "suggestion" ||
           route.kind === "history" ||
-          route.kind === "inquiry-records"
+          route.kind === "inquiry-records" ||
+          route.kind === "observe"
         ? "GET"
         : "POST",
   );
@@ -977,7 +893,9 @@ type ParsedRoute =
   | Readonly<{ kind: "interaction-events"; sessionId: string }>
   | Readonly<{ kind: "inquiry-commands"; sessionId: string }>
   | Readonly<{ kind: "inquiry-records"; sessionId: string }>
-  | Readonly<{ kind: "hypothesis-investigations"; sessionId: string }>;
+  | Readonly<{ kind: "hypothesis-investigations"; sessionId: string }>
+  | Readonly<{ kind: "protocol-commands"; sessionId: string }>
+  | Readonly<{ kind: "observe"; sessionId: string }>;
 
 function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined {
   try {
@@ -1024,6 +942,10 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
       if (segments[2] === "inquiry-records") {
         return { kind: "inquiry-records", sessionId: sessionId.data };
       }
+      if (segments[2] === "protocol-commands") {
+        return { kind: "protocol-commands", sessionId: sessionId.data };
+      }
+      if (segments[2] === "observe") return { kind: "observe", sessionId: sessionId.data };
       if (segments[2] === "hypothesis-investigations") {
         return { kind: "hypothesis-investigations", sessionId: sessionId.data };
       }
@@ -1036,6 +958,34 @@ function parseRoute(requestTarget: string | undefined): ParsedRoute | undefined 
     return suggestionSetId.success
       ? { kind: "suggestion", sessionId: sessionId.data, suggestionSetId: suggestionSetId.data }
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `?view=…&sinceNode=…&afterEvent=…&afterInquiry=…`; each parameter at most once. */
+function observeQuery(requestTarget: string | undefined): ObserveQuery | undefined {
+  try {
+    const url = new URL(requestTarget ?? "/", "http://proof.local");
+    const allowed = ["view", "sinceNode", "afterEvent", "afterInquiry"];
+    const keys = [...url.searchParams.keys()];
+    if (keys.some((key) => !allowed.includes(key)) || new Set(keys).size !== keys.length) {
+      return undefined;
+    }
+    const integer = (value: string | null): number | undefined | null =>
+      value === null ? undefined : /^(0|[1-9][0-9]{0,9})$/.test(value) ? Number(value) : null;
+    const afterEvent = integer(url.searchParams.get("afterEvent"));
+    const afterInquiry = integer(url.searchParams.get("afterInquiry"));
+    if (afterEvent === null || afterInquiry === null) return undefined;
+    const view = url.searchParams.get("view");
+    const sinceNode = url.searchParams.get("sinceNode");
+    const parsed = observeQuerySchema.safeParse({
+      ...(view === null ? {} : { view }),
+      ...(sinceNode === null ? {} : { sinceNode }),
+      ...(afterEvent === undefined ? {} : { afterEvent }),
+      ...(afterInquiry === undefined ? {} : { afterInquiry }),
+    });
+    return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
   }
@@ -1099,24 +1049,6 @@ function inquiryRecordQuery(
   }
 }
 
-function approvedRetrievalIndex(
-  definitions: DefinitionCatalog,
-  operators: NonNullable<ProtocolEnvironment["operators"]>,
-): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
-  const catalog = definitions.catalog(operators);
-  const result = createRetrievalIndex(
-    {
-      results: catalog.results,
-      moves: definitions.moves,
-      variantFamilies: catalog.variantFamilies,
-    },
-    { operators },
-  );
-  return result.ok
-    ? { ok: true, index: result.index }
-    : { ok: false, message: result.diagnostics[0]?.message ?? "The approved catalog is invalid." };
-}
-
 type JsonBodyResult =
   | Readonly<{ ok: true; value: unknown }>
   | Readonly<{ ok: false; status: 400 | 413; message: string }>;
@@ -1168,72 +1100,11 @@ function hasJsonContentType(request: IncomingMessage): boolean {
   );
 }
 
-function writeRepositoryFailure(response: ServerResponse, failure: RepositoryFailure): void {
-  const code = failure.diagnostics[0].code;
-  const status =
-    failure.status === "uncertain"
-      ? 503
-      : code === "session-not-found" ||
-          code === "suggestion-set-not-found" ||
-          code === "preview-not-found" ||
-          code === "current-node-not-found"
-        ? 404
-        : code === "serialized-stale-command" ||
-            code === "serialized-stale-backtrack" ||
-            code === "serialized-stale-delete" ||
-            code === "delete-requires-confirmation" ||
-            code === "command-deleted" ||
-            code === "interaction-event-conflict" ||
-            code === "inquiry-command-conflict" ||
-            code === "backtrack-with-information-conflict" ||
-            code === "replay-conflict"
-          ? 409
-          : code === "backtrack-symbols-unavailable"
-            ? 422
-            : code === "suggestion-set-rejected" ||
-                code === "preview-rejected" ||
-                code === "command-rejected" ||
-                code === "backtrack-rejected" ||
-                code === "delete-rejected" ||
-                code === "interaction-event-rejected" ||
-                code === "inquiry-command-rejected" ||
-                code === "backtrack-with-information-rejected" ||
-                code === "replay-rejected"
-              ? 400
-              : 500;
-  writeJson(response, status, { diagnostics: failure.diagnostics });
-}
-
-/**
- * A choice that still needs menu input is not a malformed request: the worker answers 422 with
- * the menus to choose from and the parameters still missing. Nothing is recorded.
- */
-function writeMaterializationFailure(
+function writeRepositoryFailure(
   response: ServerResponse,
-  failure: Exclude<MaterializeMoveChoiceResult, { status: "materialized" }>,
+  failure: Readonly<{ status: "rejected" | "uncertain"; diagnostics: readonly [{ code: string }] }>,
 ): void {
-  if (failure.status !== "requires-input") {
-    writeRepositoryFailure(response, failure);
-    return;
-  }
-  writeValidatedJson(response, 422, moveRequiresInputResponseSchema, failure);
-}
-
-function transitionClassesFor(
-  definitions: DefinitionCatalog,
-  suggestionSet: z.infer<typeof displayedSuggestionSetSchema>,
-): readonly z.infer<typeof proofHttpTransitionClassificationSchema>[] {
-  const moves = new Map<string, DefinitionCatalog["moves"][number]>(
-    definitions.moves.map((move) => [move.id, move]),
-  );
-  return suggestionSet.suggestions.flatMap((suggestion) => {
-    if (suggestion.source !== "move") return [];
-    const move = moves.get(suggestion.artifactId);
-    const suggestionId = suggestionIdSchema.safeParse(suggestion.id);
-    return move === undefined || !suggestionId.success
-      ? []
-      : [{ suggestionId: suggestionId.data, transitionClass: move.transitionClass }];
-  });
+  writeJson(response, repositoryFailureStatus(failure), { diagnostics: failure.diagnostics });
 }
 
 function invalidRequest(message: string): unknown {
