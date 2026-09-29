@@ -54,6 +54,12 @@ import {
   type ProofSelectionDescriptor,
   type SuggestionTransitionClass,
 } from "../../features/stored-proof-workspace/api-contract";
+import {
+  sessionLibraryEventsSchema,
+  sessionLibrarySchema,
+  type SessionLibrary,
+  type SessionLibraryEvents,
+} from "../../features/library-drawer/api-contract";
 
 const DEFAULT_PROOF_HTTP_ORIGIN = "http://127.0.0.1:8787";
 const DEFAULT_PROOF_SESSION_ID = "session:development";
@@ -1172,4 +1178,43 @@ function artifactFailureAnswer(status: number, value: unknown): ProtocolServiceA
     message: first?.message ?? "The proof service rejected the artifact.",
     body: parsed.data,
   };
+}
+
+const MAX_LIBRARY_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * A session's effective library: the approved catalog plus the stored global and session layers
+ * (design plan §17.1, roadmap N32). Read-only: the worker answers from stored and approved data.
+ */
+export async function readSessionLibrary(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<SessionLibrary> {
+  return readLibraryView(sessionIdInput, "library", sessionLibrarySchema, options);
+}
+
+/** A session's library addition events, admitted and rejected, with their diagnostics. */
+export async function readSessionLibraryEvents(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<SessionLibraryEvents> {
+  return readLibraryView(sessionIdInput, "library/events", sessionLibraryEventsSchema, options);
+}
+
+async function readLibraryView<View extends { sessionId: string }>(
+  sessionIdInput: unknown,
+  path: string,
+  schema: z.ZodType<View>,
+  options: ProofServiceRequestOptions,
+): Promise<View> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/${path}`,
+    { method: "GET", ...signalOption(options.signal) },
+  );
+  const value = await readValidatedEnvelope(response, MAX_LIBRARY_RESPONSE_BYTES);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = schema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
 }
