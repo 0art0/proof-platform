@@ -18,6 +18,7 @@ import type { AnchoredProofSelection } from "@proof/selections";
 import { ProofWorkspace, type WorkspaceView } from "../proof-workspace";
 import { StatementView, usePresentation } from "../proof-workspace/presentation";
 import type { Presentation } from "@proof/language";
+import { LibraryDrawer } from "../library-drawer";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
@@ -545,6 +546,7 @@ function StatefulStoredWorkspace({
           runCommand={runToolbarCommand}
         />
       </WorkspaceToolbar>
+      <LibraryDrawer sessionId={session.id} presentation={presentation} view={view} />
       {notice ? (
         <p className={styles.actionNotice} data-state={notice.state} role="status">
           {notice.message}
