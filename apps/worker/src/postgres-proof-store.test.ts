@@ -567,8 +567,12 @@ describe("PostgresProofStore deletion", () => {
       "command_id = ANY ($2::text[]) OR node_id = ANY ($3::text[])",
     );
     expect(replaySteps?.values).toEqual(["session:one", ["command:d"], ["node:command:d"]]);
+    // The read-only guard (N27) locks the session row before the first write.
+    expect(client.calls[1]?.text).toContain("FROM proof_sessions");
+    expect(client.calls[1]?.text).toContain("FOR UPDATE");
     expect(client.calls.map(({ text }) => text.trim().split(/\s+/)[0])).toEqual([
       "BEGIN",
+      "SELECT",
       "DELETE",
       "DELETE",
       "DELETE",
@@ -609,7 +613,9 @@ describe("PostgresProofStore deletion", () => {
       );
     });
     expect(found).toEqual({ id: "deletion:command:delete" });
-    const [insert, select] = client.calls.slice(1, 3);
+    // The read-only guard (N27) locks the session row before the first write.
+    expect(client.calls[1]?.text).toContain("FOR UPDATE");
+    const [insert, select] = client.calls.slice(2, 4);
     expect(insert?.text).toContain("INSERT INTO proof_deletions");
     expect(insert?.values).toEqual([
       "session:one",

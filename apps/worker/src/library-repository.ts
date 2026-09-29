@@ -52,8 +52,15 @@ export function libraryScopeKey(sessionId: string | undefined): string {
   return sessionId === undefined ? "global" : `session:${sessionId}`;
 }
 
-/** The locked session columns the library needs. */
-export type LibrarySessionRow = Readonly<{ operators: unknown; metadata: unknown }>;
+/**
+ * The locked session columns the library needs. `readOnly` is true for a session imported from
+ * an artifact (migration 0011); its library accepts no additions or revisions.
+ */
+export type LibrarySessionRow = Readonly<{
+  operators: unknown;
+  metadata: unknown;
+  readOnly?: boolean | undefined;
+}>;
 
 /** One `library_artifacts` row: the admitted artifact with its addition ordering. */
 export type StoredLibraryArtifactRow = Readonly<{
@@ -106,6 +113,7 @@ export type LibraryRepositoryDiagnosticCode =
   | "operator-id-conflict"
   | "operator-symbol-conflict"
   | "library-record-invalid"
+  | "session-read-only"
   | "storage-failure"
   | "commit-unknown";
 export type LibraryRepositoryDiagnostic = Readonly<{
@@ -156,6 +164,7 @@ export async function addLibraryArtifact(
     return await store.libraryTransaction(async (transaction) => {
       const scope = await lockScope(transaction, sessionId);
       if ("status" in scope) return scope;
+      if (scope.session?.readOnly === true) return readOnlySession(sessionId);
       const operators = await environmentOperators(transaction, scope.session);
       if (operators === undefined) {
         return failure("rejected", "invalid-environment", "The operator environment is invalid.");
@@ -395,6 +404,7 @@ export async function reviseBackground(
       if (session === undefined) {
         return failure("rejected", "session-not-found", "The proof session does not exist.");
       }
+      if (session.readOnly === true) return readOnlySession(sessionId);
       const metadata = parseMetadata(session.metadata);
       if (metadata === undefined) {
         return failure(
@@ -671,6 +681,14 @@ function failure(
   message: string,
 ): LibraryRepositoryFailure {
   return freezeDetached({ status, diagnostics: [{ code, message }] as const });
+}
+
+function readOnlySession(sessionId: string | undefined): LibraryRepositoryFailure {
+  return failure(
+    "rejected",
+    "session-read-only",
+    `The proof session ${sessionId ?? ""} is read-only; it was imported from an artifact.`,
+  );
 }
 
 function storageFailure(error: unknown, message: string): LibraryRepositoryFailure {

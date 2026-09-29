@@ -79,9 +79,12 @@ export function validateSameOriginJsonRequest(request: Request): Response | unde
   return undefined;
 }
 
-export async function readBoundedJson(request: Request): Promise<unknown> {
+export async function readBoundedJson(
+  request: Request,
+  maxBytes: number = MAX_REQUEST_BYTES,
+): Promise<unknown> {
   const declaredLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new RequestBodyError("The JSON request body is too large.", 413);
   }
   let text: string;
@@ -90,7 +93,7 @@ export async function readBoundedJson(request: Request): Promise<unknown> {
   } catch {
     throw new RequestBodyError("The JSON request body could not be read.", 400);
   }
-  if (new TextEncoder().encode(text).byteLength > MAX_REQUEST_BYTES) {
+  if (new TextEncoder().encode(text).byteLength > maxBytes) {
     throw new RequestBodyError("The JSON request body is too large.", 413);
   }
   if (text.length === 0) throw new RequestBodyError("A JSON request body is required.", 400);

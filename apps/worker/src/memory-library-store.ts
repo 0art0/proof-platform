@@ -147,7 +147,11 @@ export class MemoryLibraryStore extends MemoryProofStore implements LibraryStore
         const found = session(sessionId);
         return found === undefined
           ? undefined
-          : jsonRow({ operators: found.operators, metadata: found.metadata ?? null });
+          : jsonRow({
+              operators: found.operators,
+              metadata: found.metadata ?? null,
+              readOnly: found.readOnly === true,
+            });
       },
       lockGlobalLibrary: async () => undefined,
       proofNodeExists: async (sessionId, nodeId) =>

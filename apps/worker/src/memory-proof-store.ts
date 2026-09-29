@@ -8,6 +8,7 @@ import {
   type MovePreview,
   type MovePreviewId,
   type PrepareProofCommandSuccess,
+  type ProofArtifactImportRecord,
   type ProofDeletionRecord,
   type ProofEdge,
   type ProofNode,
@@ -17,6 +18,7 @@ import {
 import type { SemanticReplayStepRecord } from "@proof/protocol";
 import {
   ProofStoreTransactionError,
+  guardReadOnlySessions,
   type ProofRecordDeletionRequest,
   type ProofRecordDeletionResult,
   type ProofSession,
@@ -31,7 +33,8 @@ import {
  * `0004_session_metadata.sql`), the `proof_deletions` tombstones of `0006_proof_deletions.sql`,
  * and the `proof_interaction_events` log of `0007_interaction_events.sql` (kinds widened by
  * `0008_backtrack_interaction_event.sql`), and the `proof_inquiry_records` of
- * `0009_inquiry_records.sql`.
+ * `0009_inquiry_records.sql`, and the `proof_sessions.read_only` marker and
+ * `proof_artifact_imports` records of `0011_artifact_imports.sql`.
  * Sessions are keyed by session ID; every other table is
  * keyed by `memoryProofRecordKey(sessionId, recordId)`, matching its `(session_id, id)` primary key.
  */
@@ -48,6 +51,8 @@ export type MemoryProofTables = Readonly<{
   /** `proof_replay_steps` of `0010_semantic_replay_steps.sql`, keyed by step command ID. */
   replaySteps: Map<string, SemanticReplayStepRecord>;
   inquiryRecords: Map<string, InquiryRecord>;
+  /** `proof_artifact_imports` of `0011_artifact_imports.sql`, keyed by the imported session. */
+  artifactImports: Map<string, ProofArtifactImportRecord>;
 }>;
 
 type TableName = keyof MemoryProofTables;
@@ -67,6 +72,7 @@ const TABLE_NAMES = [
   "interactionEvents",
   "replaySteps",
   "inquiryRecords",
+  "artifactImports",
 ] as const satisfies readonly TableName[];
 
 /** The composite `(session_id, id)` key used by every session-scoped memory table. */
@@ -111,6 +117,7 @@ export class MemoryProofStore implements ProofStore {
     interactionEvents: new Map(),
     replaySteps: new Map(),
     inquiryRecords: new Map(),
+    artifactImports: new Map(),
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
@@ -123,7 +130,7 @@ export class MemoryProofStore implements ProofStore {
     try {
       let result: Result;
       try {
-        result = await work(this.instrument(context.transaction));
+        result = await work(this.instrument(guardReadOnlySessions(context.transaction)));
         context.checkDeferredConstraints();
       } catch (cause: unknown) {
         throw new ProofStoreTransactionError(
@@ -173,6 +180,7 @@ class MemoryTransactionContext {
     interactionEvents: new Map(),
     replaySteps: new Map(),
     inquiryRecords: new Map(),
+    artifactImports: new Map(),
   };
   /** Keys deleted by this transaction; a later insert of the same key re-stages the row. */
   private readonly deleted: { [Name in TableName]: Set<string> } = {
@@ -187,6 +195,7 @@ class MemoryTransactionContext {
     interactionEvents: new Set(),
     replaySteps: new Set(),
     inquiryRecords: new Set(),
+    artifactImports: new Set(),
   };
   private readonly locks = new Map<string, Promise<() => void>>();
   private closed = false;
@@ -486,8 +495,59 @@ class MemoryTransactionContext {
               currentNodeId: session.currentNodeId,
               operators: session.operators,
               ...(session.metadata === undefined ? {} : { metadata: session.metadata }),
+              ...(session.readOnly === true ? { readOnly: true } : {}),
             };
       },
+      markSessionReadOnly: async (sessionId) => {
+        await this.lock(sessionId);
+        const session = this.row("sessions", sessionId);
+        if (session === undefined || session.readOnly === true) return false;
+        this.staged.sessions.set(sessionId, Object.freeze({ ...session, readOnly: true }));
+        return true;
+      },
+      listNodes: async (sessionId) =>
+        this.sortedSessionRows("nodes", sessionId, idOf).map((node) => ({
+          sessionId,
+          nodeId: node.id,
+          stateId: node.state.id,
+          node,
+        })),
+      listSuggestionSets: async (sessionId) =>
+        this.sortedSessionRows("suggestionSets", sessionId, idOf).map((suggestionSet) => ({
+          sessionId,
+          suggestionSetId: suggestionSet.id,
+          nodeId: suggestionSet.nodeId,
+          stateId: suggestionSet.stateId,
+          suggestionSet,
+        })),
+      listPreviews: async (sessionId) => this.sortedSessionRows("previews", sessionId, idOf),
+      listEvents: async (sessionId) => this.sortedSessionRows("events", sessionId, idOf),
+      listCommands: async (sessionId) =>
+        this.sortedSessionRows("commands", sessionId, (row) => row.prepared.command.commandId),
+      listReplaySteps: async (sessionId) =>
+        this.sortedSessionRows("replaySteps", sessionId, (row) => row.commandId),
+      listDeletions: async (sessionId) => this.sortedSessionRows("deletions", sessionId, idOf),
+      readArtifactImport: async (sessionId) =>
+        this.read("artifactImports", memoryProofRecordKey(sessionId, sessionId)),
+      insertArtifactImport: async (record) =>
+        this.insert(
+          "artifactImports",
+          record.sessionId,
+          memoryProofRecordKey(record.sessionId, record.sessionId),
+          record,
+          (row) => {
+            if (!/^sha256:[0-9a-f]{64}$/.test(row.digest)) {
+              violation("proof_artifact_imports check: the digest is malformed.");
+            }
+            const duplicate = [
+              ...this.committed.artifactImports.values(),
+              ...this.staged.artifactImports.values(),
+            ].some(
+              (existing) => existing.digest === row.digest && existing.sessionId !== row.sessionId,
+            );
+            if (duplicate) violation(`proof_artifact_imports unique digest: ${row.digest}.`);
+          },
+        ),
       readNode: async (sessionId, nodeId) => {
         const node = this.read("nodes", memoryProofRecordKey(sessionId, nodeId));
         return node === undefined
@@ -820,6 +880,22 @@ class MemoryTransactionContext {
       .flatMap((recordKey) => {
         const found = this.row(name, recordKey);
         return found === undefined ? [] : [found];
+      });
+  }
+
+  /** Detached copies of a session's rows of one table, ordered by `keyOf` (like `ORDER BY`). */
+  private sortedSessionRows<Name extends TableName>(
+    name: Name,
+    sessionId: string,
+    keyOf: (row: RowOf<Name>) => string,
+  ): RowOf<Name>[] {
+    this.assertOpen();
+    return this.sessionRows(name, sessionId)
+      .map((row) => structuredClone(row) as RowOf<Name>)
+      .sort((left, right) => {
+        const leftKey = keyOf(left);
+        const rightKey = keyOf(right);
+        return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
       });
   }
 

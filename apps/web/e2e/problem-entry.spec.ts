@@ -18,8 +18,9 @@ async function fillPropositionalDraft(page: Page) {
 test("the landing page offers the three actions", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "New problem" })).toBeVisible();
+  await expect(page.getByLabel("Artifact file", { exact: true })).toBeEnabled();
+  // Upload waits for a chosen file.
   await expect(page.getByRole("button", { name: "Upload artifact" })).toBeDisabled();
-  await expect(page.getByText("Available in a later version.")).toBeVisible();
 
   await page.getByLabel("Session ID", { exact: true }).fill("session:development");
   await page.getByRole("button", { name: "Open session" }).click();
@@ -63,4 +64,22 @@ test("the worker's diagnostics explain a rejected draft", async ({ page }) => {
     page.getByRole("alert").filter({ hasText: "Goal 1 uses r, which is not declared" }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve and create session" })).toHaveCount(0);
+});
+
+test("an exported artifact uploads as a read-only session", async ({ page }) => {
+  const exported = await page.request.get("/api/proof-sessions/session%3Adevelopment/export");
+  expect(exported.status()).toBe(200);
+  expect(exported.headers()["content-disposition"]).toBe(
+    'attachment; filename="session-development.proof-artifact.json"',
+  );
+
+  await page.goto("/");
+  await page.getByLabel("Artifact file", { exact: true }).setInputFiles({
+    name: "session-development.proof-artifact.json",
+    mimeType: "application/json",
+    buffer: await exported.body(),
+  });
+  await page.getByRole("button", { name: "Upload artifact" }).click();
+  await expect(page).toHaveURL(/\/sessions\/session(%3A|:)artifact(%3A|:)[0-9a-f]{32}$/);
+  await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
 });

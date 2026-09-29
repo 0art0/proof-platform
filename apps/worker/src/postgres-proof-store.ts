@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import {
   ProofStoreTransactionError,
+  guardReadOnlySessions,
   type InquiryRecordQuery,
   type InteractionEventQuery,
   type ProofRecordDeletionRequest,
@@ -21,6 +22,7 @@ import {
   type MovePreview,
   type MovePreviewId,
   type PrepareProofCommandSuccess,
+  type ProofArtifactImportRecord,
   type ProofDeletionRecord,
   type ProofEdge,
   type ProofNode,
@@ -65,7 +67,7 @@ export class PostgresProofStore implements ProofStore {
 
       let result: Result;
       try {
-        result = await work(new PostgresProofStoreTransaction(client));
+        result = await work(guardReadOnlySessions(new PostgresProofStoreTransaction(client)));
       } catch (workCause: unknown) {
         try {
           await client.query("ROLLBACK");
@@ -115,7 +117,7 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
 
   async lockSession(sessionId: ProofSessionId): Promise<unknown | undefined> {
     const result = await this.client.query(
-      `SELECT id, root_node_id, current_node_id, operators, metadata
+      `SELECT id, root_node_id, current_node_id, operators, metadata, read_only
        FROM proof_sessions
        WHERE id = $1
        FOR UPDATE`,
@@ -132,7 +134,116 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
           ...(row.metadata === null || row.metadata === undefined
             ? {}
             : { metadata: row.metadata }),
+          ...(row.read_only === true ? { readOnly: true } : {}),
         };
+  }
+
+  async markSessionReadOnly(sessionId: ProofSessionId): Promise<boolean> {
+    const result = await this.client.query(
+      `UPDATE proof_sessions
+       SET read_only = true
+       WHERE id = $1 AND NOT read_only`,
+      [sessionId],
+    );
+    return result.rowCount === 1;
+  }
+
+  async listNodes(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    const result = await this.client.query(
+      `SELECT session_id, id, state_id, state
+       FROM proof_nodes
+       WHERE session_id = $1
+       ORDER BY id`,
+      [sessionId],
+    );
+    return result.rows.map((row) => ({
+      sessionId: row.session_id,
+      nodeId: row.id,
+      stateId: row.state_id,
+      node: { id: row.id, state: row.state },
+    }));
+  }
+
+  async listSuggestionSets(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    const result = await this.client.query(
+      `SELECT session_id, id, node_id, state_id, record
+       FROM proof_suggestion_sets
+       WHERE session_id = $1
+       ORDER BY id`,
+      [sessionId],
+    );
+    return result.rows.map((row) => ({
+      sessionId: row.session_id,
+      suggestionSetId: row.id,
+      nodeId: row.node_id,
+      stateId: row.state_id,
+      suggestionSet: row.record,
+    }));
+  }
+
+  async listPreviews(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    return this.listRecords(
+      `SELECT record FROM proof_previews WHERE session_id = $1 ORDER BY id`,
+      sessionId,
+    );
+  }
+
+  async listEvents(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    return this.listRecords(
+      `SELECT record FROM proof_events WHERE session_id = $1 ORDER BY id`,
+      sessionId,
+    );
+  }
+
+  async listCommands(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    return this.listRecords(
+      `SELECT result AS record FROM proof_commands WHERE session_id = $1 ORDER BY command_id`,
+      sessionId,
+    );
+  }
+
+  async listReplaySteps(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    return this.listRecords(
+      `SELECT record FROM proof_replay_steps WHERE session_id = $1 ORDER BY command_id`,
+      sessionId,
+    );
+  }
+
+  async listDeletions(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    return this.listRecords(
+      `SELECT record FROM proof_deletions WHERE session_id = $1 ORDER BY id`,
+      sessionId,
+    );
+  }
+
+  async readArtifactImport(sessionId: ProofSessionId): Promise<unknown | undefined> {
+    const result = await this.client.query(
+      `SELECT record
+       FROM proof_artifact_imports
+       WHERE session_id = $1`,
+      [sessionId],
+    );
+    return result.rows[0]?.record;
+  }
+
+  async insertArtifactImport(record: ProofArtifactImportRecord): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_artifact_imports
+         (session_id, digest, source_session_id, imported_at, record)
+       VALUES ($1, $2, $3, $4::timestamptz, $5::jsonb)`,
+      [
+        record.sessionId,
+        record.digest,
+        record.sourceSessionId,
+        record.importedAt,
+        JSON.stringify(record),
+      ],
+    );
+  }
+
+  private async listRecords(text: string, sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    const result = await this.client.query(text, [sessionId]);
+    return result.rows.map((row) => row.record);
   }
 
   async readNode(sessionId: ProofSessionId, nodeId: ProofNode["id"]): Promise<unknown | undefined> {

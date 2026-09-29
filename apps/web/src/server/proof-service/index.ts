@@ -29,6 +29,11 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import {
+  parseProofArtifact,
+  proofArtifactImportResponseSchema,
+  proofArtifactRejectionResponseSchema,
+} from "@proof/protocol";
+import {
   problemApprovalRequestSchema,
   problemDraftValidationResponseSchema,
   problemSetupDiagnosticSchema,
@@ -82,6 +87,7 @@ const repositoryDiagnosticCodeSchema = z.enum([
   "interaction-event-rejected",
   "interaction-event-conflict",
   "invalid-interaction-event-record",
+  "session-read-only",
 ]);
 
 const proofServiceFailureSchema = z
@@ -798,12 +804,15 @@ function signalOption(signal: AbortSignal | undefined): Readonly<{ signal?: Abor
   return signal === undefined ? {} : { signal };
 }
 
-async function readValidatedEnvelope(response: Response): Promise<unknown> {
+async function readValidatedEnvelope(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): Promise<unknown> {
   const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") throw invalidUpstreamResponse();
 
   const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw invalidUpstreamResponse();
   }
   let text: string;
@@ -812,7 +821,7 @@ async function readValidatedEnvelope(response: Response): Promise<unknown> {
   } catch {
     throw invalidUpstreamResponse();
   }
-  if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
+  if (new TextEncoder().encode(text).byteLength > maxBytes) {
     throw invalidUpstreamResponse();
   }
   try {
@@ -1063,6 +1072,79 @@ function problemSetupFailureAnswer(status: number, value: unknown): ProtocolServ
     status: status === 422 ? 422 : publicFailureStatus(status),
     code: first?.code ?? "invalid_upstream_response",
     message: first?.message ?? "The proof service rejected the request.",
+    body: parsed.data,
+  };
+}
+
+/** The largest artifact the web boundary relays in either direction. */
+export const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
+
+/** The download file name of a session's artifact: the ID with unsafe characters replaced. */
+export function artifactFileName(sessionId: string): string {
+  return `${sessionId.replace(/[^A-Za-z0-9._-]/g, "-")}.proof-artifact.json`;
+}
+
+/**
+ * Fetch a session's versioned proof artifact (roadmap N27). The body is the worker's artifact
+ * exactly as sent (its digest covers that content); it is checked against the strict artifact
+ * schema and the requested session before it is relayed.
+ */
+export async function exportProofArtifact(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/export`,
+    { method: "GET", ...signalOption(options.signal) },
+  );
+  const value = await readValidatedEnvelope(response, MAX_ARTIFACT_BYTES);
+  if (response.status === 200) {
+    const parsed = parseProofArtifact(value);
+    if (!parsed.ok || parsed.artifact.sessionId !== sessionId) throw invalidUpstreamResponse();
+    return { ok: true, status: 200, body: value };
+  }
+  return artifactFailureAnswer(response.status, value);
+}
+
+/**
+ * Upload an artifact: the worker revalidates it completely and creates a read-only session.
+ * 201 creates, 200 finds the session of an identical earlier upload, 422 carries the diagnostics
+ * of the first failed check (nothing is written).
+ */
+export async function uploadProofArtifact(
+  artifactInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  if (typeof artifactInput !== "object" || artifactInput === null || Array.isArray(artifactInput)) {
+    throw invalidRequest("A proof artifact must be a JSON object.");
+  }
+  const response = await requestProofService("/artifacts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(artifactInput),
+    ...signalOption(options.signal),
+  });
+  const value = await readValidatedEnvelope(response);
+  if (response.status === 200 || response.status === 201) {
+    const parsed = proofArtifactImportResponseSchema.safeParse(value);
+    if (!parsed.success || parsed.data.replayed !== (response.status === 200)) {
+      throw invalidUpstreamResponse();
+    }
+    return { ok: true, status: response.status, body: parsed.data };
+  }
+  return artifactFailureAnswer(response.status, value);
+}
+
+function artifactFailureAnswer(status: number, value: unknown): ProtocolServiceAnswer {
+  const parsed = proofArtifactRejectionResponseSchema.safeParse(value);
+  if (!parsed.success || status < 400 || status > 599) throw invalidUpstreamResponse();
+  const [first] = parsed.data.diagnostics;
+  return {
+    ok: false,
+    status: status === 422 ? 422 : publicFailureStatus(status),
+    code: first?.code ?? "invalid_upstream_response",
+    message: first?.message ?? "The proof service rejected the artifact.",
     body: parsed.data,
   };
 }
