@@ -1,17 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ readCurrentProofSession: vi.fn() }));
+const mocks = vi.hoisted(() => ({ readCurrentProofSession: vi.fn(), deleteProofSession: vi.fn() }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("../../../../server/proof-service", async (importOriginal) => {
   const actual = (await importOriginal()) as object;
-  return { ...actual, readCurrentProofSession: mocks.readCurrentProofSession };
+  return {
+    ...actual,
+    readCurrentProofSession: mocks.readCurrentProofSession,
+    deleteProofSession: mocks.deleteProofSession,
+  };
 });
 
 import { ProofServiceError } from "../../../../server/proof-service";
-import { GET } from "./route";
+import { DELETE, GET } from "./route";
 
-afterEach(() => mocks.readCurrentProofSession.mockReset());
+afterEach(() => {
+  mocks.readCurrentProofSession.mockReset();
+  mocks.deleteProofSession.mockReset();
+});
 
 describe("GET /api/proof-sessions/:sessionId", () => {
   it("returns a no-store session envelope and forwards cancellation", async () => {
@@ -50,6 +57,51 @@ describe("GET /api/proof-sessions/:sessionId", () => {
     expect(await response.json()).toEqual({
       ok: false,
       error: { code: "session-not-found", message: "The session was not found." },
+    });
+  });
+});
+
+describe("DELETE /api/proof-sessions/:sessionId", () => {
+  const url = "http://proof.test/api/proof-sessions/session%3Atest";
+  const sameOrigin = { origin: "http://proof.test", "sec-fetch-site": "same-origin" };
+  const context = { params: Promise.resolve({ sessionId: "session:test" }) };
+
+  it("deletes the session for a same-origin request and forwards cancellation", async () => {
+    mocks.deleteProofSession.mockResolvedValue({ deleted: true });
+    const request = new Request(url, { method: "DELETE", headers: sameOrigin });
+    const response = await DELETE(request, context);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, data: { deleted: true } });
+    expect(mocks.deleteProofSession).toHaveBeenCalledExactlyOnceWith("session:test", {
+      signal: request.signal,
+    });
+  });
+
+  it("refuses cross-origin requests without calling the worker", async () => {
+    const response = await DELETE(
+      new Request(url, {
+        method: "DELETE",
+        headers: { origin: "http://evil.test", "sec-fetch-site": "cross-site" },
+      }),
+      context,
+    );
+    expect(response.status).toBe(403);
+    expect(mocks.deleteProofSession).not.toHaveBeenCalled();
+    expect((await DELETE(new Request(url, { method: "DELETE" }), context)).status).toBe(403);
+  });
+
+  it("preserves a not-found failure", async () => {
+    mocks.deleteProofSession.mockRejectedValue(
+      new ProofServiceError("session-not-found", "The session was not found.", 404),
+    );
+    const response = await DELETE(
+      new Request(url, { method: "DELETE", headers: sameOrigin }),
+      context,
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { code: "session-not-found" },
     });
   });
 });

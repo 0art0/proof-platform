@@ -12,11 +12,17 @@ type RouteContext = Readonly<{
 /**
  * Download a session's versioned proof artifact (roadmap N27). A success is the artifact JSON
  * itself, not wrapped, as an attachment; a failure is the usual `{ ok: false, error, details }`.
+ * A private session (the default) is exported only with `?confirmPrivateExport=true`; otherwise
+ * 403 `private-export-unconfirmed`, so a client must show the acknowledgement first.
  */
 export async function GET(request: Request, context: RouteContext): Promise<Response> {
   const { sessionId } = await context.params;
   try {
-    const answer = await exportProofArtifact(sessionId, { signal: request.signal });
+    const answer = await exportProofArtifact(sessionId, {
+      signal: request.signal,
+      confirmPrivateExport:
+        new URL(request.url).searchParams.get("confirmPrivateExport") === "true",
+    });
     if (!answer.ok) return proofProtocolAnswer(answer);
     return new Response(JSON.stringify(answer.body), {
       status: 200,

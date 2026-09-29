@@ -15,7 +15,7 @@ const gets = [
   development,
   `${development}/history`,
   `${development}/suggestion-sets/warmup`,
-  `${development}/export`,
+  `${development}/export?confirmPrivateExport=true`,
 ];
 const posts = [
   "/api/problem-drafts/validate",

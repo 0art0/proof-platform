@@ -53,7 +53,9 @@ async function target() {
 describe("GET /proof-sessions/:id/export", () => {
   it("returns the artifact as an attachment and 404 for an unknown session", async () => {
     const scenario = await startArtifactService(services);
-    const response = await fetch(`${scenario.origin}/proof-sessions/${ARTIFACT_SESSION_ID}/export`);
+    const response = await fetch(
+      `${scenario.origin}/proof-sessions/${ARTIFACT_SESSION_ID}/export?confirmPrivateExport=true`,
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(response.headers.get("content-disposition")).toBe(

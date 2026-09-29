@@ -40,7 +40,8 @@ export function proofServiceFailure(error: unknown): Response {
   return proofApiFailure("service_unavailable", "The proof service could not be reached.", 503);
 }
 
-export function validateSameOriginJsonRequest(request: Request): Response | undefined {
+/** Accept a mutation only from this application's own origin (no body is required). */
+export function validateSameOriginRequest(request: Request): Response | undefined {
   let requestOrigin: string;
   let suppliedOrigin: string;
   try {
@@ -67,7 +68,12 @@ export function validateSameOriginJsonRequest(request: Request): Response | unde
       403,
     );
   }
+  return undefined;
+}
 
+export function validateSameOriginJsonRequest(request: Request): Response | undefined {
+  const foreign = validateSameOriginRequest(request);
+  if (foreign !== undefined) return foreign;
   const mediaType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") {
     return proofApiFailure(

@@ -67,7 +67,9 @@ test("the worker's diagnostics explain a rejected draft", async ({ page }) => {
 });
 
 test("an exported artifact uploads as a read-only session", async ({ page }) => {
-  const exported = await page.request.get("/api/proof-sessions/session%3Adevelopment/export");
+  const exported = await page.request.get(
+    "/api/proof-sessions/session%3Adevelopment/export?confirmPrivateExport=true",
+  );
   expect(exported.status()).toBe(200);
   expect(exported.headers()["content-disposition"]).toBe(
     'attachment; filename="session-development.proof-artifact.json"',

@@ -124,7 +124,19 @@ export type ProofSession = Readonly<{
    * read-only session is refused by `guardReadOnlySessions` with `session-read-only`.
    */
   readOnly?: true | undefined;
+  /**
+   * Who may see the session (migration 0012). Absent means `private`, the default of every new
+   * session; the stores write and report only the non-default `shared`.
+   */
+  visibility?: "shared" | undefined;
 }>;
+
+/** A session's visibility; sessions are private unless explicitly shared. */
+export type SessionVisibility = "private" | "shared";
+
+export function sessionVisibility(session: Readonly<{ visibility?: unknown }>): SessionVisibility {
+  return session.visibility === "shared" ? "shared" : "private";
+}
 
 export const proofSessionSchema: z.ZodType<ProofSession> = z
   .object({
@@ -134,6 +146,7 @@ export const proofSessionSchema: z.ZodType<ProofSession> = z
     operators: operatorEnvironmentSchema,
     metadata: proofSessionMetadataSchema.optional(),
     readOnly: z.literal(true).optional(),
+    visibility: z.literal("shared").optional(),
   })
   .strict();
 
@@ -273,6 +286,18 @@ export interface ProofStoreTransaction {
    * calls this, as its last write.
    */
   markSessionReadOnly(sessionId: ProofSessionId): Promise<boolean>;
+  /**
+   * Set `proof_sessions.visibility` (migration 0012). Returns false when the session does not
+   * exist. Not a proof write: it is allowed on a read-only session.
+   */
+  setSessionVisibility(sessionId: ProofSessionId, visibility: SessionVisibility): Promise<boolean>;
+  /**
+   * Hard-delete the session and every dependent row (nodes, suggestion sets, previews, edges,
+   * events, commands, deletion tombstones, interaction events, inquiry records, replay steps,
+   * artifact-import record, session-scoped library rows and proof-session LLM call records).
+   * Returns false when the session does not exist. Allowed on a read-only session.
+   */
+  deleteSession(sessionId: ProofSessionId): Promise<boolean>;
   /** Every node of the session, in the `readNode` record shape, ordered by node ID. */
   listNodes(sessionId: ProofSessionId): Promise<readonly unknown[]>;
   /** Every suggestion set, in the `readSuggestionSet` record shape, ordered by ID. */
@@ -389,6 +414,11 @@ export function guardReadOnlySessions(inner: ProofStoreTransaction): ProofStoreT
     listReplaySteps: (sessionId) => inner.listReplaySteps(sessionId),
     listDeletions: (sessionId) => inner.listDeletions(sessionId),
     readArtifactImport: (sessionId) => inner.readArtifactImport(sessionId),
+    // Privacy and deletion are administrative, not proof writes: a read-only (imported) session
+    // must stay deletable and its visibility changeable.
+    setSessionVisibility: (sessionId, visibility) =>
+      inner.setSessionVisibility(sessionId, visibility),
+    deleteSession: (sessionId) => inner.deleteSession(sessionId),
     lockSession: async (sessionId) => {
       const record = await inner.lockSession(sessionId);
       known.set(sessionId, isReadOnlySessionRecord(record));

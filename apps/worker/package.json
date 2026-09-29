@@ -9,6 +9,7 @@
     "start": "tsx src/main.ts",
     "start:memory": "PROOF_STORE=memory tsx src/main.ts",
     "lint": "eslint .",
+    "migrate": "tsx src/migrations/cli.ts",
     "test": "vitest run --passWithNoTests",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "typecheck": "tsc --noEmit"

@@ -1099,11 +1099,13 @@ export function artifactFileName(sessionId: string): string {
  */
 export async function exportProofArtifact(
   sessionIdInput: unknown,
-  options: ProofServiceRequestOptions = {},
+  options: ProofServiceRequestOptions & Readonly<{ confirmPrivateExport?: boolean }> = {},
 ): Promise<ProtocolServiceAnswer> {
   const sessionId = parseIdentifier(sessionIdInput, "proof session");
   const response = await requestProofService(
-    `/proof-sessions/${encodeURIComponent(sessionId)}/export`,
+    `/proof-sessions/${encodeURIComponent(sessionId)}/export${
+      options.confirmPrivateExport === true ? "?confirmPrivateExport=true" : ""
+    }`,
     { method: "GET", ...signalOption(options.signal) },
   );
   const value = await readValidatedEnvelope(response, MAX_ARTIFACT_BYTES);
@@ -1111,6 +1113,17 @@ export async function exportProofArtifact(
     const parsed = parseProofArtifact(value);
     if (!parsed.ok || parsed.artifact.sessionId !== sessionId) throw invalidUpstreamResponse();
     return { ok: true, status: 200, body: value };
+  }
+  const unconfirmed = privateExportRefusalSchema.safeParse(value);
+  if (response.status === 403 && unconfirmed.success) {
+    const [diagnostic] = unconfirmed.data.diagnostics;
+    return {
+      ok: false,
+      status: 403,
+      code: diagnostic.code,
+      message: diagnostic.message,
+      body: unconfirmed.data,
+    };
   }
   return artifactFailureAnswer(response.status, value);
 }
@@ -1123,7 +1136,11 @@ export async function readStoredProofArtifact(
   sessionIdInput: unknown,
   options: ProofServiceRequestOptions = {},
 ): Promise<ProofArtifact> {
-  const answer = await exportProofArtifact(sessionIdInput, options);
+  // The static viewers render the stored session to its own reader; that is not an export.
+  const answer = await exportProofArtifact(sessionIdInput, {
+    ...options,
+    confirmPrivateExport: true,
+  });
   if (!answer.ok) {
     if (answer.status === 404) {
       throw new ProofServiceError("invalid_request", "The proof session was not found.", 404);
@@ -1255,5 +1272,88 @@ export async function readInquiryRecords(
   if (response.status !== 200) throw failureForResponse(response.status, value);
   const parsed = inquiryRecordsEnvelopeSchema.safeParse(value);
   if (!parsed.success) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+// --- Session privacy and deletion (roadmap N36) -------------------------------------------------
+
+const privateExportRefusalSchema = z
+  .object({
+    diagnostics: z.tuple([
+      z
+        .object({ code: z.literal("private-export-unconfirmed"), message: z.string().min(1) })
+        .strict(),
+    ]),
+  })
+  .strict();
+
+export const sessionVisibilitySchema = z.enum(["private", "shared"]);
+export type SessionVisibility = z.infer<typeof sessionVisibilitySchema>;
+
+const sessionVisibilityEnvelopeSchema = z
+  .object({ sessionId: stableIdentifierSchema, visibility: sessionVisibilitySchema })
+  .strict();
+export type SessionVisibilityView = z.infer<typeof sessionVisibilityEnvelopeSchema>;
+
+/**
+ * Hard-delete a session and every dependent row, including an imported session and its artifact
+ * import record. There is no authentication yet, so this is not access control.
+ */
+export async function deleteProofSession(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<Readonly<{ deleted: true }>> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const response = await requestProofService(`/proof-sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    ...signalOption(options.signal),
+  });
+  if (response.status === 204) return { deleted: true };
+  throw failureForResponse(response.status, await readValidatedEnvelope(response));
+}
+
+/** A session's visibility: `private` unless it was explicitly shared. */
+export async function readSessionVisibility(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<SessionVisibilityView> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  return visibilityAnswer(
+    sessionId,
+    await requestProofService(`/proof-sessions/${encodeURIComponent(sessionId)}/visibility`, {
+      method: "GET",
+      ...signalOption(options.signal),
+    }),
+  );
+}
+
+/** Change a session's visibility. */
+export async function setSessionVisibility(
+  sessionIdInput: unknown,
+  visibilityInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<SessionVisibilityView> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const visibility = sessionVisibilitySchema.safeParse(visibilityInput);
+  if (!visibility.success) throw invalidRequest('The visibility must be "private" or "shared".');
+  return visibilityAnswer(
+    sessionId,
+    await requestProofService(`/proof-sessions/${encodeURIComponent(sessionId)}/visibility`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visibility: visibility.data }),
+      ...signalOption(options.signal),
+    }),
+  );
+}
+
+async function visibilityAnswer(
+  sessionId: string,
+  response: Response,
+): Promise<SessionVisibilityView> {
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = sessionVisibilityEnvelopeSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
   return parsed.data;
 }

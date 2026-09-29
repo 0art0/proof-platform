@@ -10,6 +10,7 @@ import {
   type ProofSessionId,
   type ProofStore,
   type ProofStoreTransaction,
+  type SessionVisibility,
 } from "./proof-repository";
 import {
   inquiryRecordNodeIds,
@@ -44,6 +45,27 @@ export interface SqlClient {
 export interface SqlPool {
   connect(): Promise<SqlClient>;
 }
+
+/**
+ * Every table with a `session_id` column, dependents before the rows they reference (the deferred
+ * command and session-pointer keys are settled at commit).
+ */
+export const SESSION_TABLES_IN_DELETION_ORDER = [
+  "proof_replay_steps",
+  "proof_interaction_events",
+  "proof_inquiry_records",
+  "proof_events",
+  "proof_edges",
+  "proof_previews",
+  "proof_suggestion_sets",
+  "proof_commands",
+  "proof_nodes",
+  "proof_deletions",
+  "proof_artifact_imports",
+  "library_artifacts",
+  "library_addition_events",
+  "library_background_revisions",
+] as const;
 
 /** Parameterized PostgreSQL adapter. Schema migration is deliberately external. */
 export class PostgresProofStore implements ProofStore {
@@ -117,7 +139,7 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
 
   async lockSession(sessionId: ProofSessionId): Promise<unknown | undefined> {
     const result = await this.client.query(
-      `SELECT id, root_node_id, current_node_id, operators, metadata, read_only
+      `SELECT id, root_node_id, current_node_id, operators, metadata, read_only, visibility
        FROM proof_sessions
        WHERE id = $1
        FOR UPDATE`,
@@ -135,6 +157,7 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
             ? {}
             : { metadata: row.metadata }),
           ...(row.read_only === true ? { readOnly: true } : {}),
+          ...(row.visibility === "shared" ? { visibility: "shared" } : {}),
         };
   }
 
@@ -145,6 +168,44 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
        WHERE id = $1 AND NOT read_only`,
       [sessionId],
     );
+    return result.rowCount === 1;
+  }
+
+  async setSessionVisibility(
+    sessionId: ProofSessionId,
+    visibility: SessionVisibility,
+  ): Promise<boolean> {
+    const result = await this.client.query(
+      `UPDATE proof_sessions
+       SET visibility = $2
+       WHERE id = $1`,
+      [sessionId, visibility],
+    );
+    return result.rowCount === 1;
+  }
+
+  /**
+   * Delete in foreign-key order rather than relying on `ON DELETE CASCADE`: the tables reference
+   * each other without cascades, and PostgreSQL does not order sibling cascades.
+   */
+  async deleteSession(sessionId: ProofSessionId): Promise<boolean> {
+    // Serialize with every other writer of the session before removing its rows.
+    const locked = await this.client.query(
+      `SELECT id FROM proof_sessions WHERE id = $1 FOR UPDATE`,
+      [sessionId],
+    );
+    if (locked.rows.length === 0) return false;
+    for (const table of SESSION_TABLES_IN_DELETION_ORDER) {
+      await this.client.query(`DELETE FROM ${table} WHERE session_id = $1`, [sessionId]);
+    }
+    // LLM call evidence is owner-scoped, not keyed by a session foreign key.
+    for (const table of ["llm_topic_decisions", "llm_calls"]) {
+      await this.client.query(
+        `DELETE FROM ${table} WHERE owner_kind = 'proof-session' AND owner_id = $1`,
+        [sessionId],
+      );
+    }
+    const result = await this.client.query(`DELETE FROM proof_sessions WHERE id = $1`, [sessionId]);
     return result.rowCount === 1;
   }
 

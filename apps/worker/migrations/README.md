@@ -4,9 +4,27 @@
 displayed-suggestion, concrete-preview, edge, event, and idempotent-command tables. Mathematical
 state and documentary records are stored as JSONB.
 
-Apply migrations with the deployment environment's normal PostgreSQL migration runner.
-The worker does not connect to a database or run migrations automatically at startup.
-The migrations are not exercised against a live PostgreSQL instance by the unit suite.
+Apply migrations with the runner: `PROOF_DATABASE_URL=postgresql://... npm run migrate`. It is
+idempotent and records each applied file by name and sha256 checksum in `schema_migrations`.
+
+- Each file runs in its own transaction together with its `schema_migrations` row (the runner
+  strips the file's own `BEGIN;`/`COMMIT;` envelope), so a failing file is rolled back completely
+  and earlier files stay applied. Re-running applies only files that are not yet recorded.
+- An applied file whose checksum changed, or an applied name whose file is missing, aborts the run
+  before anything else changes. Applied migrations are immutable; add a new numbered file.
+- A session-level advisory lock serializes concurrent runners.
+- `npm run migrate -- --status` lists pending migrations and changes nothing.
+- A database whose schema was applied by hand before the runner existed is adopted once with
+  `npm run migrate -- --baseline 0011_artifact_imports.sql` (records every file up to that name as
+  applied without running it), then `npm run migrate` applies the rest.
+- At startup with PostgreSQL the worker only verifies that every migration is applied and
+  unchanged and refuses to start otherwise (schema changes need DDL rights and a deliberate step,
+  and several workers must not race to alter it). `PROOF_AUTO_MIGRATE=true` applies pending
+  migrations first, for single-instance deployments. The memory store needs neither.
+
+The runner is tested against a fake connection; the unit suite does not use a live PostgreSQL
+instance. `schema-coverage.test.ts` checks the stores' SQL against the tables and columns the
+migrations create and that every memory-store entity has a migrated table.
 
 `0002_llm_call_evidence.sql` adds owner-scoped immutable LLM request/outcome records and explicit
 topic-manifest review decisions. A `dispatching` record deliberately remains ambiguous after a
@@ -138,6 +156,34 @@ a new session ID derived from the artifact digest.
 - The flag is enforced by the worker, not by a database trigger; a direct SQL writer can still
   modify an imported session.
 
+`0012_session_visibility.sql` adds `proof_sessions.visibility` (`private` default, or `shared`), the
+privacy marker of design plan §19.3. Every session, including those that existed before the
+migration, is private until explicitly shared. There is no authentication system yet, so this is
+not access control; the worker enforces only what it can without identity:
+
+- new sessions (approved problem setups, the development seed, artifact imports) are private;
+- the worker has no route that lists sessions, so private sessions cannot be enumerated;
+- `GET /proof-sessions/:id/export` of a private session needs `?confirmPrivateExport=true` and
+  otherwise answers 403 `private-export-unconfirmed`; a shared session exports directly;
+- `PATCH /proof-sessions/:id/visibility` changes it, and it may be changed on a read-only session
+  (it is not a proof write).
+
+`DELETE /proof-sessions/:id` hard-deletes a session in one transaction: nodes, suggestion sets,
+previews, edges, events, commands, deletion tombstones, interaction events, inquiry records, replay
+steps, the artifact-import record, the session-scoped library additions, artifacts and revisions,
+and the proof-session-owned LLM call records. The adapter deletes in foreign-key order instead of
+relying on `ON DELETE CASCADE` (the dependent tables reference each other without cascades), and
+`schema-coverage.test.ts` fails when a table with a `session_id` column is missing from that list
+or ordered before a table that references it. Deletion is allowed on an imported read-only session.
+Exports are not stored on the server: the artifact is built on demand from stored rows, so
+"deleting an export" means deleting the session, or the imported session with its
+`proof_artifact_imports` record; a downloaded file is outside the worker's reach. The global
+library layer and operator registry are not session data and are kept.
+
+Migration `0003` already carries the generated `provenance_key` columns and the event-to-edge
+foreign key, and `PostgresProofStore.transaction` already discards a connection with
+`release(true)` after a failed rollback or commit, so no migration was added for either.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -167,7 +213,10 @@ migrations. Its PostgreSQL-backed endpoints are:
 - `GET /proof-sessions/:sessionId/suggestion-sets/:suggestionSetId` for immutable persisted
   evidence, validated against its historical proof node.
 - `GET /proof-sessions/:sessionId/export` returns the session's versioned proof artifact, built
-  from stored rows only, as an attachment.
+  from stored rows only, as an attachment. A private session (the default)
+  needs `?confirmPrivateExport=true`.
+- `DELETE /proof-sessions/:sessionId` hard-deletes the session and its rows (204, or 404 when absent).
+- `GET`/`PATCH /proof-sessions/:sessionId/visibility` read and set `{ visibility }`.
 - `POST /artifacts` with an artifact body (at most 16 MiB) revalidates it completely and creates a
   read-only session: `{ sessionId, digest, sourceSessionId, readOnly, replayed }` (201, or 200 for
   an identical re-upload). A failed check returns 422 with its diagnostics and records nothing.
