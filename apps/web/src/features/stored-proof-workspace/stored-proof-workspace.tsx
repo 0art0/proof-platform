@@ -8,6 +8,7 @@ import {
   commandIdSchema,
   suggestionIdSchema,
   type DisplayedSuggestionSet,
+  type MenuChoices,
   type MovePreview,
   type OperatorDeclaration,
   type ProofEdge,
@@ -15,10 +16,13 @@ import {
 } from "@proof/protocol";
 import type { AnchoredProofSelection } from "@proof/selections";
 import { ProofWorkspace, type WorkspaceView } from "../proof-workspace";
-import { InlineLatex, NaturalLanguageText, usePresentation } from "../proof-workspace/presentation";
+import { StatementView, usePresentation } from "../proof-workspace/presentation";
 import type { Presentation } from "@proof/language";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar } from "./workspace-toolbar";
+import { requestParameterMenus } from "./parameter-menu-request";
+import type { MoveState, PendingMenus } from "./suggestion-card";
+import { SuggestionPanel, type SuggestionState } from "./suggestion-panel";
 import {
   backtrackApiResponseSchema,
   commandApiResponseSchema,
@@ -40,39 +44,12 @@ export type StoredProofSession = Readonly<{
 }>;
 
 export type StoredProofWorkspaceProps = Readonly<{ session: StoredProofSession; node: ProofNode }>;
-type ClassEntry = Readonly<{ suggestionId: string; transitionClass: TransitionClass }>;
-type SuggestionState =
-  | Readonly<{ kind: "idle" }>
-  | Readonly<{ kind: "loading" }>
-  | Readonly<{
-      kind: "empty";
-      suggestionSet: DisplayedSuggestionSet;
-      transitionClasses: readonly ClassEntry[];
-    }>
-  | Readonly<{
-      kind: "ready";
-      suggestionSet: DisplayedSuggestionSet;
-      transitionClasses: readonly ClassEntry[];
-    }>
-  | Readonly<{ kind: "rejected"; message: string }>
-  | Readonly<{ kind: "stale"; message: string }>;
-type MoveState =
-  | Readonly<{ kind: "idle" }>
-  | Readonly<{ kind: "previewing" | "applying"; suggestionId: string }>
-  | Readonly<{
-      kind: "previewed";
-      suggestionId: string;
-      commandId: MoveChoiceRequest["commandId"];
-      preview: MovePreview;
-    }>
-  | Readonly<{ kind: "rejected"; suggestionId: string; message: string }>;
 type HistoryState =
   | Readonly<{ kind: "loading" }>
   | Readonly<{ kind: "ready"; nodes: readonly ProofNode[]; edges: readonly HistoryEdge[] }>
   | Readonly<{ kind: "rejected"; message: string }>;
 type Notice = Readonly<{ state: "committed" | "rejected"; message: string }>;
-type TransitionClass = ProofEdge["transitionClass"];
-type SuggestionId = DisplayedSuggestionSet["suggestions"][number]["id"];
+type SuggestionId = string;
 type HistoryEdge = Readonly<{ edge: ProofEdge; name: string }>;
 
 /** Bind a validated stored snapshot to the reusable interactive proof-state view. */
@@ -261,8 +238,10 @@ function StatefulStoredWorkspace({
   );
 
   const commandIdFor = useCallback(
-    (setId: string, suggestionId: SuggestionId) => {
-      const key = `${setId}\u0000${suggestionId}`;
+    (setId: string, suggestionId: SuggestionId, choices: MenuChoices) => {
+      // A recorded preview binds its command ID to its menu choices, so other choices need
+      // another command ID.
+      const key = `${setId}\u0000${suggestionId}\u0000${choicesKey(choices)}`;
       const existing = commandIds.current.get(key);
       if (existing !== undefined) return existing;
       const created = commandIdSchema.parse(stableAttemptId("command:web", node.state.id));
@@ -273,9 +252,14 @@ function StatefulStoredWorkspace({
   );
 
   const previewSuggestion = useCallback(
-    async (set: DisplayedSuggestionSet, suggestionId: SuggestionId) => {
+    async (
+      set: DisplayedSuggestionSet,
+      suggestionId: SuggestionId,
+      choices: MenuChoices = {},
+      menu?: PendingMenus,
+    ): Promise<void> => {
       const generation = ++actionGeneration.current;
-      const commandId = commandIdFor(set.id, suggestionId);
+      const commandId = commandIdFor(set.id, suggestionId, choices);
       const chosenSuggestionId = suggestionIdSchema.parse(suggestionId);
       if (shownPreview.current?.chosenSuggestionId !== suggestionId) {
         rejectShownPreview("superseded");
@@ -288,13 +272,51 @@ function StatefulStoredWorkspace({
         commandId,
       });
       setNotice(undefined);
-      setMoveState({ kind: "previewing", suggestionId });
-      const result = await requestMovePreview(
-        session.id,
+      setMoveState({ kind: "previewing", suggestionId, menu });
+      const choice = withChoices(
         { commandId, suggestionSetId: set.id, chosenSuggestionId },
-        session.operators,
+        choices,
       );
+      let result = await requestMovePreview(session.id, choice, session.operators);
       if (actionGeneration.current !== generation) return;
+      if (!result.ok && result.code === "requires-input") {
+        // The move needs menu choices: ask the command protocol for the menus it offers.
+        const menus = await requestParameterMenus(session.id, {
+          commandId,
+          nodeId: node.id,
+          suggestionSetId: set.id,
+          suggestionId,
+          menuChoices: choices,
+        });
+        if (actionGeneration.current !== generation) return;
+        if (!menus.ok) {
+          setMoveState({ kind: "rejected", suggestionId, message: menus.message });
+          return;
+        }
+        if (!("previewRecorded" in menus)) {
+          const shown = new Set(menu?.missingParameters ?? []);
+          for (const parameterId of menus.missingParameters) {
+            if (shown.has(parameterId)) continue;
+            recordInteraction({
+              kind: "menu-expanded",
+              nodeId: node.id,
+              suggestionSetId: set.id,
+              suggestionId: chosenSuggestionId,
+              parameterId,
+            });
+          }
+          setMoveState({
+            kind: "choosing",
+            suggestionId,
+            menu: { menus: menus.menus, missingParameters: menus.missingParameters, choices },
+          });
+          return;
+        }
+        // Nothing was missing after all, so the preview was recorded under this command ID;
+        // requesting it again reads the recorded preview back.
+        result = await requestMovePreview(session.id, choice, session.operators);
+        if (actionGeneration.current !== generation) return;
+      }
       if (!result.ok) {
         setMoveState({ kind: "rejected", suggestionId, message: result.message });
       } else if (
@@ -310,7 +332,13 @@ function StatefulStoredWorkspace({
         });
       } else {
         shownPreview.current = result.preview;
-        setMoveState({ kind: "previewed", suggestionId, commandId, preview: result.preview });
+        setMoveState({
+          kind: "previewed",
+          suggestionId,
+          commandId,
+          preview: result.preview,
+          choices,
+        });
       }
     },
     [
@@ -332,11 +360,14 @@ function StatefulStoredWorkspace({
       setMutationPending(true);
       const generation = ++actionGeneration.current;
       const retryState = moveState;
-      const choice: MoveChoiceRequest = {
-        commandId: moveState.commandId,
-        suggestionSetId: set.id,
-        chosenSuggestionId: suggestionIdSchema.parse(suggestionId),
-      };
+      const choice = withChoices(
+        {
+          commandId: commandIdSchema.parse(moveState.commandId),
+          suggestionSetId: set.id,
+          chosenSuggestionId: suggestionIdSchema.parse(suggestionId),
+        },
+        moveState.choices,
+      );
       setMoveState({ kind: "applying", suggestionId });
       const result = await requestApply(session.id, choice, session.operators);
       mutationPendingRef.current = false;
@@ -345,7 +376,7 @@ function StatefulStoredWorkspace({
       if (!result.ok && result.code === "preview-regenerated") {
         // The approved definitions changed since the preview: show the regenerated preview,
         // which the next Apply of the same command confirms.
-        await previewSuggestion(set, suggestionId);
+        await previewSuggestion(set, suggestionId, retryState.choices);
         setNotice({
           state: "rejected",
           message: `Apply paused: ${result.message}`,
@@ -396,10 +427,6 @@ function StatefulStoredWorkspace({
     [loadHistory, node.id, resetTransientState, session.id, session.operators],
   );
 
-  const displayedSet =
-    suggestions.kind === "ready" || suggestions.kind === "empty"
-      ? suggestions.suggestionSet
-      : undefined;
   const breadcrumb = useMemo(() => {
     if (history.kind === "loading") return { kind: "loading" } as const;
     const crumbs =
@@ -410,11 +437,33 @@ function StatefulStoredWorkspace({
       ? ({ kind: "unavailable" } as const)
       : ({ kind: "ready", crumbs } as const);
   }, [history, node.id]);
-  const statusText = useMemo(() => suggestionStatusText(suggestions), [suggestions]);
-  const classes = new Map(
-    suggestions.kind === "ready" || suggestions.kind === "empty"
-      ? suggestions.transitionClasses.map((entry) => [entry.suggestionId, entry.transitionClass])
-      : [],
+  const panelActions = useMemo(
+    () => ({
+      onPreview: (set: DisplayedSuggestionSet, id: string) => void previewSuggestion(set, id),
+      onChooseInputs: (set: DisplayedSuggestionSet, id: string) => void previewSuggestion(set, id),
+      onSubmitChoices: (set: DisplayedSuggestionSet, id: string, choices: MenuChoices) =>
+        void previewSuggestion(
+          set,
+          id,
+          choices,
+          moveState.kind === "choosing" && moveState.suggestionId === id
+            ? moveState.menu
+            : undefined,
+        ),
+      onCancelChoices: () => {
+        actionGeneration.current += 1;
+        setMoveState({ kind: "idle" });
+      },
+      onApply: (set: DisplayedSuggestionSet, id: string) => void applySuggestion(set, id),
+      onInputSummaryExpanded: (set: DisplayedSuggestionSet, id: string) =>
+        recordInteraction({
+          kind: "menu-expanded",
+          nodeId: node.id,
+          suggestionSetId: set.id,
+          suggestionId: suggestionIdSchema.parse(id),
+        }),
+    }),
+    [applySuggestion, moveState, node.id, previewSuggestion, recordInteraction],
   );
 
   return (
@@ -445,150 +494,14 @@ function StatefulStoredWorkspace({
         />
       </div>
 
-      <section className={styles.suggestionPanel} aria-label="Persisted suggestions">
-        <div className={styles.suggestionHeading}>
-          <div>
-            <h2>Suggestions</h2>
-            <p className={styles.suggestionMeta}>
-              Deterministically ranked and persisted by the proof service.
-            </p>
-          </div>
-          {displayedSet ? <code data-testid="suggestion-set-id">{displayedSet.id}</code> : null}
-        </div>
-        <p className={styles.status} data-state={suggestions.kind} role="status">
-          {statusText}
-        </p>
-        {suggestions.kind === "ready" ? (
-          <ol className={styles.suggestions} data-testid="suggestion-list">
-            {suggestions.suggestionSet.suggestions.map((suggestion) => {
-              const classification = classes.get(suggestion.id);
-              const active = moveState.kind !== "idle" && moveState.suggestionId === suggestion.id;
-              const preview =
-                moveState.kind === "previewed" && moveState.suggestionId === suggestion.id
-                  ? moveState.preview
-                  : undefined;
-              const actionable =
-                suggestion.applicability === "applicable" && suggestion.source === "move";
-              return (
-                <li
-                  className={styles.suggestionCard}
-                  data-applicability={suggestion.applicability}
-                  data-artifact-id={suggestion.artifactId}
-                  data-suggestion-id={suggestion.id}
-                  key={suggestion.id}
-                >
-                  <header>
-                    <div>
-                      <h3>{suggestion.name}</h3>
-                      <code>{suggestion.artifactId}</code>
-                    </div>
-                    <span
-                      className={styles.applicability}
-                      data-applicability={suggestion.applicability}
-                    >
-                      {suggestion.applicability === "applicable" ? "Applicable" : "Needs input"}
-                    </span>
-                  </header>
-                  <div className={styles.cardFacts}>
-                    <span>{suggestion.source === "move" ? "Move" : "Result"}</span>
-                    <span>
-                      {suggestion.exactRepresentationMatch ? "Exact match" : "Structural match"}
-                    </span>
-                    {classification ? (
-                      <span
-                        className={styles.transitionClass}
-                        data-transition-class={classification}
-                      >
-                        {classification}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div>
-                    <strong>Why it applies</strong>
-                    <ul aria-label={`Reasons for ${suggestion.name}`}>
-                      {suggestion.reasons.map((reason, index) => (
-                        <li key={`${suggestion.id}:reason:${index}`}>{reason}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div className={styles.selectionMatches}>
-                    <strong>Matched selections</strong>
-                    <ul aria-label={`Matched selections for ${suggestion.name}`}>
-                      {suggestion.selectionMatches.map((match) => (
-                        <li
-                          key={`${match.selectionId}:${match.selectionSlotId ?? match.patternId}`}
-                        >
-                          {match.selectionId} → {match.selectionSlotId ?? match.patternId}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  {suggestion.applicability === "requires-input" ? (
-                    <div className={styles.missingInput} role="note">
-                      <strong>Additional input required</strong>
-                      <span>{missingInputText(suggestion)}</span>
-                      <details
-                        onToggle={(event) => {
-                          if (!event.currentTarget.open) return;
-                          recordInteraction({
-                            kind: "menu-expanded",
-                            nodeId: node.id,
-                            suggestionSetId: suggestions.suggestionSet.id,
-                            suggestionId: suggestionIdSchema.parse(suggestion.id),
-                          });
-                        }}
-                      >
-                        <summary>Input menus</summary>
-                        <ul aria-label={`Input menus for ${suggestion.name}`}>
-                          {[
-                            ...suggestion.unresolvedSelectionSlots,
-                            ...suggestion.unresolvedParameters,
-                          ].map((input) => (
-                            <li key={input}>{`Choose ${input}`}</li>
-                          ))}
-                        </ul>
-                      </details>
-                    </div>
-                  ) : null}
-                  <div className={styles.cardActions}>
-                    <button
-                      type="button"
-                      disabled={
-                        mutationPending || !actionable || (active && moveState.kind !== "rejected")
-                      }
-                      onClick={() =>
-                        void previewSuggestion(suggestions.suggestionSet, suggestion.id)
-                      }
-                    >
-                      {active && moveState.kind === "previewing" ? "Previewing…" : "Preview"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={
-                        mutationPending ||
-                        !actionable ||
-                        preview === undefined ||
-                        moveState.kind === "applying"
-                      }
-                      onClick={() => void applySuggestion(suggestions.suggestionSet, suggestion.id)}
-                    >
-                      {active && moveState.kind === "applying" ? "Applying…" : "Apply"}
-                    </button>
-                  </div>
-                  {moveState.kind === "rejected" && moveState.suggestionId === suggestion.id ? (
-                    <p className={styles.status} data-state="rejected" role="alert">
-                      Move rejected: {moveState.message}
-                    </p>
-                  ) : null}
-                  {preview ? (
-                    <PreviewDetails preview={preview} presentation={presentation} view={view} />
-                  ) : null}
-                </li>
-              );
-            })}
-          </ol>
-        ) : null}
-      </section>
+      <SuggestionPanel
+        suggestions={suggestions}
+        move={moveState}
+        mutationPending={mutationPending}
+        presentation={presentation}
+        view={view}
+        {...panelActions}
+      />
       <HistoryView
         history={history}
         currentNodeId={node.id}
@@ -602,71 +515,6 @@ function StatefulStoredWorkspace({
 }
 
 type ReadOnlyPresentation = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
-
-/** A read-only statement in the selected view; the stored MathJSON is never altered. */
-function ReadOnlyStatement({
-  expression,
-  declarations,
-  presentation,
-  view,
-}: ReadOnlyPresentation &
-  Readonly<{
-    expression: ProofNode["state"]["goals"][number]["sequent"]["conclusion"]["expression"];
-    declarations: ProofNode["state"]["goals"][number]["sequent"]["context"]["declarations"];
-  }>) {
-  return view === "natural-language" ? (
-    <NaturalLanguageText text={presentation.naturalLanguage(expression, { declarations })} />
-  ) : (
-    <InlineLatex latex={presentation.latex(expression)} />
-  );
-}
-
-function PreviewDetails({
-  preview,
-  presentation,
-  view,
-}: ReadOnlyPresentation & Readonly<{ preview: MovePreview }>) {
-  const added = preview.afterState.obligations.filter((item) =>
-    preview.delta.obligations.added.includes(item.id),
-  );
-  return (
-    <section className={styles.previewPanel} aria-label="Move preview">
-      <strong>Expected proof-state difference</strong>
-      <span className={styles.transitionClass} data-transition-class={preview.transitionClass}>
-        {preview.transitionClass}
-      </span>
-      <dl>
-        <div>
-          <dt>Goals</dt>
-          <dd>{deltaText(preview.delta.goals)}</dd>
-        </div>
-        <div>
-          <dt>Obligations</dt>
-          <dd>{deltaText(preview.delta.obligations)}</dd>
-        </div>
-      </dl>
-      <div>
-        <strong>New obligations</strong>
-        {added.length === 0 ? (
-          <p>None.</p>
-        ) : (
-          <ul>
-            {added.map((item) => (
-              <li key={item.id}>
-                <ReadOnlyStatement
-                  expression={item.sequent.conclusion.expression}
-                  declarations={item.sequent.context.declarations}
-                  presentation={presentation}
-                  view={view}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
-  );
-}
 
 function HistoryView({
   history,
@@ -762,7 +610,7 @@ function HistoryNodeLabel({
   return (
     <>
       {goal === undefined ? "Obligation: " : "Goal: "}
-      <ReadOnlyStatement
+      <StatementView
         expression={first.sequent.conclusion.expression}
         declarations={first.sequent.context.declarations}
         presentation={presentation}
@@ -770,17 +618,6 @@ function HistoryNodeLabel({
       />
     </>
   );
-}
-
-function missingInputText(suggestion: DisplayedSuggestionSet["suggestions"][number]): string {
-  const inputs = [...suggestion.unresolvedSelectionSlots, ...suggestion.unresolvedParameters];
-  if (suggestion.abstractionFit !== "not-used")
-    inputs.push("a concrete replacement for the abstraction");
-  return inputs.length === 0 ? "This suggestion cannot yet be executed." : inputs.join(", ");
-}
-
-function deltaText(delta: MovePreview["delta"]["goals"]): string {
-  return `+${delta.added.length} −${delta.removed.length} ~${delta.updated.length}`;
 }
 
 function toDescriptor(selection: AnchoredProofSelection): ProofSelectionDescriptor {
@@ -843,7 +680,9 @@ async function requestMovePreview(
     const response = await postChoice(sessionId, "move-previews", choice);
     const parsed = movePreviewApiResponseSchema.safeParse(await response.json());
     if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
-    if (!parsed.data.ok) return { ok: false, message: parsed.data.error.message };
+    if (!parsed.data.ok) {
+      return { ok: false, code: parsed.data.error.code, message: parsed.data.error.message };
+    }
     const preview = createMovePreviewSchema({ operators }).safeParse(parsed.data.data.preview);
     return preview.success ? { ok: true, preview: preview.data } : invalidActionResponse();
   } catch {
@@ -961,12 +800,11 @@ function invalidActionResponse(): ActionFailure {
 function isStaleFailure(code: string, message: string) {
   return code === "stale_snapshot" || /stale|older|does not match proof state/i.test(message);
 }
-function suggestionStatusText(state: SuggestionState): string {
-  if (state.kind === "idle")
-    return "Select one or more anchored occurrences to retrieve suggestions.";
-  if (state.kind === "loading") return "Loading suggestions for the current selection…";
-  if (state.kind === "empty") return "No persisted suggestions apply to this selection.";
-  if (state.kind === "stale") return `Stale selection: ${state.message}`;
-  if (state.kind === "rejected") return `Suggestion request rejected: ${state.message}`;
-  return `${state.suggestionSet.suggestions.length} persisted suggestion${state.suggestionSet.suggestions.length === 1 ? "" : "s"} in stored order.`;
+
+function choicesKey(choices: MenuChoices): string {
+  return JSON.stringify(Object.entries(choices).sort(([left], [right]) => (left < right ? -1 : 1)));
+}
+
+function withChoices(choice: MoveChoiceRequest, choices: MenuChoices): MoveChoiceRequest {
+  return Object.keys(choices).length === 0 ? choice : { ...choice, menuChoices: choices };
 }

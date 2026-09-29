@@ -75,6 +75,33 @@ export function splitNaturalLanguage(
   return parts;
 }
 
+type PlainExpression = Parameters<Presentation["latex"]>[0];
+type NaturalLanguageContext = NonNullable<Parameters<Presentation["naturalLanguage"]>[1]>;
+
+/** A read-only statement in the selected view; the stored MathJSON is never altered. */
+export function StatementView({
+  expression,
+  declarations,
+  presentation,
+  view,
+}: Readonly<{
+  expression: PlainExpression;
+  declarations?: NaturalLanguageContext["declarations"];
+  presentation: Presentation;
+  view: WorkspaceView;
+}>) {
+  return view === "natural-language" ? (
+    <NaturalLanguageText
+      text={presentation.naturalLanguage(
+        expression,
+        declarations === undefined ? {} : { declarations },
+      )}
+    />
+  ) : (
+    <InlineLatex latex={presentation.latex(expression)} />
+  );
+}
+
 export function NaturalLanguageText({ text }: Readonly<{ text: string }>) {
   return (
     <>

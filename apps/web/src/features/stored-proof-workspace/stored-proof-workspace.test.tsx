@@ -856,4 +856,167 @@ describe("StoredProofWorkspace", () => {
     await screen.findByText(/advanced to node:command:web/);
     expect(applies).toBe(2);
   });
+
+  it("round-trips a parameter menu: returned menus, chosen item IDs, preview, and apply", async () => {
+    const requiresInput = moveSuggestionSet("suggestion-set:move", "requires-input");
+    const menu = {
+      parameterId: "choice",
+      label: "Conjunct",
+      automatic: false,
+      items: [
+        {
+          id: "menu-item:00000000000000b1",
+          label: { kind: "math", expression: "p" },
+          value: { kind: "index", index: 0 },
+          origin: { kind: "conclusion" },
+        },
+        {
+          id: "menu-item:00000000000000b2",
+          label: { kind: "math", expression: "q" },
+          value: { kind: "index", index: 1 },
+          origin: { kind: "conclusion" },
+        },
+      ],
+    };
+    const previewBodies: Array<Record<string, unknown>> = [];
+    const menuBodies: Array<Record<string, unknown>> = [];
+    const commandBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory((input, init) => {
+        const url = String(input);
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (url.endsWith("/move-previews")) {
+          previewBodies.push(body);
+          if (body.menuChoices === undefined) {
+            return jsonResponse(
+              {
+                ok: false,
+                error: { code: "requires-input", message: "Choose a conjunct." },
+              },
+              422,
+            );
+          }
+          const preview = {
+            ...previewFor(String(body.commandId)),
+            menuSelection: { menus: [menu], choices: body.menuChoices },
+          };
+          return jsonResponse({ ok: true, data: { preview, replayed: false } }, 201);
+        }
+        if (url.endsWith("/protocol-commands")) {
+          menuBodies.push(body);
+          return jsonResponse(
+            {
+              ok: false,
+              error: { code: "requires-input", message: "Choose a conjunct." },
+              details: {
+                status: "requires-input",
+                commandId: body.commandId,
+                suggestionSetId: "suggestion-set:move",
+                chosenSuggestionId: "suggestion:split-goal",
+                menus: [
+                  {
+                    ...menu,
+                    items: menu.items.map((item, index) => ({ ...item, alias: `m${index + 1}` })),
+                  },
+                ],
+                missingParameters: ["choice"],
+                diagnostics: [{ code: "requires-input", message: "Choose a conjunct." }],
+              },
+            },
+            422,
+          );
+        }
+        if (url.endsWith("/commands")) {
+          commandBodies.push(body);
+          const preview = previewFor(String(body.commandId));
+          const nextNode = { id: `node:${String(body.commandId)}`, state: preview.afterState };
+          return jsonResponse(
+            {
+              ok: true,
+              data: {
+                session: { ...session, currentNodeId: nextNode.id },
+                node: nextNode,
+                receipt: {
+                  commandId: body.commandId,
+                  nodeId: nextNode.id,
+                  edgeId: `edge:${String(body.commandId)}`,
+                  eventId: `event:${String(body.commandId)}`,
+                  resultStateId: preview.afterState.id,
+                  transitionClass: "equivalence",
+                },
+                replayed: false,
+              },
+            },
+            201,
+          );
+        }
+        return jsonResponse({
+          ok: true,
+          data: {
+            suggestionSet: requiresInput,
+            replayed: false,
+            transitionClasses: [
+              { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+            ],
+          },
+        });
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    expect(within(card).getByRole("button", { name: "Preview" })).toBeDisabled();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Choose inputs" }));
+    const form = await within(card).findByRole("form", {
+      name: "Parameter menus for Split goal conjunction",
+    });
+    expect(menuBodies).toEqual([
+      {
+        commandId: previewBodies[0]?.commandId,
+        actor: { id: "actor:web", kind: "human" },
+        basis: { nodeId: node.id, suggestionSetId: "suggestion-set:move" },
+        command: {
+          kind: "preview",
+          suggestion: "suggestion:split-goal",
+          suggestionSetId: "suggestion-set:move",
+        },
+      },
+    ]);
+    const radios = within(form).getAllByRole("radio");
+    expect(radios.map((radio) => radio.getAttribute("value"))).toEqual([
+      "menu-item:00000000000000b1",
+      "menu-item:00000000000000b2",
+    ]);
+    fireEvent.click(radios[1]!);
+    fireEvent.click(within(form).getByRole("button", { name: "Preview with these inputs" }));
+
+    const preview = await within(card).findByLabelText("Move preview");
+    expect(previewBodies).toHaveLength(2);
+    expect(previewBodies[1]?.menuChoices).toEqual({ choice: "menu-item:00000000000000b2" });
+    expect(previewBodies[1]?.commandId).not.toBe(previewBodies[0]?.commandId);
+    expect(within(preview).getByLabelText("Chosen inputs")).toHaveTextContent("Conjunct:");
+    expect(within(card).queryByRole("form")).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    await screen.findByText(/advanced to node:command:web/);
+    expect(commandBodies).toEqual([
+      {
+        commandId: previewBodies[1]?.commandId,
+        suggestionSetId: "suggestion-set:move",
+        chosenSuggestionId: "suggestion:split-goal",
+        menuChoices: { choice: "menu-item:00000000000000b2" },
+      },
+    ]);
+    await waitFor(() =>
+      expect(postedKinds()).toContainEqual({
+        kind: "menu-expanded",
+        nodeId: node.id,
+        suggestionSetId: "suggestion-set:move",
+        suggestionId: "suggestion:split-goal",
+        parameterId: "choice",
+      }),
+    );
+  });
 });

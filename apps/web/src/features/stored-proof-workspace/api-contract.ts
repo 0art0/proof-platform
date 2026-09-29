@@ -226,3 +226,18 @@ const backtrackApiSuccessSchema = z
 export const backtrackApiResponseSchema = z.union([backtrackApiSuccessSchema, apiFailureSchema]);
 
 export type BacktrackApiResponse = z.infer<typeof backtrackApiResponseSchema>;
+
+/**
+ * The web proxy's answer to a command envelope (N25): a committed command, or a failure whose
+ * `details` relay the worker's structured body (for example requires-input with menus).
+ */
+export const protocolCommandApiResponseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), data: z.unknown() }).strict(),
+  z
+    .object({
+      ok: z.literal(false),
+      error: z.object({ code: z.string().min(1), message: z.string() }).strict(),
+      details: z.unknown().optional(),
+    })
+    .strict(),
+]);
