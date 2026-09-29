@@ -280,7 +280,7 @@ otherwise automate — the substrate is in scope.
 
 ## Phase 7 — Artifact
 
-- [ ] **N27 Export / import (§19).** Add a versioned artifact schema covering all non-AI §19.2 sections:
+- [x] **N27 Export / import (§19).** Add a versioned artifact schema covering all non-AI §19.2 sections:
       problem setup, library layers and addition events, initial state, the full tree with snapshots,
       selections, displayed menus, previews, edges and events, interaction events, inquiry records,
       solved status, pruned proof, sorry assumptions, final library, and translation dictionary. LLM call
@@ -307,7 +307,7 @@ otherwise automate — the substrate is in scope.
   - provenance and evidence badges;
   - previews rendered as LaTeX/NL state differences rather than JSON;
   - near-miss category and obligations display.
-- [ ] **N31 Toolbar actions (§17.2).** Add delete previous move (with descendant confirmation),
+- [x] **N31 Toolbar actions (§17.2).** Add delete previous move (with descendant confirmation),
       backtrack-with-information dialog, replay-a-sequence-here dialog, mark sorry, case split on
       selection, export, and open full tree.
 - [ ] **N32 Library drawer (§17.1).** Add a drawer with layers, search/filter by kind and domain,
@@ -713,3 +713,56 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
   - Risk: `corpus-performance.test.ts` (N37) exceeded its 150 ms suggestion budget (medians 167–199 ms)
     in two `verify` runs made while parallel verify and Playwright runs loaded the machine; it passes on a
     quiet machine. Consider running performance budgets in a separate serial vitest project.
+- 2026-09-29 — N31 — `76759ef` — the stored workspace gets a "Proof actions" row (`toolbar-action-bar.tsx`).
+  Every action sends one N25 envelope through `POST /api/proof-sessions/[id]/protocol-commands` as the
+  human web actor with `basis.nodeId`, then reloads the current node (checked against `cursor.nodeId`) and
+  history. Pure builders live in `toolbar-actions.ts`; case split and backtrack send the one exactly
+  selected proposition by `occurrence`, never raw MathJSON. Unavailable actions stay visible, disabled with
+  a reason.
+  - Delete previous move lists the nodes and descendants to remove (`planPreviousMoveDeletion` over stored
+    history) and requires a confirmation checkbox when there are descendants. Backtrack with information
+    lists every ancestor closest first with eligibility and unavailable symbols. Replay a sequence here
+    picks an off-line path, lists its stored steps, and on 422 `replay-failed` shows the report with repair
+    candidates and retries with `overrides`. Export links to N27's proxy; "Open full discovery tree" is
+    disabled until N28. Dialogs are modal with focus management; Escape closes them without clearing the
+    selection. Refusals read "`<action>` rejected (`<code>`): `<message>`".
+  - `toolbar-actions.spec.ts` creates a fresh session per test through the N26 approval API.
+  - Gaps: no web proxy for `backtrack-analysis` or `replay-preview` and no dry-run envelope, so the ancestor
+    listing is computed in the browser with `analyzeBacktrack` (advisory; the worker recomputes on commit)
+    and replay shows a report only on failure or after commit. No replay `focus` choice. Case split and
+    backtrack need an exact single proposition. Actions stay enabled for read-only imported sessions.
+- 2026-09-29 — N27 — `a5497cc`, `3a593ff` — protocol `artifact.ts`: a strict, versioned
+  (`artifactVersion: 1`) `ProofArtifact` with `problemSetup`, `initialState`, `library` (operator
+  environment, addition events, background revisions, final library), `tree` (snapshots, edges, events,
+  command records, displayed suggestion sets, previews, replay steps, id-only tombstones),
+  `interactionEvents`, `inquiryRecords`, `final` (N17 analysis, pruned proof, sorry assumptions),
+  `translationDictionary` (stored operator presentations) and `llmCalls`, plus a `sha256` digest of the
+  canonical JSON of the rest. `ARTIFACT_SESSION_ID_FIELDS` lists the only session-naming fields.
+  - Export copies stored rows only, sorted by code units so repeated exports are identical.
+    `importProofArtifact` revalidates in order: version, digest, strict schema, unique ids and one rooted
+    tree, suggestion sets, re-prepared previews, every edge replayed through `prepareProofCommand`
+    reproducing the stored child/edge/event/command, replay steps, tombstones, interaction anchors,
+    inquiry commands via `prepareInquiryCommand`, background revisions and admission of every library
+    addition, LLM call records, and recomputed final material and dictionary. The first failure rejects
+    with a code and path and writes nothing.
+  - Imported sessions keep every record id under `session:artifact:<digest prefix>`; re-uploading is
+    idempotent. Migration `0011` adds `proof_sessions.read_only` and `proof_artifact_imports` (mirrored in
+    memory). Both stores wrap every transaction in `guardReadOnlySessions`, so every write to a read-only
+    session rolls back as `session-read-only` (409), including the envelope, inquiry, deletion,
+    backtracking, replay, interaction events and library additions.
+  - HTTP: `GET /proof-sessions/:id/export` (attachment) and `POST /artifacts` (≤ 16 MiB; 201, 200 identical
+    re-upload, 422, 409 id collision); web proxies `GET /api/proof-sessions/[sessionId]/export` and `POST
+/api/artifacts`. The landing page's "Upload artifact" works and "Fetch stored proof" offers "Download
+    artifact". Tests: a full round trip; 16 tamper cases each rejected both by digest and after recomputing
+    the digest; read-only enforcement across stores and 11 HTTP routes; fast-check for canonical JSON and
+    session rebasing; an e2e export-and-upload.
+  - Gaps: no UI marks an imported session read-only and `GET /proof-sessions/:id` does not expose the flag.
+    Read-only is enforced by the worker, not a database trigger. Library rows are read in separate
+    transactions. Additions and revisions share no sequence (timestamp ordering). No LLM store is wired
+    (`llmCalls: []`). Setup edits and manifest stages are not stored. Revalidation uses the current approved
+    catalog, so artifacts built on since-changed definitions may be rejected. Re-exporting an imported
+    session returns the source's global library statically. No authentication.
+  - Test-suite risk: under heavy parallel load, `proof-workspace.spec.ts:271` (spec files share
+    `session:development`) and `:124` (dev-server navigation), the N37 suggestion budget and once the
+    kernel `obligations.test.ts` 5 s timeout failed; all pass on a quiet machine (two full e2e runs: 16
+    passed, only `:166` failed).
