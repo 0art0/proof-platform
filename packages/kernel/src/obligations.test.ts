@@ -885,5 +885,6 @@ describe("obligation provenance", () => {
     expect([...appliedKinds].sort()).toEqual(
       [...new Set(templates("x").map((template) => template.kind))].sort(),
     );
-  });
+    // Takes ~0.65 s alone but exceeded vitest's 5 s default once under heavy parallel load.
+  }, 30_000);
 });

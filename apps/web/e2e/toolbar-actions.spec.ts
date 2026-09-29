@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { createIsolatedSession, warmRoutes, type IsolatedDraft } from "./fixtures";
 
 // Commands run against a dev server that may still be compiling for parallel specs; a committed
 // command's notice gets more time than an ordinary assertion.
@@ -37,44 +38,22 @@ async function selectExpression(field: Locator, target: unknown) {
   expect(selected).toBe(true);
 }
 
-/**
- * A fresh session per test, created through the reviewed-approval API: from `p ∧ q` show
- * `q ∧ p`. Each test owns its session, so it never races the specs that use session:development.
- */
+const COMMUTE_DRAFT: IsolatedDraft = {
+  problem: { title: "Commute a conjunction", statement: "From p and q, show q and p." },
+  background: { level: "propositional logic", summary: "Natural deduction.", assumptions: [] },
+  libraryLayerIds: ["layer:global"],
+  packs: [],
+  declarations: [
+    { symbol: "p", sort: "proposition" },
+    { symbol: "q", sort: "proposition" },
+  ],
+  hypotheses: [{ format: "mathjson", expression: ["And", "p", "q"] }],
+  goals: [{ format: "mathjson", expression: ["And", "q", "p"] }],
+};
+
+/** A fresh session per test: from `p ∧ q` show `q ∧ p`. */
 async function openFreshSession(page: Page): Promise<string> {
-  await page.goto("/");
-  const sessionId = await page.evaluate(async () => {
-    const draft = {
-      problem: { title: "Commute a conjunction", statement: "From p and q, show q and p." },
-      background: { level: "propositional logic", summary: "Natural deduction.", assumptions: [] },
-      libraryLayerIds: ["layer:global"],
-      packs: [],
-      declarations: [
-        { symbol: "p", sort: "proposition" },
-        { symbol: "q", sort: "proposition" },
-      ],
-      hypotheses: [{ format: "mathjson", expression: ["And", "p", "q"] }],
-      goals: [{ format: "mathjson", expression: ["And", "q", "p"] }],
-    };
-    const post = async (url: string, body: unknown) => {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      return response.json();
-    };
-    const validated = await post("/api/problem-drafts/validate", { draft });
-    if (!validated.ok || !validated.data.ok) throw new Error(JSON.stringify(validated));
-    const id = `session:${crypto.randomUUID()}`;
-    const approved = await post("/api/proof-sessions", {
-      sessionId: id,
-      draft,
-      reviewedDigest: validated.data.review.digest,
-    });
-    if (!approved.ok) throw new Error(JSON.stringify(approved));
-    return id;
-  });
+  const sessionId = await createIsolatedSession(page, COMMUTE_DRAFT);
   await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
   await expect(page.getByLabel("Stored proof session")).toBeVisible();
   await expect(page.getByLabel("Goal 1 conclusion")).toBeVisible();
@@ -84,31 +63,6 @@ async function openFreshSession(page: Page): Promise<string> {
   );
   await warmRoutes(page, sessionId);
   return sessionId;
-}
-
-/**
- * Webpack dev compiles each API route on its first request, which can outlast an assertion
- * timeout while other specs load the machine. Touch every route these tests use once (malformed
- * bodies are refused before reaching the worker, so nothing is recorded) and wait for them.
- */
-async function warmRoutes(page: Page, sessionId: string) {
-  const statuses = await page.evaluate(async (id) => {
-    const base = `/api/proof-sessions/${encodeURIComponent(id)}`;
-    const post = (path: string) =>
-      fetch(`${base}/${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      }).then((response) => response.status);
-    return Promise.all([
-      post("protocol-commands"),
-      post("commands"),
-      post("move-previews"),
-      post("backtrack"),
-      fetch(base, { cache: "no-store" }).then((response) => response.status),
-    ]);
-  }, sessionId);
-  expect(statuses).toEqual([400, 400, 400, 400, 200]);
 }
 
 async function currentNodeId(page: Page): Promise<string> {
