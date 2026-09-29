@@ -310,7 +310,7 @@ otherwise automate — the substrate is in scope.
 - [x] **N31 Toolbar actions (§17.2).** Add delete previous move (with descendant confirmation),
       backtrack-with-information dialog, replay-a-sequence-here dialog, mark sorry, case split on
       selection, export, and open full tree.
-- [ ] **N32 Library drawer (§17.1).** Add a drawer with layers, search/filter by kind and domain,
+- [x] **N32 Library drawer (§17.1).** Add a drawer with layers, search/filter by kind and domain,
       artifact detail views (statement, premises, directions, variants, provenance, approval), and addition
       events.
 - [ ] **N33 Abstraction and drag gestures (§8.3).** Add an abstract-selection gesture that turns a selection
@@ -796,3 +796,30 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
   - Gaps: transition events store no timestamp and export sorted by id, so playback is causal rather than
     wall-clock order (needs a stored per-session transition sequence). Abandoned-branch edges have no
     stored evidence. `.toolbarNote` CSS is now unused.
+- 2026-09-29 — e2e fix — `c560aaa` — the long-standing `proof-workspace.spec.ts:176` failure
+  ("modifier multiselection controls two-selection applicability", open since N15) is fixed without
+  changing the test. Root cause: `move:expand-hypothesis-conjunction` had its only pattern on the
+  hypothesis slot, so a goal-only selection never retrieved it. The move gains a target-slot pattern
+  (wildcard `t`) through a new optional `extraPatterns` catalog field; retrieval's context gate offers
+  the partly filled move only when a local `And` hypothesis exists; and a move suggestion's specificity
+  is the max over its unresolved slots' patterns (`slotSpecificity`), so the default limit no longer
+  crowds it out behind catch-all `requires-input` moves. Pattern count 33 → 34; the N37 coverage golden
+  is unchanged. The workspace e2e suite now passes with zero failures.
+- 2026-09-29 — N32 — `8aabb29` — worker `proof-http/library-routes.ts` adds read-only `GET
+/proof-sessions/:id/library` (the approved catalog for the session's operators with its variant
+  families, then stored global and session layers from `listLibrary`, or the import record's
+  `finalLibrary` for an imported session) and `GET /proof-sessions/:id/library/events` (addition events in
+  sequence order, admitted and rejected, with diagnostics). Nothing re-runs admission or variant
+  generation. Web proxies and `readSessionLibrary`/`readSessionLibraryEvents` validate a structural
+  schema (`library-drawer/api-contract.ts`).
+  - `LibraryDrawer` (toggle + non-modal `<aside>`, mounted with a 2-line edit) has a pure view model:
+    search over ids, names, descriptions, domains, renderings and provenance; filters by kind, domain and
+    layer; grouping by layer with counts; text labels for approval, provenance and source. The detail view
+    renders statement and premises with `StatementView` (LaTeX/NL), side conditions, directions, technique
+    steps, a navigable variant family, provenance and approval. An "Addition events" tab lists admitted
+    and rejected events. Escape closes the drawer only when focus is inside it, so the proof selection is
+    kept.
+  - Gaps: read-only (no add/author/approve UI; the N25 envelope handles additions). Catalog and stored
+    artifacts are not deduplicated by id. Variant families come only from the approved catalog. No
+    auto-refresh after additions made elsewhere. The worker casts the import record's JSON library to
+    library types (validated at import). No e2e spec yet.
