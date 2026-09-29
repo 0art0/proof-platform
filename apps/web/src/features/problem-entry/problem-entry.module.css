@@ -1,0 +1,274 @@
+.page {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+
+.page h1 {
+  margin: 0 0 0.5rem;
+}
+
+.lead {
+  color: var(--text-muted);
+  margin: 0 0 1.5rem;
+}
+
+.actionsGrid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.actionCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.actionCard h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.actionCard p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.actionCard[aria-disabled="true"] {
+  border-style: dashed;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.section h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+.field input,
+.field textarea,
+.field select,
+.declaration input,
+.declaration select,
+.statementHeader select,
+.mathInput,
+.fetchForm input {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.mathInput {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.choices,
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.choices legend,
+.rows legend {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.choice {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.hint {
+  color: var(--text-muted);
+}
+
+.declaration {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.statementRow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.statementHeader {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: 600;
+}
+
+.feedback {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.feedback[data-kind="parsed"] {
+  color: var(--accent-text);
+}
+
+.feedback[data-kind="error"] {
+  color: var(--warning-text);
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.primary,
+.secondary,
+.fetchForm button {
+  font: inherit;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--accent);
+  cursor: pointer;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--surface-strong);
+  font-weight: 600;
+}
+
+.secondary,
+.fetchForm button {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  align-self: flex-start;
+}
+
+.primary:disabled,
+.secondary:disabled,
+.fetchForm button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.linkButton {
+  font: inherit;
+  font-weight: 400;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.warning {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--warning-border);
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.warning ul {
+  margin: 0.25rem 0 0;
+}
+
+.gateNote {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 2px solid var(--accent);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.review h2 {
+  margin: 0;
+}
+
+.reviewList {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+
+.reviewList dt {
+  font-weight: 700;
+}
+
+.reviewList dd {
+  margin: 0;
+}
+
+.reviewList ol {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.token {
+  display: inline-block;
+  margin-right: 0.5rem;
+}
+
+.rendered {
+  display: flex;
+  flex-direction: column;
+}
+
+.prose {
+  color: var(--text-muted);
+}
+
+.fetchForm {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

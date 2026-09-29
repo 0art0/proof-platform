@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
-// Runs proof-workspace.spec.ts against a worker using the in-memory proof store, so no
-// PostgreSQL is needed. Distinct ports keep it from reusing a PostgreSQL-backed worker or the
+// Runs proof-workspace.spec.ts and problem-entry.spec.ts against a worker using the in-memory
+// proof store, so no PostgreSQL is needed. Distinct ports keep it from reusing a PostgreSQL-backed worker or the
 // Next server of playwright.proof-workspace.config.ts, and the worker is never reused so every
 // run starts from a freshly seeded session:development.
 const WORKER_PORT = 8788;
@@ -9,7 +9,7 @@ const WEB_PORT = 3101;
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
-  testMatch: ["proof-workspace.spec.ts"],
+  testMatch: ["proof-workspace.spec.ts", "problem-entry.spec.ts"],
   // Webpack dev compiles each route on first use, so cold runs need more headroom than Turbopack.
   timeout: 60_000,
   expect: { timeout: 15_000 },

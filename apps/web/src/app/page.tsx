@@ -1,14 +1,16 @@
-import { StoredProofWorkspace } from "../features/stored-proof-workspace";
-import { readConfiguredProofSession } from "../server/proof-service";
+import { LandingActions, problemEntryStyles as styles } from "../features/problem-entry";
+import { configuredProofSessionId } from "../server/proof-service";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function HomePage() {
-  const loaded = await readConfiguredProofSession();
+/** Landing page (design plan §4.1): new problem, upload artifact, fetch stored proof. */
+export default function HomePage() {
   return (
-    <main>
-      <StoredProofWorkspace session={loaded.session} node={loaded.node} />
+    <main className={styles.page}>
+      <h1>Proof Platform</h1>
+      <p className={styles.lead}>Interactive mathematical discovery.</p>
+      <LandingActions developmentSessionId={configuredProofSessionId()} />
     </main>
   );
 }

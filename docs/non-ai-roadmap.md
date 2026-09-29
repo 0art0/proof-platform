@@ -270,7 +270,7 @@ otherwise automate — the substrate is in scope.
 
   _Accept:_ HTTP tests; an agent-style scripted session completes an N16 corpus proof over HTTP.
 
-- [ ] **N26 Manual problem and session creation (§4.1, §4.4 without LLM).** Add an API and landing page to
+- [x] **N26 Manual problem and session creation (§4.1, §4.4 without LLM).** Add an API and landing page to
       create a problem with a statement, background profile, and domain/notation preferences, then
       manually enter an initial proof state. Declarations are chosen from sort menus; hypotheses and goals
       are entered as LaTeX parsed through the Compute Engine or as MathJSON. The user picks library layers
@@ -300,7 +300,7 @@ otherwise automate — the substrate is in scope.
     polarity bevels, reinforced by icons, outlines, and labels;
   - an Escape key that clears selections;
   - a LaTeX/NL toggle, a raw MathJSON view, and "copy state JSON".
-- [ ] **N30 Suggestion panel completion (§17.3).** Add:
+- [x] **N30 Suggestion panel completion (§17.3).** Add:
   - result-application cards;
   - parameter menus for input-requiring moves;
   - expandable variant groups;
@@ -670,3 +670,46 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     `apply-result-forward` edges are classified as equivalence even when they create obligations (N06(a)).
     No script uses a derived variant. Combinatorics, linear algebra, real analysis and geometry have no
     packs yet (monomorphic sorts, no operators).
+- 2026-09-29 — N30 — `7f3d539` — the suggestion panel is split out of `stored-proof-workspace.tsx` into
+  `suggestion-panel.tsx`, `suggestion-card.tsx`, `suggestion-badges.tsx`, `parameter-menu.tsx` and
+  `preview-details.tsx`, with a pure web-local `preview-diff.ts`. Badges (glyph + text label + `data-*`,
+  never colour alone) show source, provenance, match, retrieval category (immediate / near miss / needs
+  input, from `applicability` and `predictedObligations`), transition class and evidence
+  (`transitionEvidenceOf` over the stored preview operation). Result cards preview and apply, show the
+  instantiation as LaTeX `x ↦ t`, and list predicted obligations. Variant groups keep their stored position
+  with an `aria-expanded` toggle. Previews render as statement differences in the chosen LaTeX/NL view
+  (goals closed/added, before → after targets, new obligations with provenance, sorries, chosen inputs).
+  - Parameter menus: after the legacy preview's 422 `requires-input`, the panel fetches the menus with a
+    `preview` envelope to `/protocol-commands` (records nothing), offers only returned items, and submits
+    `menuChoices` by item id; one `menu-expanded` event per newly displayed parameter.
+  - Gaps: displayed suggestions carry no provenance field; result suggestions have no expected transition
+    class before preview; previews and edges do not store `TransitionEvidence`; the legacy `move-previews`
+    proxy drops the 422 menus (hence the second request); construction-state changes are not shown in
+    diffs; menu term labels render as LaTeX in the NL view; the menu round trip is covered only by
+    component tests with mocked `fetch` (the development seed has no menu move).
+- 2026-09-29 — N26 — `08f9076` — protocol `problem-setup.ts`: a strict `problemDraftSchema` (title,
+  statement, background profile, domain/notation preferences, library layer ids, starter pack ids,
+  declarations as symbol + sort from the fixed `PROBLEM_SETUP_SORT_CHOICES` menu, hypotheses and goals as
+  `{format: "latex"}` or `{format: "mathjson"}`), plus review, approval, options and diagnostic schemas.
+  Drafts stay in the browser until approval (no migration; no row or root node exists before approval).
+  - Worker `validateProblemDraft` is pure: it parses LaTeX with the Compute Engine dictionary plus the
+    selected packs' parse triggers, checks duplicates, reserved symbols, pack-operator clashes, undeclared
+    symbols (`pack-not-selected` names the pack), each statement, and the whole root via
+    `createProofNodeSchema`. The review is the exact root node, operators, metadata, active packs and a
+    `sha256` digest. `approveProblemSession` revalidates, answers 409 `review-stale` on a digest mismatch,
+    and creates session + root through `initializeProofSession` in one transaction; identical retries
+    replay, different content gets 409 `session-conflict`. HTTP: `GET /problem-setup/options`, `POST
+/problem-drafts/validate`, `POST /proof-sessions`.
+  - Web: `/` is the landing page (new problem → `/problems/new`; upload artifact disabled until N27; fetch
+    stored proof → `/sessions?id=`). The workspace moved unchanged to `/sessions/[sessionId]` (e2e specs
+    updated). The entry form has live LaTeX/MathJSON parse feedback, sort menus and layer/pack pickers;
+    every edit clears the review. `problem-entry.spec.ts` joins `test:e2e:workspace`. fast-check covers
+    validation totality and digest order-independence; a component test proves the approval gate.
+  - Gaps: LaTeX source is not kept; no custom operators beyond packs, no user-defined sorts; untyped
+    quantifier variables must be declared; layer ids are documentary and approval records no
+    library-addition events; the Compute Engine warns about a duplicate `Divides` dictionary entry with
+    `pack:divisibility`; no authentication. One unreproduced e2e flake (`proof-workspace.spec.ts:124`,
+    navigation during first compile) was seen once.
+  - Risk: `corpus-performance.test.ts` (N37) exceeded its 150 ms suggestion budget (medians 167–199 ms)
+    in two `verify` runs made while parallel verify and Playwright runs loaded the machine; it passes on a
+    quiet machine. Consider running performance budgets in a separate serial vitest project.

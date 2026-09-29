@@ -1,0 +1,412 @@
+.suggestionPanel {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  padding: 1rem 1.15rem;
+}
+
+.suggestionPanel p {
+  margin: 0;
+}
+
+.suggestionHeading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.suggestionHeading h2 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.suggestionMeta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.status {
+  border-left: 4px solid var(--border);
+  background: var(--surface-muted);
+  padding: 0.7rem 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.status[data-state="loading"] {
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+  color: var(--goal-fg);
+}
+
+.status[data-state="rejected"],
+.status[data-state="stale"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.suggestions {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggestionCard {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.75rem;
+  background: var(--surface-strong);
+  padding: 0.85rem;
+}
+
+.suggestionCard[data-source="result"] {
+  border-left: 4px double var(--accent);
+}
+
+.suggestionCard[data-applicability="requires-input"] {
+  border-style: dashed;
+  background: var(--surface-muted);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.suggestionCard h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.suggestionCard code {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.suggestionCard ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.suggestionCard strong {
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.cardSection,
+.missingInput,
+.nearMiss {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.applicability {
+  width: fit-content;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  padding: 0.25rem 0.5rem;
+  color: var(--accent-text);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.applicability[data-applicability="requires-input"] {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.badge {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  padding: 0.2rem 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.badgeGlyph {
+  font-weight: 900;
+}
+
+.badge[data-transition-class="equivalence"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.badge[data-transition-class="strengthening"] {
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+  color: var(--goal-fg);
+}
+
+.badge[data-transition-class="weakening"] {
+  border-style: dashed;
+  border-color: var(--obligation-border);
+  background: var(--obligation-bg);
+  color: var(--obligation-fg);
+}
+
+.badge[data-evidence="sorry"] {
+  border-width: 2px;
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.badge[data-evidence="background-inference"] {
+  border-style: dotted;
+  border-color: var(--obligation-border);
+}
+
+.badge[data-evidence="library-result"],
+.badge[data-source="result"] {
+  border-style: double;
+  border-width: 3px;
+  border-color: var(--accent);
+}
+
+.badge[data-category="near-miss"] {
+  border-style: dashed;
+  border-color: var(--obligation-border);
+  color: var(--obligation-fg);
+}
+
+.badge[data-category="requires-input"] {
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+}
+
+.nearMiss {
+  border-left: 3px dashed var(--obligation-border);
+  background: var(--obligation-bg);
+  padding: 0.55rem 0.65rem;
+  color: var(--obligation-fg);
+  font-size: 0.8rem;
+}
+
+.obligationKind {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.missingInput {
+  border-left: 3px solid var(--warning-border);
+  background: var(--warning-bg);
+  padding: 0.55rem 0.65rem;
+  color: var(--warning-text);
+  font-size: 0.8rem;
+}
+
+.cardActions,
+.menuActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.cardActions button,
+.menuActions button,
+.chooseInputs,
+.variantToggle {
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface-strong);
+  padding: 0.45rem 0.7rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.chooseInputs {
+  width: fit-content;
+  border-color: var(--warning-border);
+}
+
+.cardActions button:first-child,
+.menuActions button:first-child {
+  border-color: var(--goal-border);
+  color: var(--goal-fg);
+}
+
+.cardActions button:last-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface-strong);
+}
+
+.cardActions button:disabled,
+.menuActions button:disabled,
+.chooseInputs:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.variantGroup {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.85rem;
+  padding: 0.5rem;
+}
+
+.variantToggle {
+  width: fit-content;
+}
+
+.parameterMenu {
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid var(--warning-border);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  padding: 0.7rem;
+}
+
+.menuGroup {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.55rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.menuLegend {
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.menuItem {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.menuAlias {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.menuOrigin {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.previewPanel {
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.65rem;
+  background: var(--accent-soft);
+  padding: 0.7rem;
+}
+
+.previewHeading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.previewCounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.previewCounts dt {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.previewCounts dd {
+  margin: 0.1rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+}
+
+.changeList {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.changeList > li {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.changeMarker {
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.beforeAfter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.beforeAfter > span[data-side] {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.beforeAfter > span[data-side="before"] {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+}
+
+.sideLabel {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.hypothesisChanges {
+  display: grid;
+  gap: 0.1rem;
+}
+
+@media (max-width: 42rem) {
+  .suggestionHeading,
+  .cardHeader {
+    display: grid;
+  }
+}
