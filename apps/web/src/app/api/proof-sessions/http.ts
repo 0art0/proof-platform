@@ -18,6 +18,21 @@ export function proofApiFailure(code: string, message: string, status: number): 
   );
 }
 
+/** A protocol answer: success data, or a failure with the worker's structured details. */
+export function proofProtocolAnswer(
+  answer: Readonly<{ ok: boolean; status: number; code?: string; message?: string; body: unknown }>,
+): Response {
+  if (answer.ok) return proofApiSuccess(answer.body, answer.status);
+  return Response.json(
+    {
+      ok: false,
+      error: { code: answer.code ?? "invalid_upstream_response", message: answer.message ?? "" },
+      details: answer.body,
+    },
+    { status: answer.status, headers: NO_STORE_HEADERS },
+  );
+}
+
 export function proofServiceFailure(error: unknown): Response {
   if (error instanceof ProofServiceError) {
     return proofApiFailure(error.code, error.message, error.status);
