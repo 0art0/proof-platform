@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { createIsolatedSession, warmRoutes, type IsolatedDraft } from "./fixtures";
 
 type MathfieldPort = HTMLElement & {
   lastOffset: number;
@@ -97,29 +98,38 @@ async function waitForWorkspace(page: Page) {
   await expect(page.getByLabel("Obligation 1 conclusion")).toBeVisible();
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto("/sessions/session%3Adevelopment");
-  const reset = await page.evaluate(async () => {
-    const historyResponse = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
-      cache: "no-store",
-    });
-    const history = await historyResponse.json();
-    if (!history.ok) return history;
-    const { session } = history.data;
-    if (session.currentNodeId === session.rootNodeId) return { ok: true };
-    const response = await fetch("/api/proof-sessions/session%3Adevelopment/backtrack", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        expectedCurrentNodeId: session.currentNodeId,
-        targetNodeId: session.rootNodeId,
-      }),
-    });
-    return response.json();
-  });
-  expect(reset).toMatchObject({ ok: true });
-  await page.reload();
-});
+// Tests that record suggestions or mutate proof state run in their own session, created through
+// the approval API with the development fixture's goal and hypotheses (the draft API cannot
+// express its obligation). The others only read session:development, which nothing mutates.
+const DUPLICATED_CONJUNCTION_DRAFT: IsolatedDraft = {
+  problem: { title: "Duplicated conjunction", statement: "Assuming p and q, and q, show p p q." },
+  background: {
+    level: "elementary propositional logic",
+    summary: "Propositional connectives.",
+    assumptions: [],
+  },
+  libraryLayerIds: ["layer:global"],
+  packs: [],
+  declarations: [
+    { symbol: "p", sort: "proposition" },
+    { symbol: "q", sort: "proposition" },
+  ],
+  hypotheses: [
+    { format: "mathjson", expression: ["And", "p", "q"] },
+    { format: "mathjson", expression: "q" },
+  ],
+  goals: [{ format: "mathjson", expression: ["And", "p", "p", "q"] }],
+};
+
+async function openIsolatedWorkspace(page: Page): Promise<string> {
+  const sessionId = await createIsolatedSession(page, DUPLICATED_CONJUNCTION_DRAFT);
+  await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
+  await expect(page.getByLabel("Stored proof session")).toBeVisible();
+  await expect(page.getByLabel("Goal 1 conclusion")).toBeVisible();
+  await expect(page.getByLabel("Goal 1 hypothesis 1")).toBeVisible();
+  await warmRoutes(page, sessionId);
+  return sessionId;
+}
 
 test("the stored session and each contextual sequent survive reload", async ({ page }) => {
   await page.goto("/sessions/session%3Adevelopment");
@@ -194,30 +204,37 @@ test("modifier multiselection controls two-selection applicability", async ({ pa
 test("stale anchors are rejected and the persisted order and reasons are read back unchanged", async ({
   page,
 }) => {
-  await page.goto("/sessions/session%3Adevelopment");
-  await waitForWorkspace(page);
+  const sessionId = await openIsolatedWorkspace(page);
+  const apiBase = `/api/proof-sessions/${encodeURIComponent(sessionId)}`;
 
-  const stale = await page.evaluate(async () => {
-    const response = await fetch("/api/proof-sessions/session%3Adevelopment/suggestion-sets", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: `suggestion-set:e2e-stale-${crypto.randomUUID()}`,
-        selections: [
-          {
-            kind: "exact",
-            anchor: {
-              stateId: "state:stale",
-              target: { kind: "goal", id: "goal:development-main" },
-              statement: { kind: "conclusion" },
-            },
-            path: [],
-          },
-        ],
-      }),
-    });
-    return { status: response.status, body: await response.json() };
+  const goalTargetId = await page.getByLabel("Goal 1 conclusion").evaluate((element) => {
+    return element.closest("[data-target-id]")?.getAttribute("data-target-id") ?? null;
   });
+  expect(goalTargetId).toBeTruthy();
+  const stale = await page.evaluate(
+    async ({ apiBase, goalTargetId }) => {
+      const response = await fetch(`${apiBase}/suggestion-sets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: `suggestion-set:e2e-stale-${crypto.randomUUID()}`,
+          selections: [
+            {
+              kind: "exact",
+              anchor: {
+                stateId: "state:stale",
+                target: { kind: "goal", id: goalTargetId! },
+                statement: { kind: "conclusion" },
+              },
+              path: [],
+            },
+          ],
+        }),
+      });
+      return { status: response.status, body: await response.json() };
+    },
+    { apiBase, goalTargetId },
+  );
   expect(stale.status).toBe(400);
   expect(stale.body).toMatchObject({ ok: false, error: { code: "suggestion-set-rejected" } });
 
@@ -239,13 +256,15 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
       ),
     })),
   );
-  const persisted = await page.evaluate(async (id) => {
-    const response = await fetch(
-      `/api/proof-sessions/session%3Adevelopment/suggestion-sets/${encodeURIComponent(id!)}`,
-      { cache: "no-store" },
-    );
-    return response.json();
-  }, suggestionSetId);
+  const persisted = await page.evaluate(
+    async ({ id, apiBase }) => {
+      const response = await fetch(`${apiBase}/suggestion-sets/${encodeURIComponent(id!)}`, {
+        cache: "no-store",
+      });
+      return response.json();
+    },
+    { id: suggestionSetId, apiBase },
+  );
   expect(persisted).toMatchObject({ ok: true });
   expect(
     persisted.data.suggestionSet.suggestions.map(
@@ -271,15 +290,15 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
 test("preview, apply, rejection, backtracking, and a second child preserve the discovery tree", async ({
   page,
 }) => {
-  await page.goto("/sessions/session%3Adevelopment");
-  await waitForWorkspace(page);
+  const sessionId = await openIsolatedWorkspace(page);
+  const apiBase = `/api/proof-sessions/${encodeURIComponent(sessionId)}`;
 
-  const initialHistory = await page.evaluate(async () => {
-    const response = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+  const initialHistory = await page.evaluate(async (apiBase) => {
+    const response = await fetch(`${apiBase}/history`, {
       cache: "no-store",
     });
     return response.json();
-  });
+  }, apiBase);
   expect(initialHistory).toMatchObject({ ok: true });
   const rootNodeId = initialHistory.data.session.rootNodeId as string;
   const initialEdgeCount = initialHistory.data.edges.length as number;
@@ -307,12 +326,12 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   await expect(preview.getByText("None.", { exact: true })).toBeVisible();
   await expect(page.getByText(`Current node ${rootNodeId}`, { exact: true })).toBeVisible();
 
-  const afterPreview = await page.evaluate(async () => {
-    const response = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+  const afterPreview = await page.evaluate(async (apiBase) => {
+    const response = await fetch(`${apiBase}/history`, {
       cache: "no-store",
     });
     return response.json();
-  });
+  }, apiBase);
   expect(afterPreview.data.session.currentNodeId).toBe(rootNodeId);
   expect(afterPreview.data.edges).toHaveLength(initialEdgeCount);
 
@@ -328,8 +347,8 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   ).toBeVisible();
 
   const staleApply = await page.evaluate(
-    async ({ suggestionSetId, suggestionId }) => {
-      const response = await fetch("/api/proof-sessions/session%3Adevelopment/commands", {
+    async ({ apiBase, suggestionSetId, suggestionId }) => {
+      const response = await fetch(`${apiBase}/commands`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -340,7 +359,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
       });
       return { status: response.status, body: await response.json() };
     },
-    { suggestionSetId: splitSuggestionSetId!, suggestionId: splitSuggestionId! },
+    { apiBase, suggestionSetId: splitSuggestionSetId!, suggestionId: splitSuggestionId! },
   );
   expect(staleApply.status).toBeGreaterThanOrEqual(400);
   expect(staleApply.body).toMatchObject({ ok: false });
@@ -363,12 +382,12 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   await expandCard.getByRole("button", { name: "Apply" }).click();
   await expect(page.getByText(/advanced to node:/)).toBeVisible();
 
-  const branched = await page.evaluate(async () => {
-    const response = await fetch("/api/proof-sessions/session%3Adevelopment/history", {
+  const branched = await page.evaluate(async (apiBase) => {
+    const response = await fetch(`${apiBase}/history`, {
       cache: "no-store",
     });
     return response.json();
-  });
+  }, apiBase);
   expect(branched).toMatchObject({ ok: true });
   const children = branched.data.edges.filter(
     ({ edge }: { edge: { parentNodeId: string } }) => edge.parentNodeId === rootNodeId,

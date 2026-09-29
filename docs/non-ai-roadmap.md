@@ -287,7 +287,7 @@ otherwise automate — the substrate is in scope.
       records are included if present. Add an exporter from the store, and an importer with full
       revalidation that creates a read-only session. Add upload and fetch APIs. _Accept:_ round-trip
       tests; a tampered artifact is rejected.
-- [ ] **N28 Static viewers (§4.6, §16).** Add a full discovery-tree viewer, chronological playback, and a
+- [x] **N28 Static viewers (§4.6, §16).** Add a full discovery-tree viewer, chronological playback, and a
       pruned-proof viewer (LaTeX and natural language, with the sorry assumption list and links to
       motivating inquiry records). All views read only stored snapshots. _Accept:_ tests assert no kernel,
       retrieval, or rendering-of-history recomputation of menus.
@@ -766,3 +766,33 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     `session:development`) and `:124` (dev-server navigation), the N37 suggestion budget and once the
     kernel `obligations.test.ts` 5 s timeout failed; all pass on a quiet machine (two full e2e runs: 16
     passed, only `:166` failed).
+- 2026-09-29 — test hardening — `245b729` — e2e tests that record suggestions or mutate proof state build
+  their own session through the N26 approval API (`apps/web/e2e/fixtures.ts` `createIsolatedSession`),
+  so specs no longer race over `session:development`, which the suite now only reads (the reset
+  `beforeEach` is gone). `apps/web/e2e/global-warmup.ts` (Playwright `globalSetup`) compiles every page
+  and route the specs use before tests start. The N37 budgets moved to a serial vitest project
+  (`apps/worker/vitest.perf.config.ts`, `npm run test:perf`), excluded from the parallel `npm test` and
+  chained into `npm run verify`; budgets and measurement are unchanged. The kernel obligations property
+  test has an explicit 30 s timeout (0.65 s alone). Under a concurrent `npm test`, the e2e suite and perf
+  project were stable. The known modifier-multiselection failure is now `proof-workspace.spec.ts:176`
+  (body unchanged).
+- 2026-09-29 — N28 — `ca66c56`, `8f18ab8` — routes `/sessions/{id}/tree`, `/playback` and `/proof` read
+  only the session's stored artifact through `readStoredProofArtifact` (`exportProofArtifact` +
+  `parseProofArtifact`); imported read-only sessions work and are marked read-only. View models live in
+  `apps/web/src/features/discovery-viewer/` (`tree-layout.ts`, `playback-timeline.ts`,
+  `pruned-proof-view.ts`, `inquiry-context.ts`).
+  - Tree: every retained node and edge including abandoned branches; edges show the chosen stored
+    suggestion (or operation kind), transition class and stored route evidence; the detail panel shows the
+    stored snapshot and stored displayed suggestion set in stored order. Playback merges stored
+    transitions, interaction events and inquiry records with button and arrow/Home/End stepping. The
+    pruned-proof viewer shows `final.prunedProof` in LaTeX/NL, the sorry assumptions it depends on (and
+    separately those on abandoned branches), and links steps to motivating inquiry records rendered with
+    `createInquiryExplainer`. The toolbar's "Open full discovery tree" is now a link.
+  - No recomputation: solved status, route, pruned proof and sorry lists come from `artifact.final`.
+    `no-recomputation.test.tsx` replaces kernel, move planning, retrieval and protocol discovery/preview
+    functions with throwing spies and renders all three views; shown menus equal stored entries exactly;
+    a static test forbids viewer imports of kernel, moves, retrieval or library. An e2e test follows the
+    tree link for an isolated session and renders all three pages.
+  - Gaps: transition events store no timestamp and export sorted by id, so playback is causal rather than
+    wall-clock order (needs a stored per-session transition sequence). Abandoned-branch edges have no
+    stored evidence. `.toolbarNote` CSS is now unused.
