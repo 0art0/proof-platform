@@ -9,7 +9,7 @@ const WEB_PORT = 3101;
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
-  testMatch: ["proof-workspace.spec.ts", "problem-entry.spec.ts"],
+  testMatch: ["proof-workspace.spec.ts", "problem-entry.spec.ts", "toolbar-actions.spec.ts"],
   // Webpack dev compiles each route on first use, so cold runs need more headroom than Turbopack.
   timeout: 60_000,
   expect: { timeout: 15_000 },

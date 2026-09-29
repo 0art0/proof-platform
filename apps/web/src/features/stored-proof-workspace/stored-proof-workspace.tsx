@@ -34,6 +34,12 @@ import {
   type ProofSelectionDescriptor,
 } from "./api-contract";
 import { createInteractionRecorder } from "./interaction-recorder";
+import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
+import {
+  describeCommandFailure,
+  postProtocolCommand,
+  readCurrentSession,
+} from "./toolbar-requests";
 import styles from "./stored-proof-workspace.module.css";
 
 export type StoredProofSession = Readonly<{
@@ -74,6 +80,7 @@ function StatefulStoredWorkspace({
   const [notice, setNotice] = useState<Notice>();
   const [mutationPending, setMutationPending] = useState(false);
   const [view, setView] = useState<WorkspaceView>("formal");
+  const [selections, setSelections] = useState<readonly AnchoredProofSelection[]>([]);
   const presentation = usePresentation(session.operators);
   const requestGeneration = useRef(0);
   const actionGeneration = useRef(0);
@@ -121,6 +128,7 @@ function StatefulStoredWorkspace({
     shownPreview.current = undefined;
     setSuggestions({ kind: "idle" });
     setMoveState({ kind: "idle" });
+    setSelections([]);
   }, []);
 
   /** Record that the shown preview was left without being applied. */
@@ -142,6 +150,7 @@ function StatefulStoredWorkspace({
   const handleSelectionChange = useCallback(
     (selections: readonly AnchoredProofSelection[]) => {
       if (mutationPendingRef.current) return;
+      setSelections(selections);
       // The workspace of a newly committed snapshot reports its empty selection once it mounts.
       // Nothing changed, so keep the notice of the apply or backtrack that produced it.
       const empty = selections.length === 0;
@@ -427,6 +436,55 @@ function StatefulStoredWorkspace({
     [loadHistory, node.id, resetTransientState, session.id, session.operators],
   );
 
+  /** Toolbar actions (N31): one command envelope, then the new current node and history. */
+  const runToolbarCommand = useCallback<RunToolbarCommand>(
+    async (action, envelope, summarize) => {
+      if (mutationPendingRef.current) {
+        return {
+          ok: false,
+          status: 0,
+          code: "busy",
+          message: "Another proof command is still running.",
+        };
+      }
+      mutationPendingRef.current = true;
+      setMutationPending(true);
+      actionGeneration.current += 1;
+      const outcome = await postProtocolCommand(session.id, envelope);
+      if (!outcome.ok) {
+        mutationPendingRef.current = false;
+        setMutationPending(false);
+        setNotice({ state: "rejected", message: describeCommandFailure(action, outcome) });
+        void loadHistory();
+        return outcome;
+      }
+      const current = await readCurrentSession(session.id);
+      mutationPendingRef.current = false;
+      setMutationPending(false);
+      if (!current.ok || current.value.node.id !== outcome.response.cursor.nodeId) {
+        setNotice({
+          state: "rejected",
+          message: `${action} was committed, but the new current node could not be loaded; reload the page.`,
+        });
+        void loadHistory();
+        return outcome;
+      }
+      rejectShownPreview("superseded");
+      setSession(current.value.session);
+      setNode(current.value.node);
+      resetTransientState();
+      setNotice({
+        state: "committed",
+        message:
+          summarize?.(outcome.response) ??
+          `${action} committed${outcome.response.replayed ? " (already recorded)" : ""}; now at ${current.value.node.id}.`,
+      });
+      void loadHistory();
+      return outcome;
+    },
+    [loadHistory, rejectShownPreview, resetTransientState, session.id],
+  );
+
   const breadcrumb = useMemo(() => {
     if (history.kind === "loading") return { kind: "loading" } as const;
     const crumbs =
@@ -474,7 +532,19 @@ function StatefulStoredWorkspace({
         counts={{ goals: node.state.goals.length, obligations: node.state.obligations.length }}
         breadcrumb={breadcrumb}
       />
-      <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node} />
+      <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node}>
+        <ToolbarActionBar
+          node={node}
+          rootNodeId={session.rootNodeId}
+          operators={session.operators}
+          selections={selections}
+          history={history}
+          mutationPending={mutationPending}
+          presentation={presentation}
+          view={view}
+          runCommand={runToolbarCommand}
+        />
+      </WorkspaceToolbar>
       {notice ? (
         <p className={styles.actionNotice} data-state={notice.state} role="status">
           {notice.message}
