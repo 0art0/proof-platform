@@ -125,6 +125,19 @@ branch's terms, so the step can itself be replayed, its report, and the replay r
 - The source edge is recorded by ID only. "Delete previous move" removes the rows of deleted
   commands and nodes before it removes them. `MemoryProofStore` mirrors the table and its checks.
 
+`0011_artifact_imports.sql` supports proof artifacts (design plan §19). An uploaded artifact is
+revalidated in full and stored as an ordinary session that keeps the artifact's record IDs under
+a new session ID derived from the artifact digest.
+
+- `proof_sessions.read_only` marks an imported session. The worker refuses every write to such a
+  session at the transaction layer (`guardReadOnlySessions`, diagnostic `session-read-only`,
+  HTTP 409). The importer sets the flag as its last write in the import transaction.
+- `proof_artifact_imports` holds one record per imported session: the digest (unique), the source
+  session, and the library section and LLM call records rebased onto the imported session, which
+  have no proof-store rows and are re-exported statically. `MemoryProofStore` mirrors both.
+- The flag is enforced by the worker, not by a database trigger; a direct SQL writer can still
+  modify an imported session.
+
 ## Proof HTTP service and live verification
 
 `createPostgresProofHttpService(pool)` creates the product `node:http` service without applying
@@ -153,6 +166,12 @@ migrations. Its PostgreSQL-backed endpoints are:
   unconfirmed descendants, or replaying a deleted command returns 409. Deleting at the root returns 400.
 - `GET /proof-sessions/:sessionId/suggestion-sets/:suggestionSetId` for immutable persisted
   evidence, validated against its historical proof node.
+- `GET /proof-sessions/:sessionId/export` returns the session's versioned proof artifact, built
+  from stored rows only, as an attachment.
+- `POST /artifacts` with an artifact body (at most 16 MiB) revalidates it completely and creates a
+  read-only session: `{ sessionId, digest, sourceSessionId, readOnly, replayed }` (201, or 200 for
+  an identical re-upload). A failed check returns 422 with its diagnostics and records nothing.
+  Every write to a read-only session returns 409 `session-read-only`.
 - `POST /proof-sessions/:sessionId/interaction-events` with a strict protocol
   `recordInteractionEventRequestSchema` body (`{ id, nodeId, kind, ...payload }`). It returns
   `{ event, replayed }` (201, or 200 for an identical retry); a conflicting reuse of the ID returns 409.

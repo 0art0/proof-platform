@@ -174,7 +174,7 @@ class FakeLibrarySqlClient implements SqlClient {
       return rows([]);
     }
     if (sql.startsWith("SELECT pg_advisory_xact_lock")) return rows([]);
-    if (sql.startsWith("SELECT operators, metadata FROM proof_sessions")) {
+    if (sql.startsWith("SELECT operators, metadata, read_only FROM proof_sessions")) {
       const session = t.sessions.get(String(a));
       return rows(session === undefined ? [] : [structuredClone(session)]);
     }
@@ -572,7 +572,7 @@ describe("PostgresLibraryStore", () => {
       diagnostics: [expect.objectContaining({ code: "commit-unknown" })],
     });
     expect(client.calls).toContain(
-      "SELECT operators, metadata FROM proof_sessions WHERE id = $1 FOR UPDATE",
+      "SELECT operators, metadata, read_only FROM proof_sessions WHERE id = $1 FOR UPDATE",
     );
   });
 

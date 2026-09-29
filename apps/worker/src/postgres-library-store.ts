@@ -77,14 +77,16 @@ class PostgresLibraryStoreTransaction implements LibraryStoreTransaction {
 
   async lockLibrarySession(sessionId: string): Promise<LibrarySessionRow | undefined> {
     const result = await this.client.query(
-      `SELECT operators, metadata
+      `SELECT operators, metadata, read_only
        FROM proof_sessions
        WHERE id = $1
        FOR UPDATE`,
       [sessionId],
     );
     const row = result.rows[0];
-    return row === undefined ? undefined : { operators: row.operators, metadata: row.metadata };
+    return row === undefined
+      ? undefined
+      : { operators: row.operators, metadata: row.metadata, readOnly: row.read_only === true };
   }
 
   async lockGlobalLibrary(): Promise<void> {

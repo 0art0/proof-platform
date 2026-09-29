@@ -107,6 +107,8 @@ const CONFLICT = new Set([
   "inquiry-command-conflict",
   "backtrack-with-information-conflict",
   "replay-conflict",
+  // Writes to a session imported from an artifact (N27).
+  "session-read-only",
   // Library repository conflicts.
   "event-id-conflict",
   "artifact-id-conflict",

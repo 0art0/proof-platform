@@ -53,6 +53,7 @@ import {
   type ProofEdge,
   type ProofDeletionRecord,
   type ProofNode,
+  type ProofArtifactImportRecord,
   type ProofSessionMetadata,
   type ProtocolEnvironment,
   type SuggestionSetId,
@@ -118,6 +119,11 @@ export type ProofSession = Readonly<{
   operators: readonly OperatorDeclaration[];
   /** Documentary session context; absent for sessions created before migration 0003. */
   metadata?: ProofSessionMetadata | undefined;
+  /**
+   * Present on a session created by importing an artifact (migration 0011). Every write to a
+   * read-only session is refused by `guardReadOnlySessions` with `session-read-only`.
+   */
+  readOnly?: true | undefined;
 }>;
 
 export const proofSessionSchema: z.ZodType<ProofSession> = z
@@ -127,6 +133,7 @@ export const proofSessionSchema: z.ZodType<ProofSession> = z
     currentNodeId: proofNodeIdSchema,
     operators: operatorEnvironmentSchema,
     metadata: proofSessionMetadataSchema.optional(),
+    readOnly: z.literal(true).optional(),
   })
   .strict();
 
@@ -260,6 +267,29 @@ export interface ProofStoreTransaction {
     sessionId: ProofSessionId,
     query: InquiryRecordQuery,
   ): Promise<readonly unknown[]>;
+  /**
+   * Mark the session read-only (migration 0011). Returns false when the session does not exist;
+   * marking an already read-only session is itself a refused write. Only the artifact importer
+   * calls this, as its last write.
+   */
+  markSessionReadOnly(sessionId: ProofSessionId): Promise<boolean>;
+  /** Every node of the session, in the `readNode` record shape, ordered by node ID. */
+  listNodes(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** Every suggestion set, in the `readSuggestionSet` record shape, ordered by ID. */
+  listSuggestionSets(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** Every stored preview record, ordered by ID. */
+  listPreviews(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** Every stored transition-event record, ordered by ID. */
+  listEvents(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** Every stored command result, ordered by command ID. */
+  listCommands(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** Every semantic-replay step record, ordered by step command ID. */
+  listReplaySteps(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** Every deletion tombstone, ordered by ID. */
+  listDeletions(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /** The artifact-import record of an imported session, if any. */
+  readArtifactImport(sessionId: ProofSessionId): Promise<unknown | undefined>;
+  insertArtifactImport(record: ProofArtifactImportRecord): Promise<void>;
 }
 
 export type InquiryRecordQuery = Readonly<{
@@ -294,6 +324,145 @@ export class ProofStoreTransactionError extends Error {
     this.outcome = outcome;
     this.cause = cause;
   }
+}
+
+/** A write was attempted on a read-only (imported) session; the transaction rolls back. */
+export class ReadOnlySessionError extends Error {
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super(`The proof session ${sessionId} is read-only; it was imported from an artifact.`);
+    this.name = "ReadOnlySessionError";
+    this.sessionId = sessionId;
+  }
+}
+
+/** Whether a `lockSession` record marks its session read-only. */
+export function isReadOnlySessionRecord(record: unknown): boolean {
+  return (
+    typeof record === "object" &&
+    record !== null &&
+    (record as Readonly<{ readOnly?: unknown }>).readOnly === true
+  );
+}
+
+/**
+ * Enforce read-only sessions at the transaction layer. Both stores wrap every transaction they
+ * hand out, so every repository path (resource routes, the command envelope, inquiry commands and
+ * methods, deletion, backtracking, replay, interaction events) is covered without per-route
+ * checks. Each write first learns, once per transaction and session, whether its session is
+ * read-only (from the repository's own `lockSession` when that already ran, otherwise by taking
+ * the session lock); a write to a read-only session throws `ReadOnlySessionError`, which rolls the
+ * transaction back and surfaces as `session-read-only`. `markSessionReadOnly` is itself a write:
+ * after it the session accepts no further writes, even in the same transaction.
+ */
+export function guardReadOnlySessions(inner: ProofStoreTransaction): ProofStoreTransaction {
+  const known = new Map<string, boolean>();
+  const writable = async (sessionId: ProofSessionId): Promise<void> => {
+    let readOnly = known.get(sessionId);
+    if (readOnly === undefined) {
+      readOnly = isReadOnlySessionRecord(await inner.lockSession(sessionId));
+      known.set(sessionId, readOnly);
+    }
+    if (readOnly) throw new ReadOnlySessionError(sessionId);
+  };
+  // Every method is listed (no spread), so a new transaction method must be classified here.
+  return {
+    readNode: (sessionId, nodeId) => inner.readNode(sessionId, nodeId),
+    readCommand: (sessionId, commandId) => inner.readCommand(sessionId, commandId),
+    readSuggestionSet: (sessionId, id) => inner.readSuggestionSet(sessionId, id),
+    readPreview: (sessionId, previewId) => inner.readPreview(sessionId, previewId),
+    listEdges: (sessionId) => inner.listEdges(sessionId),
+    readDeletion: (sessionId, commandId) => inner.readDeletion(sessionId, commandId),
+    readInteractionEvent: (sessionId, eventId) => inner.readInteractionEvent(sessionId, eventId),
+    lastInteractionSequence: (sessionId) => inner.lastInteractionSequence(sessionId),
+    listInteractionEvents: (sessionId, query) => inner.listInteractionEvents(sessionId, query),
+    readReplayStep: (sessionId, commandId) => inner.readReplayStep(sessionId, commandId),
+    readInquiryRecord: (sessionId, recordId) => inner.readInquiryRecord(sessionId, recordId),
+    lastInquirySequence: (sessionId) => inner.lastInquirySequence(sessionId),
+    listInquiryRecords: (sessionId, query) => inner.listInquiryRecords(sessionId, query),
+    listNodes: (sessionId) => inner.listNodes(sessionId),
+    listSuggestionSets: (sessionId) => inner.listSuggestionSets(sessionId),
+    listPreviews: (sessionId) => inner.listPreviews(sessionId),
+    listEvents: (sessionId) => inner.listEvents(sessionId),
+    listCommands: (sessionId) => inner.listCommands(sessionId),
+    listReplaySteps: (sessionId) => inner.listReplaySteps(sessionId),
+    listDeletions: (sessionId) => inner.listDeletions(sessionId),
+    readArtifactImport: (sessionId) => inner.readArtifactImport(sessionId),
+    lockSession: async (sessionId) => {
+      const record = await inner.lockSession(sessionId);
+      known.set(sessionId, isReadOnlySessionRecord(record));
+      return record;
+    },
+    insertSession: async (session) => {
+      // A session becomes read-only only through `markSessionReadOnly`, after its rows exist.
+      if (session.readOnly === true) throw new ReadOnlySessionError(session.id);
+      await inner.insertSession(session);
+      known.set(session.id, false);
+    },
+    insertNode: async (sessionId, node) => {
+      await writable(sessionId);
+      return inner.insertNode(sessionId, node);
+    },
+    insertSuggestionSet: async (sessionId, suggestionSet) => {
+      await writable(sessionId);
+      return inner.insertSuggestionSet(sessionId, suggestionSet);
+    },
+    insertPreview: async (sessionId, preview) => {
+      await writable(sessionId);
+      return inner.insertPreview(sessionId, preview);
+    },
+    insertEdge: async (sessionId, edge) => {
+      await writable(sessionId);
+      return inner.insertEdge(sessionId, edge);
+    },
+    insertEvent: async (sessionId, event) => {
+      await writable(sessionId);
+      return inner.insertEvent(sessionId, event);
+    },
+    insertCommand: async (sessionId, result) => {
+      await writable(sessionId);
+      return inner.insertCommand(sessionId, result);
+    },
+    advanceCurrentNode: async (sessionId, expectedNodeId, nextNodeId) => {
+      await writable(sessionId);
+      return inner.advanceCurrentNode(sessionId, expectedNodeId, nextNodeId);
+    },
+    repointCurrentNode: async (sessionId, expectedNodeId, targetNodeId) => {
+      await writable(sessionId);
+      return inner.repointCurrentNode(sessionId, expectedNodeId, targetNodeId);
+    },
+    deleteProofRecords: async (sessionId, request) => {
+      await writable(sessionId);
+      return inner.deleteProofRecords(sessionId, request);
+    },
+    insertDeletion: async (sessionId, deletion) => {
+      await writable(sessionId);
+      return inner.insertDeletion(sessionId, deletion);
+    },
+    insertInteractionEvent: async (sessionId, event) => {
+      await writable(sessionId);
+      return inner.insertInteractionEvent(sessionId, event);
+    },
+    insertReplayStep: async (sessionId, record) => {
+      await writable(sessionId);
+      return inner.insertReplayStep(sessionId, record);
+    },
+    insertInquiryRecord: async (sessionId, record) => {
+      await writable(sessionId);
+      return inner.insertInquiryRecord(sessionId, record);
+    },
+    insertArtifactImport: async (record) => {
+      await writable(record.sessionId as ProofSessionId);
+      return inner.insertArtifactImport(record);
+    },
+    markSessionReadOnly: async (sessionId) => {
+      await writable(sessionId);
+      const marked = await inner.markSessionReadOnly(sessionId);
+      if (marked) known.set(sessionId, true);
+      return marked;
+    },
+  };
 }
 
 class SerializedStaleCommandError extends Error {
@@ -339,6 +508,7 @@ export type RepositoryDiagnosticCode =
   | "inquiry-command-rejected"
   | "inquiry-command-conflict"
   | "invalid-inquiry-record"
+  | "session-read-only"
   | "storage-failure"
   | "commit-unknown";
 
@@ -3273,6 +3443,15 @@ function parseSuggestionSetRecord(
 }
 
 export function transactionFailure(error: unknown, fallbackMessage: string): RepositoryFailure {
+  const readOnly =
+    error instanceof ReadOnlySessionError
+      ? error
+      : error instanceof ProofStoreTransactionError && error.cause instanceof ReadOnlySessionError
+        ? error.cause
+        : undefined;
+  if (readOnly !== undefined) {
+    return repositoryFailure("rejected", "session-read-only", readOnly.message);
+  }
   // Stores wrap callback failures in a rolled-back error; the stale-pointer cause stays meaningful.
   const staleCause =
     error instanceof ProofStoreTransactionError &&
