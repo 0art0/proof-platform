@@ -1210,6 +1210,7 @@ function attemptAssignment(
       message: "No approved result-application move applies the replayed operation.",
     };
   }
+  const authoredMoves = input.moves.filter(({ id }) => id.startsWith("authored:"));
   const prepared = prepareProofCommand(
     node,
     {
@@ -1227,6 +1228,7 @@ function attemptAssignment(
       trustedActor: input.actor,
       operators,
       ...(input.results === undefined ? {} : { results: input.results }),
+      ...(authoredMoves.length === 0 ? {} : { moves: authoredMoves }),
     },
   );
   if (!prepared.ok) {

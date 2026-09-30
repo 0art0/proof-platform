@@ -18,7 +18,13 @@ import {
   type OperatorDeclaration,
   type StatementId,
 } from "@proof/mathjson-model";
-import { moveIdSchema, planMove, type MoveId } from "@proof/moves";
+import {
+  moveDefinitionSchema,
+  moveIdSchema,
+  planMove,
+  type MoveDefinition,
+  type MoveId,
+} from "@proof/moves";
 import {
   type RetrievalIndex,
   type ResolvedRetrievalSelection,
@@ -514,6 +520,8 @@ export type ProtocolEnvironment = Readonly<{
   operators?: readonly OperatorDeclaration[];
   /** Approved results that result-application moves may instantiate (kernel-validated). */
   results?: readonly KernelResult[];
+  /** Approved moves beyond the hand-authored catalog (authored moves, N35). */
+  moves?: readonly MoveDefinition[];
 }>;
 
 export type ProofNode = Readonly<{
@@ -969,6 +977,7 @@ export type PrepareProofCommandContext = Readonly<{
   trustedActor: unknown;
   operators?: unknown;
   results?: unknown;
+  moves?: unknown;
   previous?: unknown;
   suggestionSet?: unknown;
   preview?: unknown;
@@ -980,6 +989,8 @@ const prepareContextSchema = z
     operators: operatorDeclarationsSchema.optional(),
     /** Approved kernel results; the kernel validates the catalog on every transition. */
     results: z.array(z.unknown()).optional(),
+    /** Approved authored moves (N35), parsed as move definitions. */
+    moves: z.array(moveDefinitionSchema).optional(),
     previous: z.unknown().optional(),
     suggestionSet: z.unknown().optional(),
     preview: z.unknown().optional(),
@@ -1023,6 +1034,7 @@ function prepareProofCommandInternal(
     ...(contextResult.results === undefined
       ? {}
       : { results: contextResult.results as readonly KernelResult[] }),
+    ...(contextResult.moves === undefined ? {} : { moves: contextResult.moves }),
   };
 
   let nodeSchema: z.ZodType<ProofNode>;
