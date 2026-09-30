@@ -313,10 +313,10 @@ otherwise automate — the substrate is in scope.
 - [x] **N32 Library drawer (§17.1).** Add a drawer with layers, search/filter by kind and domain,
       artifact detail views (statement, premises, directions, variants, provenance, approval), and addition
       events.
-- [ ] **N33 Abstraction and drag gestures (§8.3).** Add an abstract-selection gesture that turns a selection
-      into a typed wildcard for retrieval only. Add drag gestures that show a preview before commit:
-      result → expression (deep apply/rewrite), hypothesis → goal (use/specialize/rewrite), and term →
-      binder or argument slot (instantiate).
+- [~] **N33 Abstraction and drag gestures (§8.3).** Add an abstract-selection gesture that turns a selection
+  into a typed wildcard for retrieval only. Add drag gestures that show a preview before commit:
+  result → expression (deep apply/rewrite), hypothesis → goal (use/specialize/rewrite), and term →
+  binder or argument slot (instantiate).
 - [x] **N34 Inquiry and construction panels (refinement §10).** Add a compact inquiry panel (active
       objective, current attempt, unresolved constructions, top obstruction or requirement) and the actions
       "Use this", "Construct an object", "Find sufficient conditions", "Investigate this hypothesis", and
@@ -901,3 +901,38 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     library-result steps. No promotion beyond `move-discovery-draft`, no withdrawal, and the author may
     review their own draft. Artifact import revalidates with the base catalog and may reject sessions
     that applied an authored move. No web proxy for the two new routes and no UI yet.
+- 2026-09-30 — N27 follow-up (import of authored moves) — `dafd2a7` — `importProofArtifact` builds its
+  validation environment from the base catalog plus the authored moves approved in the artifact's own
+  library section (latest approved `move` reviews among its admitted `move-discovery-draft` addition
+  events, digest-checked and revalidated with `validateMoveTemplate`); moves from other sessions on the
+  importing server are never consulted. Tests: a session that authored, approved and applied a move
+  round-trips; dropping the approved move, removing an example, a declared class the plan does not compose
+  and a stale recorded digest are each rejected after recomputing the artifact digest.
+- 2026-09-30 — N31 follow-up (dry runs) — `af037fc` — web proxies `POST
+/api/proof-sessions/[id]/backtrack-analysis` and `/replay-preview` (same-origin, strict schemas).
+  The backtrack dialog uses the worker's analysis (no `analyzeBacktrack` in the browser). The replay
+  dialog previews the exact request a commit would send, under the commit's command id, and shows the
+  report (exact/adapted counts, substitutions, parameters, new obligations, first failure, repair
+  candidates) before anything is committed; repairs re-preview with overrides; commit is disabled until
+  the preview is complete. Gaps: no replay `focus` choice; the preview recomputes on every change.
+- 2026-09-30 — N27 follow-up (read-only UI) — `af037fc` — `GET /proof-sessions/:id` returns
+  `session.readOnly` (imported artifact) and `session.visibility: "shared"` when set. The header shows
+  "Read-only · imported artifact"; every toolbar action is disabled with "This session is read-only
+  (imported artifact)"; the suggestion panel, inquiry panel and history backtrack are locked with a
+  read-only note.
+- 2026-10-01 — N33 (drag gestures; abstraction blocked) — `7a28aa5` — `features/gestures/`: a pure drag
+  state machine (idle → carrying → resolving → idle) and pure drop resolution. A drop makes its source and
+  target the active selections (hypothesis → goal and term → slot as a two-selection query, result →
+  expression as a one-selection query), runs the existing suggestion request, picks the matching displayed
+  suggestion by artifact id or move-slot assignment, and previews it with `previewSuggestion`; only Apply
+  commits and no mathematics is sent. A drop no displayed suggestion fits shows "No move applies here" and
+  changes nothing. Sources: hypothesis handles, library result rows and a tray chip for the current
+  selection. Keyboard alternative: pick up (Enter/Space), select a target, "Drop on selection"; Escape
+  cancels. Drags are disabled in read-only sessions. Handle names come from content, not `aria-label`, to
+  avoid `getByLabel` collisions. Pick-up is deferred one tick because Chromium aborts a native drag whose
+  layout shifts during `dragstart`. `gestures.spec.ts` covers a mouse drag and the keyboard path.
+  - Gaps: the abstraction gesture is not implemented. Protocol and retrieval support typed wildcards
+    (`retrievalWildcardSchema`, `abstractionFit`), but the worker `proofHttpSuggestionRequestSchema`, the
+    web proxy (`suggestionSetMatchesRequest` requires `abstraction === undefined`) and the web request
+    schema reject a per-selection `abstraction`. Term and result drops are covered by component tests
+    only. Drop resolution hard-codes the slot ids `target`/`occurrence` and `term`/`witness`.
