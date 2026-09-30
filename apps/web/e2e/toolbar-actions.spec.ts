@@ -237,11 +237,10 @@ test("export asks to confirm a private session, then downloads the artifact; the
 }) => {
   const sessionId = await openFreshSession(page);
   const dialog = page.getByRole("dialog", { name: "Export a private session" });
-  // A click before hydration does nothing, so retry it until the dialog opens.
-  await expect(async () => {
-    await page.getByRole("button", { name: "Export proof" }).click();
-    await expect(dialog).toBeVisible({ timeout: 4_000 });
-  }).toPass({ timeout: 60_000 });
+  const exportButton = page.getByRole("button", { name: "Export proof" });
+  await expect(exportButton).toHaveAttribute("data-hydrated", "true");
+  await exportButton.click();
+  await expect(dialog).toBeVisible();
   await expect(dialog.getByText("This session is private. Export it anyway?")).toBeVisible();
   const downloading = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Export anyway" }).click();

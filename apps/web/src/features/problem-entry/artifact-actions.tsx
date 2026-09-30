@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { exportHref, fetchSessionVisibility } from "../stored-proof-workspace/export-action";
+import { useHydrated } from "../hydration/use-hydrated";
 import styles from "./problem-entry.module.css";
 
 type Diagnostic = Readonly<{ code: string; message: string; path?: readonly (string | number)[] }>;
@@ -114,6 +115,7 @@ export function ArtifactDownload({
 }: Readonly<{ navigate?: (url: string) => void }>) {
   const [sessionId, setSessionId] = useState("");
   const [state, setState] = useState<DownloadState>({ kind: "idle" });
+  const hydrated = useHydrated();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -149,7 +151,7 @@ export function ArtifactDownload({
           setState({ kind: "idle" });
         }}
       />
-      <button type="submit" disabled={state.kind === "checking"}>
+      <button type="submit" disabled={state.kind === "checking"} data-hydrated={hydrated}>
         Download artifact
       </button>
       {state.kind === "failed" ? (

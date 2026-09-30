@@ -69,14 +69,11 @@ test("the worker's diagnostics explain a rejected draft", async ({ page }) => {
 
 test("an exported artifact uploads as a read-only session", async ({ page }) => {
   await page.goto("/");
-  // A click before hydration submits the form natively and reloads the page, so retry it.
-  await expect(async () => {
-    await page.getByLabel("Session ID to download", { exact: true }).fill("session:development");
-    await page.getByRole("button", { name: "Download artifact" }).click();
-    await expect(page.getByText("This session is private. Export it anyway?")).toBeVisible({
-      timeout: 4_000,
-    });
-  }).toPass({ timeout: 60_000 });
+  const downloadButton = page.getByRole("button", { name: "Download artifact" });
+  await expect(downloadButton).toHaveAttribute("data-hydrated", "true");
+  await page.getByLabel("Session ID to download", { exact: true }).fill("session:development");
+  await downloadButton.click();
+  await expect(page.getByText("This session is private. Export it anyway?")).toBeVisible();
   const downloading = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export anyway" }).click();
   const download = await downloading;

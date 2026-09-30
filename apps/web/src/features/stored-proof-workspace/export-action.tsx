@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useHydrated } from "../hydration/use-hydrated";
 import { ToolbarDialog } from "./toolbar-dialog";
 import styles from "./stored-proof-workspace.module.css";
 
@@ -70,6 +71,7 @@ export function ExportAction({
 }: Readonly<{ sessionId: string; startDownload?: (url: string, fileName: string) => void }>) {
   const [state, setState] = useState<ExportState>({ kind: "idle" });
   const generation = useRef(0);
+  const hydrated = useHydrated();
 
   const begin = async () => {
     const current = ++generation.current;
@@ -109,6 +111,7 @@ export function ExportAction({
         type="button"
         className={styles.toolbarButton}
         disabled={state.kind === "checking"}
+        data-hydrated={hydrated}
         onClick={() => void begin()}
       >
         Export proof
