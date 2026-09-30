@@ -73,6 +73,7 @@ export const LIBRARY_ADMISSION_DIAGNOSTIC_CODES = [
   "derived-layer-required",
   "derived-session-mismatch",
   "derived-node-not-found",
+  "move-layer-required",
 ] as const;
 export const libraryAdmissionDiagnosticCodeSchema = z.enum(LIBRARY_ADMISSION_DIAGNOSTIC_CODES);
 export type LibraryAdmissionDiagnosticCode = z.infer<typeof libraryAdmissionDiagnosticCodeSchema>;
@@ -362,7 +363,14 @@ export function admitLibraryArtifact(input: LibraryAdmissionInput): LibraryAdmis
         : `The ${layer} layer belongs to a proof session.`,
     );
   }
-  if (artifact.approval.status === "rejected") {
+  if (artifact.kind === "move" && layer !== "move-discovery-draft") {
+    add("move-layer-required", "A move template belongs to the move-discovery-draft layer.");
+  }
+  // In the draft layer a move artifact may itself be a recorded rejection: the review is the record.
+  if (
+    artifact.approval.status === "rejected" &&
+    !(artifact.kind === "move" && layer === "move-discovery-draft")
+  ) {
     add("approval-rejected", "A rejected artifact cannot be added to the library.");
   }
   if (artifact.provenance.kind === "derived" && layer !== "derived") {
@@ -415,7 +423,9 @@ export function admitLibraryArtifact(input: LibraryAdmissionInput): LibraryAdmis
       break;
     }
     case "move-discovery-draft":
-      if (artifact.approval.status !== "draft") {
+      // A move template carries its own review record, which its schema checked against the
+      // approval. Everything else in this layer is a draft.
+      if (artifact.kind !== "move" && artifact.approval.status !== "draft") {
         add("draft-required", "Move-discovery additions are admitted as drafts only.");
       }
       break;
