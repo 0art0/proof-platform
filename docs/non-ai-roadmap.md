@@ -317,7 +317,7 @@ otherwise automate — the substrate is in scope.
       into a typed wildcard for retrieval only. Add drag gestures that show a preview before commit:
       result → expression (deep apply/rewrite), hypothesis → goal (use/specialize/rewrite), and term →
       binder or argument slot (instantiate).
-- [ ] **N34 Inquiry and construction panels (refinement §10).** Add a compact inquiry panel (active
+- [x] **N34 Inquiry and construction panels (refinement §10).** Add a compact inquiry panel (active
       objective, current attempt, unresolved constructions, top obstruction or requirement) and the actions
       "Use this", "Construct an object", "Find sufficient conditions", "Investigate this hypothesis", and
       "Try this method". Add a construction-task view with requirements by role.
@@ -333,7 +333,7 @@ otherwise automate — the substrate is in scope.
 
 ## Phase 9 — Hardening
 
-- [ ] **N36 Migrations, privacy, deletion (§19.3).** Add an idempotent migration runner script, schema
+- [x] **N36 Migrations, privacy, deletion (§19.3).** Add an idempotent migration runner script, schema
       coverage for every new entity, private-by-default sessions, and session/export deletion APIs.
 - [x] **N37 Corpus and performance (§21.5–§21.6).** Extend the corpus across logic, algebra, number
       theory, sets, order, and a research-notation custom-operator case. Record deterministic coverage and
@@ -823,3 +823,50 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     artifacts are not deduplicated by id. Variant families come only from the approved catalog. No
     auto-refresh after additions made elsewhere. The worker casts the import record's JSON library to
     library types (validated at import). No e2e spec yet.
+- 2026-09-29 — N34 — `d644f9f` — web `features/inquiry-panel`: a compact "Inquiry" panel mounted after the
+  suggestion panel. It reads stored inquiry records through the new `GET
+/api/proof-sessions/[id]/inquiry-records` proxy (`readInquiryRecords`, paged by `after`) and folds them
+  with `currentInquiryStatus` (`inquiry-summary.ts`) into the active objective, current attempt, top
+  obstruction or next requirement, and the snapshot's open `constructions`, worded by
+  `createInquiryExplainer`. Later-interpretation relationships never select what is shown and are listed
+  apart. `ConstructionTaskView` groups requirements by role (necessary / sufficient / heuristic) with
+  candidates, status, scope, dependencies and outcome.
+  - Actions, each one N25 envelope as the human web actor with no free-typed mathematics: "Investigate
+    this hypothesis" (`investigate-hypothesis`), "Try this method" (`apply` with `inquiryMethod:
+"try-result"` on the previewed result suggestion), "Construct an object" (`kernel-operation`
+    `introduce-placeholder` on a selected existential goal), "Find sufficient conditions"
+    (`record-inquiry`: Explore question + elective objective, no reason), "Use this" (`record-inquiry`: a
+    manual attempt on the active objective). `inquiry-panel.spec.ts` investigates a hypothesis and
+    constructs an object against the real kernel.
+  - Gaps: no dedicated "sufficient conditions" question form (records Explore/`relationship`); no "used
+    for" relation (records an attempt); "Try this method" covers library results only and needs an
+    existing preview; construct dependencies are computed client-side and not editable; no
+    add-requirement/add-candidate UI; status folding is client-side over all records; the panel is stacked
+    below the suggestion panel.
+- 2026-09-29 — N36 — `850bf9f` — idempotent migration runner (`npm run migrate`; `schema_migrations` by
+  name and sha256, one transaction per file, advisory lock, changed-checksum and missing-file abort,
+  `--status`, `--baseline`). The Postgres worker verifies at startup that every migration is applied and
+  refuses to start otherwise; `PROOF_AUTO_MIGRATE=true` applies pending ones. `schema-coverage.test.ts`
+  checks the stores' SQL against migrated tables and columns, that every memory-store entity has a table,
+  and that the session-deletion table list covers every `session_id` table in dependency order.
+  - Migration `0012` adds `proof_sessions.visibility` (private by default for new, imported and seeded
+    sessions). Exporting a private session needs `?confirmPrivateExport=true` (403
+    `private-export-unconfirmed` otherwise); `GET`/`PATCH /proof-sessions/:id/visibility`.
+    `DELETE /proof-sessions/:id` hard-deletes a session and every dependent row (proof tables, inquiry,
+    replay, interaction events, import record, session library, session-owned LLM records) in both stores;
+    idempotent (204, then 404) and allowed on read-only imported sessions. Web DELETE and visibility
+    proxies. The archived agentctl fixes (`release(true)` and the 0003 provenance constraint) were already
+    present; the coverage test asserts they stay.
+  - Gaps: visibility is not access control until authentication exists (anyone with a session id can
+    read or delete it). Exports are not stored server-side. Nothing was run against live PostgreSQL.
+- 2026-09-30 — export acknowledgement and e2e determinism — `9ebfadd`, `e5724d8` — N36 made the toolbar
+  Export link and the landing "Download artifact" return 403 for private sessions. Both now read the
+  session's visibility, export shared sessions directly, and ask "This session is private. Export it
+  anyway?" before requesting `?confirmPrivateExport=true` (shared `ExportAction` in
+  `stored-proof-workspace/export-action.tsx`).
+  - E2E timeouts after N34/N36 were not a code regression (bisect: `proof-workspace.spec.ts:290` took the
+    same time before and after, and with the inquiry panel unmounted). The `next dev` server stalled
+    under load, serving compiled chunks in 17–27 s at high CPU with growing RSS.
+    `playwright.proof-workspace-memory.config.ts` now runs `next build --webpack && next start`; the
+    workspace e2e suite passes 20/20 in about 1.4 min. Click retries were replaced by a `data-hydrated`
+    marker (`features/hydration/use-hydrated.ts`). The other two Playwright configs still use `next dev`.
