@@ -65,7 +65,10 @@ import {
   type ProofNode,
   type ProtocolEnvironment,
 } from "@proof/protocol";
+import type { MoveDefinition } from "@proof/moves";
+import { validateMoveTemplate } from "@proof/moves/authoring";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "./approved-catalog";
+import { approvedAuthoredMoves } from "./move-authoring";
 import { artifactDigest } from "./artifact-export";
 import { storedLlmCallSchema } from "./llm-call-repository";
 import {
@@ -276,6 +279,46 @@ function fail(code: string, message: string, path: Path): never {
   throw new ArtifactRejection({ code, message, path: [...path] });
 }
 
+/**
+ * The authored moves an artifact's own library section approves: the latest approved `move`
+ * review of each move in its admitted `move-discovery-draft` addition events, whose recorded
+ * digest still describes the template and whose template passes `validateMoveTemplate` here.
+ * Moves of the importing server's other sessions are never consulted.
+ */
+function artifactAuthoredMoves(
+  artifact: ProofArtifact,
+  base: DefinitionCatalog,
+  operators: NonNullable<ProtocolEnvironment["operators"]>,
+  results: NonNullable<ProtocolEnvironment["results"]>,
+): readonly MoveDefinition[] {
+  const admitted = artifact.library.additionEvents.flatMap((event) =>
+    event.admission.decision === "admitted" &&
+    event.layer === "move-discovery-draft" &&
+    event.artifact.kind === "move"
+      ? [event.artifact]
+      : [],
+  );
+  const approvedTemplates = new Map<string, unknown>();
+  for (const move of admitted) {
+    const id = move.template["id"];
+    if (typeof id === "string" && move.review?.decision === "approved") {
+      approvedTemplates.set(id, move.template);
+    }
+  }
+  const catalog = base.catalog(operators).results;
+  return approvedAuthoredMoves(admitted)
+    .filter((move) => !base.moves.some(({ id }) => id === move.id))
+    .filter(
+      (move) =>
+        validateMoveTemplate(approvedTemplates.get(move.id), {
+          operators,
+          results,
+          artifactExists: (reference) =>
+            reference.kind === "result" && catalog.some(({ id }) => id === reference.id),
+        }).ok,
+    );
+}
+
 /** Every revalidation step after the schema and the digest; throws `ArtifactRejection`. */
 class ArtifactValidator {
   private readonly environment: ProtocolEnvironment;
@@ -285,14 +328,17 @@ class ArtifactValidator {
   private readonly commandIds = new Set<string>();
   private readonly deletedNodeIds = new Set<string>();
 
+  private readonly definitions: DefinitionCatalog;
+
   constructor(
     private readonly artifact: ProofArtifact,
-    private readonly definitions: DefinitionCatalog,
+    baseDefinitions: DefinitionCatalog,
   ) {
+    this.definitions = baseDefinitions;
     const operators = artifact.initialState.operators;
     let results: ProtocolEnvironment["results"];
     try {
-      results = definitions.catalog(operators).kernelResults;
+      results = baseDefinitions.catalog(operators).kernelResults;
     } catch {
       results = undefined;
     }
@@ -302,7 +348,19 @@ class ArtifactValidator {
         "operators",
       ]);
     }
-    this.environment = { operators, results };
+    // The base catalog plus the authored moves approved in THIS artifact's own library section.
+    const authored = artifactAuthoredMoves(artifact, baseDefinitions, operators, results);
+    if (authored.length > 0) {
+      this.definitions = Object.freeze({
+        moves: [...baseDefinitions.moves, ...authored],
+        catalog: baseDefinitions.catalog,
+      });
+    }
+    this.environment = {
+      operators,
+      results,
+      ...(authored.length === 0 ? {} : { moves: authored }),
+    };
   }
 
   validate(): ProofArtifactDiagnostic | undefined {
@@ -483,6 +541,7 @@ class ArtifactValidator {
           ? {}
           : { operators: this.environment.operators }),
         ...(this.environment.results === undefined ? {} : { results: this.environment.results }),
+        ...(this.environment.moves === undefined ? {} : { moves: this.environment.moves }),
         ...(suggestionSet === undefined ? {} : { suggestionSet }),
         ...(preview === undefined ? {} : { preview }),
       });
