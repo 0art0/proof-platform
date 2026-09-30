@@ -678,6 +678,24 @@ const commandSchemas = [
       payloadSource: payloadSourceSchema.optional(),
     })
     .strict(),
+  z
+    .object({
+      /** Save an authored move template as a draft (validated by `@proof/moves` on approval). */
+      kind: z.literal("author-move-draft"),
+      template: z.record(z.string(), z.unknown()),
+      payloadSource: payloadSourceSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      /** Decide a draft: the acting human is the reviewer. */
+      kind: z.literal("review-move-draft"),
+      draftArtifactId: stableIdentifierSchema,
+      decision: z.enum(["approved", "rejected", "changes-requested"]),
+      notes: z.string().max(4_000),
+      payloadSource: payloadSourceSchema.optional(),
+    })
+    .strict(),
 ] as const;
 
 export const protocolCommandSchema = z.discriminatedUnion("kind", commandSchemas);

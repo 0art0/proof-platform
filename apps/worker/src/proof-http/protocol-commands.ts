@@ -56,6 +56,8 @@ import type { z } from "zod";
 import { extractConditionalLemma, investigateHypothesis } from "../inquiry-methods";
 import { listInquiryRecords, recordInquiryCommand } from "../inquiry-repository";
 import { addLibraryArtifact } from "../library-repository";
+import { authorMoveDraft, reviewMoveDraft } from "../move-authoring";
+import type { MoveTemplateValidationOptions } from "@proof/moves/authoring";
 import {
   backtrackProofSession,
   backtrackWithInformation,
@@ -99,13 +101,18 @@ function repositoryFailed(
   failure: Readonly<{
     status: "rejected" | "uncertain";
     diagnostics: readonly [{ code: string; message: string }];
+    /** Move-template validation diagnostics, for a refused authoring request (N35). */
+    validation?: readonly unknown[];
   }>,
 ): Failure {
   return {
     ok: false,
     outcome: {
       status: repositoryFailureStatus(failure),
-      body: { diagnostics: failure.diagnostics },
+      body: {
+        diagnostics: failure.diagnostics,
+        ...(failure.validation === undefined ? {} : { validation: failure.validation }),
+      },
     },
   };
 }
@@ -1019,6 +1026,73 @@ async function dispatch(
       };
     }
 
+    case "author-move-draft": {
+      if (context.library === undefined) return libraryUnavailable();
+      const source = authoringSource(actor, command.payloadSource);
+      if (!source.ok) return source;
+      const environment = await authoringEnvironment(context, sessionId);
+      if (!environment.ok) return environment;
+      const authored = await authorMoveDraft(context.library, {
+        commandId,
+        sessionId,
+        authorId: actor.id,
+        occurredAt: now().toISOString(),
+        template: command.template,
+        validation: environment.value,
+      });
+      if (authored.status !== "recorded") return repositoryFailed(authored);
+      return {
+        ok: true,
+        value: {
+          replayed: authored.replayed,
+          result: {
+            artifactId: authored.artifact.id,
+            moveId: authored.artifact.template["id"],
+            revision: authored.revision,
+            definitionDigest: authored.artifact.definitionDigest,
+            status: "draft",
+            validation: authored.validation.ok
+              ? { ok: true, report: authored.validation.report }
+              : { ok: false, diagnostics: authored.validation.diagnostics },
+          },
+        },
+      };
+    }
+
+    case "review-move-draft": {
+      if (context.library === undefined) return libraryUnavailable();
+      const source = authoringSource(actor, command.payloadSource);
+      if (!source.ok) return source;
+      const environment = await authoringEnvironment(context, sessionId);
+      if (!environment.ok) return environment;
+      const reviewed = await reviewMoveDraft(context.library, {
+        commandId,
+        sessionId,
+        reviewerId: actor.id,
+        occurredAt: now().toISOString(),
+        draftArtifactId: command.draftArtifactId,
+        decision: command.decision,
+        notes: command.notes,
+        validation: environment.value,
+      });
+      if (reviewed.status !== "recorded") return repositoryFailed(reviewed);
+      return {
+        ok: true,
+        value: {
+          replayed: reviewed.replayed,
+          result: {
+            artifactId: reviewed.artifact.id,
+            draftArtifactId: command.draftArtifactId,
+            moveId: reviewed.artifact.template["id"],
+            decision: reviewed.decision,
+            definitionDigest: reviewed.definitionDigest,
+            review: reviewed.artifact.review,
+            retrievable: reviewed.retrievable,
+          },
+        },
+      };
+    }
+
     case "add-library-result": {
       if (context.library === undefined) return libraryUnavailable();
       const source = libraryPayloadSource(command, actor);
@@ -1028,6 +1102,13 @@ async function dispatch(
           400,
           "invalid-request",
           "A session command adds to the session's library layers, never the global layer.",
+        );
+      }
+      if (command.artifact["kind"] === "move") {
+        return diagnostics(
+          400,
+          "invalid-request",
+          "Move templates are added with author-move-draft and review-move-draft.",
         );
       }
       const added = await addLibraryArtifact(context.library, {
@@ -1048,6 +1129,43 @@ async function dispatch(
       };
     }
   }
+}
+
+/** Authored moves are new mathematics: a human actor, acting as reviewed authoring. */
+function authoringSource(actor: ProtocolActor, payloadSource: string | undefined): Step<true> {
+  if (payloadSource !== "reviewed-authoring") {
+    return protocolFailure({
+      code: payloadSource === undefined ? "payload-source-required" : "payload-source-rejected",
+      message: "Move authoring names its payload source: reviewed-authoring.",
+    });
+  }
+  if (actor.kind !== "human") {
+    return protocolFailure({
+      code: "payload-source-rejected",
+      message: "Reviewed authoring is accepted only from a human actor.",
+    });
+  }
+  return { ok: true, value: true };
+}
+
+async function authoringEnvironment(
+  context: ServiceContext,
+  sessionId: string,
+): Promise<Step<MoveTemplateValidationOptions>> {
+  const loaded = await loadCurrentProofSession(context.store, sessionId);
+  if (loaded.status !== "loaded") return repositoryFailed(loaded);
+  const operators = loaded.session.operators;
+  const results = context.definitions.catalog(operators).kernelResults;
+  return {
+    ok: true,
+    value: {
+      operators,
+      ...(results === undefined ? {} : { results }),
+      artifactExists: (reference) =>
+        reference.kind === "result" &&
+        context.definitions.catalog(operators).results.some(({ id }) => id === reference.id),
+    },
+  };
 }
 
 function libraryUnavailable(): Failure {

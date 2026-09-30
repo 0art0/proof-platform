@@ -14,6 +14,7 @@ export default defineConfig({
     "problem-entry.spec.ts",
     "toolbar-actions.spec.ts",
     "inquiry-panel.spec.ts",
+    "mouse-only-flows.spec.ts",
   ],
   globalSetup: "./apps/web/e2e/global-warmup.ts",
   timeout: 60_000,

@@ -2007,6 +2007,7 @@ export async function backtrackWithInformation(
           trustedActor,
           ...(environment.operators === undefined ? {} : { operators: environment.operators }),
           ...(environment.results === undefined ? {} : { results: environment.results }),
+          ...(environment.moves === undefined ? {} : { moves: environment.moves }),
         });
         if (!prepared.ok) {
           return repositoryFailure(
@@ -2800,6 +2801,7 @@ export async function executeProofCommandWithin(
     trustedActor,
     ...(environment.operators === undefined ? {} : { operators: environment.operators }),
     ...(environment.results === undefined ? {} : { results: environment.results }),
+    ...(environment.moves === undefined ? {} : { moves: environment.moves }),
     ...(previous === undefined ? {} : { previous }),
     ...(suggestionSet === undefined ? {} : { suggestionSet }),
     ...(preview === undefined ? {} : { preview }),
@@ -3297,7 +3299,12 @@ function frozenEnvironment(
     createProofNodeSchema({ operators });
     const results = definitions.catalog(operators).kernelResults;
     if (results === undefined) return undefined;
-    return deepFreeze({ operators: structuredClone(operators), results: structuredClone(results) });
+    const authored = definitions.moves.filter(({ id }) => id.startsWith("authored:"));
+    return deepFreeze({
+      operators: structuredClone(operators),
+      results: structuredClone(results),
+      ...(authored.length === 0 ? {} : { moves: structuredClone(authored) }),
+    });
   } catch {
     return undefined;
   }

@@ -166,7 +166,25 @@ export type LibraryTechnique = LibraryArtifactCommon &
     steps: readonly string[];
   }>;
 
-export type LibraryArtifact = LibraryDefinition | LibraryResult | LibraryTechnique;
+export type LibraryMoveReview = z.infer<typeof libraryMoveReviewSchema>;
+
+/**
+ * A deterministic move template authored without AI (roadmap N35). The template is opaque JSON here:
+ * `@proof/moves` owns its schema and validation, and depends on this package. A move artifact
+ * lives only in the `move-discovery-draft` layer; its review records sit in the artifact itself,
+ * and each review is a new artifact that restates the template it reviewed.
+ */
+export type LibraryMove = LibraryArtifactCommon &
+  Readonly<{
+    kind: "move";
+    template: Readonly<Record<string, unknown>>;
+    /** `sha256:` digest of the template's canonical JSON, recorded when the artifact was made. */
+    definitionDigest: string;
+    authorId: string;
+    review?: LibraryMoveReview | undefined;
+  }>;
+
+export type LibraryArtifact = LibraryDefinition | LibraryResult | LibraryTechnique | LibraryMove;
 
 export type LibraryEnvironment = Readonly<{
   operators?: readonly OperatorDeclaration[];
@@ -215,6 +233,67 @@ const rawTechniqueSchema = z
     steps: z.array(z.string().min(1)).min(1),
   })
   .strict();
+
+export const moveReviewDecisionSchema = z.enum(["approved", "rejected", "changes-requested"]);
+export type MoveReviewDecision = z.infer<typeof moveReviewDecisionSchema>;
+
+export const definitionDigestSchema = z
+  .string()
+  .regex(/^sha256:[0-9a-f]{64}$/, "A definition digest is sha256: followed by 64 hex digits.");
+
+export const libraryMoveReviewSchema = z
+  .object({
+    decision: moveReviewDecisionSchema,
+    reviewerId: stableIdentifierSchema,
+    reviewedAt: z.string().datetime({ offset: true }),
+    notes: z.string().max(4_000),
+    /** The draft artifact this review decides. */
+    reviewOf: libraryArtifactIdSchema,
+    /** The digest of the reviewed template, which validation was run against. */
+    definitionDigest: definitionDigestSchema,
+  })
+  .strict();
+
+const rawMoveSchema = z
+  .object({
+    ...commonShape,
+    kind: z.literal("move"),
+    template: z.record(z.string(), z.unknown()),
+    definitionDigest: definitionDigestSchema,
+    authorId: stableIdentifierSchema,
+    review: libraryMoveReviewSchema.optional(),
+  })
+  .strict();
+
+export const libraryMoveSchema: z.ZodType<LibraryMove> = guardedSchema(
+  rawMoveSchema.superRefine((move, context) => {
+    addCommonIssues(move, context);
+    const { review, approval } = move;
+    const issue = (message: string, path: PropertyKey[]) =>
+      context.addIssue({ code: "custom", message, path });
+    if (review === undefined) {
+      if (approval.status !== "draft") {
+        issue("A move without a review is a draft.", ["approval"]);
+      }
+      return;
+    }
+    if (review.definitionDigest !== move.definitionDigest) {
+      issue("The review must record the digest of this template.", ["review", "definitionDigest"]);
+    }
+    if (review.decision !== "approved" && review.notes.trim().length === 0) {
+      issue("A rejection or change request must carry notes.", ["review", "notes"]);
+    }
+    const consistent =
+      review.decision === "approved"
+        ? approval.status === "approved" && approval.reviewerId === review.reviewerId
+        : review.decision === "rejected"
+          ? approval.status === "rejected"
+          : approval.status === "draft";
+    if (!consistent) {
+      issue("The approval must restate the review decision.", ["approval"]);
+    }
+  }),
+);
 
 export function createLibraryResultSchema(
   environment: LibraryEnvironment = {},
@@ -268,7 +347,7 @@ export function createLibraryArtifactSchema(
 ): z.ZodType<LibraryArtifact> {
   const resultSchema = createLibraryResultSchema(environment);
   const definitionSchema = createLibraryDefinitionSchema(environment);
-  return z.union([definitionSchema, resultSchema, libraryTechniqueSchema]);
+  return z.union([definitionSchema, resultSchema, libraryTechniqueSchema, libraryMoveSchema]);
 }
 
 export const libraryResultSchema = createLibraryResultSchema();

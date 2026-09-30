@@ -38,6 +38,7 @@ import {
 import type { LibraryStore } from "../library-repository";
 import { postgresProofStore } from "../postgres-proof-store";
 import { handleArtifactRoute } from "./artifact-routes";
+import { handleAuthoredMoveRoute, requestSessionId, scopedContext } from "./authored-move-routes";
 import { handleLibraryRoute } from "./library-routes";
 import { handleSessionAdminRoute } from "./session-admin-routes";
 import { handleProblemSetupRoute } from "./problem-setup-routes";
@@ -322,10 +323,13 @@ export function createPostgresProofHttpService(pool: Pool): ProofHttpService {
 }
 
 async function handleRequest(
-  context: HandlerContext,
+  baseContext: HandlerContext,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
+  // A session's requests see the base definitions plus its approved authored moves (N35).
+  const context = await scopedContext(baseContext, requestSessionId(request.url));
+  if (await handleAuthoredMoveRoute(context, request, response)) return;
   if (await handleProblemSetupRoute(context, request, response)) return;
   if (await handleArtifactRoute(context, request, response)) return;
   if (await handleLibraryRoute(context, request, response)) return;

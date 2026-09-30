@@ -763,6 +763,13 @@ const moveById: ReadonlyMap<string, MoveDefinition> = new Map(
   HAND_AUTHORED_MOVES.map((move) => [move.id, move]),
 );
 
+/**
+ * The kernel environment plus the approved moves beyond the hand-authored catalog (authored moves,
+ * N35). A hand-authored move ID is never shadowed.
+ */
+export type PlanMoveEnvironment = KernelEnvironment &
+  Readonly<{ moves?: readonly MoveDefinition[] }>;
+
 export type MovePlanDiagnosticCode =
   | "invalid-request"
   | "move-not-found"
@@ -793,7 +800,7 @@ export type MovePlanResult =
 export function planMove(
   stateInput: unknown,
   requestInput: unknown,
-  environment: KernelEnvironment = {},
+  environment: PlanMoveEnvironment = {},
 ): MovePlanResult {
   try {
     if (!isStrictRecord(requestInput) || !hasExactKeys(requestInput, ["moveId", "operation"])) {
@@ -807,7 +814,9 @@ export function planMove(
     if (!moveId.success || !operation.success) {
       return moveFailure("invalid-request", "The move ID or kernel operation is invalid.");
     }
-    const move = moveById.get(moveId.data);
+    const move =
+      moveById.get(moveId.data) ??
+      environment.moves?.find((candidate) => candidate.id === moveId.data);
     if (move === undefined)
       return moveFailure("move-not-found", "The requested move is unavailable.");
     if (move.implementation.operationKind !== operation.data.kind) {
@@ -816,10 +825,12 @@ export function planMove(
         "The supplied primitive does not implement the requested move.",
       );
     }
+    const kernelEnvironment: KernelEnvironment = { ...environment };
+    delete (kernelEnvironment as { moves?: unknown }).moves;
     const transition = applyTransition(
       stateInput as ExecutableProofState,
       operation.data,
-      environment,
+      kernelEnvironment,
     );
     if (!transition.ok) {
       const diagnostic = transition.diagnostics[0];

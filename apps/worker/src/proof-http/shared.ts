@@ -96,6 +96,7 @@ const NOT_FOUND = new Set([
   "suggestion-set-not-found",
   "preview-not-found",
   "current-node-not-found",
+  "draft-not-found",
 ]);
 const CONFLICT = new Set([
   "serialized-stale-command",
@@ -107,6 +108,7 @@ const CONFLICT = new Set([
   "inquiry-command-conflict",
   "backtrack-with-information-conflict",
   "replay-conflict",
+  "draft-already-reviewed",
   // Writes to a session imported from an artifact (N27).
   "session-read-only",
   // Library repository conflicts.
@@ -127,6 +129,15 @@ const REJECTED = new Set([
   "backtrack-with-information-rejected",
   "replay-rejected",
   "invalid-request",
+  "review-notes-required",
+]);
+
+/** Move-authoring refusals of well-formed requests (N35). */
+const MOVE_AUTHORING_INVALID = new Set([
+  "invalid-template",
+  "move-validation-failed",
+  "draft-corrupt",
+  "library-admission-rejected",
 ]);
 
 /** The HTTP status of a repository (or library repository) failure. */
@@ -138,6 +149,7 @@ export function repositoryFailureStatus(
   if (NOT_FOUND.has(code)) return 404;
   if (CONFLICT.has(code)) return 409;
   if (code === "backtrack-symbols-unavailable") return 422;
+  if (MOVE_AUTHORING_INVALID.has(code)) return 422;
   if (REJECTED.has(code)) return 400;
   return 500;
 }
