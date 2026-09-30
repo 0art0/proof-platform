@@ -8,7 +8,14 @@ import {
 
 /** How the reducer interpreted the most recent gesture. */
 export type SelectionGestureOutcome =
-  "replaced" | "expanded" | "saturated" | "added" | "removed" | "overlap-rejected" | "cleared";
+  | "replaced"
+  | "expanded"
+  | "saturated"
+  | "added"
+  | "removed"
+  | "overlap-rejected"
+  | "cleared"
+  | "set-by-drop";
 
 export type SelectionGestureFeedback = Readonly<{
   outcome: SelectionGestureOutcome;
@@ -36,7 +43,9 @@ export type SelectionGestureAction =
       repeatable: boolean;
       fallbackReason?: string;
     }>
-  | Readonly<{ type: "clear" }>;
+  | Readonly<{ type: "clear" }>
+  /** A drag-and-drop or "drop on selection" gesture chooses the complete active set. */
+  | Readonly<{ type: "set"; selections: readonly AnchoredProofSelection[] }>;
 
 export const EMPTY_SELECTION_GESTURE_STATE: SelectionGestureState = Object.freeze({
   active: Object.freeze([]),
@@ -72,6 +81,13 @@ export function selectionGestureReducer(
     return {
       active: EMPTY_SELECTION_GESTURE_STATE.active,
       feedback: { outcome: "cleared", repeatable: false },
+    };
+  }
+
+  if (action.type === "set") {
+    return {
+      active: [...action.selections],
+      feedback: { outcome: "set-by-drop", repeatable: false },
     };
   }
 
@@ -135,6 +151,7 @@ const OUTCOME_MESSAGES: Readonly<Record<SelectionGestureOutcome, string>> = Obje
   removed: "Removed the occurrence from the selection set.",
   "overlap-rejected": "Not added: the occurrence overlaps an active selection.",
   cleared: "Selections cleared.",
+  "set-by-drop": "Selected the drop source and target to preview a move.",
 });
 
 /** A short, screen-reader-friendly description of how the last gesture was interpreted. */
@@ -167,7 +184,10 @@ function semanticParent(selection: AnchoredProofSelection): AnchoredProofSelecti
   return path === undefined ? undefined : { kind: "exact", anchor: selection.anchor, path };
 }
 
-function selectionsOverlap(left: AnchoredProofSelection, right: AnchoredProofSelection): boolean {
+export function selectionsOverlap(
+  left: AnchoredProofSelection,
+  right: AnchoredProofSelection,
+): boolean {
   if (JSON.stringify(stableAnchor(left.anchor)) !== JSON.stringify(stableAnchor(right.anchor))) {
     return false;
   }

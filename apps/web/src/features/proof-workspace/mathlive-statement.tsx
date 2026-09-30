@@ -1,7 +1,7 @@
 "use client";
 
 import type { MathfieldElement as MathfieldElementType } from "mathlive";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { renderMathJson, type PlainMathJson } from "@proof/mathjson-model";
 import type { AnchoredProofSelection, StatementAnchor } from "@proof/selections";
 import {
@@ -9,6 +9,8 @@ import {
   renderInteractiveLatex,
   type MathLiveSelectionPort,
 } from "./mathlive-selection";
+import { readAnchoredOccurrenceAtPoint, type MathLivePointPort } from "./mathlive-point";
+import gestureStyles from "../gestures/gestures.module.css";
 import styles from "./proof-workspace.module.css";
 
 let mathfieldElementCtor: Promise<typeof MathfieldElementType> | undefined;
@@ -40,6 +42,14 @@ type MathLiveStatementProps = Readonly<{
   /** Polarity of the active selection inside this statement, when one exists. */
   selectionPolarity?: SelectionPolarity | undefined;
   onGesture: (gesture: MathLiveStatementGesture) => void;
+  /** Present while something is being carried: the statement accepts a drop of it. */
+  dropZone?: MathLiveDropZone | undefined;
+}>;
+
+export type MathLiveDropZone = Readonly<{
+  onHover: (over: boolean) => void;
+  /** The occurrence under the pointer (the whole statement when it cannot be told). */
+  onDrop: (occurrence: AnchoredProofSelection) => void;
 }>;
 
 export function MathLiveStatement({
@@ -49,8 +59,11 @@ export function MathLiveStatement({
   selected,
   selectionPolarity,
   onGesture,
+  dropZone,
 }: MathLiveStatementProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const fieldRef = useRef<MathfieldElementType | undefined>(undefined);
+  const [dropOver, setDropOver] = useState(false);
   const onGestureRef = useRef(onGesture);
   const anchorRef = useRef(anchor);
   const [ready, setReady] = useState(false);
@@ -98,25 +111,67 @@ export function MathLiveStatement({
 
       field.addEventListener("pointerup", handlePointerUp);
       host.replaceChildren(field);
+      fieldRef.current = field;
       setReady(true);
     });
 
     return () => {
       active = false;
+      fieldRef.current = undefined;
       field?.remove();
     };
   }, [expression, interactiveLatex, label, serializedAnchor]);
 
+  const dropReady = dropZone !== undefined;
+  const dropHandlers = dropReady
+    ? {
+        onDragOver: (event: DragEvent<HTMLDivElement>) => {
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+          setDropOver(true);
+          dropZone.onHover(true);
+        },
+        onDragLeave: (event: DragEvent<HTMLDivElement>) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDropOver(false);
+          dropZone.onHover(false);
+        },
+        onDrop: (event: DragEvent<HTMLDivElement>) => {
+          event.preventDefault();
+          setDropOver(false);
+          dropZone.onDrop(
+            readAnchoredOccurrenceAtPoint(
+              fieldRef.current as unknown as MathLivePointPort | undefined,
+              expression,
+              anchorRef.current,
+              { x: event.clientX, y: event.clientY },
+            ),
+          );
+        },
+      }
+    : {};
+
   return (
     <div
-      className={styles.mathProjection}
-      data-ready={ready}
-      data-selected={selected}
-      data-selection-polarity={selected ? selectionPolarity : undefined}
-      data-selection-anchor={serializedAnchor}
-      ref={hostRef}
+      className={gestureStyles.dropZone}
+      data-drop-ready={dropReady}
+      data-drop-over={dropReady && dropOver}
+      data-drop-anchor={dropReady ? serializedAnchor : undefined}
+      {...dropHandlers}
     >
-      <span aria-hidden="true">{rendered.ok ? rendered.latex : "Unable to render MathJSON"}</span>
+      <div
+        className={styles.mathProjection}
+        data-ready={ready}
+        data-selected={selected}
+        data-selection-polarity={selected ? selectionPolarity : undefined}
+        data-selection-anchor={serializedAnchor}
+        ref={hostRef}
+      >
+        <span aria-hidden="true">{rendered.ok ? rendered.latex : "Unable to render MathJSON"}</span>
+      </div>
+      {dropReady ? (
+        <span className={gestureStyles.dropHint}>Drop here to preview a move</span>
+      ) : null}
     </div>
   );
 }
