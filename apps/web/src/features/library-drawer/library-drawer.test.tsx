@@ -5,6 +5,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPresentation } from "@proof/language";
 import { LibraryDrawer } from "./library-drawer";
+import { IDLE_DRAG_STATE } from "../gestures/drag-state";
+import type { GestureBindings } from "../gestures/use-drag-gestures";
 import { EVENTS, LIBRARY } from "./library-fixtures.testing";
 
 const presentation = createPresentation({ operators: [] });
@@ -219,5 +221,66 @@ describe("LibraryDrawer", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Close/ }));
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(toggle).toHaveFocus();
+  });
+
+  describe("drag gestures", () => {
+    const gestures = (): GestureBindings => ({
+      enabled: true,
+      state: IDLE_DRAG_STATE,
+      carrying: undefined,
+      pickUp: vi.fn(),
+      hover: vi.fn(),
+      dropOn: vi.fn(),
+      cancel: vi.fn(),
+    });
+
+    async function openWith(bindings: GestureBindings | undefined) {
+      stubFetch();
+      render(
+        <LibraryDrawer
+          sessionId="session:test"
+          presentation={presentation}
+          view="formal"
+          gestures={bindings}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Library" }));
+      await screen.findByRole("search", { name: "Filter library" });
+    }
+
+    it("offers a handle on result rows only, and none without a gesture surface", async () => {
+      await openWith(undefined);
+      expect(document.querySelectorAll("[data-drag-handle]")).toHaveLength(0);
+      cleanup();
+
+      await openWith(gestures());
+      const results = LIBRARY.entries.filter(({ artifact }) => artifact.kind === "result");
+      expect(results.length).toBeGreaterThan(0);
+      expect(document.querySelectorAll("[data-drag-handle]")).toHaveLength(results.length);
+      expect(screen.getByRole("button", { name: "Drag result Excluded middle" })).toBeVisible();
+    });
+
+    it("picks a result up by pointer drag or by keyboard, carrying only its artifact ID", async () => {
+      const bindings = gestures();
+      await openWith(bindings);
+      const handle = screen.getByRole("button", {
+        name: "Drag result Excluded middle",
+      });
+      const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+      fireEvent.dragStart(handle, { dataTransfer });
+      await waitFor(() => expect(bindings.pickUp).toHaveBeenCalledTimes(1));
+      const source = {
+        kind: "result",
+        artifactId: "result:excluded-middle",
+        label: "Excluded middle",
+      };
+      expect(bindings.pickUp).toHaveBeenLastCalledWith(source, "pointer");
+      expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "Excluded middle");
+
+      fireEvent.keyDown(handle, { key: "Enter" });
+      expect(bindings.pickUp).toHaveBeenLastCalledWith(source, "keyboard");
+      fireEvent.dragEnd(handle);
+      expect(bindings.cancel).toHaveBeenCalled();
+    });
   });
 });

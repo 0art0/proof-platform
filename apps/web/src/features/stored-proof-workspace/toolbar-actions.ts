@@ -34,6 +34,9 @@ export type ToolbarTarget = Readonly<{ kind: "goal" | "obligation"; id: string }
 export type Availability<Value> =
   Readonly<{ ok: true; value: Value }> | Readonly<{ ok: false; reason: string }>;
 
+/** Why every mutating action is disabled in a session imported from an artifact (N27). */
+export const READ_ONLY_REASON = "This session is read-only (imported artifact)";
+
 function unavailable<Value>(reason: string): Availability<Value> {
   return { ok: false, reason };
 }

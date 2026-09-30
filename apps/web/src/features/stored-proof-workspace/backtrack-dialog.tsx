@@ -1,11 +1,11 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
-import {
-  analyzeBacktrack,
-  type BacktrackAncestor,
-  type OperatorDeclaration,
-  type ProofNode,
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type {
+  BacktrackAncestor,
+  BacktrackAnalysis,
+  BacktrackAnalysisRequest,
+  ProofNode,
 } from "@proof/protocol";
 import type { Presentation } from "@proof/language";
 import { StatementView } from "../proof-workspace/presentation";
@@ -14,20 +14,18 @@ import { ToolbarDialog } from "./toolbar-dialog";
 import {
   backtrackWithInformationEnvelope,
   toolbarCommandId,
-  type HistoryEdge,
   type SelectedProposition,
 } from "./toolbar-actions";
-import { describeCommandFailure } from "./toolbar-requests";
+import { describeCommandFailure, requestBacktrackAnalysis } from "./toolbar-requests";
 import type { RunToolbarCommand } from "./toolbar-action-bar";
 import styles from "./toolbar-actions.module.css";
 
 export type BacktrackDialogProps = Readonly<{
+  sessionId: string;
   proposition: SelectedProposition;
   node: ProofNode;
   rootNodeId: string;
   nodes: readonly ProofNode[];
-  edges: readonly HistoryEdge[];
-  operators: readonly OperatorDeclaration[];
   presentation: Presentation;
   view: WorkspaceView;
   runCommand: RunToolbarCommand;
@@ -36,40 +34,55 @@ export type BacktrackDialogProps = Readonly<{
 
 /**
  * Backtracking with information (design plan §16.3): split on the selected proposition `P` at an
- * ancestor where its symbols are available. The ancestors and their unavailable symbols are read
- * from the stored tree by the protocol's pure analysis; the worker repeats the analysis when the
- * command arrives, so the listing here never decides what is committed.
+ * ancestor where its symbols are available. The ancestors and their unavailable symbols come from
+ * the proof service's dry-run analysis (`POST .../backtrack-analysis`); the worker repeats the
+ * analysis when the command arrives, so the listing here never decides what is committed.
  */
 export function BacktrackDialog({
+  sessionId,
   proposition,
   node,
   rootNodeId,
   nodes,
-  edges,
-  operators,
   presentation,
   view,
   runCommand,
   onClose,
 }: BacktrackDialogProps) {
   const groupId = useId();
-  const analysis = useMemo(
-    () =>
-      analyzeBacktrack({
-        rootNodeId,
-        nodes,
-        edges: edges.map(({ edge }) => edge),
-        operators,
-        request: {
-          sourceNodeId: node.id,
-          sourceTarget: proposition.target,
-          proposition: proposition.expression,
-        },
-      }),
-    [edges, node.id, nodes, operators, proposition, rootNodeId],
-  );
-  const closest = analysis.ok ? analysis.analysis.closestEligibleAncestorNodeId : undefined;
-  const [chosen, setChosen] = useState<string | undefined>(closest);
+  // The selection object is rebuilt on every render; its content keys the request.
+  const requestKey = JSON.stringify({
+    sourceNodeId: node.id,
+    sourceTarget: proposition.target,
+    proposition: proposition.expression,
+  });
+  const [analysis, setAnalysis] = useState<AnalysisState>({ kind: "loading" });
+  const [chosen, setChosen] = useState<string | undefined>();
+  const choices = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void requestBacktrackAnalysis(
+      sessionId,
+      JSON.parse(requestKey) as BacktrackAnalysisRequest,
+      controller.signal,
+    ).then((outcome) => {
+      if (controller.signal.aborted) return;
+      if (outcome.ok) {
+        setAnalysis({ kind: "ready", analysis: outcome.value });
+        setChosen(outcome.value.closestEligibleAncestorNodeId);
+      } else {
+        setAnalysis({ kind: "failed", message: outcome.message });
+      }
+    });
+    return () => controller.abort();
+  }, [requestKey, sessionId]);
+  const ready = analysis.kind === "ready" ? analysis.analysis : undefined;
+  const closest = ready?.closestEligibleAncestorNodeId;
+  // The dialog opened before the listing existed: move focus to the preselected ancestor.
+  useEffect(() => {
+    if (ready !== undefined)
+      choices.current?.querySelector<HTMLInputElement>("input:checked")?.focus();
+  }, [ready]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   const byId = useMemo(() => new Map(nodes.map((entry) => [entry.id as string, entry])), [nodes]);
@@ -113,17 +126,19 @@ export function BacktrackDialog({
           view={view}
         />
       </p>
-      {analysis.ok ? (
+      {analysis.kind === "loading" ? (
+        <p role="status" className={styles.muted}>
+          Asking the proof service where P can be split…
+        </p>
+      ) : null}
+      {ready !== undefined ? (
         <>
           <p className={styles.muted}>
-            Free symbols:{" "}
-            {analysis.analysis.freeSymbols.length === 0
-              ? "none"
-              : analysis.analysis.freeSymbols.join(", ")}
+            Free symbols: {ready.freeSymbols.length === 0 ? "none" : ready.freeSymbols.join(", ")}
           </p>
-          <fieldset className={styles.choices}>
+          <fieldset ref={choices} className={styles.choices}>
             <legend id={groupId}>Ancestor to split at (closest first)</legend>
-            {analysis.analysis.ancestors.map((ancestor) => (
+            {ready.ancestors.map((ancestor) => (
               <AncestorOption
                 key={ancestor.nodeId}
                 ancestor={ancestor}
@@ -143,11 +158,12 @@ export function BacktrackDialog({
             </p>
           ) : null}
         </>
-      ) : (
+      ) : null}
+      {analysis.kind === "failed" ? (
         <p role="alert" className={styles.error}>
-          Backtracking is unavailable: {analysis.diagnostics[0].message}
+          Backtracking is unavailable: {analysis.message}
         </p>
-      )}
+      ) : null}
       {error === undefined ? null : (
         <p role="alert" className={styles.error}>
           {error}
@@ -169,6 +185,11 @@ export function BacktrackDialog({
     </ToolbarDialog>
   );
 }
+
+type AnalysisState =
+  | Readonly<{ kind: "loading" }>
+  | Readonly<{ kind: "ready"; analysis: BacktrackAnalysis }>
+  | Readonly<{ kind: "failed"; message: string }>;
 
 function AncestorOption({
   ancestor,

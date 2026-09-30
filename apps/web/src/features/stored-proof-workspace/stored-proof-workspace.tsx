@@ -20,6 +20,7 @@ import { StatementView, usePresentation } from "../proof-workspace/presentation"
 import type { Presentation } from "@proof/language";
 import { LibraryDrawer } from "../library-drawer";
 import { InquiryPanel } from "../inquiry-panel";
+import { GestureTray, useDragGestures } from "../gestures";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
@@ -37,6 +38,7 @@ import {
 } from "./api-contract";
 import { createInteractionRecorder } from "./interaction-recorder";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
+import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
   describeCommandFailure,
   postProtocolCommand,
@@ -49,6 +51,9 @@ export type StoredProofSession = Readonly<{
   rootNodeId: string;
   currentNodeId: string;
   operators: readonly OperatorDeclaration[];
+  /** Set for a session imported from an artifact (N27): nothing in it can be changed. */
+  readOnly?: true | undefined;
+  visibility?: "shared" | undefined;
 }>;
 
 export type StoredProofWorkspaceProps = Readonly<{ session: StoredProofSession; node: ProofNode }>;
@@ -81,6 +86,7 @@ function StatefulStoredWorkspace({
   const [history, setHistory] = useState<HistoryState>({ kind: "loading" });
   const [notice, setNotice] = useState<Notice>();
   const [mutationPending, setMutationPending] = useState(false);
+  const readOnly = initialSession.readOnly === true;
   const [view, setView] = useState<WorkspaceView>("formal");
   const [selections, setSelections] = useState<readonly AnchoredProofSelection[]>([]);
   const presentation = usePresentation(session.operators);
@@ -96,6 +102,11 @@ function StatefulStoredWorkspace({
   // The displayed suggestion set and the shown preview, for interaction events.
   const displayedSetId = useRef<string | undefined>(undefined);
   const shownPreview = useRef<MovePreview | undefined>(undefined);
+  // Drag gestures are created after previewSuggestion; these let earlier callbacks reach them.
+  const notifyDragSelection = useRef<
+    ((selections: readonly AnchoredProofSelection[]) => void) | undefined
+  >(undefined);
+  const resetDrag = useRef<(() => void) | undefined>(undefined);
 
   const loadHistory = useCallback(async () => {
     const generation = ++historyGeneration.current;
@@ -131,6 +142,7 @@ function StatefulStoredWorkspace({
     setSuggestions({ kind: "idle" });
     setMoveState({ kind: "idle" });
     setSelections([]);
+    resetDrag.current?.();
   }, []);
 
   /** Record that the shown preview was left without being applied. */
@@ -153,6 +165,7 @@ function StatefulStoredWorkspace({
     (selections: readonly AnchoredProofSelection[]) => {
       if (mutationPendingRef.current) return;
       setSelections(selections);
+      notifyDragSelection.current?.(selections);
       // The workspace of a newly committed snapshot reports its empty selection once it mounts.
       // Nothing changed, so keep the notice of the apply or backtrack that produced it.
       const empty = selections.length === 0;
@@ -363,6 +376,23 @@ function StatefulStoredWorkspace({
     ],
   );
 
+  const previewDropped = useCallback(
+    (set: DisplayedSuggestionSet, suggestionId: string) =>
+      void previewSuggestion(set, suggestionId),
+    [previewSuggestion],
+  );
+  const drag = useDragGestures({
+    stateId: node.state.id,
+    enabled: view === "formal" && !mutationPending && !readOnly,
+    disabledReason: readOnly ? READ_ONLY_REASON : undefined,
+    suggestions,
+    previewSuggestion: previewDropped,
+  });
+  useEffect(() => {
+    notifyDragSelection.current = drag.notifySelectionChange;
+    resetDrag.current = drag.reset;
+  }, [drag.notifySelectionChange, drag.reset]);
+
   const applySuggestion = useCallback(
     async (set: DisplayedSuggestionSet, suggestionId: SuggestionId) => {
       if (moveState.kind !== "previewed" || moveState.suggestionId !== suggestionId) return;
@@ -532,10 +562,13 @@ function StatefulStoredWorkspace({
         sessionId={session.id}
         currentNodeId={node.id}
         counts={{ goals: node.state.goals.length, obligations: node.state.obligations.length }}
+        readOnly={readOnly}
         breadcrumb={breadcrumb}
       />
       <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node}>
         <ToolbarActionBar
+          sessionId={session.id}
+          readOnly={readOnly}
           node={node}
           rootNodeId={session.rootNodeId}
           operators={session.operators}
@@ -547,12 +580,18 @@ function StatefulStoredWorkspace({
           runCommand={runToolbarCommand}
         />
       </WorkspaceToolbar>
-      <LibraryDrawer sessionId={session.id} presentation={presentation} view={view} />
+      <LibraryDrawer
+        sessionId={session.id}
+        presentation={presentation}
+        view={view}
+        gestures={drag.bindings}
+      />
       {notice ? (
         <p className={styles.actionNotice} data-state={notice.state} role="status">
           {notice.message}
         </p>
       ) : null}
+      <GestureTray bindings={drag.bindings} selections={selections} view={view} />
       <div
         className={styles.interactionShell}
         data-busy={mutationPending}
@@ -564,13 +603,20 @@ function StatefulStoredWorkspace({
           operators={session.operators}
           view={view}
           onSelectionChange={handleSelectionChange}
+          gestures={drag.bindings}
+          selectionRequest={drag.selectionRequest}
         />
       </div>
 
+      {readOnly ? (
+        <p className={styles.readOnlyReason} role="note" data-testid="read-only-reason">
+          {READ_ONLY_REASON}: suggestions can be viewed but not applied.
+        </p>
+      ) : null}
       <SuggestionPanel
         suggestions={suggestions}
         move={moveState}
-        mutationPending={mutationPending}
+        mutationPending={mutationPending || readOnly}
         presentation={presentation}
         view={view}
         {...panelActions}
@@ -582,7 +628,7 @@ function StatefulStoredWorkspace({
         selections={selections}
         suggestions={suggestions}
         move={moveState}
-        mutationPending={mutationPending}
+        mutationPending={mutationPending || readOnly}
         presentation={presentation}
         operators={session.operators}
         view={view}
@@ -591,7 +637,7 @@ function StatefulStoredWorkspace({
       <HistoryView
         history={history}
         currentNodeId={node.id}
-        mutationPending={mutationPending}
+        mutationPending={mutationPending || readOnly}
         presentation={presentation}
         view={view}
         onBacktrack={backtrackTo}

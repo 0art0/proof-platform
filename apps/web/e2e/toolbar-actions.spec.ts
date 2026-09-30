@@ -224,6 +224,12 @@ test("a sibling branch is reviewed and replayed at the current node", async ({ p
   await expect(dialog.getByRole("region", { name: "Steps to replay" })).toContainText(
     "Split conjunction goal",
   );
+  // The dry run reports the step before anything is committed; the cursor has not moved yet.
+  await expect(dialog.getByRole("region", { name: "Replay report" })).toContainText(
+    "1 exact, 0 adapted; every step matches here.",
+    COMMAND,
+  );
+  expect(await currentNodeId(page)).toBe(rootId);
   await dialog.getByRole("button", { name: "Replay 1 step here" }).click();
   await expect(page.getByText(/Replayed 1 step \(1 exact, 0 adapted\); now at node:/)).toBeVisible(
     COMMAND,

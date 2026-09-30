@@ -5,6 +5,7 @@ import {
   describeSelectionFeedback,
   proofSelectionKey,
   selectionGestureReducer,
+  selectionsOverlap,
   type SelectionGestureOutcome,
   type SelectionGestureState,
 } from "./selection-state";
@@ -190,6 +191,20 @@ describe("proof selection gestures", () => {
     expect(cleared.feedback).toEqual({ outcome: "cleared", repeatable: false });
   });
 
+  it("sets the complete active set for a drop and discards repeated-click memory", () => {
+    const selected = select(EMPTY_SELECTION_GESTURE_STATE, exact("goal:left", [0]));
+    expect(selected.repetition).toBeDefined();
+    const source = exact("goal:left", [], { kind: "hypothesis", id: "hypothesis:h" as never });
+    const target = exact("goal:left", []);
+    const dropped = selectionGestureReducer(selected, {
+      type: "set",
+      selections: [source, target],
+    });
+    expect(dropped.active).toEqual([source, target]);
+    expect(dropped.repetition).toBeUndefined();
+    expect(dropped.feedback).toEqual({ outcome: "set-by-drop", repeatable: false });
+  });
+
   it("carries a fallback reason with the interpreted outcome", () => {
     const snapped = select(EMPTY_SELECTION_GESTURE_STATE, exact("goal:left", []), {
       fallbackReason: "Stale display metadata was snapped to the statement root.",
@@ -213,6 +228,7 @@ describe("selection feedback messages", () => {
       "removed",
       "overlap-rejected",
       "cleared",
+      "set-by-drop",
     ];
     const messages = outcomes.map((outcome) =>
       describeSelectionFeedback({ outcome, repeatable: false }),
@@ -239,5 +255,13 @@ describe("selection feedback messages", () => {
     ).toBe(
       "Snapped to nearest subtree (The range was widened to the smallest containing subtree). Selected the occurrence.",
     );
+  });
+});
+
+describe("selection overlap", () => {
+  it("detects nested occurrences in one statement and ignores other statements", () => {
+    expect(selectionsOverlap(exact("goal:left", [0]), exact("goal:left", [0, 1]))).toBe(true);
+    expect(selectionsOverlap(exact("goal:left", [0]), exact("goal:left", [1]))).toBe(false);
+    expect(selectionsOverlap(exact("goal:left", []), exact("goal:right", []))).toBe(false);
   });
 });

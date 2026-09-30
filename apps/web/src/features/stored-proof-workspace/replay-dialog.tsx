@@ -1,10 +1,11 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   compactMathText,
   semanticReplayReportSchema,
   type ProofNode,
+  type SemanticReplayPreviewRequest,
   type ProtocolCommandResponse,
   type ReplayCandidate,
   type ReplayOverride,
@@ -20,11 +21,12 @@ import {
   type HistoryEdge,
   type ReplaySource,
 } from "./toolbar-actions";
-import { describeCommandFailure } from "./toolbar-requests";
+import { describeCommandFailure, requestReplayPreview } from "./toolbar-requests";
 import type { RunToolbarCommand } from "./toolbar-action-bar";
 import styles from "./toolbar-actions.module.css";
 
 export type ReplayDialogProps = Readonly<{
+  sessionId: string;
   node: ProofNode;
   rootNodeId: string;
   nodes: readonly ProofNode[];
@@ -33,7 +35,12 @@ export type ReplayDialogProps = Readonly<{
   onClose: () => void;
 }>;
 
-type Failure = Readonly<{ message: string; report?: SemanticReplayReport }>;
+/** The dry-run report of one request, tagged with the request it answers. */
+type PreviewResult = Readonly<{
+  key: string;
+  outcome:
+    Readonly<{ ok: true; report: SemanticReplayReport }> | Readonly<{ ok: false; message: string }>;
+}>;
 
 /** Nodes whose branch can be replayed here: every node off the current node's own line. */
 export function replayEndOptions(
@@ -58,11 +65,14 @@ export function replaySummary(response: ProtocolCommandResponse): string | undef
 
 /**
  * Replay a recorded sequence onto the current node (design plan §16.4). The user chooses the
- * source path from the stored history and reviews its steps before anything is sent. The proof
- * service re-matches every step; a step that does not match writes nothing and returns the
- * report, whose repair candidates can be chosen and sent again under the same command.
+ * source path from the stored history, and the proof service's dry run (`POST .../replay-preview`)
+ * reports every step (exact or adapted, new substitutions and obligations) and the first failure
+ * with its repair candidates BEFORE anything is written. The preview is requested with the
+ * commit's own command ID, so repair candidates chosen from it are valid overrides of the commit.
+ * The commit re-matches every step again; a step that no longer matches writes nothing.
  */
 export function ReplayDialog({
+  sessionId,
   node,
   rootNodeId,
   nodes,
@@ -89,7 +99,8 @@ export function ReplayDialog({
   const [commandId, setCommandId] = useState(() => toolbarCommandId("replay"));
   const [overrides, setOverrides] = useState<readonly ReplayOverride[]>([]);
   const [repairs, setRepairs] = useState<Readonly<Record<string, string>>>({});
-  const [failure, setFailure] = useState<Failure>();
+  const [commitError, setCommitError] = useState<string>();
+  const [preview, setPreview] = useState<PreviewResult>();
   const [pending, setPending] = useState(false);
 
   const source: ReplaySource | undefined =
@@ -97,11 +108,43 @@ export function ReplayDialog({
   const steps = source === undefined ? undefined : replaySteps(edges, source);
   const startOptions = toNodeId === undefined ? [] : ancestorsOf(edges, toNodeId);
 
+  // The dry run asks exactly what a commit would send; only the request's content keys it.
+  const previewKey =
+    source === undefined || steps === undefined || steps.length === 0
+      ? undefined
+      : JSON.stringify({
+          commandId,
+          source,
+          targetNodeId: node.id,
+          ...(overrides.length === 0 ? {} : { overrides }),
+        });
+  useEffect(() => {
+    if (previewKey === undefined) return;
+    const controller = new AbortController();
+    void requestReplayPreview(
+      sessionId,
+      JSON.parse(previewKey) as SemanticReplayPreviewRequest,
+      controller.signal,
+    ).then((result) => {
+      if (controller.signal.aborted) return;
+      setPreview({
+        key: previewKey,
+        outcome: result.ok
+          ? { ok: true, report: result.value }
+          : { ok: false, message: result.message },
+      });
+    });
+    return () => controller.abort();
+  }, [previewKey, sessionId]);
+  const current = preview !== undefined && preview.key === previewKey ? preview.outcome : undefined;
+  const loadingPreview = previewKey !== undefined && current === undefined;
+  const report = current?.ok === true ? current.report : undefined;
+
   const resetAttempt = () => {
     setCommandId(toolbarCommandId("replay"));
     setOverrides([]);
     setRepairs({});
-    setFailure(undefined);
+    setCommitError(undefined);
   };
 
   const chooseEnd = (id: string) => {
@@ -113,6 +156,7 @@ export function ReplayDialog({
   const submit = async (withOverrides: readonly ReplayOverride[]) => {
     if (source === undefined || steps === undefined || steps.length === 0) return;
     setPending(true);
+    setCommitError(undefined);
     const outcome = await runCommand(
       "Replay",
       replayEnvelope({ commandId, nodeId: node.id, source, overrides: withOverrides }),
@@ -123,16 +167,16 @@ export function ReplayDialog({
       onClose();
       return;
     }
-    setOverrides(withOverrides);
-    setRepairs({});
-    setFailure({
-      message: describeCommandFailure("Replay", outcome),
-      ...(outcome.replayReport === undefined ? {} : { report: outcome.replayReport }),
-    });
+    setCommitError(describeCommandFailure("Replay", outcome));
+    // The worker's own report replaces the preview: the commit found a step that no longer matches.
+    if (outcome.replayReport !== undefined && previewKey !== undefined) {
+      setPreview({ key: previewKey, outcome: { ok: true, report: outcome.replayReport } });
+    }
   };
 
-  const retryWithRepairs = () => {
-    const index = failure?.report?.firstFailure?.index;
+  /** Fold the chosen repair candidates into the overrides; the changed request is previewed again. */
+  const previewWithRepairs = () => {
+    const index = report?.firstFailure?.index;
     if (index === undefined) return;
     const chosen = Object.entries(repairs).map(([slotId, candidateId]) => ({
       stepIndex: index,
@@ -145,7 +189,9 @@ export function ReplayDialog({
           (next) => next.stepIndex === override.stepIndex && next.slotId === override.slotId,
         ),
     );
-    void submit([...kept, ...chosen] as readonly ReplayOverride[]);
+    setOverrides([...kept, ...chosen] as readonly ReplayOverride[]);
+    setRepairs({});
+    setCommitError(undefined);
   };
 
   const nodeLabel = (id: string) => {
@@ -205,7 +251,7 @@ export function ReplayDialog({
           <h3>Steps to replay ({steps.length})</h3>
           <ol className={styles.stepList}>
             {steps.map(({ edge, name }, index) => {
-              const reported = failure?.report?.steps[index];
+              const reported = report?.steps[index];
               return (
                 <li key={edge.id} data-step-status={reported?.status ?? "pending"}>
                   <strong>{name}</strong> · {edge.transitionClass}
@@ -219,23 +265,28 @@ export function ReplayDialog({
               );
             })}
           </ol>
-          {failure?.report === undefined ? (
-            <p className={styles.muted}>
-              Nothing is written until you replay. A dry-run preview is not available in this
-              version: if a step does not match here, the replay stops before writing and its
-              report, with repair candidates, is shown.
-            </p>
-          ) : null}
+          <p className={styles.muted}>
+            Nothing is written until you replay; the preview below is a dry run of these steps.
+          </p>
         </section>
       )}
 
-      {failure?.report === undefined ? null : (
-        <ReplayReportView report={failure.report} repairs={repairs} onRepair={setRepairs} />
+      {loadingPreview ? (
+        <p role="status" className={styles.muted}>
+          Previewing the replay…
+        </p>
+      ) : null}
+      {report === undefined ? null : (
+        <ReplayReportView report={report} repairs={repairs} onRepair={setRepairs} />
       )}
-
-      {failure === undefined ? null : (
+      {current?.ok === false ? (
         <p role="alert" className={styles.error}>
-          {failure.message}
+          The replay could not be previewed: {current.message}
+        </p>
+      ) : null}
+      {commitError === undefined ? null : (
+        <p role="alert" className={styles.error}>
+          {commitError}
         </p>
       )}
 
@@ -243,20 +294,20 @@ export function ReplayDialog({
         <button type="button" onClick={onClose}>
           Cancel
         </button>
-        {failure?.report?.firstFailure === undefined ? null : (
+        {report?.firstFailure === undefined ? null : (
           <button
             type="button"
             className={styles.primaryButton}
             disabled={pending || Object.keys(repairs).length === 0}
-            onClick={retryWithRepairs}
+            onClick={previewWithRepairs}
           >
-            Replay again with the chosen repairs
+            Preview with the chosen repairs
           </button>
         )}
         <button
           type="button"
           className={styles.primaryButton}
-          disabled={pending || steps === undefined || steps.length === 0}
+          disabled={pending || report?.complete !== true}
           onClick={() => void submit(overrides)}
         >
           {pending
@@ -296,6 +347,18 @@ function ReplayReportView({
   return (
     <section aria-label="Replay report" className={styles.reportSection}>
       <h3>Replay report</h3>
+      <p data-testid="replay-report-summary">
+        {report.steps.filter(({ status }) => status === "exact").length} exact,{" "}
+        {report.steps.filter(({ status }) => status === "adapted").length} adapted
+        {report.complete ? "; every step matches here." : "; a step does not match here."}
+      </p>
+      {report.steps.flatMap((step) =>
+        step.parameters.map(({ parameterId, match }) => (
+          <p key={`${step.index}:${parameterId}`} className={styles.muted}>
+            Step {step.index}: parameter {parameterId} re-chosen by {match}.
+          </p>
+        )),
+      )}
       {report.substitutions.length === 0 ? null : (
         <p>
           Changed substitutions:{" "}

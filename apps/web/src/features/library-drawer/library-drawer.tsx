@@ -13,6 +13,8 @@ import {
   type SessionLibrary,
   type SessionLibraryEvents,
 } from "./api-contract";
+import { DragHandle } from "../gestures/gesture-ui";
+import type { GestureBindings } from "../gestures/use-drag-gestures";
 import { LibraryDetail } from "./library-detail";
 import { LibraryEvents } from "./library-events";
 import {
@@ -42,6 +44,8 @@ export type LibraryDrawerProps = Readonly<{
   sessionId: string;
   presentation: Presentation;
   view: WorkspaceView;
+  /** When present, result rows can be dragged onto an expression (design plan §8.3). */
+  gestures?: GestureBindings | undefined;
 }>;
 
 /**
@@ -50,7 +54,7 @@ export type LibraryDrawerProps = Readonly<{
  * views and the session's addition events. Escape closes it and returns focus to its toggle.
  * Adding artifacts is not offered here; the protocol envelope owns additions.
  */
-export function LibraryDrawer({ sessionId, presentation, view }: LibraryDrawerProps) {
+export function LibraryDrawer({ sessionId, presentation, view, gestures }: LibraryDrawerProps) {
   const [open, setOpen] = useState(false);
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -78,6 +82,7 @@ export function LibraryDrawer({ sessionId, presentation, view }: LibraryDrawerPr
           sessionId={sessionId}
           presentation={presentation}
           view={view}
+          gestures={gestures}
           onClose={close}
         />
       ) : null}
@@ -90,6 +95,7 @@ function DrawerPanel({
   sessionId,
   presentation,
   view,
+  gestures,
   onClose,
 }: LibraryDrawerProps & Readonly<{ id: string; onClose: () => void }>) {
   const panel = useRef<HTMLElement>(null);
@@ -247,6 +253,17 @@ function DrawerPanel({
                             {provenanceLabel(entry.artifact.provenance)}
                           </span>
                         </button>
+                        {gestures !== undefined && entry.artifact.kind === "result" ? (
+                          <DragHandle
+                            source={{
+                              kind: "result",
+                              artifactId: entry.artifact.id,
+                              label: entry.artifact.name,
+                            }}
+                            label={`result ${entry.artifact.name}`}
+                            bindings={gestures}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>

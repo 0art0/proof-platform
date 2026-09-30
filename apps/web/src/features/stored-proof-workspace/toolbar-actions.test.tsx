@@ -4,10 +4,12 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  analyzeBacktrack,
   createProofNodeSchema,
   type ProofEdge,
   type ProofNode,
   type ProtocolCommandEnvelope,
+  type SemanticReplayReport,
 } from "@proof/protocol";
 import { createPresentation } from "@proof/language";
 import { proofStateIdSchema, statementIdSchema } from "@proof/mathjson-model";
@@ -18,6 +20,7 @@ import {
   type ToolbarActionBarProps,
 } from "./toolbar-action-bar";
 import {
+  READ_ONLY_REASON,
   defaultReplayStart,
   deletionImpact,
   replaySteps,
@@ -124,6 +127,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const committed = (envelope: ProtocolCommandEnvelope): ProtocolCommandOutcome => ({
@@ -153,9 +157,81 @@ const committed = (envelope: ProtocolCommandEnvelope): ProtocolCommandOutcome =>
   } as never,
 });
 
+type PreviewBody = Readonly<{
+  commandId?: string;
+  source: { fromNodeId: string; toNodeId: string };
+  targetNodeId?: string;
+  overrides?: readonly unknown[];
+}>;
+
+const json = (body: unknown) => new Response(JSON.stringify(body));
+
+/** A complete replay report with one exact step per source edge. */
+function completeReport(stepCount: number): SemanticReplayReport {
+  return {
+    targetNodeId: "node:c",
+    complete: true,
+    steps: Array.from({ length: stepCount }, (_, index) => ({
+      index: index + 1,
+      sourceEdgeId: `edge:step-${index + 1}`,
+      status: "exact",
+      selections: [],
+      substitutions: [],
+      resultSubstitutions: [],
+      parameters: [],
+      obligations: [],
+      alternatives: [],
+    })),
+    substitutions: [],
+    finalNodeId: "node:c",
+  } as unknown as SemanticReplayReport;
+}
+
+/**
+ * Stub the two dry-run proxies. The analysis is the protocol's own over the fixture tree, as the
+ * worker would compute it; previews come from `preview` (a complete one-step report by default).
+ */
+function stubDryRuns(preview: (body: PreviewBody) => unknown = () => completeReport(1)) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (url.endsWith("/backtrack-analysis")) {
+      const analyzed = analyzeBacktrack({
+        rootNodeId: root.id,
+        nodes,
+        edges: edges.map(({ edge }) => edge),
+        operators: [],
+        request: body,
+      });
+      return analyzed.ok
+        ? json({ ok: true, data: { analysis: analyzed.analysis } })
+        : json({
+            ok: false,
+            error: {
+              code: "backtrack-with-information-rejected",
+              message: analyzed.diagnostics[0].message,
+            },
+          });
+    }
+    if (url.endsWith("/replay-preview")) {
+      const report = preview(body as unknown as PreviewBody);
+      return report instanceof Response ? report : json({ ok: true, data: { report } });
+    }
+    throw new Error(`Unexpected request to ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const previewBodies = (fetchMock: ReturnType<typeof stubDryRuns>): PreviewBody[] =>
+  fetchMock.mock.calls
+    .filter(([url]) => String(url).endsWith("/replay-preview"))
+    .map(([, init]) => JSON.parse(String(init?.body)) as PreviewBody);
+
 function renderBar(overrides: Partial<ToolbarActionBarProps> = {}) {
   const runCommand = vi.fn<RunToolbarCommand>(async (_action, envelope) => committed(envelope));
   const props: ToolbarActionBarProps = {
+    sessionId: "session:test",
     node: nodeC,
     rootNodeId: root.id,
     operators: [],
@@ -428,10 +504,22 @@ describe("ToolbarActionBar", () => {
   });
 
   it("offers eligible ancestors for backtracking, closest first and preselected", async () => {
+    const fetchMock = stubDryRuns();
     const { runCommand } = renderBar({ selections: [selection(nodeC, hypothesisR, [0])] });
     fireEvent.click(screen.getByRole("button", { name: "Backtrack with information…" }));
     const dialog = screen.getByRole("dialog", { name: "Backtrack with information" });
-    expect(within(dialog).getByText("Free symbols: r")).toBeVisible();
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Asking the proof service");
+    expect(await within(dialog).findByText("Free symbols: r")).toBeVisible();
+    // The analysis is the worker's: one dry-run request for this proposition, no local analysis.
+    const analysisCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/session%3Atest/backtrack-analysis"),
+    );
+    expect(analysisCalls).toHaveLength(1);
+    expect(JSON.parse(String(analysisCalls[0]?.[1]?.body))).toMatchObject({
+      sourceNodeId: "node:c",
+      sourceTarget: { kind: "goal", id: "goal:main" },
+      proposition: "r",
+    });
     const options = within(dialog).getAllByRole("radio");
     expect(options.map((option) => (option as HTMLInputElement).value)).toEqual([
       "node:b",
@@ -439,7 +527,7 @@ describe("ToolbarActionBar", () => {
       "node:root",
     ]);
     expect(options[0]).toBeChecked();
-    expect(options[0]).toHaveFocus();
+    await waitFor(() => expect(options[0]).toHaveFocus());
     expect(options[2]).toBeDisabled();
     expect(dialog.querySelector('[data-ancestor-node-id="node:root"]')).toHaveTextContent(
       "Unavailable symbols: r",
@@ -465,6 +553,7 @@ describe("ToolbarActionBar", () => {
   });
 
   it("shows a refused backtrack in the dialog and keeps it open", async () => {
+    stubDryRuns();
     const { runCommand } = renderBar({ selections: [selection(nodeC, hypothesisR, [0])] });
     runCommand.mockResolvedValueOnce({
       ok: false,
@@ -474,11 +563,34 @@ describe("ToolbarActionBar", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Backtrack with information…" }));
     const dialog = screen.getByRole("dialog", { name: "Backtrack with information" });
+    await within(dialog).findAllByRole("radio");
     fireEvent.click(within(dialog).getByRole("button", { name: "Split on P here" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Backtrack with information rejected (backtrack-with-information-rejected): The symbol r is unavailable at node:a.",
     );
     expect(screen.getByRole("dialog")).toBeVisible();
+  });
+
+  it("says so when the proof service refuses the backtrack analysis", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({
+          ok: false,
+          error: {
+            code: "backtrack-with-information-rejected",
+            message: "The source target is not a goal or obligation of the source node.",
+          },
+        }),
+      ),
+    );
+    renderBar({ selections: [selection(nodeC, hypothesisR, [0])] });
+    fireEvent.click(screen.getByRole("button", { name: "Backtrack with information…" }));
+    const dialog = screen.getByRole("dialog", { name: "Backtrack with information" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Backtracking is unavailable: The source target is not a goal or obligation of the source node. (backtrack-with-information-rejected)",
+    );
+    expect(within(dialog).getByRole("button", { name: "Split on P here" })).toBeDisabled();
   });
 
   it("closes a dialog on Escape without letting Escape clear the selection", () => {
@@ -498,21 +610,53 @@ describe("ToolbarActionBar", () => {
     document.removeEventListener("keydown", clearSelection);
   });
 
-  it("reviews the replayed steps before committing, then offers repairs for a failed step", async () => {
+  it("previews the replay before anything is committed, then commits under the same command", async () => {
+    const fetchMock = stubDryRuns();
     const { runCommand } = renderBar({ node: nodeC });
     fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
     const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
     expect(within(dialog).getByLabelText("Replay the path ending at")).toHaveValue("node:sibling");
     expect(within(dialog).getByLabelText("Starting after")).toHaveValue("node:root");
+    const commit = within(dialog).getByRole("button", { name: "Replay 1 step here" });
+    // Nothing can be committed until the dry run has answered.
+    expect(commit).toBeDisabled();
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Previewing the replay");
+    const report = await within(dialog).findByRole("region", { name: "Replay report" });
+    expect(report).toHaveTextContent("1 exact, 0 adapted; every step matches here.");
+    expect(commit).toBeEnabled();
+    expect(runCommand).not.toHaveBeenCalled();
+
+    const previews = previewBodies(fetchMock);
+    expect(previews).toHaveLength(1);
+    expect(previews[0]).toMatchObject({
+      source: { fromNodeId: "node:root", toNodeId: "node:sibling" },
+      targetNodeId: "node:c",
+    });
     const steps = within(dialog).getByRole("region", { name: "Steps to replay" });
     expect(
       within(steps)
         .getAllByRole("listitem")
         .map((item) => item.textContent),
-    ).toEqual(["Sibling move · equivalence"]);
-    expect(runCommand).not.toHaveBeenCalled();
+    ).toEqual(["Sibling move · equivalence · matched exactly"]);
 
-    const report = {
+    fireEvent.click(commit);
+    await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
+    const envelope = lastEnvelope(runCommand);
+    expect(envelope).toMatchObject({
+      basis: { nodeId: "node:c" },
+      command: {
+        kind: "replay",
+        source: { fromNodeId: "node:root", toNodeId: "node:sibling" },
+        targetNodeId: "node:c",
+      },
+    });
+    // The commit carries the command ID the preview was computed under.
+    expect(envelope.commandId).toBe(previews[0]?.commandId);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("offers repair candidates from the preview and commits them as overrides of the same command", async () => {
+    const failed = {
       targetNodeId: "node:c",
       complete: false,
       steps: [
@@ -557,51 +701,110 @@ describe("ToolbarActionBar", () => {
       },
       finalNodeId: "node:c",
     };
-    runCommand.mockResolvedValueOnce({
-      ok: false,
-      status: 422,
-      code: "replay-failed",
-      message: "No occurrence matches the target slot.",
-      replayReport: report as never,
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Replay 1 step here" }));
-    await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
-    const first = lastEnvelope(runCommand);
-    expect(first).toMatchObject({
-      basis: { nodeId: "node:c" },
-      command: {
-        kind: "replay",
-        source: { fromNodeId: "node:root", toNodeId: "node:sibling" },
-        targetNodeId: "node:c",
-      },
-    });
-    expect(first.command).not.toHaveProperty("overrides");
+    const fetchMock = stubDryRuns((body) =>
+      body.overrides === undefined ? failed : completeReport(1),
+    );
+    const { runCommand } = renderBar({ node: nodeC });
+    fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
+    const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
 
     const reportView = await within(dialog).findByRole("region", { name: "Replay report" });
     expect(reportView).toHaveTextContent(
       "First failure: step 1 — No occurrence matches the target slot.",
     );
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Replay rejected (replay-failed)");
+    const steps = within(dialog).getByRole("region", { name: "Steps to replay" });
     expect(within(steps).getByText(/failed/)).toBeVisible();
-    const retry = within(dialog).getByRole("button", {
-      name: "Replay again with the chosen repairs",
-    });
-    expect(retry).toBeDisabled();
+    // A failed preview cannot be committed, and committing was never attempted.
+    expect(within(dialog).getByRole("button", { name: "Replay 1 step here" })).toBeDisabled();
+    expect(runCommand).not.toHaveBeenCalled();
+
+    const again = within(dialog).getByRole("button", { name: "Preview with the chosen repairs" });
+    expect(again).toBeDisabled();
     fireEvent.click(
       within(reportView).getByRole("radio", { name: /And\(q, p\) in goal goal:main/ }),
     );
-    fireEvent.click(retry);
-    await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
-    const second = lastEnvelope(runCommand);
-    // The retry reuses the command ID the repair candidates were named under.
-    expect(second.commandId).toBe(first.commandId);
-    expect(second.command).toMatchObject({
+    fireEvent.click(again);
+    await waitFor(() => expect(previewBodies(fetchMock)).toHaveLength(2));
+    const [first, second] = previewBodies(fetchMock);
+    // The repaired preview keeps the command ID the candidates were named under.
+    expect(second?.commandId).toBe(first?.commandId);
+    expect(second?.overrides).toEqual([
+      { stepIndex: 1, slotId: "target", candidateId: "candidate:one" },
+    ]);
+
+    const commit = within(dialog).getByRole("button", { name: "Replay 1 step here" });
+    await waitFor(() => expect(commit).toBeEnabled());
+    expect(runCommand).not.toHaveBeenCalled();
+    fireEvent.click(commit);
+    await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
+    const envelope = lastEnvelope(runCommand);
+    expect(envelope.commandId).toBe(first?.commandId);
+    expect(envelope.command).toMatchObject({
       overrides: [{ stepIndex: 1, slotId: "target", candidateId: "candidate:one" }],
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("changes the replay source and its steps together", () => {
+  it("replaces the preview with the worker's report when the commit finds a step that no longer matches", async () => {
+    stubDryRuns();
+    const { runCommand } = renderBar({ node: nodeC });
+    const stale = {
+      ...completeReport(1),
+      complete: false,
+      steps: [
+        {
+          ...completeReport(1).steps[0],
+          status: "failed",
+          diagnostic: { code: "command-rejected", message: "The state changed." },
+        },
+      ],
+      firstFailure: {
+        index: 1,
+        diagnostic: { code: "command-rejected", message: "The state changed." },
+        repairs: [],
+      },
+    };
+    runCommand.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      code: "replay-failed",
+      message: "The state changed.",
+      replayReport: stale as never,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
+    const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
+    const commit = within(dialog).getByRole("button", { name: "Replay 1 step here" });
+    await waitFor(() => expect(commit).toBeEnabled());
+    fireEvent.click(commit);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Replay rejected (replay-failed): The state changed.",
+    );
+    expect(within(dialog).getByRole("region", { name: "Replay report" })).toHaveTextContent(
+      "First failure: step 1 — The state changed.",
+    );
+    expect(commit).toBeDisabled();
+  });
+
+  it("reports a replay preview the proof service could not compute", async () => {
+    stubDryRuns(() =>
+      json({
+        ok: false,
+        error: { code: "replay-rejected", message: "The source path is unknown." },
+      }),
+    );
+    renderBar({ node: nodeC });
+    fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
+    const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "The replay could not be previewed: The source path is unknown. (replay-rejected)",
+    );
+    expect(within(dialog).getByRole("button", { name: "Replay 1 step here" })).toBeDisabled();
+  });
+
+  it("changes the replay source and its steps together, previewing each source", async () => {
+    const fetchMock = stubDryRuns((body) =>
+      completeReport(body.source.fromNodeId === "node:a" ? 2 : 3),
+    );
     renderBar({ node: sibling });
     fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
     const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
@@ -614,7 +817,37 @@ describe("ToolbarActionBar", () => {
     });
     const steps = within(dialog).getByRole("region", { name: "Steps to replay" });
     expect(within(steps).getAllByRole("listitem")).toHaveLength(2);
-    expect(within(dialog).getByRole("button", { name: "Replay 2 steps here" })).toBeEnabled();
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Replay 2 steps here" })).toBeEnabled(),
+    );
+    const last = previewBodies(fetchMock).at(-1);
+    expect(last).toMatchObject({ source: { fromNodeId: "node:a", toNodeId: "node:c" } });
+  });
+});
+
+describe("a read-only imported session", () => {
+  it("disables every mutating action with the read-only reason", () => {
+    renderBar({
+      readOnly: true,
+      selections: [selection(nodeC, conclusion, [1])],
+    });
+    for (const name of [
+      "Delete previous move…",
+      "Backtrack with information…",
+      "Replay a sequence here…",
+      "Mark sorry",
+      "Case split on selection",
+    ]) {
+      const button = screen.getByRole("button", { name });
+      expect(button, name).toBeDisabled();
+      expect(button, name).toHaveAccessibleDescription(READ_ONLY_REASON);
+    }
+    expect(READ_ONLY_REASON).toBe("This session is read-only (imported artifact)");
+  });
+
+  it("leaves the actions alone for a writable session", () => {
+    renderBar({ readOnly: false, selections: [selection(nodeC, conclusion, [1])] });
+    expect(screen.getByRole("button", { name: "Mark sorry" })).toBeEnabled();
   });
 });
 

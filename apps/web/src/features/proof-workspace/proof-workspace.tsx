@@ -23,6 +23,8 @@ import {
   proofSelectionKey,
   selectionGestureReducer,
 } from "./selection-state";
+import { DragHandle } from "../gestures/gesture-ui";
+import type { GestureBindings, SelectionRequest } from "../gestures/use-drag-gestures";
 import styles from "./proof-workspace.module.css";
 
 const EMPTY_OPERATORS: readonly OperatorDeclaration[] = Object.freeze([]);
@@ -33,6 +35,10 @@ export type ProofWorkspaceProps = Readonly<{
   /** Formal view keeps interactive MathLive fields; natural language is read-only. */
   view?: WorkspaceView;
   onSelectionChange?: (selections: readonly AnchoredProofSelection[]) => void;
+  /** Drag-and-drop surface (design plan §8.3); absent means the statements are not drag-aware. */
+  gestures?: GestureBindings;
+  /** Makes exactly these selections active when its `id` changes (a drop's source and target). */
+  selectionRequest?: SelectionRequest | undefined;
 }>;
 
 /** Render a ProofNode only after validating its complete runtime boundary. */
@@ -41,6 +47,8 @@ export function ProofWorkspace({
   operators = EMPTY_OPERATORS,
   view = "formal",
   onSelectionChange,
+  gestures,
+  selectionRequest,
 }: ProofWorkspaceProps) {
   const node = parseProofNode(nodeInput, operators);
   if (node === undefined) {
@@ -55,6 +63,8 @@ export function ProofWorkspace({
       operators={operators}
       view={view}
       onSelectionChange={onSelectionChange}
+      gestures={gestures}
+      selectionRequest={selectionRequest}
     />
   );
 }
@@ -94,6 +104,8 @@ type ValidatedProofWorkspaceProps = Readonly<{
   operators: readonly OperatorDeclaration[];
   view: WorkspaceView;
   onSelectionChange?: ((selections: readonly AnchoredProofSelection[]) => void) | undefined;
+  gestures?: GestureBindings | undefined;
+  selectionRequest?: SelectionRequest | undefined;
 }>;
 
 const INITIAL_SELECTION_NOTICE =
@@ -104,6 +116,8 @@ function ValidatedProofWorkspace({
   operators,
   view,
   onSelectionChange,
+  gestures,
+  selectionRequest,
 }: ValidatedProofWorkspaceProps) {
   const [selectionState, dispatch] = useReducer(
     selectionGestureReducer,
@@ -120,6 +134,14 @@ function ValidatedProofWorkspace({
   useEffect(() => {
     onSelectionChangeRef.current?.(selectionState.active);
   }, [selectionState.active]);
+
+  // A request already present when this snapshot mounts was handled for an earlier snapshot.
+  const handledRequestId = useRef(selectionRequest?.id);
+  useEffect(() => {
+    if (selectionRequest === undefined || selectionRequest.id === handledRequestId.current) return;
+    handledRequestId.current = selectionRequest.id;
+    dispatch({ type: "set", selections: selectionRequest.selections });
+  }, [selectionRequest]);
 
   const hasSelection = selectionState.active.length > 0;
   useEffect(() => {
@@ -166,6 +188,7 @@ function ValidatedProofWorkspace({
     presentation,
     selectedAnchors,
     onGesture: handleGesture,
+    gestures: view === "formal" ? gestures : undefined,
   };
 
   return (
@@ -265,6 +288,7 @@ type StatementEnvironment = Readonly<{
   /** Selected statement anchors, keyed by serialized anchor, with their selection polarity. */
   selectedAnchors: ReadonlyMap<string, SelectionPolarity | undefined>;
   onGesture: (gesture: MathLiveStatementGesture) => void;
+  gestures?: GestureBindings | undefined;
 }>;
 
 /**
@@ -462,6 +486,7 @@ function ContextualSequentView({
                     declarations={declarations}
                     expression={hypothesis.statement.expression}
                     label={`${targetLabel} ${ordinal} hypothesis ${index + 1}`}
+                    handleLabel={`hypothesis ${index + 1} of ${targetLabel.toLowerCase()} ${ordinal}`}
                     environment={environment}
                   />
                 </li>
@@ -497,6 +522,8 @@ type StatementViewProps = Readonly<{
   declarations: Target["sequent"]["context"]["declarations"];
   expression: PlainMathJson;
   label: string;
+  /** Names the statement's drag handle; it must not contain `label`, which finds the field. */
+  handleLabel?: string;
   environment: StatementEnvironment;
 }>;
 
@@ -506,11 +533,13 @@ function StatementView({
   declarations,
   expression,
   label,
+  handleLabel,
   environment,
 }: StatementViewProps) {
   const key = JSON.stringify(anchor);
   const selected = environment.selectedAnchors.has(key);
   const polarity = environment.selectedAnchors.get(key);
+  const gestures = environment.gestures;
   return (
     <div className={styles.statement}>
       {environment.view === "natural-language" ? (
@@ -532,8 +561,27 @@ function StatementView({
           selected={selected}
           selectionPolarity={polarity}
           onGesture={environment.onGesture}
+          dropZone={
+            gestures?.carrying === undefined || !gestures.enabled
+              ? undefined
+              : {
+                  onHover: gestures.hover,
+                  onDrop: (occurrence) => gestures.dropOn(anchor, occurrence),
+                }
+          }
         />
       )}
+      {gestures !== undefined && anchor.statement.kind === "hypothesis" ? (
+        <DragHandle
+          source={{
+            kind: "hypothesis",
+            selection: { kind: "exact", anchor, path: [] },
+            label: handleLabel ?? label,
+          }}
+          label={handleLabel ?? label}
+          bindings={gestures}
+        />
+      ) : null}
       {selected ? (
         <span className={styles.selectedBadge} data-polarity={polarity}>
           Selected{polarity === undefined ? "" : ` · ${POLARITY_LABELS[polarity]}`}

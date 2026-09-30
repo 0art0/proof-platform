@@ -119,6 +119,21 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)artifact(%3A|:)[0-9a-f]{32}$/);
   const importedBase = new URL(page.url()).pathname;
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
+  // The workspace marks the imported session read-only and disables every mutating action.
+  await expect(page.getByTestId("read-only-badge")).toBeVisible(COMMAND);
+  for (const name of [
+    "Delete previous move…",
+    "Backtrack with information…",
+    "Replay a sequence here…",
+    "Mark sorry",
+    "Case split on selection",
+  ]) {
+    const action = page.getByRole("button", { name });
+    await expect(action).toBeDisabled();
+    await expect(action).toHaveAccessibleDescription(
+      "This session is read-only (imported artifact)",
+    );
+  }
 
   // The imported session is read-only; its pruned proof omits the abandoned branch.
   await page.goto(`${importedBase}/proof`);

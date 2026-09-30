@@ -1,0 +1,146 @@
+.tray {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+}
+
+.trayHeading {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.help {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.trayActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.trayButton {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+  padding: 0.4rem 0.7rem;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.trayButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.trayButton:focus-visible,
+.handle:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.carrying {
+  margin: 0;
+  border: 2px dashed var(--accent);
+  border-radius: 0.6rem;
+  background: var(--accent-soft);
+  padding: 0.4rem 0.6rem;
+  color: var(--accent-text);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.outcome {
+  margin: 0;
+  border-left: 4px solid var(--border);
+  padding-left: 0.6rem;
+  font-size: 0.82rem;
+}
+
+.outcome[data-outcome="no-move"] {
+  border-left-style: double;
+  color: var(--warning-text);
+}
+
+.outcome[data-outcome="previewing"] {
+  border-left-style: solid;
+  border-left-color: var(--accent);
+}
+
+.handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface-strong);
+  padding: 0.15rem 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: grab;
+  user-select: none;
+}
+
+.handle[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.handle[aria-pressed="true"] {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.dropHint {
+  display: inline-block;
+  margin-top: 0.3rem;
+  border: 2px dashed var(--accent);
+  border-radius: 0.4rem;
+  padding: 0.1rem 0.45rem;
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.dropZone[data-drop-ready="true"] {
+  outline: 2px dashed var(--accent);
+  outline-offset: 3px;
+}
+
+.dropZone[data-drop-over="true"] {
+  outline-style: solid;
+  background: var(--accent-soft);
+}
+
+.statusArea {
+  display: grid;
+  align-content: start;
+  gap: 0.4rem;
+  min-height: 5.5rem;
+}
+
+.dropZone {
+  position: relative;
+}
+
+.dropHint {
+  position: absolute;
+  top: 0;
+  right: 0;
+  margin-top: 0;
+  background: var(--surface-strong);
+  pointer-events: none;
+}

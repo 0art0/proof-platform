@@ -1,6 +1,12 @@
 import "server-only";
 
 import {
+  backtrackAnalysisRequestSchema,
+  backtrackAnalysisSchema,
+  semanticReplayPreviewRequestSchema,
+  semanticReplayReportSchema,
+  type BacktrackAnalysis,
+  type SemanticReplayReport,
   createMovePreviewSchema,
   createProofEdgeSchema,
   createProofNodeSchema,
@@ -88,6 +94,11 @@ const repositoryDiagnosticCodeSchema = z.enum([
   "backtrack-target-not-found",
   "backtrack-rejected",
   "serialized-stale-backtrack",
+  // The dry runs (backtrack analysis, replay preview) relay these refusals.
+  "backtrack-with-information-rejected",
+  "replay-rejected",
+  "replay-conflict",
+  "invalid-replay-record",
   "invalid-request",
   "not-found",
   "internal-error",
@@ -120,9 +131,18 @@ const proofSessionSchema = z
   })
   .strict();
 
+/**
+ * The current session carries two additive markers: `readOnly` for an imported artifact and
+ * `visibility` when shared (absent means a private, writable session).
+ */
+const currentProofSessionSchema = proofSessionSchema.extend({
+  readOnly: z.literal(true).optional(),
+  visibility: z.literal("shared").optional(),
+});
+
 const currentSessionEnvelopeSchema = z
   .object({
-    session: proofSessionSchema,
+    session: currentProofSessionSchema,
     node: z.unknown(),
   })
   .strict();
@@ -189,7 +209,7 @@ const backtrackEnvelopeSchema = z
 export type ProofSession = z.infer<typeof proofSessionSchema>;
 
 export type CurrentProofSession = Readonly<{
-  session: ProofSession;
+  session: z.infer<typeof currentProofSessionSchema>;
   node: ProofNode;
 }>;
 
@@ -548,6 +568,63 @@ export async function backtrackProofSession(
     throw invalidUpstreamResponse();
   }
   return { session, node, replayed: envelope.data.replayed };
+}
+
+/** The dry-run analysis of backtracking with information (roadmap N20); nothing is written. */
+export async function analyzeBacktrackProofSession(
+  sessionIdInput: unknown,
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<Readonly<{ analysis: BacktrackAnalysis }>> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const request = backtrackAnalysisRequestSchema.safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The backtrack analysis request is invalid.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/backtrack-analysis`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const envelope = z.object({ analysis: backtrackAnalysisSchema }).strict().safeParse(value);
+  if (!envelope.success) throw invalidUpstreamResponse();
+  return envelope.data;
+}
+
+/**
+ * The dry-run report of a semantic replay (roadmap N21): adapted steps, the first failure and its
+ * repair candidates. Pass the commit's command ID so candidate IDs carry over as overrides.
+ */
+export async function previewSemanticReplayProofSession(
+  sessionIdInput: unknown,
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<Readonly<{ report: SemanticReplayReport }>> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const request = semanticReplayPreviewRequestSchema.safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The replay preview request is invalid.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/replay-preview`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  // The final node depends on the session operators and is not needed for a preview.
+  const envelope = z
+    .object({ report: semanticReplayReportSchema, finalNode: z.unknown() })
+    .strict()
+    .safeParse(value);
+  if (!envelope.success) throw invalidUpstreamResponse();
+  return { report: envelope.data.report };
 }
 
 /**

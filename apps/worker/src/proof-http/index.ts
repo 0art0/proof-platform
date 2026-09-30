@@ -359,7 +359,12 @@ async function handleRequest(
         })
         .strict(),
       {
-        session: withoutMetadata(loaded.session),
+        session: {
+          ...withoutMetadata(loaded.session),
+          // Additive markers: present only for an imported read-only or a shared session.
+          ...(loaded.session.readOnly === true ? { readOnly: true as const } : {}),
+          ...(loaded.session.visibility === "shared" ? { visibility: "shared" as const } : {}),
+        },
         node: loaded.node,
         ...(metadata === undefined ? {} : { metadata }),
       },

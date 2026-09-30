@@ -1,11 +1,15 @@
 import {
+  backtrackAnalysisSchema,
   createProofNodeSchema,
   protocolCommandResponseSchema,
   semanticReplayReportSchema,
+  type BacktrackAnalysis,
+  type BacktrackAnalysisRequest,
   type OperatorDeclaration,
   type ProofNode,
   type ProtocolCommandEnvelope,
   type ProtocolCommandResponse,
+  type SemanticReplayPreviewRequest,
   type SemanticReplayReport,
 } from "@proof/protocol";
 import { z } from "zod";
@@ -127,4 +131,89 @@ export function describeCommandFailure(action: string, failure: ProtocolCommandF
         ? " Try again once the proof service is available."
         : "";
   return `${action} rejected (${failure.code}): ${failure.message}${hint}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dry runs (N20, N21): the proof service computes; the browser only displays
+// ---------------------------------------------------------------------------------------------
+
+export type DryRunOutcome<Value> =
+  Readonly<{ ok: true; value: Value }> | Readonly<{ ok: false; message: string }>;
+
+const dryRunFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    error: z.object({ code: z.string().min(1), message: z.string() }).strict(),
+  })
+  .strict();
+
+async function postDryRun<Value>(
+  sessionId: string,
+  route: "backtrack-analysis" | "replay-preview",
+  request: unknown,
+  success: z.ZodType<Value>,
+  signal?: AbortSignal,
+): Promise<DryRunOutcome<Value>> {
+  let body: unknown;
+  try {
+    const response = await fetch(`/api/proof-sessions/${encodeURIComponent(sessionId)}/${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      cache: "no-store",
+      ...(signal === undefined ? {} : { signal }),
+    });
+    body = await response.json();
+  } catch {
+    return { ok: false, message: "The proof service could not be reached." };
+  }
+  const parsed = success.safeParse(body);
+  if (parsed.success) return { ok: true, value: parsed.data };
+  const failure = dryRunFailureSchema.safeParse(body);
+  return {
+    ok: false,
+    message: failure.success
+      ? `${failure.data.error.message || "The request was refused."} (${failure.data.error.code})`
+      : "The proof service returned an invalid response.",
+  };
+}
+
+const backtrackAnalysisResponseSchema = z
+  .object({ ok: z.literal(true), data: z.object({ analysis: backtrackAnalysisSchema }).strict() })
+  .strict();
+
+/** The worker's analysis of where `P` can be split on; nothing is written. */
+export async function requestBacktrackAnalysis(
+  sessionId: string,
+  request: BacktrackAnalysisRequest,
+  signal?: AbortSignal,
+): Promise<DryRunOutcome<BacktrackAnalysis>> {
+  const outcome = await postDryRun(
+    sessionId,
+    "backtrack-analysis",
+    request,
+    backtrackAnalysisResponseSchema,
+    signal,
+  );
+  return outcome.ok ? { ok: true, value: outcome.value.data.analysis } : outcome;
+}
+
+const replayPreviewResponseSchema = z
+  .object({ ok: z.literal(true), data: z.object({ report: semanticReplayReportSchema }).strict() })
+  .strict();
+
+/** The worker's replay report for the same request a commit would send; nothing is written. */
+export async function requestReplayPreview(
+  sessionId: string,
+  request: SemanticReplayPreviewRequest,
+  signal?: AbortSignal,
+): Promise<DryRunOutcome<SemanticReplayReport>> {
+  const outcome = await postDryRun(
+    sessionId,
+    "replay-preview",
+    request,
+    replayPreviewResponseSchema,
+    signal,
+  );
+  return outcome.ok ? { ok: true, value: outcome.value.data.report } : outcome;
 }

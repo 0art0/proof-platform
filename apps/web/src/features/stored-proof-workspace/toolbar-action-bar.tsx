@@ -19,6 +19,7 @@ import {
   selectedProposition,
   sorryAvailability,
   sorryEnvelope,
+  READ_ONLY_REASON,
   toolbarCommandId,
   type Availability,
   type HistoryEdge,
@@ -42,6 +43,10 @@ export type ToolbarHistory =
   | Readonly<{ kind: "rejected"; message: string }>;
 
 export type ToolbarActionBarProps = Readonly<{
+  /** The session the dialogs ask for dry runs (backtrack analysis, replay preview). */
+  sessionId: string;
+  /** An imported artifact: every action is disabled with `READ_ONLY_REASON`. */
+  readOnly?: boolean | undefined;
   node: ProofNode;
   rootNodeId: string;
   operators: readonly OperatorDeclaration[];
@@ -57,6 +62,8 @@ type OpenDialog = "delete" | "backtrack" | "replay" | undefined;
 
 /** The proof actions of the toolbar (design plan §17.2): each is one N25 command envelope. */
 export function ToolbarActionBar({
+  sessionId,
+  readOnly = false,
   node,
   rootNodeId,
   operators,
@@ -79,6 +86,8 @@ export function ToolbarActionBar({
         : undefined;
   const impact =
     history.kind === "ready" ? deletionImpact(rootNodeId, node.id, history.edges) : undefined;
+  const lock = <Value,>(availability: Availability<Value>): Availability<Value> =>
+    readOnly ? { ok: false, reason: READ_ONLY_REASON } : availability;
   const deleteAvailability: Availability<true> =
     historyReason !== undefined
       ? { ok: false, reason: historyReason }
@@ -115,25 +124,25 @@ export function ToolbarActionBar({
     <div className={styles.actionBar} role="group" aria-label="Proof actions">
       <ActionButton
         label="Delete previous move…"
-        availability={deleteAvailability}
+        availability={lock(deleteAvailability)}
         busy={busy}
         onClick={() => setDialog("delete")}
       />
       <ActionButton
         label="Backtrack with information…"
-        availability={backtrackAvailability}
+        availability={lock(backtrackAvailability)}
         busy={busy}
         onClick={() => setDialog("backtrack")}
       />
       <ActionButton
         label="Replay a sequence here…"
-        availability={replayAvailability}
+        availability={lock(replayAvailability)}
         busy={busy}
         onClick={() => setDialog("replay")}
       />
       <ActionButton
         label="Mark sorry"
-        availability={sorry}
+        availability={lock(sorry)}
         busy={busy}
         onClick={() => {
           if (!sorry.ok) return;
@@ -150,7 +159,7 @@ export function ToolbarActionBar({
       />
       <ActionButton
         label="Case split on selection"
-        availability={proposition}
+        availability={lock(proposition)}
         busy={busy}
         onClick={() => {
           if (!proposition.ok) return;
@@ -175,12 +184,11 @@ export function ToolbarActionBar({
       ) : null}
       {dialog === "backtrack" && proposition.ok && history.kind === "ready" ? (
         <BacktrackDialog
+          sessionId={sessionId}
           proposition={proposition.value}
           node={node}
           rootNodeId={rootNodeId}
           nodes={history.nodes}
-          edges={history.edges}
-          operators={operators}
           presentation={presentation}
           view={view}
           runCommand={runCommand}
@@ -189,6 +197,7 @@ export function ToolbarActionBar({
       ) : null}
       {dialog === "replay" && history.kind === "ready" ? (
         <ReplayDialog
+          sessionId={sessionId}
           node={node}
           rootNodeId={rootNodeId}
           nodes={history.nodes}

@@ -233,4 +233,38 @@ describe("toolbar actions in the stored workspace", () => {
       ),
     ).toBeVisible();
   });
+
+  it("marks an imported session read-only: badge, reason, and every toolbar action disabled", async () => {
+    stubFetch({
+      "/history": () => json({ ok: true, data: { session, nodes: [root], edges: [] } }),
+    });
+    render(<StoredProofWorkspace session={{ ...session, readOnly: true }} node={root} />);
+    expect(screen.getByTestId("read-only-badge")).toHaveTextContent("Read-only");
+    expect(screen.getByTestId("read-only-reason")).toHaveTextContent(
+      "This session is read-only (imported artifact)",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
+    for (const name of [
+      "Delete previous move…",
+      "Backtrack with information…",
+      "Replay a sequence here…",
+      "Mark sorry",
+      "Case split on selection",
+    ]) {
+      const button = screen.getByRole("button", { name });
+      expect(button, name).toBeDisabled();
+      expect(button, name).toHaveAccessibleDescription(
+        "This session is read-only (imported artifact)",
+      );
+    }
+  });
+
+  it("shows no read-only marker for a writable session", () => {
+    stubFetch({
+      "/history": () => json({ ok: true, data: { session, nodes: [root], edges: [] } }),
+    });
+    render(<StoredProofWorkspace session={session} node={root} />);
+    expect(screen.queryByTestId("read-only-badge")).toBeNull();
+    expect(screen.queryByTestId("read-only-reason")).toBeNull();
+  });
 });
