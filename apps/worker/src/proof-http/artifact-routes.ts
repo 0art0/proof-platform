@@ -2,7 +2,8 @@
  * HTTP routes for proof artifacts (design plan §19, roadmap N27):
  *
  * - `GET /proof-sessions/:id/export`: the session's versioned artifact (200), built from stored
- *   rows only, with `Content-Disposition: attachment`.
+ *   rows only, with `Content-Disposition: attachment`. A private session (the default) is exported
+ *   only with `?confirmPrivateExport=true`; otherwise 403 `private-export-unconfirmed` (N36).
  * - `POST /artifacts` with the artifact as the JSON body (at most 16 MiB): full revalidation, then
  *   a new read-only session. 201 `{ sessionId, digest, sourceSessionId, readOnly, replayed }`
  *   creates it, 200 answers an identical re-upload with the same session, 422 `{ diagnostics }`
@@ -18,6 +19,7 @@ import type { z } from "zod";
 import { exportProofArtifact } from "../artifact-export";
 import { importProofArtifact } from "../artifact-import";
 import { proofSessionIdSchema } from "../proof-repository";
+import { readSessionVisibility } from "../session-admin";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 /** Upload limit for one artifact; stored snapshots make artifacts much larger than commands. */
@@ -88,6 +90,22 @@ export async function handleArtifactRoute(
       methodNotAllowed(response, "GET");
       return true;
     }
+    if (!privateExportConfirmed(request.url)) {
+      const visibility = await readSessionVisibility(context.store, sessionId.data);
+      if (visibility.status === "read" && visibility.visibility === "private") {
+        writeJson(response, 403, {
+          diagnostics: [
+            {
+              code: "private-export-unconfirmed",
+              message:
+                "This session is private. Repeat the export with confirmPrivateExport=true to " +
+                "acknowledge that the artifact leaves the session's private scope.",
+            },
+          ],
+        });
+        return true;
+      }
+    }
     const exported = await exportProofArtifact(context.store, sessionId.data, {
       library: context.library,
       definitions: context.definitions,
@@ -106,6 +124,18 @@ export async function handleArtifactRoute(
     return true;
   }
   return false;
+}
+
+function privateExportConfirmed(requestTarget: string | undefined): boolean {
+  try {
+    return (
+      new URL(requestTarget ?? "/", "http://proof.local").searchParams.get(
+        "confirmPrivateExport",
+      ) === "true"
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** A download file name for a session's artifact: the ID with unsafe characters replaced. */

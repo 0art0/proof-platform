@@ -239,11 +239,19 @@ function historyResponse(
   });
 }
 
+/** Reads the workspace makes on its own (history, the inquiry panel's records), not commands. */
+function isBackgroundRead(url: string): boolean {
+  return url.endsWith("/history") || url.includes("/inquiry-records");
+}
+
 function mockWithHistory(
   handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response,
 ) {
   return vi.fn<typeof fetch>(async (input, init) => {
     if (String(input).endsWith("/history")) return historyResponse();
+    if (String(input).includes("/inquiry-records")) {
+      return jsonResponse({ ok: true, data: { records: [] } });
+    }
     if (String(input).endsWith("/interaction-events")) {
       postedInteractions.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return jsonResponse({ ok: true, data: {} }, 201);
@@ -273,9 +281,9 @@ describe("StoredProofWorkspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Select stale" }));
     expect(screen.getByRole("status")).toHaveTextContent("Stale selection");
-    expect(
-      fetchMock.mock.calls.filter((call) => !String(call[0]).endsWith("/history")),
-    ).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter((call) => !isBackgroundRead(String(call[0])))).toHaveLength(
+      0,
+    );
   });
 
   it("retains server order and reasons without client-side reranking", async () => {
@@ -349,7 +357,7 @@ describe("StoredProofWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     fireEvent.click(screen.getByRole("button", { name: "Select pair" }));
     const suggestionRequests = fetchMock.mock.calls.filter(
-      (call) => !String(call[0]).endsWith("/history"),
+      (call) => !isBackgroundRead(String(call[0])),
     );
     const secondRequest = JSON.parse(String(suggestionRequests[1]?.[1]?.body)) as { id: string };
     second.resolve(

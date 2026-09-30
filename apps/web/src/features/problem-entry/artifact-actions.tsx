@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { exportHref, fetchSessionVisibility } from "../stored-proof-workspace/export-action";
+import { useHydrated } from "../hydration/use-hydrated";
 import styles from "./problem-entry.module.css";
 
 type Diagnostic = Readonly<{ code: string; message: string; path?: readonly (string | number)[] }>;
@@ -97,30 +99,83 @@ export function ArtifactUpload({
   );
 }
 
-/** "Download artifact": the export proxy answers with the artifact as an attachment. */
+type DownloadState =
+  | Readonly<{ kind: "idle" }>
+  | Readonly<{ kind: "checking" }>
+  | Readonly<{ kind: "confirming"; id: string }>
+  | Readonly<{ kind: "failed"; message: string }>;
+
+/**
+ * "Download artifact": the export proxy answers with the artifact as an attachment. A shared
+ * session downloads directly; a private one needs an explicit acknowledgement first (roadmap N36),
+ * and only then is the export requested with `confirmPrivateExport=true`.
+ */
 export function ArtifactDownload({
   navigate = (url) => window.location.assign(url),
 }: Readonly<{ navigate?: (url: string) => void }>) {
   const [sessionId, setSessionId] = useState("");
+  const [state, setState] = useState<DownloadState>({ kind: "idle" });
+  const hydrated = useHydrated();
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const id = sessionId.trim();
+    if (!SESSION_ID_PATTERN.test(id)) return;
+    setState({ kind: "checking" });
+    try {
+      const visibility = await fetchSessionVisibility(id);
+      if (visibility === "shared") {
+        setState({ kind: "idle" });
+        navigate(exportHref(id));
+      } else {
+        setState({ kind: "confirming", id });
+      }
+    } catch (error) {
+      setState({
+        kind: "failed",
+        message: error instanceof Error ? error.message : "The export failed.",
+      });
+    }
+  }
+
   return (
-    <form
-      className={styles.fetchForm}
-      onSubmit={(event) => {
-        event.preventDefault();
-        const id = sessionId.trim();
-        if (!SESSION_ID_PATTERN.test(id)) return;
-        navigate(`/api/proof-sessions/${encodeURIComponent(id)}/export`);
-      }}
-    >
+    <form className={styles.fetchForm} onSubmit={(event) => void submit(event)}>
       <input
         aria-label="Session ID to download"
         placeholder="session:…"
         required
         pattern="[A-Za-z0-9][A-Za-z0-9._:/\-]*"
         value={sessionId}
-        onChange={(event) => setSessionId(event.currentTarget.value)}
+        onChange={(event) => {
+          setSessionId(event.currentTarget.value);
+          setState({ kind: "idle" });
+        }}
       />
-      <button type="submit">Download artifact</button>
+      <button type="submit" disabled={state.kind === "checking"} data-hydrated={hydrated}>
+        Download artifact
+      </button>
+      {state.kind === "failed" ? (
+        <p role="alert" className={styles.warning}>
+          {state.message}
+        </p>
+      ) : null}
+      {state.kind === "confirming" ? (
+        <div role="alert" className={styles.warning}>
+          <p>This session is private. Export it anyway?</p>
+          <button
+            type="button"
+            onClick={() => {
+              setState({ kind: "idle" });
+              navigate(exportHref(state.id, true));
+            }}
+          >
+            Export anyway
+          </button>{" "}
+          <button type="button" onClick={() => setState({ kind: "idle" })}>
+            Cancel
+          </button>
+        </div>
+      ) : null}
     </form>
   );
 }

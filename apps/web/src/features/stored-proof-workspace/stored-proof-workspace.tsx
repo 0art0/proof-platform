@@ -19,6 +19,7 @@ import { ProofWorkspace, type WorkspaceView } from "../proof-workspace";
 import { StatementView, usePresentation } from "../proof-workspace/presentation";
 import type { Presentation } from "@proof/language";
 import { LibraryDrawer } from "../library-drawer";
+import { InquiryPanel } from "../inquiry-panel";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
@@ -573,6 +574,19 @@ function StatefulStoredWorkspace({
         presentation={presentation}
         view={view}
         {...panelActions}
+      />
+      <InquiryPanel
+        sessionId={session.id}
+        node={node}
+        history={history}
+        selections={selections}
+        suggestions={suggestions}
+        move={moveState}
+        mutationPending={mutationPending}
+        presentation={presentation}
+        operators={session.operators}
+        view={view}
+        runCommand={runToolbarCommand}
       />
       <HistoryView
         history={history}

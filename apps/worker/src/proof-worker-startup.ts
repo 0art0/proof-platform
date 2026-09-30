@@ -3,7 +3,13 @@ import { ensureDevelopmentProofSession } from "./development-session";
 import type { LibraryStore } from "./library-repository";
 import { MemoryLibraryStore } from "./memory-library-store";
 import { postgresLibraryStore } from "./postgres-library-store";
-import { postgresProofStore } from "./postgres-proof-store";
+import {
+  DEFAULT_MIGRATIONS_DIRECTORY,
+  applyMigrations,
+  loadMigrations,
+  verifyMigrations,
+} from "./migrations/runner";
+import { postgresProofStore, type SqlPool } from "./postgres-proof-store";
 import { createProofHttpService, type ProofHttpService } from "./proof-http";
 import type { ProofStore } from "./proof-repository";
 
@@ -15,6 +21,11 @@ export type ProofStoreSelection =
       kind: "memory" | "postgres";
       store: ProofStore;
       library: LibraryStore;
+      /**
+       * Make the schema ready before serving. PostgreSQL: verify that every migration is applied
+       * and unchanged, or apply the pending ones when `autoMigrate` is set; memory: nothing.
+       */
+      prepareSchema: (options: Readonly<{ autoMigrate: boolean }>) => Promise<void>;
       close: () => Promise<void>;
     }>
   | Readonly<{ ok: false; message: string }>;
@@ -33,6 +44,7 @@ export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelecti
       kind: "memory" as const,
       store,
       library: store,
+      prepareSchema: async () => undefined,
       close: async () => undefined,
     });
   }
@@ -57,6 +69,12 @@ export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelecti
     kind: "postgres" as const,
     store: postgresProofStore(pool),
     library: postgresLibraryStore(pool),
+    prepareSchema: async ({ autoMigrate }) => {
+      const migrations = await loadMigrations(DEFAULT_MIGRATIONS_DIRECTORY);
+      const sqlPool = pool as unknown as SqlPool;
+      if (autoMigrate) await applyMigrations(sqlPool, migrations);
+      await verifyMigrations(sqlPool, migrations);
+    },
     close: () => pool.end(),
   });
 }
@@ -68,11 +86,18 @@ export type StartedProofWorker = Readonly<{
   close: () => Promise<void>;
 }>;
 
-/** Select the store, seed `session:development` idempotently, and serve the proof HTTP API. */
+/**
+ * Select the store, check its schema, seed `session:development` idempotently, and serve the proof
+ * HTTP API. With PostgreSQL the worker by default only verifies that every migration is applied
+ * and unchanged and refuses to start otherwise (schema changes need DDL rights and a deliberate
+ * step, and several workers must not race to alter it); `PROOF_AUTO_MIGRATE=true` applies the
+ * pending migrations first, for single-instance deployments. `npm run migrate` does the same.
+ */
 export async function startProofWorker(env: ProofWorkerEnvironment): Promise<StartedProofWorker> {
   const selection = selectProofStore(env);
   if (!selection.ok) throw new Error(selection.message);
   try {
+    await selection.prepareSchema({ autoMigrate: env.PROOF_AUTO_MIGRATE === "true" });
     const seeded = await ensureDevelopmentProofSession(selection.store);
     if (seeded.status !== "ready") {
       throw new Error(`Development session seeding failed: ${seeded.diagnostics[0].message}`);

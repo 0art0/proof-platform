@@ -9,8 +9,12 @@ const WEB_PORT = 3101;
 
 export default defineConfig({
   testDir: "./apps/web/e2e",
-  testMatch: ["proof-workspace.spec.ts", "problem-entry.spec.ts", "toolbar-actions.spec.ts"],
-  // Webpack dev compiles each route on first use, so cold runs need more headroom than Turbopack.
+  testMatch: [
+    "proof-workspace.spec.ts",
+    "problem-entry.spec.ts",
+    "toolbar-actions.spec.ts",
+    "inquiry-panel.spec.ts",
+  ],
   globalSetup: "./apps/web/e2e/global-warmup.ts",
   timeout: 60_000,
   expect: { timeout: 15_000 },
@@ -28,12 +32,14 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
-      // Webpack with polling avoids Turbopack's inotify watchers, which exhaust the OS watch
-      // limit when several worktrees and dev servers share one host.
-      command: `NEXT_TELEMETRY_DISABLED=1 WATCHPACK_POLLING=true PROOF_HTTP_ORIGIN=http://127.0.0.1:${WORKER_PORT} npx next dev apps/web --webpack --hostname 127.0.0.1 --port ${WEB_PORT}`,
+      // A production build: `next dev` recompiles routes and client chunks on demand, which under
+      // two parallel browsers stalled page loads for 5-27 s at a time (a single 100% CPU server
+      // process holding gigabytes) and made the 60 s tests flaky. The build runs once here, so the
+      // timeout covers it.
+      command: `NEXT_TELEMETRY_DISABLED=1 PROOF_HTTP_ORIGIN=http://127.0.0.1:${WORKER_PORT} npx next build apps/web --webpack && NEXT_TELEMETRY_DISABLED=1 PROOF_HTTP_ORIGIN=http://127.0.0.1:${WORKER_PORT} npx next start apps/web --hostname 127.0.0.1 --port ${WEB_PORT}`,
       url: `http://127.0.0.1:${WEB_PORT}`,
       reuseExistingServer: true,
-      timeout: 120_000,
+      timeout: 300_000,
     },
   ],
 });

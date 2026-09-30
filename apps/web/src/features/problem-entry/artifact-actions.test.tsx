@@ -102,16 +102,61 @@ describe("ArtifactUpload", () => {
 });
 
 describe("ArtifactDownload", () => {
-  it("opens the export proxy for the entered session", () => {
-    const navigate = vi.fn();
-    render(<ArtifactDownload navigate={navigate} />);
+  function enter() {
     fireEvent.change(screen.getByLabelText("Session ID to download"), {
       target: { value: " session:development " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Download artifact" }));
-    expect(navigate).toHaveBeenCalledExactlyOnceWith(
-      "/api/proof-sessions/session%3Adevelopment/export",
+  }
+
+  it("opens the export proxy directly for a shared session", async () => {
+    const fetchMock = stubFetch({ ok: true, data: { visibility: "shared" } }, 200);
+    const navigate = vi.fn();
+    render(<ArtifactDownload navigate={navigate} />);
+    enter();
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(
+        "/api/proof-sessions/session%3Adevelopment/export",
+      ),
     );
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "/api/proof-sessions/session%3Adevelopment/visibility",
+      expect.anything(),
+    );
+    expect(screen.queryByText(/is private/)).toBeNull();
+  });
+
+  it("requires an acknowledgement for a private session before exporting", async () => {
+    stubFetch({ ok: true, data: { visibility: "private" } }, 200);
+    const navigate = vi.fn();
+    render(<ArtifactDownload navigate={navigate} />);
+    enter();
+    expect(await screen.findByText("This session is private. Export it anyway?")).toBeVisible();
+    expect(navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Export anyway" }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(
+      "/api/proof-sessions/session%3Adevelopment/export?confirmPrivateExport=true",
+    );
+  });
+
+  it("requests nothing when the acknowledgement is cancelled", async () => {
+    stubFetch({ ok: true, data: { visibility: "private" } }, 200);
+    const navigate = vi.fn();
+    render(<ArtifactDownload navigate={navigate} />);
+    enter();
+    await screen.findByText("This session is private. Export it anyway?");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText(/is private/)).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("shows a readable error when the visibility cannot be read", async () => {
+    stubFetch({ ok: false, error: { message: "gone" } }, 404);
+    const navigate = vi.fn();
+    render(<ArtifactDownload navigate={navigate} />);
+    enter();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/visibility could not be read/);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

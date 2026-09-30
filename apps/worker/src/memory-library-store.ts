@@ -88,6 +88,21 @@ export class MemoryLibraryStore extends MemoryProofStore implements LibraryStore
     });
   }
 
+  /** Session deletion removes the session-scoped library rows (`ON DELETE CASCADE` in SQL). */
+  protected override sessionsDeleted(sessionIds: ReadonlySet<string>): void {
+    for (const table of [this.library.events, this.library.artifacts, this.library.revisions]) {
+      for (const [key, row] of table as Map<string, Readonly<{ sessionId?: string | null }>>) {
+        if (
+          row.sessionId !== undefined &&
+          row.sessionId !== null &&
+          sessionIds.has(row.sessionId)
+        ) {
+          table.delete(key);
+        }
+      }
+    }
+  }
+
   private async serialized<Result>(work: () => Promise<Result>): Promise<Result> {
     const previous = this.exclusive;
     let release: () => void = () => undefined;

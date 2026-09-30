@@ -140,10 +140,16 @@ export class MemoryProofStore implements ProofStore {
         );
       }
       context.commit();
+      if (context.deletedSessions.size > 0) this.sessionsDeleted(context.deletedSessions);
       return result;
     } finally {
       context.close();
     }
+  }
+
+  /** Called synchronously after a commit that deleted sessions; subclasses purge their own rows. */
+  protected sessionsDeleted(sessionIds: ReadonlySet<string>): void {
+    void sessionIds;
   }
 
   /** Test seam for fault injection; production returns the transaction unchanged. */
@@ -199,6 +205,8 @@ class MemoryTransactionContext {
   };
   private readonly locks = new Map<string, Promise<() => void>>();
   private closed = false;
+  /** Sessions this transaction deleted, so the store can purge dependent rows it owns. */
+  readonly deletedSessions = new Set<string>();
   readonly transaction: ProofStoreTransaction;
 
   constructor(
@@ -305,6 +313,20 @@ class MemoryTransactionContext {
       removed.push(idOf(row));
     }
     return removed;
+  }
+
+  /** Mirrors `PostgresProofStore.deleteSession`: every row of every session-scoped table. */
+  private removeSession(sessionId: string): void {
+    for (const name of TABLE_NAMES) {
+      const keys = new Set([...this.staged[name].keys(), ...this.committed[name].keys()]);
+      for (const recordKey of keys) {
+        const owner = name === "sessions" ? recordKey : sessionOfKey(recordKey);
+        if (owner !== sessionId) continue;
+        this.staged[name].delete(recordKey);
+        this.deleted[name].add(recordKey);
+      }
+    }
+    this.deletedSessions.add(sessionId);
   }
 
   /** Mirrors `PostgresProofStore.deleteProofRecords`, checking each immediate foreign key. */
@@ -496,7 +518,25 @@ class MemoryTransactionContext {
               operators: session.operators,
               ...(session.metadata === undefined ? {} : { metadata: session.metadata }),
               ...(session.readOnly === true ? { readOnly: true } : {}),
+              ...(session.visibility === "shared" ? { visibility: "shared" } : {}),
             };
+      },
+      setSessionVisibility: async (sessionId, visibility) => {
+        await this.lock(sessionId);
+        const session = this.row("sessions", sessionId);
+        if (session === undefined) return false;
+        // Only the non-default `shared` is stored; absent means private.
+        const next: { -readonly [Key in keyof ProofSession]: ProofSession[Key] } = { ...session };
+        if (visibility === "shared") next.visibility = "shared";
+        else delete next.visibility;
+        this.staged.sessions.set(sessionId, Object.freeze(next));
+        return true;
+      },
+      deleteSession: async (sessionId) => {
+        await this.lock(sessionId);
+        if (this.row("sessions", sessionId) === undefined) return false;
+        this.removeSession(sessionId);
+        return true;
       },
       markSessionReadOnly: async (sessionId) => {
         await this.lock(sessionId);

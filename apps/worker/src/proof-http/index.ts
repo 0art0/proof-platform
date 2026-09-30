@@ -39,6 +39,7 @@ import type { LibraryStore } from "../library-repository";
 import { postgresProofStore } from "../postgres-proof-store";
 import { handleArtifactRoute } from "./artifact-routes";
 import { handleLibraryRoute } from "./library-routes";
+import { handleSessionAdminRoute } from "./session-admin-routes";
 import { handleProblemSetupRoute } from "./problem-setup-routes";
 import { handleObserve, handleProtocolCommand } from "./protocol-commands";
 import {
@@ -328,6 +329,7 @@ async function handleRequest(
   if (await handleProblemSetupRoute(context, request, response)) return;
   if (await handleArtifactRoute(context, request, response)) return;
   if (await handleLibraryRoute(context, request, response)) return;
+  if (await handleSessionAdminRoute(context, request, response)) return;
   const { store, definitions, now } = context;
   const route = parseRoute(request.url);
   if (route === undefined) {

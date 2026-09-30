@@ -34,6 +34,43 @@ describe("GET /api/proof-sessions/:sessionId/export", () => {
     expect(await response.json()).toEqual(artifact);
     expect(mocks.exportProofArtifact).toHaveBeenCalledExactlyOnceWith("session:test", {
       signal: incoming.signal,
+      confirmPrivateExport: false,
+    });
+  });
+
+  it("forwards the private-export acknowledgement only for exactly true", async () => {
+    mocks.exportProofArtifact.mockResolvedValue({ ok: true, status: 200, body: artifact });
+    const base = "http://proof.test/api/proof-sessions/session%3Atest/export";
+    for (const [query, confirmed] of [
+      ["?confirmPrivateExport=true", true],
+      ["?confirmPrivateExport=1", false],
+      ["?confirmPrivateExport=false", false],
+    ] as const) {
+      mocks.exportProofArtifact.mockClear();
+      await GET(new Request(`${base}${query}`), context);
+      expect(mocks.exportProofArtifact.mock.calls[0]?.[1]).toMatchObject({
+        confirmPrivateExport: confirmed,
+      });
+    }
+  });
+
+  it("relays an unconfirmed private export as a 403 without an attachment", async () => {
+    const details = {
+      diagnostics: [{ code: "private-export-unconfirmed", message: "Private session." }],
+    };
+    mocks.exportProofArtifact.mockResolvedValue({
+      ok: false,
+      status: 403,
+      code: "private-export-unconfirmed",
+      message: "Private session.",
+      body: details,
+    });
+    const response = await GET(request(), context);
+    expect(response.status).toBe(403);
+    expect(response.headers.get("content-disposition")).toBeNull();
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { code: "private-export-unconfirmed" },
     });
   });
 

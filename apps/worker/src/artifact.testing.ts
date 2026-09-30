@@ -143,7 +143,7 @@ export async function startArtifactService(
     get,
     post,
     async exportArtifact(id = sessionId) {
-      const response = await fetch(`${sessionUrl(id)}/export`);
+      const response = await fetch(`${sessionUrl(id)}/export?confirmPrivateExport=true`);
       expect(response.status, await response.clone().text()).toBe(200);
       return (await response.json()) as ProofArtifact;
     },

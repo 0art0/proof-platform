@@ -17,6 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "npm run lint --workspaces --if-present",
+    "migrate": "npm run migrate -w @proof/worker --",
     "test": "npm run test --workspaces --if-present",
     "test:perf": "npm run test:perf --workspaces --if-present",
     "test:e2e": "playwright test",
