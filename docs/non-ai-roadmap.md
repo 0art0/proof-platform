@@ -321,7 +321,7 @@ otherwise automate — the substrate is in scope.
       objective, current attempt, unresolved constructions, top obstruction or requirement) and the actions
       "Use this", "Construct an object", "Find sufficient conditions", "Investigate this hypothesis", and
       "Try this method". Add a construction-task view with requirements by role.
-- [ ] **N35 Move authoring without AI (§13.1, refinement §7).** Add:
+- [~] **N35 Move authoring without AI (§13.1, refinement §7).** Add:
   - a visual move-template editor: selection contract, patterns picked from selections, parameters from
     menus, required artifacts, plan as a kernel-operation sequence, class, and examples;
   - validation of examples by running the plan;
@@ -338,7 +338,7 @@ otherwise automate — the substrate is in scope.
 - [x] **N37 Corpus and performance (§21.5–§21.6).** Extend the corpus across logic, algebra, number
       theory, sets, order, and a research-notation custom-operator case. Record deterministic coverage and
       interaction counts. Add performance budget tests for selection, suggestions, and previews.
-- [ ] **N38 End-to-end mouse-only flows (§21.4).** Add Playwright flows against the memory worker (N00):
+- [x] **N38 End-to-end mouse-only flows (§21.4).** Add Playwright flows against the memory worker (N00):
       solve a corpus problem mouse-only, delete an accidental move, backtrack with information, export,
       reimport, and view the pruned proof.
 
@@ -870,3 +870,34 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     `playwright.proof-workspace-memory.config.ts` now runs `next build --webpack && next start`; the
     workspace e2e suite passes 20/20 in about 1.4 min. Click retries were replaced by a `data-hydrated`
     marker (`features/hydration/use-hydrated.ts`). The other two Playwright configs still use `next dev`.
+- 2026-09-30 — N38 — `1ae642e` — `apps/web/e2e/mouse-only-flows.spec.ts` (+ `mouse-helpers.ts`), in the
+  memory-worker config. One isolated-session test solves `corpus:conjunction-swap` with pointer
+  interactions only: an accidental split is deleted through the confirmation dialog, a backtrack with
+  information adds a case split, the original branch is finished with close-by-hypothesis, the session is
+  exported through the private-session acknowledgement, reimported through the landing file chooser, and
+  the read-only pruned proof (4 steps, no sorry dependency) and tree (6 nodes, 1 abandoned) are checked.
+  MathLive selection uses the existing set-selection-then-`pointerup` convention, not a pixel drag. No UI
+  gaps were found; a non-empty sorry list is not exercised.
+- 2026-09-30 — N35 (backend; the editor UI is still open) — `e57aea3`, `716cd76` — moves `authoring.ts`
+  (subpath export `@proof/moves/authoring`): a strict `authoredMoveTemplateSchema` (selection contract,
+  patterns, parameters, required artifacts, a plan of 1–16 primitive steps, declared class, runnable
+  examples). The contract and parameters are the first primitive's; later steps replay recorded
+  N21-shaped selections, parameters and operations, re-matched on the previous state.
+  `validateMoveTemplate` runs every example through `materializeMoveOperation`, `planMove` and a
+  `planMoveSequence` cross-check, requires the declared class to equal the class composed from the kernel
+  steps, and compares goals, obligations and class up to alpha-renaming (≥ 2 positive and 1 negative
+  examples). `macroFromSemanticSteps`/`recordedMacroExample` build macros from recorded steps (fast-check:
+  a recorded macro reproduces its outcome on alpha-renamed states).
+  - Library artifact kind `move` (template, digest, author, review) is admitted only in
+    `move-discovery-draft`; drafts and reviews are append-only addition events. Envelope commands
+    `author-move-draft` and `review-move-draft` (human, `reviewed-authoring`); `GET
+/proof-sessions/:id/authored-moves` and `POST /proof-sessions/:id/authored-moves/validate`. Approval
+    re-validates and records the definition digest; rejections and change requests are recorded reviews.
+    Approved single-step moves join the session-scoped catalog (`planMove`/`prepareProofCommand` carry
+    `environment.moves`) and apply end to end over HTTP; drafts are never retrievable; re-approval changes
+    the definition hash, so N19 regeneration applies.
+  - Gaps: multi-step macros are validated, stored and approvable but not retrievable or applicable (one
+    edge carries one kernel operation; apply a macro as a semantic replay). Macros cannot contain
+    library-result steps. No promotion beyond `move-discovery-draft`, no withdrawal, and the author may
+    review their own draft. Artifact import revalidates with the base catalog and may reject sessions
+    that applied an authored move. No web proxy for the two new routes and no UI yet.
