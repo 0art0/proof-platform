@@ -61,6 +61,8 @@ export type WorkspaceHeaderProps = Readonly<{
   background?: string | undefined;
   currentNodeId: string;
   counts: SnapshotCounts;
+  /** An imported artifact: shown as a badge; every mutating action is disabled elsewhere. */
+  readOnly?: boolean | undefined;
   breadcrumb:
     | Readonly<{ kind: "loading" }>
     | Readonly<{ kind: "ready"; crumbs: readonly BranchCrumb[] }>
@@ -73,6 +75,7 @@ export function WorkspaceHeader({
   background,
   currentNodeId,
   counts,
+  readOnly = false,
   breadcrumb,
 }: WorkspaceHeaderProps) {
   const closed = counts.goals === 0 && counts.obligations === 0;
@@ -96,6 +99,15 @@ export function WorkspaceHeader({
           <span className={styles.snapshotStatusLabel}>Snapshot targets:</span>{" "}
           <strong>{snapshotStatusText(counts)}</strong>
         </p>
+        {readOnly ? (
+          <span
+            className={styles.readOnlyBadge}
+            data-testid="read-only-badge"
+            title="This session is read-only (imported artifact)"
+          >
+            Read-only · imported artifact
+          </span>
+        ) : null}
         <span>Current node {currentNodeId}</span>
       </div>
       <nav className={styles.breadcrumb} aria-label="Current branch">

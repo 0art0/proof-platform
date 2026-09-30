@@ -37,6 +37,7 @@ import {
 } from "./api-contract";
 import { createInteractionRecorder } from "./interaction-recorder";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
+import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
   describeCommandFailure,
   postProtocolCommand,
@@ -49,6 +50,9 @@ export type StoredProofSession = Readonly<{
   rootNodeId: string;
   currentNodeId: string;
   operators: readonly OperatorDeclaration[];
+  /** Set for a session imported from an artifact (N27): nothing in it can be changed. */
+  readOnly?: true | undefined;
+  visibility?: "shared" | undefined;
 }>;
 
 export type StoredProofWorkspaceProps = Readonly<{ session: StoredProofSession; node: ProofNode }>;
@@ -81,6 +85,7 @@ function StatefulStoredWorkspace({
   const [history, setHistory] = useState<HistoryState>({ kind: "loading" });
   const [notice, setNotice] = useState<Notice>();
   const [mutationPending, setMutationPending] = useState(false);
+  const readOnly = initialSession.readOnly === true;
   const [view, setView] = useState<WorkspaceView>("formal");
   const [selections, setSelections] = useState<readonly AnchoredProofSelection[]>([]);
   const presentation = usePresentation(session.operators);
@@ -532,10 +537,13 @@ function StatefulStoredWorkspace({
         sessionId={session.id}
         currentNodeId={node.id}
         counts={{ goals: node.state.goals.length, obligations: node.state.obligations.length }}
+        readOnly={readOnly}
         breadcrumb={breadcrumb}
       />
       <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node}>
         <ToolbarActionBar
+          sessionId={session.id}
+          readOnly={readOnly}
           node={node}
           rootNodeId={session.rootNodeId}
           operators={session.operators}
@@ -567,10 +575,15 @@ function StatefulStoredWorkspace({
         />
       </div>
 
+      {readOnly ? (
+        <p className={styles.readOnlyReason} role="note" data-testid="read-only-reason">
+          {READ_ONLY_REASON}: suggestions can be viewed but not applied.
+        </p>
+      ) : null}
       <SuggestionPanel
         suggestions={suggestions}
         move={moveState}
-        mutationPending={mutationPending}
+        mutationPending={mutationPending || readOnly}
         presentation={presentation}
         view={view}
         {...panelActions}
@@ -582,7 +595,7 @@ function StatefulStoredWorkspace({
         selections={selections}
         suggestions={suggestions}
         move={moveState}
-        mutationPending={mutationPending}
+        mutationPending={mutationPending || readOnly}
         presentation={presentation}
         operators={session.operators}
         view={view}
@@ -591,7 +604,7 @@ function StatefulStoredWorkspace({
       <HistoryView
         history={history}
         currentNodeId={node.id}
-        mutationPending={mutationPending}
+        mutationPending={mutationPending || readOnly}
         presentation={presentation}
         view={view}
         onBacktrack={backtrackTo}

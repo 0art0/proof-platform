@@ -94,6 +94,9 @@ export const storedProofSessionSchema = z
     rootNodeId: proofNodeIdSchema,
     currentNodeId: proofNodeIdSchema,
     operators: z.array(operatorDeclarationSchema),
+    /** Additive markers of the current-session read: an imported artifact, or a shared session. */
+    readOnly: z.literal(true).optional(),
+    visibility: z.literal("shared").optional(),
   })
   .strict();
 

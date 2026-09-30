@@ -149,6 +149,21 @@ describe("POST /artifacts", () => {
   });
 });
 
+describe("GET /proof-sessions/:id of an imported session", () => {
+  it("exposes the read-only marker, and only for an imported session", async () => {
+    const service = await target();
+    const created = await upload(service.origin, artifact);
+    const session = async (id: string) =>
+      (
+        (await (
+          await fetch(`${service.origin}/proof-sessions/${encodeURIComponent(id)}`)
+        ).json()) as Json
+      ).session as Json;
+    expect((await session(created.body.sessionId as string)).readOnly).toBe(true);
+    expect(await session("session:placeholder")).not.toHaveProperty("readOnly");
+  });
+});
+
 describe("a read-only imported session", () => {
   it("refuses every mutation route and command with 409 session-read-only", async () => {
     const service = await target();
