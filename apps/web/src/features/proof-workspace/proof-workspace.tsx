@@ -39,7 +39,11 @@ export type ProofWorkspaceProps = Readonly<{
   gestures?: GestureBindings;
   /** Makes exactly these selections active when its `id` changes (a drop's source and target). */
   selectionRequest?: SelectionRequest | undefined;
+  /** A link shown in the Active selections card once something is selected (no auto-scroll). */
+  suggestionsLink?: SuggestionsLink | undefined;
 }>;
+
+export type SuggestionsLink = Readonly<{ href: string; text: string }>;
 
 /** Render a ProofNode only after validating its complete runtime boundary. */
 export function ProofWorkspace({
@@ -49,6 +53,7 @@ export function ProofWorkspace({
   onSelectionChange,
   gestures,
   selectionRequest,
+  suggestionsLink,
 }: ProofWorkspaceProps) {
   const node = parseProofNode(nodeInput, operators);
   if (node === undefined) {
@@ -65,6 +70,7 @@ export function ProofWorkspace({
       onSelectionChange={onSelectionChange}
       gestures={gestures}
       selectionRequest={selectionRequest}
+      suggestionsLink={suggestionsLink}
     />
   );
 }
@@ -106,6 +112,7 @@ type ValidatedProofWorkspaceProps = Readonly<{
   onSelectionChange?: ((selections: readonly AnchoredProofSelection[]) => void) | undefined;
   gestures?: GestureBindings | undefined;
   selectionRequest?: SelectionRequest | undefined;
+  suggestionsLink?: SuggestionsLink | undefined;
 }>;
 
 const INITIAL_SELECTION_NOTICE =
@@ -118,6 +125,7 @@ function ValidatedProofWorkspace({
   onSelectionChange,
   gestures,
   selectionRequest,
+  suggestionsLink,
 }: ValidatedProofWorkspaceProps) {
   const [selectionState, dispatch] = useReducer(
     selectionGestureReducer,
@@ -198,7 +206,7 @@ function ValidatedProofWorkspace({
       <header className={styles.workspaceHeader}>
         <div>
           <p className={styles.eyebrow}>Proof snapshot</p>
-          <h2>Contextual sequents</h2>
+          <h2>Goals and obligations</h2>
         </div>
         <dl className={styles.snapshotFacts}>
           <div>
@@ -214,7 +222,10 @@ function ValidatedProofWorkspace({
 
       <div className={styles.workspaceBody}>
         <div className={styles.sequentColumn}>
-          <FamilyLegend />
+          <details className={styles.legendDetails}>
+            <summary>Colour and symbol key</summary>
+            <FamilyLegend />
+          </details>
           {view === "natural-language" ? (
             <p className={styles.viewNote}>
               Natural-language view is read-only. Switch to the formal view to select occurrences.
@@ -257,6 +268,11 @@ function ValidatedProofWorkspace({
             </ol>
           )}
 
+          {suggestionsLink === undefined || selectionState.active.length === 0 ? null : (
+            <a className={styles.suggestionsLink} href={suggestionsLink.href}>
+              {suggestionsLink.text}
+            </a>
+          )}
           <button
             className={styles.clearButton}
             type="button"
@@ -412,6 +428,7 @@ function ContextualSequentView({
       data-family={kind}
       data-target-id={target.id}
       aria-labelledby={titleId}
+      title={target.id}
     >
       <header className={styles.sequentHeader}>
         <div>
@@ -422,7 +439,6 @@ function ContextualSequentView({
             {targetLabel} {ordinal}
           </h3>
         </div>
-        <code>{target.id}</code>
       </header>
 
       <section

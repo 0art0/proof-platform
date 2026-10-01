@@ -6,6 +6,7 @@ import {
 } from "@proof/library";
 import { createHash } from "node:crypto";
 import { HAND_AUTHORED_MOVES, approvedKernelResults, type MoveDefinition } from "@proof/moves";
+import type { AuthoredMoveTemplate } from "@proof/moves/authoring";
 import type { DefinitionHash, ProtocolEnvironment } from "@proof/protocol";
 
 type Operators = NonNullable<ProtocolEnvironment["operators"]>;
@@ -48,6 +49,13 @@ export function approvedResultEnvironment(
   return approvedCatalog(operators).kernelResults;
 }
 
+/** An approved multi-step macro: its template and the first-step projection retrieval indexes. */
+export type MacroDefinition = Readonly<{
+  /** The first step's contract under the macro's ID. Retrieval only; never applicable alone. */
+  move: MoveDefinition;
+  template: AuthoredMoveTemplate;
+}>;
+
 /**
  * The approved definitions a worker retrieves, previews and applies with. Production uses
  * `APPROVED_DEFINITIONS`; tests inject another catalog to change a definition between preview
@@ -55,6 +63,12 @@ export function approvedResultEnvironment(
  */
 export type DefinitionCatalog = Readonly<{
   moves: readonly MoveDefinition[];
+  /**
+   * Approved multi-step macros (N35). They are kept apart from `moves` on purpose: `moves` is
+   * what the command path accepts as a single-edge move, while a macro is applied as a sequence of
+   * ordinary commands. Retrieval indexes `moves` plus each macro's first-step projection.
+   */
+  macros?: readonly MacroDefinition[];
   catalog(operators: Operators): ApprovedCatalog;
 }>;
 

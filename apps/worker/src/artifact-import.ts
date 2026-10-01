@@ -60,19 +60,25 @@ import {
   type JsonValue,
   type MovePreview,
   type ProofArtifact,
+  type ProofEdge,
   type ProofArtifactDiagnostic,
   type ProofArtifactImportRecord,
   type ProofNode,
   type ProtocolEnvironment,
 } from "@proof/protocol";
 import type { MoveDefinition } from "@proof/moves";
-import { validateMoveTemplate } from "@proof/moves/authoring";
-import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "./approved-catalog";
-import { approvedAuthoredMoves } from "./move-authoring";
+import { runMovePlan, validateMoveTemplate } from "@proof/moves/authoring";
+import {
+  APPROVED_DEFINITIONS,
+  type DefinitionCatalog,
+  type MacroDefinition,
+} from "./approved-catalog";
+import { approvedAuthoredMacros, approvedAuthoredMoves } from "./move-authoring";
 import { artifactDigest } from "./artifact-export";
 import { storedLlmCallSchema } from "./llm-call-repository";
 import {
   ProofStoreTransactionError,
+  displayedMoveSelections,
   isReadOnlySessionRecord,
   proofSessionIdSchema,
   transactionFailure,
@@ -290,7 +296,7 @@ function artifactAuthoredMoves(
   base: DefinitionCatalog,
   operators: NonNullable<ProtocolEnvironment["operators"]>,
   results: NonNullable<ProtocolEnvironment["results"]>,
-): readonly MoveDefinition[] {
+): Readonly<{ moves: readonly MoveDefinition[]; macros: readonly MacroDefinition[] }> {
   const admitted = artifact.library.additionEvents.flatMap((event) =>
     event.admission.decision === "admitted" &&
     event.layer === "move-discovery-draft" &&
@@ -306,17 +312,20 @@ function artifactAuthoredMoves(
     }
   }
   const catalog = base.catalog(operators).results;
-  return approvedAuthoredMoves(admitted)
-    .filter((move) => !base.moves.some(({ id }) => id === move.id))
-    .filter(
-      (move) =>
-        validateMoveTemplate(approvedTemplates.get(move.id), {
-          operators,
-          results,
-          artifactExists: (reference) =>
-            reference.kind === "result" && catalog.some(({ id }) => id === reference.id),
-        }).ok,
-    );
+  const valid = (id: string) =>
+    !base.moves.some((move) => move.id === id) &&
+    validateMoveTemplate(approvedTemplates.get(id), {
+      operators,
+      results,
+      artifactExists: (reference) =>
+        reference.kind === "result" &&
+        catalog.some(({ id: resultId }) => resultId === reference.id),
+    }).ok;
+  return {
+    moves: approvedAuthoredMoves(admitted).filter((move) => valid(move.id)),
+    // Macros are revalidated the same way; each applied macro is also re-run (checkMacros).
+    macros: approvedAuthoredMacros(admitted).filter(({ move }) => valid(move.id)),
+  };
 }
 
 /** Every revalidation step after the schema and the digest; throws `ArtifactRejection`. */
@@ -349,10 +358,16 @@ class ArtifactValidator {
       ]);
     }
     // The base catalog plus the authored moves approved in THIS artifact's own library section.
-    const authored = artifactAuthoredMoves(artifact, baseDefinitions, operators, results);
-    if (authored.length > 0) {
+    const { moves: authored, macros } = artifactAuthoredMoves(
+      artifact,
+      baseDefinitions,
+      operators,
+      results,
+    );
+    if (authored.length > 0 || macros.length > 0) {
       this.definitions = Object.freeze({
         moves: [...baseDefinitions.moves, ...authored],
+        ...(macros.length === 0 ? {} : { macros }),
         catalog: baseDefinitions.catalog,
       });
     }
@@ -369,6 +384,7 @@ class ArtifactValidator {
       this.checkSuggestionSets();
       this.checkPreviews();
       this.checkTransitions();
+      this.checkMacroApplications();
       this.checkReplaySteps();
       this.checkDeletions();
       this.checkInteractionEvents();
@@ -484,6 +500,17 @@ class ArtifactValidator {
           operation: preview.operation,
           ...(preview.menuSelection === undefined ? {} : { menuSelection: preview.menuSelection }),
           ...(preview.definitions === undefined ? {} : { definitions: preview.definitions }),
+          ...(preview.macro === undefined
+            ? {}
+            : {
+                macro: {
+                  steps: preview.macro.steps.map(({ id, moveId, operation }) => ({
+                    id,
+                    moveId,
+                    operation,
+                  })),
+                },
+              }),
         },
         this.environment,
       );
@@ -565,6 +592,93 @@ class ArtifactValidator {
         );
       }
     });
+  }
+
+  /**
+   * Every macro application (edges sharing a macro link) is re-run with the artifact's own
+   * approved macro: the steps must be consecutive, name the template's primitives, and carry
+   * exactly the operations the template produces from the first step's displayed selections.
+   */
+  private checkMacroApplications(): void {
+    const { tree } = this.artifact;
+    const applications = new Map<string, { edge: ProofEdge; index: number }[]>();
+    tree.edges.forEach((edge, index) => {
+      if (edge.macro === undefined) return;
+      const steps = applications.get(edge.macro.previewId) ?? [];
+      steps.push({ edge, index });
+      applications.set(edge.macro.previewId, steps);
+    });
+    for (const [previewId, entries] of applications) {
+      const steps = [...entries].sort((a, b) => a.edge.macro!.stepIndex - b.edge.macro!.stepIndex);
+      const path = ["tree", "edges", steps[0]?.index ?? 0];
+      const first = steps[0]?.edge;
+      const link = first?.macro;
+      if (first === undefined || link === undefined) continue;
+      const macro = this.definitions.macros?.find(({ move }) => move.id === link.moveId);
+      if (macro === undefined) {
+        fail(
+          "macro-not-approved",
+          `The edge ${first.id} applies the macro ${link.moveId}, which the artifact does not approve.`,
+          path,
+        );
+      }
+      const plan = macro.template.plan.steps;
+      const baseCommandId = first.commandId.replace(/:macro:1$/, "");
+      if (
+        steps.length !== plan.length ||
+        steps.some(
+          ({ edge }, position) =>
+            edge.macro?.moveId !== link.moveId ||
+            edge.macro.stepIndex !== position + 1 ||
+            edge.macro.stepCount !== plan.length ||
+            edge.macro.stepId !== plan[position]?.id ||
+            edge.moveId !== plan[position]?.moveId ||
+            edge.commandId !== `${baseCommandId}:macro:${position + 1}` ||
+            (position > 0 && edge.parentNodeId !== steps[position - 1]?.edge.childNodeId),
+        )
+      ) {
+        fail(
+          "macro-application-invalid",
+          `The steps of macro ${link.moveId} do not form one complete, consecutive application.`,
+          path,
+        );
+      }
+      const preview = this.requirePreview(previewId, path);
+      const parent = this.requireNode(first.parentNodeId, [...path, "parentNodeId"]);
+      const last = this.requireNode(steps.at(-1)!.edge.childNodeId, path);
+      const set = this.requireSuggestionSet(preview.suggestionSetId, path);
+      const chosen = set.suggestions.find(({ id }) => id === preview.chosenSuggestionId);
+      const selections = chosen === undefined ? undefined : displayedMoveSelections(set, chosen);
+      const run =
+        selections === undefined
+          ? undefined
+          : runMovePlan(
+              macro.template,
+              parent.state,
+              selections,
+              preview.menuSelection?.choices ?? {},
+              this.environment,
+              baseCommandId,
+            );
+      if (
+        run === undefined ||
+        !run.ok ||
+        preview.moveId !== link.moveId ||
+        preview.nodeId !== parent.id ||
+        !sameJson(
+          run.operations,
+          steps.map(({ edge }) => edge.operation),
+        ) ||
+        !sameJson(run.state, last.state) ||
+        !sameJson(run.state, preview.afterState)
+      ) {
+        fail(
+          "macro-not-reproduced",
+          `Re-running the approved macro ${link.moveId} does not reproduce its recorded steps.`,
+          path,
+        );
+      }
+    }
   }
 
   private checkReplaySteps(): void {

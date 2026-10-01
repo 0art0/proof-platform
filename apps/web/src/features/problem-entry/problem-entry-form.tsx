@@ -20,10 +20,12 @@ import {
   draftPathLabel,
   emptyProblemForm,
   formToDraft,
+  missingRequiredFields,
   type DeclarationRow,
   type FormProblem,
   type ProblemForm,
 } from "./draft-form";
+import { recordRecentSession } from "./recent-sessions";
 import { StatementField } from "./statement-field";
 import styles from "./problem-entry.module.css";
 
@@ -120,8 +122,11 @@ export function ProblemEntryForm({
 
   const review = async () => {
     setReviewed(undefined);
-    if (!current.ok) {
-      setNotice({ kind: "problems", problems: current.problems });
+    const missing = missingRequiredFields(form);
+    if (!current.ok || missing.length > 0) {
+      const known = new Set(missing.map(({ field }) => field));
+      const others = current.ok ? [] : current.problems.filter(({ field }) => !known.has(field));
+      setNotice({ kind: "problems", problems: [...missing, ...others] });
       return;
     }
     const draft = current.draft;
@@ -177,6 +182,10 @@ export function ProblemEntryForm({
         reviewedDigest: reviewed.review.digest,
       });
       if (response.ok) {
+        recordRecentSession({
+          id: reviewed.sessionId,
+          title: reviewed.review.metadata.problem.title,
+        });
         navigate(`/sessions/${encodeURIComponent(reviewed.sessionId)}`);
         return;
       }
@@ -203,11 +212,16 @@ export function ProblemEntryForm({
       }}
     >
       <Section title="Problem">
-        <Field label="Problem title">
-          <input value={form.title} onChange={text("title")} />
+        <Field label="Problem title" required>
+          <input value={form.title} onChange={text("title")} aria-required="true" />
         </Field>
-        <Field label="Problem statement">
-          <textarea rows={4} value={form.statement} onChange={text("statement")} />
+        <Field label="Problem statement" required>
+          <textarea
+            rows={4}
+            value={form.statement}
+            onChange={text("statement")}
+            aria-required="true"
+          />
         </Field>
       </Section>
 
@@ -215,14 +229,14 @@ export function ProblemEntryForm({
         <p className={styles.sectionIntro}>
           Tell us what a reader may assume when exploring this problem.
         </p>
-        <Field label="Assumed level">
+        <Field label="Assumed level" required>
           <input
             placeholder="first-year undergraduate"
             value={form.backgroundLevel}
             onChange={text("backgroundLevel")}
           />
         </Field>
-        <Field label="What the reader is expected to know">
+        <Field label="What the reader is expected to know" required>
           <textarea rows={2} value={form.backgroundSummary} onChange={text("backgroundSummary")} />
         </Field>
       </Section>
@@ -378,6 +392,7 @@ export function ProblemEntryForm({
             <StatementField
               key={row.key}
               label={`Goal ${index + 1}`}
+              required={index === 0}
               row={row}
               latex={latex}
               onChange={(next) => update((f) => ({ ...f, goals: replaceAt(f.goals, index, next) }))}
@@ -621,7 +636,7 @@ function NoticeView({ notice }: Readonly<{ notice: Notice }>) {
         }));
   return (
     <div role="alert" className={styles.warning}>
-      <p>The draft cannot be reviewed yet:</p>
+      <p>The setup cannot be checked yet:</p>
       <ul>
         {items.map((item, index) => (
           <li key={index}>
@@ -642,10 +657,15 @@ function Section({ title, children }: Readonly<{ title: string; children: ReactN
   );
 }
 
-function Field({ label, children }: Readonly<{ label: string; children: ReactNode }>) {
+/** The required marker is CSS-generated so the label text stays exactly `label`. */
+function Field({
+  label,
+  required,
+  children,
+}: Readonly<{ label: string; required?: boolean; children: ReactNode }>) {
   return (
     <label className={styles.field}>
-      <span>{label}</span>
+      <span data-marker={required === true ? "required" : undefined}>{label}</span>
       {children}
     </label>
   );

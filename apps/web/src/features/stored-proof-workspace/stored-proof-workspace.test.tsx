@@ -983,7 +983,7 @@ describe("StoredProofWorkspace", () => {
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
     expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
 
-    fireEvent.click(within(card).getByRole("button", { name: "Choose inputs" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Fill in missing values" }));
     const form = await within(card).findByRole("form", {
       name: "Parameter menus for Split goal conjunction",
     });

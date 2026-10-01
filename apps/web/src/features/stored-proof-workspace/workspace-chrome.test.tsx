@@ -270,3 +270,37 @@ describe("WorkspaceToolbar", () => {
     );
   });
 });
+
+describe("WorkspaceHeader problem statement", () => {
+  it("shows the title as the heading, the session id as the eyebrow, and the statement collapsed", () => {
+    render(
+      <WorkspaceHeader
+        sessionId="session:test"
+        title="Commute a conjunction"
+        statement="Show that p and q implies q and p."
+        currentNodeId="node:c"
+        counts={{ goals: 1, obligations: 0 }}
+        breadcrumb={{ kind: "loading" }}
+      />,
+    );
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Commute a conjunction" }),
+    ).toHaveAttribute("title", "session:test");
+    expect(screen.getByText("session:test")).toBeVisible();
+    const details = screen.getByText("Problem statement").closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    expect(details).toHaveTextContent("Show that p and q implies q and p.");
+  });
+
+  it("omits the statement section when there is no statement", () => {
+    render(
+      <WorkspaceHeader
+        sessionId="session:test"
+        currentNodeId="node:c"
+        counts={{ goals: 1, obligations: 0 }}
+        breadcrumb={{ kind: "loading" }}
+      />,
+    );
+    expect(screen.queryByText("Problem statement")).toBeNull();
+  });
+});

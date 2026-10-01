@@ -110,15 +110,16 @@ export function BacktrackDialog({
       title="Backtrack with information"
       description={
         <p>
-          Insert a classical case split on P and on not P at an earlier node. The current branch
-          stays in the discovery tree; a case whose goal is P closes at once, and the other case
-          becomes the current node.
+          Go back to an earlier step and split the proof there into two cases: the selected
+          statement is true, or it is false. The case where it is true closes at once if that
+          statement is its goal; the other case becomes your current step. Your current branch stays
+          in the proof history.
         </p>
       }
       onClose={onClose}
     >
       <p className={styles.proposition} data-testid="backtrack-proposition">
-        <span>P = </span>
+        <span>Selected statement: </span>
         <StatementView
           expression={proposition.expression}
           declarations={declarationsOf(node, proposition)}
@@ -128,16 +129,17 @@ export function BacktrackDialog({
       </p>
       {analysis.kind === "loading" ? (
         <p role="status" className={styles.muted}>
-          Asking the proof service where P can be split…
+          Asking the proof service where this statement can be split…
         </p>
       ) : null}
       {ready !== undefined ? (
         <>
           <p className={styles.muted}>
-            Free symbols: {ready.freeSymbols.length === 0 ? "none" : ready.freeSymbols.join(", ")}
+            Symbols it mentions:{" "}
+            {ready.freeSymbols.length === 0 ? "none" : ready.freeSymbols.join(", ")}
           </p>
           <fieldset ref={choices} className={styles.choices}>
-            <legend id={groupId}>Ancestor to split at (closest first)</legend>
+            <legend id={groupId}>Earlier step to split at (nearest first)</legend>
             {ready.ancestors.map((ancestor) => (
               <AncestorOption
                 key={ancestor.nodeId}
@@ -154,7 +156,8 @@ export function BacktrackDialog({
           </fieldset>
           {closest === undefined ? (
             <p role="alert" className={styles.error}>
-              No ancestor declares every symbol of P, so P cannot be split on earlier.
+              No earlier step declares every symbol of the selected statement, so it cannot be split
+              on there.
             </p>
           ) : null}
         </>
@@ -179,7 +182,7 @@ export function BacktrackDialog({
           disabled={pending || chosen === undefined}
           onClick={() => void submit()}
         >
-          {pending ? "Splitting…" : "Split on P here"}
+          {pending ? "Splitting…" : "Split here"}
         </button>
       </div>
     </ToolbarDialog>
@@ -216,8 +219,8 @@ function AncestorOption({
   const reason = ancestor.eligible
     ? undefined
     : ancestor.unavailableSymbols.length > 0
-      ? `Unavailable symbols: ${ancestor.unavailableSymbols.join(", ")}`
-      : "P is not a well-formed proposition there";
+      ? `Not yet declared here: ${ancestor.unavailableSymbols.join(", ")}`
+      : "The statement is not well-formed there";
   return (
     <label
       className={styles.choice}
@@ -233,12 +236,12 @@ function AncestorOption({
         onChange={onChoose}
       />
       <span>
-        <strong>
-          {ancestor.nodeId}
-          {isRoot ? " (root)" : ""}
-        </strong>{" "}
-        · {ancestor.distance} {ancestor.distance === 1 ? "step" : "steps"} up
-        {closest ? " · closest eligible" : ""}
+        <strong title={ancestor.nodeId}>
+          {isRoot
+            ? "The starting point"
+            : `${ancestor.distance} ${ancestor.distance === 1 ? "step" : "steps"} back`}
+        </strong>
+        {closest ? " · nearest option" : ""}
         {target === undefined ? null : (
           <span className={styles.choiceDetail}>
             {ancestor.target.kind === "goal" ? "Goal: " : "Obligation: "}

@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { exportHref, fetchSessionVisibility } from "../stored-proof-workspace/export-action";
 import { useHydrated } from "../hydration/use-hydrated";
+import { recordRecentSession } from "./recent-sessions";
 import styles from "./problem-entry.module.css";
 
 type Diagnostic = Readonly<{ code: string; message: string; path?: readonly (string | number)[] }>;
@@ -56,6 +57,7 @@ export function ArtifactUpload({
     const sessionId = uploadedSessionId(body);
     if (response.ok && sessionId !== undefined) {
       setNotice({ kind: "idle" });
+      recordRecentSession({ id: sessionId, title: `Opened file: ${file.name}` });
       navigate(`/sessions/${encodeURIComponent(sessionId)}`);
       return;
     }
@@ -81,17 +83,20 @@ export function ArtifactUpload({
         <div role="alert" className={styles.warning}>
           <p>{notice.message}</p>
           {notice.diagnostics.length > 0 ? (
-            <ul>
-              {notice.diagnostics.map((diagnostic, index) => (
-                <li key={index} data-code={diagnostic.code}>
-                  <code>{diagnostic.code}</code>
-                  {diagnostic.path === undefined || diagnostic.path.length === 0
-                    ? null
-                    : ` at ${diagnostic.path.join(".")}`}
-                  : {diagnostic.message}
-                </li>
-              ))}
-            </ul>
+            <details className={styles.details}>
+              <summary>Technical details</summary>
+              <ul>
+                {notice.diagnostics.map((diagnostic, index) => (
+                  <li key={index} data-code={diagnostic.code}>
+                    <code>{diagnostic.code}</code>
+                    {diagnostic.path === undefined || diagnostic.path.length === 0
+                      ? null
+                      : ` at ${diagnostic.path.join(".")}`}
+                    : {diagnostic.message}
+                  </li>
+                ))}
+              </ul>
+            </details>
           ) : null}
         </div>
       ) : null}
@@ -162,6 +167,7 @@ export function ArtifactDownload({
       {state.kind === "confirming" ? (
         <div role="alert" className={styles.warning}>
           <p>This session is private. Export it anyway?</p>
+          <p>The file contains the whole proof state, including the problem and background.</p>
           <button
             type="button"
             onClick={() => {

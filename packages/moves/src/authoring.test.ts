@@ -10,6 +10,7 @@ import {
 } from "@proof/mathjson-model";
 import {
   AUTHORED_MOVE_ID_PREFIX,
+  authoredMacroDefinition,
   authoredMoveDefinition,
   authoredMoveTemplateSchema,
   macroFromSemanticSteps,
@@ -563,7 +564,7 @@ describe("macroFromSemanticSteps", () => {
     ]);
     expect(template.transitionClass).toBe("equivalence");
     const validation = validateMoveTemplate(template, { operators });
-    expect(validation).toMatchObject({ ok: true, report: { stepCount: 2, retrievable: false } });
+    expect(validation).toMatchObject({ ok: true, report: { stepCount: 2, retrievable: true } });
   });
 
   it("is not projected to a retrievable definition", () => {
@@ -574,6 +575,41 @@ describe("macroFromSemanticSteps", () => {
         "macro",
       ),
     ).toBeUndefined();
+  });
+
+  it("projects an approved macro to its first step for retrieval only", () => {
+    const approval = { status: "approved", reviewerId: "reviewer:human" } as const;
+    const macro = authoredMacroDefinition(macroTemplate(), approval, "macro");
+    expect(macro).toBeDefined();
+    expect(macro?.definition).toMatchObject({
+      id: "authored:intro-twice",
+      implementation: { operationKind: "introduce-implication" },
+      transitionClass: "equivalence",
+    });
+    expect(macro?.template.plan.steps).toHaveLength(2);
+    // A single-step template is an ordinary definition, not a macro; malformed input never projects.
+    expect(authoredMacroDefinition(introTemplate(), approval, "single")).toBeUndefined();
+    expect(authoredMacroDefinition({ id: "authored:broken" }, approval, "bad")).toBeUndefined();
+  });
+
+  it("reports every step's outcome from a run", () => {
+    const { before } = recordedSteps();
+    const run = runMovePlan(
+      macroTemplate(),
+      before,
+      { target: conclusionSelection() } as MoveSelections,
+      {},
+      environment,
+      "outcomes",
+    );
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(run.steps.map(({ index, id, moveId }) => [index, id, moveId])).toEqual([
+      [1, "step-1", "move:introduce-implication"],
+      [2, "step-2", "move:introduce-implication"],
+    ]);
+    expect(run.steps.at(-1)?.state).toEqual(run.state);
+    expect(run.steps[0]?.operation.resultStateId).toBe(run.steps[0]?.state.id);
   });
 
   it("composes the declared class from the steps and rejects a mismatch", () => {

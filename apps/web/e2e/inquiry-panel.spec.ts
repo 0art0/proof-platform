@@ -90,6 +90,8 @@ test("investigating a hypothesis records a Determine question shown in the inqui
 }) => {
   await openSession(page, COMMUTE_DRAFT);
   const panel = page.getByRole("region", { name: "Inquiry" });
+  // The panel starts collapsed until there is an objective or a selection.
+  await panel.getByText("Show inquiry details").click();
   const investigate = panel.getByRole("button", { name: "Investigate this hypothesis" });
   await expect(investigate).toBeDisabled();
   await expect(panel.getByText("Select an occurrence in a hypothesis first.")).toBeVisible();
@@ -115,6 +117,7 @@ test("constructing an object on an existential goal shows its construction task"
 }) => {
   await openSession(page, EXISTENTIAL_DRAFT);
   const panel = page.getByRole("region", { name: "Inquiry" });
+  await panel.getByText("Show inquiry details").click();
   const construct = panel.getByRole("button", { name: "Construct an object" });
   await expect(construct).toBeDisabled();
   await expect(

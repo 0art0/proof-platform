@@ -496,3 +496,23 @@
     position: static;
   }
 }
+
+.legendDetails {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.legendDetails > summary {
+  width: fit-content;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.legendDetails > ul {
+  margin-top: 0.4rem;
+}
+
+.suggestionsLink {
+  font-size: 0.82rem;
+  font-weight: 700;
+}

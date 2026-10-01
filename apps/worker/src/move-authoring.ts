@@ -24,6 +24,7 @@ import {
   type MoveReviewDecision,
 } from "@proof/library";
 import {
+  authoredMacroDefinition,
   authoredMoveDefinition,
   authoredMoveTemplateSchema,
   validateMoveTemplate,
@@ -32,7 +33,7 @@ import {
   type MoveTemplateValidationOptions,
 } from "@proof/moves/authoring";
 import type { MoveDefinition } from "@proof/moves";
-import { definitionHash, type DefinitionCatalog } from "./approved-catalog";
+import { definitionHash, type DefinitionCatalog, type MacroDefinition } from "./approved-catalog";
 import {
   addLibraryArtifact,
   listLibrary,
@@ -133,7 +134,9 @@ export function summarizeAuthoredMoves(
   }
   return [...summaries].map(([moveId, entry]) => {
     const definition =
-      entry.active === undefined ? undefined : approvedDefinition(entry.active, moveId);
+      entry.active === undefined
+        ? undefined
+        : (approvedDefinition(entry.active, moveId) ?? approvedMacro(entry.active, moveId));
     return {
       moveId,
       name: entry.name,
@@ -158,10 +161,23 @@ function approvedDefinition(artifact: LibraryMove, moveId: string): MoveDefiniti
   return definition?.id === moveId ? definition : undefined;
 }
 
-/** The approved, retrievable definitions among a session's stored move artifacts. */
-export function approvedAuthoredMoves(
-  artifacts: readonly LibraryArtifact[],
-): readonly MoveDefinition[] {
+/** The macro of an approved review artifact (a template of two or more steps), if it is one. */
+function approvedMacro(artifact: LibraryMove, moveId: string): MacroDefinition | undefined {
+  const { approval, review } = artifact;
+  if (approval.status !== "approved" || review?.decision !== "approved") return undefined;
+  if (definitionHash(artifact.template) !== artifact.definitionDigest) return undefined;
+  const macro = authoredMacroDefinition(
+    artifact.template,
+    { status: "approved", reviewerId: approval.reviewerId },
+    `authored by ${artifact.authorId}`,
+  );
+  return macro?.definition.id === moveId
+    ? { move: macro.definition, template: macro.template }
+    : undefined;
+}
+
+/** The latest approved review of each move among a session's stored move artifacts. */
+function latestApprovedReviews(artifacts: readonly LibraryArtifact[]): Map<string, LibraryMove> {
   const latest = new Map<string, LibraryMove>();
   for (const artifact of moveArtifacts(artifacts)) {
     const moveId = templateId(artifact);
@@ -169,9 +185,26 @@ export function approvedAuthoredMoves(
       latest.set(moveId, artifact);
     }
   }
-  return [...latest].flatMap(([moveId, artifact]) => {
+  return latest;
+}
+
+/** The approved, retrievable definitions among a session's stored move artifacts. */
+export function approvedAuthoredMoves(
+  artifacts: readonly LibraryArtifact[],
+): readonly MoveDefinition[] {
+  return [...latestApprovedReviews(artifacts)].flatMap(([moveId, artifact]) => {
     const definition = approvedDefinition(artifact, moveId);
     return definition === undefined ? [] : [definition];
+  });
+}
+
+/** The approved multi-step macros among a session's stored move artifacts. */
+export function approvedAuthoredMacros(
+  artifacts: readonly LibraryArtifact[],
+): readonly MacroDefinition[] {
+  return [...latestApprovedReviews(artifacts)].flatMap(([moveId, artifact]) => {
+    const macro = approvedMacro(artifact, moveId);
+    return macro === undefined ? [] : [macro];
   });
 }
 
@@ -187,11 +220,15 @@ export async function sessionDefinitions(
   if (library === undefined) return base;
   const listed = await listLibrary(library, { sessionId, layers: ["move-discovery-draft"] });
   if (listed.status !== "found") return base;
-  const authored = approvedAuthoredMoves(listed.artifacts).filter(
-    (move) => !base.moves.some(({ id }) => id === move.id),
-  );
-  if (authored.length === 0) return base;
-  return Object.freeze({ moves: [...base.moves, ...authored], catalog: base.catalog });
+  const taken = (id: string) => base.moves.some((move) => move.id === id);
+  const authored = approvedAuthoredMoves(listed.artifacts).filter((move) => !taken(move.id));
+  const macros = approvedAuthoredMacros(listed.artifacts).filter(({ move }) => !taken(move.id));
+  if (authored.length === 0 && macros.length === 0) return base;
+  return Object.freeze({
+    moves: [...base.moves, ...authored],
+    ...(macros.length === 0 ? {} : { macros: [...(base.macros ?? []), ...macros] }),
+    catalog: base.catalog,
+  });
 }
 
 export type SessionAuthoredMoves = Readonly<{
@@ -206,6 +243,14 @@ export async function readAuthoredMoves(
   const listed = await listLibrary(library, { sessionId, layers: ["move-discovery-draft"] });
   if (listed.status !== "found") return listed;
   return { status: "found", moves: summarizeAuthoredMoves(listed.artifacts) };
+}
+
+/** Whether the move's latest approved version is in the session's retrieval catalog. */
+function isRetrievable(artifacts: readonly LibraryArtifact[], moveId: string | undefined): boolean {
+  return (
+    approvedAuthoredMoves(artifacts).some(({ id }) => id === moveId) ||
+    approvedAuthoredMacros(artifacts).some(({ move }) => move.id === moveId)
+  );
 }
 
 const CLASSIFICATION = { domains: ["proof-moves"], level: "foundational" } as const;
@@ -374,7 +419,7 @@ export async function reviewMoveDraft(
       artifact,
       decision: artifact.review.decision,
       definitionDigest: artifact.definitionDigest,
-      retrievable: approvedAuthoredMoves([...moves]).some(({ id }) => id === templateId(artifact)),
+      retrievable: isRetrievable(moves, templateId(artifact)),
     };
   }
   const draft = moves.find(
@@ -448,7 +493,6 @@ export async function reviewMoveDraft(
     decision: input.decision,
     definitionDigest: draft.definitionDigest,
     retrievable:
-      input.decision === "approved" &&
-      approvedAuthoredMoves([...moves, added.event.artifact]).some(({ id }) => id === template.id),
+      input.decision === "approved" && isRetrievable([...moves, added.event.artifact], template.id),
   };
 }

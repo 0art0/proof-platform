@@ -421,3 +421,23 @@ describe("InquiryPanel actions", () => {
 
 // Keep the premise target referenced by fixtures used in other suites.
 void PREMISE_TARGET;
+
+describe("InquiryPanel collapsing", () => {
+  it("starts collapsed while there is nothing to show, and opens for a selection", async () => {
+    stubFetch();
+    renderPanel();
+    await screen.findByTestId("inquiry-objective");
+    const details = screen.getByText(/Show inquiry details/).closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    cleanup();
+
+    stubFetch();
+    renderPanel({
+      selections: [
+        selection(node, { kind: "hypothesis", id: statementIdSchema.parse("hypothesis:eps") }, [1]),
+      ],
+    });
+    await screen.findByTestId("inquiry-objective");
+    expect(screen.getByText("Hide inquiry details").closest("details")).toHaveAttribute("open");
+  });
+});

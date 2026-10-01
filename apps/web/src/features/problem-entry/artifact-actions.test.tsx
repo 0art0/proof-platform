@@ -91,6 +91,26 @@ describe("ArtifactUpload", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("keeps the technical details collapsed behind the one-line message", async () => {
+    stubFetch(
+      {
+        ok: false,
+        error: { code: "x", message: "Edge 2 differs." },
+        details: { diagnostics: [{ code: "x", message: "Edge 2 differs.", path: ["a"] }] },
+      },
+      422,
+    );
+    render(<ArtifactUpload navigate={vi.fn()} />);
+    choose(JSON.stringify(artifact));
+    fireEvent.click(screen.getByRole("button", { name: "Open proof file" }));
+    const alert = await screen.findByRole("alert");
+    const details = alert.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent("Technical details");
+    expect(alert.querySelector("p")).toHaveTextContent("The artifact was not imported");
+  });
+
   it("refuses a file that is not JSON without calling the service", async () => {
     const fetchMock = stubFetch({}, 500);
     render(<ArtifactUpload navigate={vi.fn()} />);

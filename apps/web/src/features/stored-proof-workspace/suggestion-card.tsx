@@ -2,6 +2,7 @@
 
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, MovePreview, ProofEdge } from "@proof/protocol";
+import { useId } from "react";
 import type { WorkspaceView } from "../proof-workspace";
 import { InlineLatex, NaturalLanguageText } from "../proof-workspace/presentation";
 import { ParameterMenu, type DisplayedParameterMenu } from "./parameter-menu";
@@ -9,6 +10,7 @@ import { PreviewDetails } from "./preview-details";
 import { suggestionCategory } from "./preview-diff";
 import {
   CategoryBadge,
+  EvidenceBadge,
   MatchBadge,
   ProvenanceBadge,
   SourceBadge,
@@ -75,6 +77,7 @@ export function SuggestionCard({
   view,
   ...actions
 }: SuggestionCardProps) {
+  const reasonId = useId();
   const active = move.kind !== "idle" && move.suggestionId === suggestion.id;
   const preview = active && move.kind === "previewed" ? move.preview : undefined;
   const menu =
@@ -92,6 +95,15 @@ export function SuggestionCard({
     suggestion.abstractionFit === "not-used";
   const previewable = suggestion.applicability === "applicable";
   const busy = active && (move.kind === "previewing" || move.kind === "applying");
+  // A sorry is an unproved assumption, whatever transition class is stored beside it.
+  const sorry = suggestion.source === "move" && suggestion.artifactId === "move:mark-sorry";
+  const previewReason = previewable
+    ? undefined
+    : suggestion.abstractionFit !== "not-used"
+      ? "Search-only result: select a concrete expression to apply this."
+      : menuResolvable
+        ? "Fill in the missing values first, then preview."
+        : "Select every part this step needs first, then preview.";
   return (
     <li
       className={styles.suggestionCard}
@@ -116,11 +128,17 @@ export function SuggestionCard({
       >
         <SourceBadge source={suggestion.source} />
         <CategoryBadge category={category} />
+        {sorry ? <EvidenceBadge evidence="sorry" /> : null}
         {transitionClass === undefined ? null : (
           <TransitionClassBadge transitionClass={transitionClass} />
         )}
       </div>
-      {transitionClass === undefined ? null : (
+      {sorry ? (
+        <p className={styles.transitionMeaning} data-testid="sorry-meaning">
+          This assumes the claim without proving it, and it stays marked as a sorry. It is not an
+          equivalence.
+        </p>
+      ) : transitionClass === undefined ? null : (
         <p className={styles.transitionMeaning}>{transitionMeaning(transitionClass)}</p>
       )}
       {suggestion.reasons[0] === undefined ? null : (
@@ -221,7 +239,7 @@ export function SuggestionCard({
               disabled={mutationPending || busy || menu !== undefined}
               onClick={actions.onChooseInputs}
             >
-              Choose inputs
+              Fill in missing values
             </button>
           ) : null}
         </div>
@@ -244,6 +262,8 @@ export function SuggestionCard({
         <button
           type="button"
           disabled={mutationPending || !previewable || (active && move.kind !== "rejected")}
+          title={previewReason}
+          {...(previewReason === undefined ? {} : { "aria-describedby": reasonId })}
           onClick={actions.onPreview}
         >
           {active && move.kind === "previewing" && menu === undefined
@@ -258,6 +278,11 @@ export function SuggestionCard({
           {active && move.kind === "applying" ? "Applying…" : "Apply this step"}
         </button>
       </div>
+      {previewReason === undefined ? null : (
+        <p id={reasonId} className={styles.previewReason}>
+          {previewReason}
+        </p>
+      )}
       {active && move.kind === "rejected" ? (
         <p className={styles.status} data-state="rejected" role="alert">
           Move rejected: {move.message}

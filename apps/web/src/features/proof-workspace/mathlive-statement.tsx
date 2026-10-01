@@ -109,6 +109,15 @@ export function MathLiveStatement({
         });
       };
 
+      // The field is read-only, but MathLive consumes Tab to move through the expression, which
+      // made one statement take several tab stops. Let Tab leave the field instead.
+      field.addEventListener(
+        "keydown",
+        (event) => {
+          if (event.key === "Tab") event.stopImmediatePropagation();
+        },
+        true,
+      );
       field.addEventListener("pointerup", handlePointerUp);
       host.replaceChildren(field);
       fieldRef.current = field;

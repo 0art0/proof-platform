@@ -96,6 +96,7 @@
 
 .choices,
 .rows {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -135,6 +136,7 @@
 
 .statementHeader {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
   font-weight: 600;
@@ -299,4 +301,62 @@
   margin: 0;
   color: var(--text-muted);
   font-weight: 400;
+}
+
+.fetchForm input[type="file"] {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.recent {
+  margin: 0 0 1.5rem;
+}
+
+.recent h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.recent ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.recentId {
+  margin-left: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.details {
+  margin: 0;
+}
+
+.details summary {
+  cursor: pointer;
+  color: var(--accent-text);
+}
+
+.field [data-marker="required"]::after,
+.statementHeader [data-marker="required"]::after {
+  content: " (required)";
+  color: var(--warning-text);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.field [data-marker="optional"]::after {
+  content: " (optional)";
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.notFoundLinks {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
 }

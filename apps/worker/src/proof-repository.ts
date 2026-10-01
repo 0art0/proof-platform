@@ -68,9 +68,15 @@ import {
   type MoveSelectionInput,
   type MoveSelections,
 } from "@proof/moves";
+import { runMovePlan } from "@proof/moves/authoring";
 import type { RetrievalIndex } from "@proof/retrieval";
 import { z } from "zod";
-import { APPROVED_DEFINITIONS, definitionHash, type DefinitionCatalog } from "./approved-catalog";
+import {
+  APPROVED_DEFINITIONS,
+  definitionHash,
+  type DefinitionCatalog,
+  type MacroDefinition,
+} from "./approved-catalog";
 import {
   MAX_REPLAY_STEPS,
   deriveSemanticStep,
@@ -515,6 +521,7 @@ export type RepositoryDiagnosticCode =
   | "invalid-preview-record"
   | "preview-not-found"
   | "preview-rejected"
+  | "macro-step-failed"
   | "invalid-edge-record"
   | "invalid-proof-history"
   | "backtrack-rejected"
@@ -709,6 +716,14 @@ export type MaterializedMovePreviewRequest = Readonly<{
   menuSelection?: MoveMenuSelection;
   /** Content hashes of the move and library definitions the materialization used. */
   definitions: readonly DefinitionReference[];
+  /** Present for a multi-step macro suggestion: every concrete step (`operation` is the first). */
+  macro?: Readonly<{
+    steps: readonly Readonly<{
+      id: string;
+      moveId: MovePreview["moveId"];
+      operation: MovePreview["operation"];
+    }>[];
+  }>;
 }>;
 
 const initializeInputSchema = z
@@ -1060,6 +1075,7 @@ export async function materializeMoveChoice(
         operation: result.operation,
         ...(menuSelection === undefined ? {} : { menuSelection }),
         definitions: references,
+        ...(materialized.macro === undefined ? {} : { macro: materialized.macro }),
       };
       // An existing preview for this command ID is compared by `recordMovePreview`, which
       // regenerates it when only the approved definitions behind it changed.
@@ -1258,6 +1274,15 @@ export async function recordMovePreview(
   }
 }
 
+/** A stored macro preview in the request's shape, or undefined for an ordinary preview. */
+function macroRequestOf(preview: MovePreview): unknown {
+  return preview.macro === undefined
+    ? undefined
+    : {
+        steps: preview.macro.steps.map(({ id, moveId, operation }) => ({ id, moveId, operation })),
+      };
+}
+
 /** The stored preview and the request name the same displayed choice and menu choices. */
 function sameDisplayedChoice(preview: MovePreview, request: unknown): boolean {
   return (
@@ -1277,7 +1302,12 @@ async function previewWasApplied(
   previewId: MovePreviewId,
 ): Promise<boolean> {
   const edges = await transaction.listEdges(sessionId);
-  return edges.some((row) => isDataRecord(row) && row.previewId === previewId);
+  return edges.some(
+    (row) =>
+      isDataRecord(row) &&
+      (row.previewId === previewId ||
+        (isDataRecord(row.macro) && row.macro.previewId === previewId)),
+  );
 }
 
 /** A deterministic ID for the regeneration of `stalePreviewId` with this exact content. */
@@ -1286,6 +1316,7 @@ function regeneratedPreviewId(stalePreviewId: MovePreviewId, request: unknown): 
     ? {
         moveId: request.moveId,
         operation: request.operation,
+        macro: request.macro,
         menuSelection: request.menuSelection,
         definitions: request.definitions,
       }
@@ -1845,6 +1876,7 @@ export async function deletePreviousMove(
         deletedCommandIds: plan.deletedCommandIds,
         deletedSuggestionSetIds: sortedIds(removed.suggestionSetIds),
         deletedPreviewIds: sortedIds(removed.previewIds),
+        ...(plan.macroSteps === undefined ? {} : { macroSteps: plan.macroSteps }),
         occurredAt: (options.now?.() ?? new Date()).toISOString(),
       });
       const detached = deletion === undefined ? undefined : freezeDetached(deletion);
@@ -2546,8 +2578,11 @@ async function planReplayInTransaction(
     steps.push({
       sourceEdgeId: edge.id,
       unavailable:
-        "The step was not applied from a displayed suggestion (for example a backtracking case " +
-        "split), so it has no recorded selections to re-match.",
+        edge.macro === undefined
+          ? "The step was not applied from a displayed suggestion (for example a backtracking case " +
+            "split), so it has no recorded selections to re-match."
+          : `The step is step ${edge.macro.stepIndex} of the macro ${edge.macro.moveId}; it has no ` +
+            "recorded selections of its own, so apply the macro again instead of replaying its steps.",
     });
   }
 
@@ -2843,6 +2878,210 @@ export async function executeProofCommandWithin(
   return { status: "committed" as const, result: prepared, replayed: false };
 }
 
+/** The command ID of one step of a macro application. */
+export function macroStepCommandId(
+  commandId: ApplyKernelCommand["commandId"],
+  index: number,
+): ApplyKernelCommand["commandId"] {
+  return `${commandId}:macro:${index}` as ApplyKernelCommand["commandId"];
+}
+
+export type ExecuteMacroResult =
+  | Readonly<{
+      status: "committed";
+      /** One prepared result per step, in order; the last holds the node the cursor is at. */
+      results: readonly PrepareProofCommandSuccess[];
+      replayed: boolean;
+    }>
+  | RepositoryFailure;
+
+/**
+ * Apply a stored macro preview (roadmap N35) as a sequence of ordinary validated commands in ONE
+ * transaction. Step `i` is `apply-kernel-operation` command `<commandId>:macro:<i>`, prepared by
+ * `prepareProofCommand` against the node step `i-1` created, so every step creates a fresh
+ * node, edge, event and command record. The edges carry the macro link (macro move ID, preview ID
+ * and step index). Any failing step records nothing. A retry with the same command ID replays the
+ * recorded steps; a cursor that moved on is a stale-command conflict.
+ */
+export async function executeMacroPreview(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  input: Readonly<{ commandId: ApplyKernelCommand["commandId"]; previewId: MovePreviewId }>,
+  trustedActorInput: unknown,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+): Promise<ExecuteMacroResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const trustedActor = safeParse(actorSchema, trustedActorInput);
+  if (sessionId === undefined || trustedActor === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "command-rejected",
+      "The session ID or trusted actor is invalid.",
+    );
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId, definitions);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
+      const previewInput = await transaction.readPreview(session.id, input.previewId);
+      if (previewInput === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "preview-not-found",
+          "The command references a move preview that does not exist in this session.",
+        );
+      }
+      const preview = safeParse(createMovePreviewSchema(environment), previewInput);
+      if (preview === undefined || preview.id !== input.previewId || preview.macro === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-preview-record",
+          "The stored preview is not a valid macro preview.",
+        );
+      }
+      const { steps } = preview.macro;
+      const stepCommandId = (index: number) => macroStepCommandId(input.commandId, index);
+      const context = {
+        trustedActor,
+        ...(environment.operators === undefined ? {} : { operators: environment.operators }),
+        ...(environment.results === undefined ? {} : { results: environment.results }),
+        ...(environment.moves === undefined ? {} : { moves: environment.moves }),
+      };
+      const commandFor = (index: number, parentNodeId: ProofNode["id"]) => {
+        const step = steps[index];
+        const id = stepCommandId(index + 1);
+        const ids = derivedMoveRecordIds(id);
+        return {
+          commandId: id,
+          kind: "apply-kernel-operation",
+          actor: trustedActor,
+          parentNodeId,
+          resultNodeId: ids.resultNodeId,
+          edgeId: ids.edgeId,
+          eventId: ids.eventId,
+          moveId: step?.moveId,
+          operation: step?.operation,
+          macro: {
+            moveId: preview.moveId,
+            previewId: preview.id,
+            stepIndex: index + 1,
+            stepCount: steps.length,
+            stepId: step?.id,
+          },
+        };
+      };
+
+      const firstId = stepCommandId(1);
+      if ((await transaction.readCommand(session.id, firstId)) !== undefined) {
+        // A retry: every recorded step must reproduce, and the cursor must still be at the end.
+        const results: PrepareProofCommandSuccess[] = [];
+        let parent: ProofNode["id"] = preview.nodeId;
+        for (const [index] of steps.entries()) {
+          const recordedInput = await transaction.readCommand(session.id, stepCommandId(index + 1));
+          const recorded =
+            recordedInput === undefined
+              ? undefined
+              : safeParse(createPrepareProofCommandSuccessSchema(environment), recordedInput);
+          if (recorded === undefined) {
+            return repositoryFailure(
+              "rejected",
+              "invalid-command-record",
+              "A recorded macro step failed runtime validation or is missing.",
+            );
+          }
+          const replayed = prepareProofCommand(
+            recorded.prepared.parent,
+            commandFor(index, parent),
+            { ...context, previous: recorded },
+          );
+          if (!replayed.ok) {
+            return repositoryFailure(
+              "rejected",
+              "command-rejected",
+              `Macro step ${index + 1} of ${steps.length} conflicts with the recorded application: ${replayed.diagnostics[0].message}`,
+            );
+          }
+          results.push(replayed);
+          parent = replayed.prepared.node.id;
+        }
+        if (session.currentNodeId !== results.at(-1)?.prepared.node.id) {
+          return repositoryFailure(
+            "rejected",
+            "serialized-stale-command",
+            "The recorded macro application was superseded by navigation or a later move.",
+          );
+        }
+        return { status: "committed" as const, results, replayed: true };
+      }
+
+      for (const id of [input.commandId, firstId]) {
+        const deleted = await deletedCommandFailure(transaction, session.id, id);
+        if (deleted !== undefined) return deleted;
+      }
+      if (session.currentNodeId !== preview.nodeId) {
+        return repositoryFailure(
+          "rejected",
+          "serialized-stale-command",
+          "The current proof node changed before the macro was applied.",
+        );
+      }
+      const currentInput = await transaction.readNode(session.id, session.currentNodeId);
+      const currentNode =
+        currentInput === undefined
+          ? undefined
+          : parseNodeRecord(currentInput, session, environment, session.currentNodeId);
+      if (currentNode === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-current-node",
+          "The stored current proof node is missing or failed validation.",
+        );
+      }
+      const results: PrepareProofCommandSuccess[] = [];
+      let node = currentNode;
+      for (const [index] of steps.entries()) {
+        if ((await transaction.readCommand(session.id, stepCommandId(index + 1))) !== undefined) {
+          return repositoryFailure(
+            "rejected",
+            "command-rejected",
+            "A macro step's command ID is already recorded.",
+          );
+        }
+        const prepared = prepareProofCommand(node, commandFor(index, node.id), context);
+        if (!prepared.ok) {
+          return repositoryFailure(
+            "rejected",
+            "macro-step-failed",
+            `Macro step ${index + 1} of ${steps.length} was rejected: ${prepared.diagnostics[0].message}`,
+          );
+        }
+        results.push(prepared);
+        node = prepared.prepared.node;
+      }
+      if (!jsonEquals(node.state, preview.afterState)) {
+        return repositoryFailure(
+          "rejected",
+          "command-rejected",
+          "The macro's final state differs from its stored preview.",
+        );
+      }
+      for (const result of results) {
+        await transaction.insertNode(session.id, result.prepared.node);
+        await transaction.insertEdge(session.id, result.prepared.edge);
+        await transaction.insertEvent(session.id, result.prepared.event);
+        await transaction.insertCommand(session.id, result);
+      }
+      if (!(await transaction.repointCurrentNode(session.id, currentNode.id, node.id))) {
+        throw new SerializedStaleCommandError();
+      }
+      return { status: "committed" as const, results, replayed: false };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The macro could not be applied atomically.");
+  }
+}
+
 type DisplayedSuggestion = DisplayedSuggestionSet["suggestions"][number];
 type ResolvedSelection = DisplayedSuggestionSet["selection"] extends infer Selection
   ? Selection extends { kind: "selection-query"; selections: readonly (infer Subject)[] }
@@ -2858,6 +3097,8 @@ type MaterializedSuggestion =
       moveId: string;
       result: Extract<MaterializationResult, { ok: true }>;
       references: readonly DefinitionReference[];
+      /** For a macro suggestion: the concrete steps `runMovePlan` produced. */
+      macro?: NonNullable<MaterializedMovePreviewRequest["macro"]>;
     }>
   | Readonly<{
       ok: false;
@@ -2889,27 +3130,35 @@ function materializeSuggestion(
   let result: MaterializationResult;
   const references: DefinitionReference[] = [];
   if (suggestion.source === "move") {
-    const move = definitions.moves.find((definition) => definition.id === suggestion.artifactId);
+    const macro = definitions.macros?.find(({ move }) => move.id === suggestion.artifactId);
+    const move =
+      definitions.moves.find((definition) => definition.id === suggestion.artifactId) ??
+      macro?.move;
     if (move === undefined) {
       return rejected(
         "The displayed move is not available in the approved deterministic move catalog.",
       );
     }
-    const selections: Record<string, MoveSelectionInput> = {};
-    for (const match of suggestion.selectionMatches) {
-      if (match.selectionSlotId === undefined) continue;
-      const selection = resolvedSelectionById(suggestionSet, match.selectionId);
-      if (selection === undefined || Object.hasOwn(selections, match.selectionSlotId)) {
-        return rejected("The displayed move's selection evidence is inconsistent.");
-      }
-      selections[match.selectionSlotId] = moveSelectionInput(selection);
+    const selections = displayedMoveSelections(suggestionSet, suggestion);
+    if (selections === undefined) {
+      return rejected("The displayed move's selection evidence is inconsistent.");
     }
     moveId = move.id;
+    if (macro !== undefined) {
+      return materializeMacroSuggestion(
+        macro,
+        node,
+        selections,
+        menuChoices,
+        environment,
+        commandId,
+      );
+    }
     references.push({ kind: "move", id: move.id, hash: definitionHash(move) });
     result = materializeMoveOperation({
       state: node.state,
       move,
-      selections: selections as MoveSelections,
+      selections,
       menuChoices,
       idGenerator,
       env: environment,
@@ -2997,6 +3246,103 @@ function materializeSuggestion(
   return { ok: true, moveId, result, references };
 }
 
+/** The move selections a displayed move suggestion matched, by slot; undefined when inconsistent. */
+export function displayedMoveSelections(
+  suggestionSet: DisplayedSuggestionSet,
+  suggestion: DisplayedSuggestion,
+): MoveSelections | undefined {
+  const selections: Record<string, MoveSelectionInput> = {};
+  for (const match of suggestion.selectionMatches) {
+    if (match.selectionSlotId === undefined) continue;
+    const selection = resolvedSelectionById(suggestionSet, match.selectionId);
+    if (selection === undefined || Object.hasOwn(selections, match.selectionSlotId)) {
+      return undefined;
+    }
+    selections[match.selectionSlotId] = moveSelectionInput(selection);
+  }
+  return selections as MoveSelections;
+}
+
+/**
+ * Materialize a macro suggestion: its first step from the displayed selections and menu choices,
+ * every later step re-matched on the state the previous step left (`runMovePlan`, the same path
+ * authoring validation uses). A step that fails to re-match fails the whole materialization and
+ * names the step; nothing is applied.
+ */
+function materializeMacroSuggestion(
+  macro: MacroDefinition,
+  node: ProofNode,
+  selections: MoveSelections,
+  menuChoices: MoveMenuChoices,
+  environment: ProtocolEnvironment,
+  commandId: ApplyKernelCommand["commandId"],
+): MaterializedSuggestion {
+  const run = runMovePlan(
+    macro.template,
+    node.state,
+    selections,
+    menuChoices,
+    environment,
+    commandId,
+  );
+  if (!run.ok) {
+    const { diagnostic } = run;
+    if (diagnostic.code === "requires-input") {
+      const menus = safeParse(parameterMenusSchema, diagnostic.menus ?? []);
+      if (menus === undefined) {
+        return {
+          ok: false,
+          failure: repositoryFailure(
+            "rejected",
+            "preview-rejected",
+            "The generated parameter menus failed runtime validation.",
+          ),
+        };
+      }
+      return {
+        ok: false,
+        requiresInput: {
+          menus,
+          missingParameters: [...(diagnostic.missingParameters ?? [])],
+          diagnostics: [{ code: "requires-input", message: diagnostic.message }],
+        },
+      };
+    }
+    const count = macro.template.plan.steps.length;
+    const step = macro.template.plan.steps[diagnostic.stepIndex];
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        diagnostic.stepIndex === 0 ? "preview-rejected" : "macro-step-failed",
+        `Macro step ${diagnostic.stepIndex + 1} of ${count}${
+          step === undefined ? "" : ` (${step.id})`
+        } could not be applied: ${diagnostic.message}`,
+      ),
+    };
+  }
+  const first = run.operations[0];
+  if (first === undefined) {
+    return {
+      ok: false,
+      failure: repositoryFailure("rejected", "preview-rejected", "The macro produced no steps."),
+    };
+  }
+  return {
+    ok: true,
+    moveId: macro.move.id,
+    result: { ok: true, operation: first, menus: run.menus, diagnostics: [] },
+    references: [{ kind: "move", id: macro.move.id, hash: definitionHash(macro.template) }],
+    macro: {
+      steps: run.steps.map((step) => ({
+        id: step.id,
+        moveId: step.moveId as MovePreview["moveId"],
+        operation: step.operation,
+      })),
+    },
+  };
+}
+
 /**
  * The static-history record of the menus a materialization displayed and the item IDs chosen.
  * Moves whose only menus are automatic (generated IDs) and that received no choices record
@@ -3071,8 +3417,10 @@ function movePreviewRequestMatches(preview: MovePreview, request: unknown): bool
   if (!isDataRecord(request)) return false;
   if (request.menuSelection !== undefined) keys.push("menuSelection");
   if (request.definitions !== undefined) keys.push("definitions");
+  if (request.macro !== undefined) keys.push("macro");
   return (
     isStrictDataRecord(request, keys) &&
+    jsonEquals(request.macro, macroRequestOf(preview)) &&
     request.id === preview.id &&
     request.suggestionSetId === preview.suggestionSetId &&
     request.chosenSuggestionId === preview.chosenSuggestionId &&

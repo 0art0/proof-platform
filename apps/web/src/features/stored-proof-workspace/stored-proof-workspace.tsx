@@ -33,7 +33,7 @@ import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar, movesHref } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
 import type { MoveState, PendingMenus } from "./suggestion-card";
-import { SuggestionPanel, type SuggestionState } from "./suggestion-panel";
+import { SUGGESTION_PANEL_ID, SuggestionPanel, type SuggestionState } from "./suggestion-panel";
 import {
   backtrackApiResponseSchema,
   commandApiResponseSchema,
@@ -62,6 +62,10 @@ export type StoredProofSession = Readonly<{
   /** Set for a session imported from an artifact (N27): nothing in it can be changed. */
   readOnly?: true | undefined;
   visibility?: "shared" | undefined;
+  /** Problem metadata, when the page supplies it: the header's title and collapsed statement. */
+  title?: string | undefined;
+  statement?: string | undefined;
+  background?: string | undefined;
 }>;
 
 export type StoredProofWorkspaceProps = Readonly<{ session: StoredProofSession; node: ProofNode }>;
@@ -614,10 +618,27 @@ function StatefulStoredWorkspace({
     [applySuggestion, moveState, node.id, previewSuggestion, recordInteraction],
   );
 
+  const suggestionCount =
+    suggestions.kind === "ready" || suggestions.kind === "empty"
+      ? suggestions.suggestionSet.suggestions.length
+      : undefined;
+  const suggestionsLink =
+    suggestionCount === undefined
+      ? undefined
+      : {
+          href: `#${SUGGESTION_PANEL_ID}`,
+          text:
+            suggestionCount === 0
+              ? "No suggestions fit this selection (see below)"
+              : `${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"} below`,
+        };
   return (
     <section className={styles.storedWorkspace} aria-label="Stored proof session">
       <WorkspaceHeader
         sessionId={session.id}
+        title={session.title}
+        statement={session.statement}
+        background={session.background}
         currentNodeId={node.id}
         counts={{ goals: node.state.goals.length, obligations: node.state.obligations.length }}
         readOnly={readOnly}
@@ -677,6 +698,7 @@ function StatefulStoredWorkspace({
           onSelectionChange={handleSelectionChange}
           gestures={drag.bindings}
           selectionRequest={drag.selectionRequest}
+          suggestionsLink={suggestionsLink}
         />
       </div>
 

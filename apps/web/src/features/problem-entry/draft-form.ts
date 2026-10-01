@@ -116,6 +116,34 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
   return problems.length === 0 ? { ok: true, draft } : { ok: false, problems };
 }
 
+/**
+ * Every required field that is still empty, in form order, so one check reports them all (the
+ * worker would otherwise reject them one diagnostic at a time). Field names match the form labels.
+ */
+export function missingRequiredFields(form: ProblemForm): readonly FormProblem[] {
+  const problems: FormProblem[] = [];
+  const need = (field: string, value: string) => {
+    if (value.trim().length === 0) problems.push({ field, message: "This is required." });
+  };
+  need("Problem title", form.title);
+  need("Problem statement", form.statement);
+  need("Assumed level", form.backgroundLevel);
+  need("What the reader is expected to know", form.backgroundSummary);
+  form.declarations.forEach((row, index) => {
+    if (row.symbol.trim().length === 0) {
+      const field = `Variable or object ${index + 1}`;
+      problems.push({ field, message: "Enter a name, or remove this row." });
+    }
+  });
+  form.goals.forEach((row, index) => {
+    if (row.text.trim().length === 0) {
+      const field = `Goal ${index + 1}`;
+      problems.push({ field, message: `${field} is empty.` });
+    }
+  });
+  return problems;
+}
+
 export type MathJsonText =
   Readonly<{ ok: true; expression: PlainMathJson }> | Readonly<{ ok: false; message: string }>;
 

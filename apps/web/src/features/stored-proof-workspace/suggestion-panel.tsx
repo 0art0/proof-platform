@@ -44,6 +44,9 @@ export type SuggestionPanelActions = Readonly<{
   onInputSummaryExpanded: (set: DisplayedSuggestionSet, suggestionId: string) => void;
 }>;
 
+/** The fragment that links to the panel (the active-selections card points here). */
+export const SUGGESTION_PANEL_ID = "suggestion-panel";
+
 export type SuggestionPanelProps = SuggestionPanelActions &
   Readonly<{
     suggestions: SuggestionState;
@@ -89,7 +92,11 @@ export function SuggestionPanel({
     />
   );
   return (
-    <section className={styles.suggestionPanel} aria-label="Available suggestions">
+    <section
+      id={SUGGESTION_PANEL_ID}
+      className={styles.suggestionPanel}
+      aria-label="Available suggestions"
+    >
       <div className={styles.suggestionHeading}>
         <div>
           <h2>Suggestions</h2>
@@ -172,11 +179,11 @@ function VariantGroup({
       >
         <span aria-hidden="true">{open ? "▾ " : "▸ "}</span>
         {open
-          ? `Hide related variants of ${name}`
-          : `Show ${count} related variant${count === 1 ? "" : "s"} of ${name}`}
+          ? `Hide other versions of ${name}`
+          : `Show ${count} other version${count === 1 ? "" : "s"} of ${name}`}
       </button>
       {open ? (
-        <ol id={listId} className={styles.suggestions} aria-label={`Related variants of ${name}`}>
+        <ol id={listId} className={styles.suggestions} aria-label={`Other versions of ${name}`}>
           {variants}
         </ol>
       ) : null}

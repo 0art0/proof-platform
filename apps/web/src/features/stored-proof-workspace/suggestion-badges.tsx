@@ -66,10 +66,22 @@ export function TransitionClassBadge({
   );
 }
 
+const EVIDENCE_HINTS: Readonly<Record<TransitionEvidence, string>> = {
+  structural: "Justified by a built-in logical rule.",
+  "library-result": "Justified by a named library result that the proof cites.",
+  "background-inference": "Justified by what your declared background knowledge allows.",
+  sorry: "Not proved: the claim is assumed and stays marked as a sorry. It is not an equivalence.",
+};
+
 /** Structural, library-result, background-inference or sorry evidence of a recorded preview. */
 export function EvidenceBadge({ evidence }: Readonly<{ evidence: TransitionEvidence }>) {
   return (
-    <span className={styles.badge} data-badge="evidence" data-evidence={evidence} title="Evidence">
+    <span
+      className={styles.badge}
+      data-badge="evidence"
+      data-evidence={evidence}
+      title={EVIDENCE_HINTS[evidence]}
+    >
       <Glyph glyph={EVIDENCE[evidence].glyph} />
       <span>{EVIDENCE[evidence].label}</span>
     </span>
@@ -113,7 +125,16 @@ export function ProvenanceBadge() {
 /** Whether the suggestion applies a library result or runs a move. */
 export function SourceBadge({ source }: Readonly<{ source: "result" | "move" }>) {
   return (
-    <span className={styles.badge} data-badge="source" data-source={source}>
+    <span
+      className={styles.badge}
+      data-badge="source"
+      data-source={source}
+      title={
+        source === "result"
+          ? "Applies a named result from the library to your selection."
+          : "Runs a built-in or authored proof step on your selection."
+      }
+    >
       <Glyph glyph={source === "result" ? "§" : "↦"} />
       <span>{source === "result" ? "Result application" : "Move"}</span>
     </span>
@@ -129,7 +150,18 @@ export function MatchBadge({
   const label =
     kind === "exact" ? "Exact match" : kind === "structural" ? "Structural match" : "Abstraction";
   return (
-    <span className={styles.badge} data-badge="match" data-match={kind}>
+    <span
+      className={styles.badge}
+      data-badge="match"
+      data-match={kind}
+      title={
+        kind === "exact"
+          ? "The selection is written exactly as the pattern is."
+          : kind === "structural"
+            ? "The selection has the same shape as the pattern, though written differently."
+            : "Found by searching for any expression of the selected kind; browse only."
+      }
+    >
       <Glyph glyph={kind === "exact" ? "=" : kind === "structural" ? "≅" : "?"} />
       <span>{label}</span>
     </span>

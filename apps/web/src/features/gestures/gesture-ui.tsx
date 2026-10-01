@@ -156,7 +156,7 @@ function AbstractionToggles({
               {unavailable !== undefined
                 ? unavailable
                 : abstract
-                  ? `Abstract (${role === "proposition" ? "any proposition" : "any term"}): searching for results that fit any ${role === "proposition" ? "proposition" : "term"} here, not just this exact one. Only the search changes; previews and Apply still use your exact selection.`
+                  ? `Abstract (${role === "proposition" ? "any proposition" : "any term"}): searching for results that fit any ${role === "proposition" ? "proposition" : "term"} here, not just this exact one. Only the search changes; previews and Apply still use your exact selection. Results found this way are for browsing; they cannot be previewed.`
                   : "Concrete: searching for results that match this exact expression."}
             </span>
           </li>
@@ -199,69 +199,96 @@ export function GestureTray({ bindings, selections, view, abstraction }: Gesture
   const selectionSource =
     only === undefined ? undefined : dragSourceForSelection(only, describeOccurrence(only));
 
+  // The buttons live in the overlay while a drag starts without a selection, so that nothing is
+  // inserted into the page under the pointer (Chromium ends a drag whose source moves).
+  const dropButtons = (
+    <>
+      <button
+        type="button"
+        className={styles.trayButton}
+        disabled={!bindings.enabled || carrying === undefined || only === undefined}
+        title={
+          carrying === undefined
+            ? "Pick something up first (drag handle, Enter or Space)."
+            : only === undefined
+              ? "Select exactly one target to drop on."
+              : undefined
+        }
+        onClick={() => only !== undefined && bindings.dropOn(only.anchor, only)}
+      >
+        Drop on selection
+      </button>
+      <button
+        type="button"
+        className={styles.trayButton}
+        disabled={carrying === undefined}
+        aria-keyshortcuts="Escape"
+        onClick={() => bindings.cancel()}
+      >
+        Cancel drag
+      </button>
+    </>
+  );
+  const showActions = only !== undefined;
   return (
     <section className={styles.tray} aria-label="Drag gestures" data-gesture-tray>
-      <h2 className={styles.trayHeading}>Drag gestures</h2>
       <p className={styles.help} data-testid="gesture-help">
         {bindings.disabledReason !== undefined
           ? `Drag gestures are unavailable: ${bindings.disabledReason}.`
           : view === "formal"
-            ? "Drag a hypothesis onto a goal, a term onto another occurrence, or a library result onto an expression. Every drop shows a preview first. Keyboard: pick something up, select the target, then choose Drop on selection."
+            ? "Tip: drag a hypothesis, a term or a library result onto an expression to preview a move."
             : "Switch to the formal view to drag and drop."}
       </p>
-      <div className={styles.trayActions}>
-        {selectionSource === undefined ? null : (
-          <>
-            <DragHandle
-              source={selectionSource}
-              label="the selected occurrence"
-              bindings={bindings}
-            />
-            <span className={styles.help}>{SOURCE_NAMES[selectionSource.kind]} selected</span>
-          </>
-        )}
-        <button
-          type="button"
-          className={styles.trayButton}
-          disabled={!bindings.enabled || carrying === undefined || only === undefined}
-          onClick={() => only !== undefined && bindings.dropOn(only.anchor, only)}
-        >
-          Drop on selection
-        </button>
-        <button
-          type="button"
-          className={styles.trayButton}
-          disabled={carrying === undefined}
-          aria-keyshortcuts="Escape"
-          onClick={() => bindings.cancel()}
-        >
-          Cancel drag
-        </button>
-      </div>
+      {bindings.disabledReason === undefined && view === "formal" ? (
+        <details className={styles.trayDetails}>
+          <summary>Dragging and keyboard help</summary>
+          <p className={styles.help}>
+            Drag a hypothesis onto a goal, a term onto another occurrence, or a library result onto
+            an expression. Every drop shows a preview first. Keyboard: pick something up, select the
+            target, then choose Drop on selection.
+          </p>
+        </details>
+      ) : null}
+      {showActions ? (
+        <div className={styles.trayActions}>
+          {selectionSource === undefined ? null : (
+            <>
+              <DragHandle
+                source={selectionSource}
+                label="the selected occurrence"
+                bindings={bindings}
+              />
+              <span className={styles.help}>{SOURCE_NAMES[selectionSource.kind]} selected</span>
+            </>
+          )}
+          {dropButtons}
+        </div>
+      ) : null}
       {abstraction === undefined ? null : (
         <AbstractionToggles controls={abstraction} selections={selections} />
       )}
-      {/* A fixed-height area: cues that appear at pick-up must not shift the page under a drag. */}
-      <div className={styles.statusArea}>
-        {carrying === undefined ? null : (
+      {/* The carrying cue is an overlay, so it appearing at pick-up cannot shift the page. */}
+      {carrying === undefined ? null : (
+        <div className={styles.carryingOverlay}>
           <p className={styles.carrying} role="status" data-testid="carrying">
             Carrying {SOURCE_NAMES[carrying.kind].toLowerCase()}: {carrying.label}.{" "}
             {only === undefined
               ? "Select exactly one target, or drop on a highlighted statement."
               : "Choose Drop on selection to preview."}
           </p>
-        )}
-        {state.phase === "idle" && state.outcome !== undefined ? (
-          <p
-            className={styles.outcome}
-            role="status"
-            data-testid="drag-outcome"
-            data-outcome={state.outcome.kind}
-          >
-            {state.outcome.message}
-          </p>
-        ) : null}
-      </div>
+          {only === undefined ? <div className={styles.trayActions}>{dropButtons}</div> : null}
+        </div>
+      )}
+      {state.phase === "idle" && state.outcome !== undefined ? (
+        <p
+          className={styles.outcome}
+          role="status"
+          data-testid="drag-outcome"
+          data-outcome={state.outcome.kind}
+        >
+          {state.outcome.message}
+        </p>
+      ) : null}
     </section>
   );
 }

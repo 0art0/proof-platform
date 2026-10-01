@@ -19,6 +19,7 @@ import {
   type StatementId,
 } from "@proof/mathjson-model";
 import {
+  composeTransitionClasses,
   moveDefinitionSchema,
   moveIdSchema,
   planMove,
@@ -477,6 +478,30 @@ export const kernelOperationAdapterSchema: z.ZodType<KernelOperation> = z
     return z.NEVER;
   });
 
+/**
+ * Links one command, and the edge it creates, to one step of a multi-step macro application
+ * (roadmap N35). A macro is applied as a sequence of ordinary commands, each validated against its
+ * own parent; the link only labels them so history shows the sequence as one user action. `moveId`
+ * is the macro's authored move ID, `previewId` the stored macro preview, and `stepIndex` is
+ * 1-based. The command's own `moveId` is the hand-authored primitive the step applied.
+ */
+export const macroLinkSchema = z
+  .object({
+    moveId: moveIdSchema,
+    previewId: movePreviewIdSchema,
+    stepIndex: z.number().int().min(1).max(16),
+    stepCount: z.number().int().min(2).max(16),
+    /** The template plan step's ID. */
+    stepId: stableIdentifierSchema,
+  })
+  .strict()
+  .superRefine((link, context) => {
+    if (link.stepIndex > link.stepCount) {
+      addLinkIssue(context, "A macro step index cannot exceed the step count.");
+    }
+  });
+export type MacroLink = z.infer<typeof macroLinkSchema>;
+
 export const applyKernelCommandSchema = z
   .object({
     commandId: commandIdSchema,
@@ -493,9 +518,24 @@ export const applyKernelCommandSchema = z
     operation: kernelOperationAdapterSchema,
     /** The parameter menus displayed for the chosen suggestion and the item IDs chosen. */
     menuSelection: moveMenuSelectionSchema.optional(),
+    /** Present only on a step of a macro application; such a step carries no suggestion evidence. */
+    macro: macroLinkSchema.optional(),
   })
   .strict()
   .superRefine((command, context) => {
+    if (
+      command.macro !== undefined &&
+      (command.suggestionSetId !== undefined ||
+        command.previewId !== undefined ||
+        command.menuSelection !== undefined ||
+        command.moveId === undefined ||
+        command.moveId === command.macro.moveId)
+    ) {
+      addLinkIssue(
+        context,
+        "A macro step names its primitive move and carries no per-step suggestion evidence.",
+      );
+    }
     const hasSuggestionSet = command.suggestionSetId !== undefined;
     const hasChosenSuggestion = command.chosenSuggestionId !== undefined;
     if (hasSuggestionSet !== hasChosenSuggestion) {
@@ -616,6 +656,8 @@ export const proofEdgeSchema = z
     transitionClass: transitionClassSchema,
     /** Static history: the menus displayed for this transition and the item IDs chosen. */
     menuSelection: moveMenuSelectionSchema.optional(),
+    /** Present only on a step of a macro application (see `macroLinkSchema`). */
+    macro: macroLinkSchema.optional(),
   })
   .strict()
   .superRefine((edge, context) => addSuggestionReferenceIssues(edge, context));
@@ -645,6 +687,32 @@ export const proofStateDeltaSchema = z
   .strict();
 export type ProofStateDelta = z.infer<typeof proofStateDeltaSchema>;
 
+/**
+ * The per-step outcomes of a macro preview (roadmap N35). A macro preview's `operation` is its
+ * first step's, its `afterState` and `delta` are the FINAL state's, and its `transitionClass` is
+ * the class composed from the steps.
+ */
+export const macroPreviewStepSchema = z
+  .object({
+    /** 1-based. */
+    index: z.number().int().min(1).max(16),
+    /** The template plan step's ID. */
+    id: stableIdentifierSchema,
+    /** The hand-authored primitive move the step applies. */
+    moveId: moveIdSchema,
+    operation: kernelOperationAdapterSchema,
+    transitionClass: transitionClassSchema,
+    /** What this step alone changed. */
+    delta: proofStateDeltaSchema,
+  })
+  .strict();
+export type MacroPreviewStep = z.infer<typeof macroPreviewStepSchema>;
+
+export const macroPreviewSchema = z
+  .object({ steps: z.array(macroPreviewStepSchema).min(2).max(16) })
+  .strict();
+export type MacroPreview = z.infer<typeof macroPreviewSchema>;
+
 export type MovePreview = Readonly<{
   id: MovePreviewId;
   nodeId: ProofNodeId;
@@ -660,6 +728,8 @@ export type MovePreview = Readonly<{
   menuSelection?: MoveMenuSelection | undefined;
   /** Content hashes of the approved move/library definitions the preview was built from. */
   definitions?: readonly DefinitionReference[] | undefined;
+  /** Present when `moveId` is a multi-step macro: every step's outcome, in order. */
+  macro?: MacroPreview | undefined;
 }>;
 
 export function createMovePreviewSchema(
@@ -681,6 +751,7 @@ export function createMovePreviewSchema(
       delta: proofStateDeltaSchema,
       menuSelection: moveMenuSelectionSchema.optional(),
       definitions: definitionReferencesSchema.optional(),
+      macro: macroPreviewSchema.optional(),
     })
     .strict()
     .superRefine((preview, context) => {
@@ -690,8 +761,47 @@ export function createMovePreviewSchema(
       if (preview.operation.expectedStateId !== preview.beforeState.id) {
         addLinkIssue(context, "The preview operation does not target its before-state snapshot.");
       }
-      if (preview.operation.resultStateId !== preview.afterState.id) {
-        addLinkIssue(context, "The preview operation does not produce its after-state snapshot.");
+      if (preview.macro === undefined) {
+        if (preview.operation.resultStateId !== preview.afterState.id) {
+          addLinkIssue(context, "The preview operation does not produce its after-state snapshot.");
+        }
+      } else {
+        const { steps } = preview.macro;
+        const first = steps[0];
+        const last = steps.at(-1);
+        if (
+          first === undefined ||
+          last === undefined ||
+          !jsonEquals(first.operation, preview.operation)
+        ) {
+          addLinkIssue(context, "A macro preview's operation must be its first step's.");
+        } else if (last.operation.resultStateId !== preview.afterState.id) {
+          addLinkIssue(context, "The last macro step does not produce the after-state snapshot.");
+        }
+        steps.forEach((step, index) => {
+          if (step.index !== index + 1) {
+            addLinkIssue(context, "Macro preview steps must be numbered consecutively from 1.");
+          }
+          const previous = steps[index - 1];
+          if (
+            previous !== undefined &&
+            step.operation.expectedStateId !== previous.operation.resultStateId
+          ) {
+            addLinkIssue(context, "Macro preview steps must chain through their states.");
+          }
+          if (step.moveId === preview.moveId) {
+            addLinkIssue(context, "A macro step must name a primitive move, not the macro.");
+          }
+        });
+        if (
+          preview.transitionClass !==
+          composeTransitionClasses(steps.map(({ transitionClass }) => transitionClass))
+        ) {
+          addLinkIssue(
+            context,
+            "A macro preview's class must be the class composed from its steps.",
+          );
+        }
       }
       if (!jsonEquals(preview.delta, computeDelta(preview.beforeState, preview.afterState))) {
         addLinkIssue(context, "The preview delta does not match its evidence snapshots.");
@@ -710,6 +820,24 @@ const prepareMovePreviewInputSchema = z
     operation: kernelOperationAdapterSchema,
     menuSelection: moveMenuSelectionSchema.optional(),
     definitions: definitionReferencesSchema.optional(),
+    /** The concrete steps of a macro suggestion (the worker ran the template to obtain them). */
+    macro: z
+      .object({
+        steps: z
+          .array(
+            z
+              .object({
+                id: stableIdentifierSchema,
+                moveId: moveIdSchema,
+                operation: kernelOperationAdapterSchema,
+              })
+              .strict(),
+          )
+          .min(2)
+          .max(16),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -749,6 +877,9 @@ export function prepareMovePreview(
         "The requested move was not displayed for this proof snapshot.",
       );
     }
+    if (request.macro !== undefined) {
+      return prepareMacroPreview(node, suggestionSet, request, request.macro, environment);
+    }
     const planned = planMove(
       node.state,
       { moveId: request.moveId, operation: request.operation },
@@ -785,6 +916,79 @@ export function prepareMovePreview(
       "The move-preview boundary could not inspect its input safely.",
     );
   }
+}
+
+/**
+ * A macro preview: every step is planned through `planMove` on the state the previous step left,
+ * so each step is kernel-validated and the previewed final state is the one a sequence of ordinary
+ * commands will reach. A failing step rejects the whole preview and names the step.
+ */
+function prepareMacroPreview(
+  node: ProofNode,
+  suggestionSet: DisplayedSuggestionSet,
+  request: z.infer<typeof prepareMovePreviewInputSchema>,
+  macro: NonNullable<z.infer<typeof prepareMovePreviewInputSchema>["macro"]>,
+  environment: ProtocolEnvironment,
+): PrepareMovePreviewResult {
+  const first = macro.steps[0];
+  if (first === undefined || !jsonEquals(first.operation, request.operation)) {
+    return protocolFailure(
+      "preview-rejected",
+      "A macro preview's operation must be its first step's.",
+    );
+  }
+  let state = node.state;
+  const steps: MacroPreviewStep[] = [];
+  for (const [position, step] of macro.steps.entries()) {
+    if (step.moveId === request.moveId) {
+      return protocolFailure(
+        "preview-rejected",
+        "A macro step must name a primitive move, not the macro.",
+      );
+    }
+    const planned = planMove(
+      state,
+      { moveId: step.moveId, operation: step.operation },
+      environment,
+    );
+    if (!planned.ok) {
+      return protocolFailure(
+        "preview-rejected",
+        `Macro step ${position + 1} of ${macro.steps.length} was rejected: ${
+          planned.diagnostics[0]?.message ?? "the step is not valid."
+        }`,
+      );
+    }
+    steps.push({
+      index: position + 1,
+      id: step.id,
+      moveId: step.moveId,
+      operation: planned.operation,
+      transitionClass: planned.preview.transitionClass,
+      delta: computeDelta(state, planned.preview.state),
+    });
+    state = planned.preview.state;
+  }
+  const candidate = safeZodParse(createMovePreviewSchema(environment), {
+    id: request.id,
+    nodeId: node.id,
+    stateId: node.state.id,
+    suggestionSetId: suggestionSet.id,
+    chosenSuggestionId: request.chosenSuggestionId,
+    moveId: request.moveId,
+    operation: first.operation,
+    transitionClass: composeTransitionClasses(steps.map(({ transitionClass }) => transitionClass)),
+    beforeState: node.state,
+    afterState: state,
+    delta: computeDelta(node.state, state),
+    ...(request.menuSelection === undefined ? {} : { menuSelection: request.menuSelection }),
+    ...(request.definitions === undefined ? {} : { definitions: request.definitions }),
+    macro: { steps },
+  });
+  const preview = candidate === undefined ? undefined : freezeDetached(candidate);
+  return preview === undefined
+    ? protocolFailure("preview-rejected", "The macro preview could not be detached safely.")
+    : { ok: true, preview, diagnostics: [] };
 }
 
 export type TransitionEvent = Readonly<{
@@ -1181,6 +1385,7 @@ function prepareProofCommandInternal(
     operation: command.operation,
     transitionClass: transition.transitionClass,
     ...(command.menuSelection === undefined ? {} : { menuSelection: command.menuSelection }),
+    ...(command.macro === undefined ? {} : { macro: command.macro }),
   };
   const event: TransitionEvent = {
     id: command.eventId,

@@ -354,3 +354,21 @@ a.toolbarButton {
   color: var(--warning-text);
   font-size: 0.85rem;
 }
+
+.headerStatement {
+  max-width: 60ch;
+  margin-top: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.headerStatement > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.headerStatement p {
+  margin: 0.3rem 0 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

@@ -93,3 +93,31 @@ test("an exported artifact uploads as a read-only session", async ({ page }) => 
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)artifact(%3A|:)[0-9a-f]{32}$/);
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
 });
+
+test("a created proof is listed under recent proofs on the home page", async ({ page }) => {
+  await page.goto("/problems/new");
+  await fillPropositionalDraft(page);
+  await page.getByRole("button", { name: "Check setup" }).click();
+  await page.getByRole("button", { name: "Start exploring" }).click();
+  await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
+
+  await page.goto("/");
+  const recent = page.getByRole("region", { name: "Recent proofs" });
+  await expect(recent.getByRole("link", { name: "Disjunction introduction" })).toBeVisible();
+});
+
+test("an empty check lists every missing required field", async ({ page }) => {
+  await page.goto("/problems/new");
+  await page.getByRole("button", { name: "Check setup" }).click();
+  const alert = page.getByRole("alert").filter({ hasText: "cannot be checked yet" });
+  await expect(alert).toContainText("Problem title: This is required.");
+  await expect(alert).toContainText("Assumed level");
+  await expect(alert).toContainText("Goal 1");
+});
+
+test("an unknown proof shows a page with a way back", async ({ page }) => {
+  await page.goto("/sessions/session%3Adoes-not-exist");
+  await expect(page.getByRole("heading", { name: "Proof not found" })).toBeVisible();
+  await page.getByRole("link", { name: "Back to the start" }).click();
+  await expect(page).toHaveURL(/\/$/);
+});

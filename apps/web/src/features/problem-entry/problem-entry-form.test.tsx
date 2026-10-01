@@ -296,6 +296,35 @@ describe("ProblemEntryForm approval gate", () => {
   });
 });
 
+describe("ProblemEntryForm required fields", () => {
+  it("marks the required fields", () => {
+    renderForm();
+    expect(screen.getByLabelText("Problem title")).toHaveAttribute("aria-required", "true");
+    expect(screen.getByLabelText("Assumed level")).toBeInTheDocument();
+    expect(screen.getByText("Problem title")).toHaveAttribute("data-marker", "required");
+    expect(screen.getByText("Notation preferences (one per line)")).not.toHaveAttribute(
+      "data-marker",
+    );
+  });
+
+  it("lists every missing required field at once without calling the service", async () => {
+    renderForm();
+    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    const alert = await screen.findByRole("alert");
+    for (const field of [
+      "Problem title",
+      "Problem statement",
+      "Assumed level",
+      "What the reader is expected to know",
+      "Variable or object 1",
+      "Goal 1",
+    ]) {
+      expect(alert).toHaveTextContent(`${field}:`);
+    }
+    expect(validateCalls()).toHaveLength(0);
+  });
+});
+
 describe("formToDraft", () => {
   it("keeps only optional packs, in menu order, and omits empty preferences", () => {
     const result = formToDraft(
