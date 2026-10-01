@@ -105,7 +105,7 @@ describe("ProofWorkspace selection feedback", () => {
   it("ignores secondary-button gestures", async () => {
     render(<ProofWorkspace node={proofNode()} />);
     fireEvent.pointerUp(await screen.findByLabelText("Goal 1 conclusion"), { button: 2 });
-    expect(screen.getByText("No active occurrence.")).toBeVisible();
+    expect(screen.getByText("Nothing selected yet.")).toBeVisible();
   });
 
   it("says when stale display metadata was snapped to a subtree", async () => {

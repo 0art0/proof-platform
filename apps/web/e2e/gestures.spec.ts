@@ -51,7 +51,7 @@ test("dragging a hypothesis onto a goal previews a move and only Apply commits i
   expect(await currentNodeId(page)).toBe(rootId);
   await expect(page.getByLabel("Goal 1 hypothesis 2")).toHaveCount(0);
 
-  await card.getByRole("button", { name: "Apply" }).click();
+  await card.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByText(/advanced to node:/)).toBeVisible(COMMAND);
   expect(await currentNodeId(page)).not.toBe(rootId);
   // The hypothesis conjunction was expanded into its two conjuncts.
@@ -103,11 +103,11 @@ test("abstracting a selection asks retrieval for abstraction matches without tou
     "Abstract (any proposition): searching for results that fit any proposition here",
   );
   const badge = page.locator('[data-badge="match"][data-match="abstraction"]').first();
-  await expect(badge).toBeVisible(COMMAND);
+  const card = page.locator("li[data-applicability]", { has: badge }).first();
+  await expect(card.getByText("Why this was suggested")).toBeVisible(COMMAND);
   await expect(badge).toContainText("Abstraction");
   // An abstraction-backed suggestion needs concrete input: it cannot be previewed or applied.
-  const card = page.locator("li[data-applicability]", { has: badge }).first();
-  await expect(card.getByRole("button", { name: "Preview" })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "Preview changes" })).toBeDisabled();
   expect(await currentNodeId(page)).toBe(rootId);
 
   // Turning it off restores the concrete suggestions.

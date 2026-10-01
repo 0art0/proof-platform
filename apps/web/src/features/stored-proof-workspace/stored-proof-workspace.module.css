@@ -196,6 +196,51 @@
   align-items: center;
 }
 
+.moreTools,
+.proofActions {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.moreTools > summary,
+.proofActions > summary {
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+  padding: 0.45rem 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.moreTools > summary:focus-visible,
+.proofActions > summary:focus-visible,
+.rawState > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.moreToolsPanel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.65rem 0 0.2rem;
+}
+
+.moreToolsPanel .rawState {
+  flex-basis: 100%;
+}
+
+.proofActions {
+  margin-top: 0.2rem;
+}
+
+.proofActions[open] > summary {
+  margin-bottom: 0.7rem;
+}
+
 .viewToggle {
   display: inline-flex;
   overflow: hidden;

@@ -74,7 +74,7 @@ export function ArtifactUpload({
         }}
       />
       <button type="submit" disabled={file === undefined || notice.kind === "uploading"}>
-        Upload artifact
+        Open proof file
       </button>
       {notice.kind === "uploading" ? <p role="status">Revalidating the artifact…</p> : null}
       {notice.kind === "failed" ? (
@@ -141,7 +141,7 @@ export function ArtifactDownload({
   return (
     <form className={styles.fetchForm} onSubmit={(event) => void submit(event)}>
       <input
-        aria-label="Session ID to download"
+        aria-label="Saved proof ID to download"
         placeholder="session:…"
         required
         pattern="[A-Za-z0-9][A-Za-z0-9._:/\-]*"

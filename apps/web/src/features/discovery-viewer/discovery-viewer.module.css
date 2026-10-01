@@ -34,6 +34,31 @@
   font-size: 0.8rem;
 }
 
+.viewDescription {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.technicalDetails {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.technicalDetails summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.technicalDetails summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.technicalDetails p,
+.technicalDetails dl {
+  margin-top: 0.5rem;
+}
+
 .headerFacts {
   display: flex;
   flex-wrap: wrap;

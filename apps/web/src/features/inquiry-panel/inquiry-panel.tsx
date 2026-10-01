@@ -154,7 +154,9 @@ export function InquiryPanel(props: InquiryPanelProps) {
       }
       setFeedback({
         state: "committed",
-        text: `${action} recorded${outcome.response.replayed ? " (already recorded)" : ""}.`,
+        text: outcome.response.replayed
+          ? `${action} was already recorded in this inquiry.`
+          : `Recorded in this inquiry: ${action}.`,
       });
       reload();
     },
@@ -175,9 +177,7 @@ export function InquiryPanel(props: InquiryPanelProps) {
       const created = outcome.response.result.inquiryRecords;
       setFeedback({
         state: "committed",
-        text: `${action} committed${
-          Array.isArray(created) ? `; ${created.length} inquiry records were created` : ""
-        }.`,
+        text: `${action} started${Array.isArray(created) && created.length > 0 ? ". Related inquiry details were added." : "."}`,
       });
       reload();
     },
@@ -217,7 +217,8 @@ export function InquiryPanel(props: InquiryPanelProps) {
         <SummaryRow label="Active objective" testId="inquiry-objective">
           {description?.objective === undefined ? (
             <span className={styles.empty}>
-              None. Investigate a hypothesis or find sufficient conditions to start one.
+              None yet. Select a goal and find sufficient conditions, or select a hypothesis to
+              investigate it.
             </span>
           ) : (
             <>
@@ -318,6 +319,7 @@ export function InquiryPanel(props: InquiryPanelProps) {
       </section>
 
       <div className={styles.actions} role="group" aria-label="Inquiry actions">
+        <strong className={styles.actionsHeading}>Choose a next step</strong>
         <ActionButton
           label="Use this"
           availability={useThis}

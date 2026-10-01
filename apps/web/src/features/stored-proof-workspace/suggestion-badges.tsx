@@ -16,6 +16,16 @@ const TRANSITION_CLASSES: Readonly<Record<TransitionClass, Readonly<{ glyph: str
   weakening: { glyph: "⇒" },
 };
 
+const TRANSITION_MEANINGS: Readonly<Record<TransitionClass, string>> = {
+  equivalence: "This step preserves the goal: the old and new states mean the same thing.",
+  strengthening: "The new state is stronger. Solving it proves the original goal.",
+  weakening: "The new state is weaker. Solving it alone does not prove the original goal.",
+};
+
+export function transitionMeaning(transitionClass: TransitionClass): string {
+  return TRANSITION_MEANINGS[transitionClass];
+}
+
 const EVIDENCE: Readonly<Record<TransitionEvidence, Readonly<{ glyph: string; label: string }>>> = {
   structural: { glyph: "⊢", label: "Structural rule" },
   "library-result": { glyph: "§", label: "Library result cited" },
@@ -47,7 +57,8 @@ export function TransitionClassBadge({
       className={styles.badge}
       data-badge="transition-class"
       data-transition-class={transitionClass}
-      title="Transition class"
+      title={transitionMeaning(transitionClass)}
+      aria-label={`${transitionClass}: ${transitionMeaning(transitionClass)}`}
     >
       <Glyph glyph={TRANSITION_CLASSES[transitionClass].glyph} />
       <span>{transitionClass}</span>
@@ -68,7 +79,18 @@ export function EvidenceBadge({ evidence }: Readonly<{ evidence: TransitionEvide
 /** The retrieval category: immediate, near miss (creates obligations), or needs input. */
 export function CategoryBadge({ category }: Readonly<{ category: SuggestionCategory }>) {
   return (
-    <span className={styles.badge} data-badge="category" data-category={category}>
+    <span
+      className={styles.badge}
+      data-badge="category"
+      data-category={category}
+      title={
+        category === "near-miss"
+          ? "This step needs additional premises or conditions to be proved."
+          : category === "requires-input"
+            ? "Choose an available value or selection before previewing this step."
+            : "This step is ready to preview."
+      }
+    >
       <Glyph glyph={CATEGORIES[category].glyph} />
       <span>{CATEGORIES[category].label}</span>
     </span>

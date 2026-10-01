@@ -46,7 +46,7 @@ describe("ArtifactUpload", () => {
     );
     const navigate = vi.fn();
     render(<ArtifactUpload navigate={navigate} />);
-    const upload = screen.getByRole("button", { name: "Upload artifact" });
+    const upload = screen.getByRole("button", { name: "Open proof file" });
     expect(upload).toBeDisabled();
 
     choose(JSON.stringify(artifact));
@@ -83,7 +83,7 @@ describe("ArtifactUpload", () => {
     const navigate = vi.fn();
     render(<ArtifactUpload navigate={navigate} />);
     choose(JSON.stringify(artifact));
-    fireEvent.click(screen.getByRole("button", { name: "Upload artifact" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open proof file" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The artifact was not imported: Edge 2 differs.");
@@ -95,7 +95,7 @@ describe("ArtifactUpload", () => {
     const fetchMock = stubFetch({}, 500);
     render(<ArtifactUpload navigate={vi.fn()} />);
     choose("{not json");
-    fireEvent.click(screen.getByRole("button", { name: "Upload artifact" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open proof file" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The file is not valid JSON.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -103,7 +103,7 @@ describe("ArtifactUpload", () => {
 
 describe("ArtifactDownload", () => {
   function enter() {
-    fireEvent.change(screen.getByLabelText("Session ID to download"), {
+    fireEvent.change(screen.getByLabelText("Saved proof ID to download"), {
       target: { value: " session:development " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Download artifact" }));
@@ -161,14 +161,28 @@ describe("ArtifactDownload", () => {
 });
 
 describe("LandingActions", () => {
-  it("offers the three actions with upload enabled", () => {
+  it("offers the three ways to begin and keeps less common actions tucked away", () => {
     render(<LandingActions developmentSessionId="session:development" />);
-    expect(screen.getByRole("heading", { name: "Upload artifact" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Open a proof file" })).toBeInTheDocument();
     expect(screen.getByLabelText("Artifact file")).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Download artifact" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Enter a new problem" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Start a new problem" })).toHaveAttribute(
       "href",
       "/problems/new",
     );
+    expect(screen.getByRole("heading", { name: "Resume a saved proof" })).toBeInTheDocument();
+    expect(screen.getByText("Download a saved proof").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    expect(screen.getByText("Open an example proof").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    fireEvent.click(screen.getByText("Download a saved proof"));
+    expect(screen.getByRole("button", { name: "Download artifact" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Open an example proof"));
+    expect(screen.getByRole("link", { name: "Explore the example proof" })).toHaveAttribute(
+      "href",
+      "/sessions/session%3Adevelopment",
+    );
+    expect(screen.getByText("Download a saved proof")).toBeInTheDocument();
   });
 });

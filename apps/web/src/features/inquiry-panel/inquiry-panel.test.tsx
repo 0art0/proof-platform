@@ -211,7 +211,7 @@ describe("InquiryPanel summary", () => {
   it("says so when nothing is recorded, and reads the stored records once for the node", async () => {
     const { fetchMock } = stubFetch();
     renderPanel();
-    expect(await screen.findByText(/None\. Investigate a hypothesis/)).toBeInTheDocument();
+    expect(await screen.findByText(/None yet\. Select a goal/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/proof-sessions/session%3Atest/inquiry-records?after=0&limit=500",
       expect.objectContaining({ cache: "no-store" }),
@@ -252,7 +252,7 @@ describe("InquiryPanel actions", () => {
   it("keeps every action visible, disabled with its reason", async () => {
     stubFetch();
     renderPanel();
-    await screen.findByText(/None\. Investigate/);
+    await screen.findByText(/None yet\. Select a goal/);
     for (const name of [
       "Use this",
       "Construct an object",
@@ -279,11 +279,11 @@ describe("InquiryPanel actions", () => {
         selection(node, { kind: "hypothesis", id: statementIdSchema.parse("hypothesis:eps") }, [1]),
       ],
     });
-    await screen.findByText(/None\. Investigate/);
+    await screen.findByText(/None yet\. Select a goal/);
     const before = gets();
     fireEvent.click(button("Investigate this hypothesis"));
     expect(await screen.findByTestId("inquiry-feedback")).toHaveTextContent(
-      "Investigate this hypothesis recorded.",
+      "Recorded in this inquiry: Investigate this hypothesis.",
     );
     expect(posts).toHaveLength(1);
     expect(posts[0]?.url).toBe("/api/proof-sessions/session%3Atest/protocol-commands");
@@ -306,7 +306,7 @@ describe("InquiryPanel actions", () => {
         selection(node, { kind: "hypothesis", id: statementIdSchema.parse("hypothesis:eps") }, [1]),
       ],
     });
-    await screen.findByText(/None\. Investigate/);
+    await screen.findByText(/None yet\. Select a goal/);
     fireEvent.click(button("Investigate this hypothesis"));
     const alert = await screen.findByTestId("inquiry-feedback");
     expect(alert).toHaveAttribute("role", "alert");
@@ -318,9 +318,9 @@ describe("InquiryPanel actions", () => {
   it("records Find sufficient conditions as an Explore question with no reason", async () => {
     const { posts } = stubFetch();
     renderPanel({ selections: [selection(node, conclusion, [])] });
-    await screen.findByText(/None\. Investigate/);
+    await screen.findByText(/None yet\. Select a goal/);
     fireEvent.click(button("Find sufficient conditions"));
-    await screen.findByText("Find sufficient conditions recorded.");
+    await screen.findByText("Recorded in this inquiry: Find sufficient conditions.");
     const command = posts[0]?.body.command as unknown as {
       records: { kind: string; question?: { form: string } }[];
     };
@@ -338,7 +338,7 @@ describe("InquiryPanel actions", () => {
     });
     await waitFor(() => expect(button("Use this")).toBeEnabled());
     fireEvent.click(button("Use this"));
-    await screen.findByText("Use this recorded.");
+    await screen.findByText("Recorded in this inquiry: Use this.");
     expect(posts[0]?.body.command).toMatchObject({
       kind: "record-inquiry",
       records: [{ kind: "attempt", objectiveId: "objective:main", method: { kind: "manual" } }],
@@ -348,7 +348,7 @@ describe("InquiryPanel actions", () => {
   it("constructs an object through the workspace command path and shows its refusal", async () => {
     stubFetch();
     const { runCommand } = renderPanel({ selections: [selection(node, conclusion, [])] });
-    await screen.findByText(/None\. Investigate/);
+    await screen.findByText(/None yet\. Select a goal/);
     fireEvent.click(button("Construct an object"));
     const alert = await screen.findByTestId("inquiry-feedback");
     expect(runCommand).toHaveBeenCalledTimes(1);
@@ -402,7 +402,7 @@ describe("InquiryPanel actions", () => {
     } as unknown as ProtocolCommandOutcome);
     fireEvent.click(button("Try this method"));
     expect(await screen.findByTestId("inquiry-feedback")).toHaveTextContent(
-      "Try this method committed; 3 inquiry records were created.",
+      "Try this method started. Related inquiry details were added.",
     );
     expect(runCommand.mock.calls[0]?.[1]).toMatchObject({
       commandId: "command:preview-1",
@@ -413,7 +413,7 @@ describe("InquiryPanel actions", () => {
   it("disables every action while the workspace is mutating", async () => {
     stubFetch();
     renderPanel({ mutationPending: true, selections: [selection(node, conclusion, [])] });
-    await screen.findByText(/None\. Investigate/);
+    await screen.findByText(/None yet\. Select a goal/);
     expect(button("Construct an object")).toBeDisabled();
     expect(button("Find sufficient conditions")).toBeDisabled();
   });

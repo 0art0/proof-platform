@@ -272,3 +272,31 @@
   gap: 0.5rem;
   flex-wrap: wrap;
 }
+
+.secondaryActions {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.secondaryActions summary,
+.disclosure {
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.secondaryActions p {
+  margin: 0.5rem 0;
+}
+
+.disclosure {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 0.75rem;
+}
+
+.sectionIntro {
+  margin: 0;
+  color: var(--text-muted);
+  font-weight: 400;
+}

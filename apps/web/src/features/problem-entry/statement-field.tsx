@@ -58,7 +58,7 @@ export function StatementField({
           }
         >
           <option value="latex">LaTeX</option>
-          <option value="mathjson">MathJSON</option>
+          <option value="mathjson">Structured notation (advanced)</option>
         </select>
         {onRemove === undefined ? null : (
           <button type="button" className={styles.linkButton} onClick={onRemove}>
@@ -80,7 +80,7 @@ export function StatementField({
       <p id={feedbackId} className={styles.feedback} data-kind={feedback.kind}>
         {feedback.kind === "parsed" ? (
           <>
-            <span aria-hidden="true">✓ </span>MathJSON: <code>{feedback.mathJson}</code>
+            <span aria-hidden="true">✓ </span>Notation recognized.
           </>
         ) : feedback.kind === "error" ? (
           <>

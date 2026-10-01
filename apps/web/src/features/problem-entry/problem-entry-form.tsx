@@ -71,8 +71,8 @@ const apiFailureSchema = z
 
 /**
  * New problem (design plan §4.1, §4.4 without the formalizer). The draft stays in the browser.
- * "Review draft" asks the worker to validate it and shows exactly what would be stored; only
- * "Approve and create session" on an unchanged reviewed draft creates the session and root node.
+ * "Check setup" asks the worker to validate it and shows the mathematical content; only
+ * "Start exploring" on an unchanged reviewed draft creates the session and root node.
  * Any edit after review discards the review.
  */
 export function ProblemEntryForm({
@@ -211,28 +211,39 @@ export function ProblemEntryForm({
         </Field>
       </Section>
 
-      <Section title="Background">
-        <Field label="Background level">
+      <Section title="Background knowledge">
+        <p className={styles.sectionIntro}>
+          Tell us what a reader may assume when exploring this problem.
+        </p>
+        <Field label="Assumed level">
           <input
             placeholder="first-year undergraduate"
             value={form.backgroundLevel}
             onChange={text("backgroundLevel")}
           />
         </Field>
-        <Field label="Background summary">
+        <Field label="What the reader is expected to know">
           <textarea rows={2} value={form.backgroundSummary} onChange={text("backgroundSummary")} />
         </Field>
-        <Field label="Assumed background (one per line)">
+      </Section>
+
+      <details className={styles.section}>
+        <summary className={styles.disclosure}>More setup choices (optional)</summary>
+        <Field label="Specific background assumptions (one per line)">
           <textarea
             rows={2}
             value={form.backgroundAssumptions}
             onChange={text("backgroundAssumptions")}
           />
         </Field>
-        <Field label="Background domains (comma-separated)">
-          <input value={form.backgroundDomains} onChange={text("backgroundDomains")} />
+        <Field label="Areas of mathematics">
+          <input
+            placeholder="algebra, real analysis"
+            value={form.backgroundDomains}
+            onChange={text("backgroundDomains")}
+          />
         </Field>
-        <Field label="Maximum background level">
+        <Field label="Highest level of included results">
           <select value={form.maximumLevel} onChange={text("maximumLevel")}>
             <option value="">Unspecified</option>
             {BACKGROUND_LEVELS.map((level) => (
@@ -242,20 +253,17 @@ export function ProblemEntryForm({
             ))}
           </select>
         </Field>
-      </Section>
-
-      <Section title="Preferences">
-        <Field label="Preferred domains (comma-separated)">
+        <Field label="Preferred areas of mathematics">
           <input value={form.preferredDomains} onChange={text("preferredDomains")} />
         </Field>
         <Field label="Notation preferences (one per line)">
           <textarea rows={2} value={form.notation} onChange={text("notation")} />
         </Field>
-      </Section>
-
-      <Section title="Library">
         <fieldset className={styles.choices}>
-          <legend>Library layers</legend>
+          <legend>Include extra mathematical results</legend>
+          <p className={styles.sectionIntro}>
+            Choose additional results and methods to make available while exploring.
+          </p>
           {options.layers.map((layer) => (
             <label key={layer.id} className={styles.choice}>
               <input
@@ -273,7 +281,7 @@ export function ProblemEntryForm({
           ))}
         </fieldset>
         <fieldset className={styles.choices}>
-          <legend>Packs</legend>
+          <legend>Notation and concepts</legend>
           {options.packs.map((pack) => (
             <label key={pack.id} className={styles.choice}>
               <input
@@ -288,7 +296,7 @@ export function ProblemEntryForm({
               <span>
                 <strong>{pack.name}</strong> — {pack.description}
                 {pack.alwaysActive ? (
-                  <em className={styles.hint}> Always active (standard notation).</em>
+                  <em className={styles.hint}> Always included.</em>
                 ) : (
                   <em className={styles.hint}>
                     {" "}
@@ -300,11 +308,16 @@ export function ProblemEntryForm({
             </label>
           ))}
         </fieldset>
-      </Section>
+      </details>
 
-      <Section title="Initial proof state">
+      <Section title="What is known and what to prove">
+        <p className={styles.sectionIntro}>
+          Enter any assumptions and a goal. Add variables or objects if they appear in these
+          statements.
+        </p>
         <fieldset className={styles.rows}>
-          <legend>Declarations</legend>
+          <legend>Variables and objects</legend>
+          <p className={styles.sectionIntro}>For example, add x as a real number or A as a set.</p>
           {form.declarations.map((row, index) => (
             <DeclarationEditor
               key={row.key}
@@ -329,11 +342,11 @@ export function ProblemEntryForm({
               }))
             }
           >
-            Add declaration
+            Add variable or object
           </button>
         </fieldset>
         <fieldset className={styles.rows}>
-          <legend>Hypotheses</legend>
+          <legend>What is already known</legend>
           {form.hypotheses.map((row, index) => (
             <StatementField
               key={row.key}
@@ -360,7 +373,7 @@ export function ProblemEntryForm({
           </button>
         </fieldset>
         <fieldset className={styles.rows}>
-          <legend>Goals</legend>
+          <legend>What to prove</legend>
           {form.goals.map((row, index) => (
             <StatementField
               key={row.key}
@@ -392,7 +405,7 @@ export function ProblemEntryForm({
 
       <div className={styles.actions}>
         <button type="submit" className={styles.primary} disabled={busy !== undefined}>
-          {busy === "review" ? "Reviewing…" : "Review draft"}
+          {busy === "review" ? "Checking…" : "Check setup"}
         </button>
       </div>
 
@@ -400,7 +413,7 @@ export function ProblemEntryForm({
 
       {reviewed === undefined ? (
         <p className={styles.gateNote} role="status">
-          Nothing is stored until you review the draft and approve it.
+          A proof session is created only after you approve the checked setup.
         </p>
       ) : (
         <ReviewPanel
@@ -408,6 +421,8 @@ export function ProblemEntryForm({
           sorts={options.sorts}
           approvable={approvable}
           busy={busy === "approve"}
+          layers={options.layers}
+          packs={options.packs}
           onApprove={() => void approve()}
         />
       )}
@@ -420,12 +435,16 @@ function ReviewPanel({
   sorts,
   approvable,
   busy,
+  layers,
+  packs,
   onApprove,
 }: Readonly<{
   reviewed: Reviewed;
   sorts: ProblemSetupOptions["sorts"];
   approvable: boolean;
   busy: boolean;
+  layers: ProblemSetupOptions["layers"];
+  packs: ProblemSetupOptions["packs"];
   onApprove: () => void;
 }>) {
   const presentation = useMemo(
@@ -436,13 +455,43 @@ function ReviewPanel({
   const context = goal?.sequent.context;
   return (
     <section className={styles.review} aria-label="Review">
-      <h2>Review</h2>
-      <p>
-        Approving creates a session whose root node is exactly this state. The statements below are
-        the stored MathJSON, rendered back.
-      </p>
+      <h2>Review your setup</h2>
+      <p>Check that the problem, assumptions, and goal are represented as you intend.</p>
       <dl className={styles.reviewList}>
-        <dt>Declarations</dt>
+        <dt>Problem</dt>
+        <dd>
+          <strong>{reviewed.draft.problem.title}</strong>
+          <p>{reviewed.draft.problem.statement}</p>
+        </dd>
+        <dt>Background knowledge</dt>
+        <dd>
+          {reviewed.draft.background.level || reviewed.draft.background.summary
+            ? [reviewed.draft.background.level, reviewed.draft.background.summary]
+                .filter(Boolean)
+                .join(" — ")
+            : "Not specified"}
+        </dd>
+        {reviewed.draft.background.assumptions.length > 0 ? (
+          <>
+            <dt>Additional assumptions</dt>
+            <dd>{reviewed.draft.background.assumptions.join("; ")}</dd>
+          </>
+        ) : null}
+        <dt>Included results</dt>
+        <dd>
+          {reviewed.review.metadata.libraryLayerIds
+            .map((id) => layers.find((layer) => layer.id === id)?.label)
+            .filter((label): label is string => label !== undefined)
+            .join(", ") || "None selected"}
+        </dd>
+        <dt>Notation and concepts</dt>
+        <dd>
+          {reviewed.review.activePackIds
+            .map((id) => packs.find((pack) => pack.id === id)?.name)
+            .filter((name): name is string => name !== undefined)
+            .join(", ") || "None selected"}
+        </dd>
+        <dt>Variables and objects</dt>
         <dd>
           {context === undefined || context.declarations.length === 0
             ? "None"
@@ -482,18 +531,10 @@ function ReviewPanel({
             ))}
           </ol>
         </dd>
-        <dt>Active packs</dt>
-        <dd>{reviewed.review.activePackIds.join(", ")}</dd>
-        <dt>Library layers</dt>
-        <dd>{reviewed.review.metadata.libraryLayerIds.join(", ") || "None"}</dd>
-        <dt>Review digest</dt>
-        <dd>
-          <code>{reviewed.review.digest.slice(0, 19)}…</code>
-        </dd>
       </dl>
       {approvable ? null : (
         <p role="alert" className={styles.warning}>
-          The draft changed after review. Review it again before approving.
+          The setup changed after you checked it. Check it again before starting.
         </p>
       )}
       <button
@@ -502,7 +543,7 @@ function ReviewPanel({
         disabled={!approvable || busy}
         onClick={onApprove}
       >
-        {busy ? "Creating session…" : "Approve and create session"}
+        {busy ? "Starting…" : "Start exploring"}
       </button>
     </section>
   );
@@ -539,14 +580,14 @@ function DeclarationEditor({
   return (
     <div className={styles.declaration}>
       <input
-        aria-label={`Symbol ${index + 1}`}
-        placeholder="x"
+        aria-label={`Variable or object ${index + 1}`}
+        placeholder="e.g. x"
         spellCheck={false}
         value={row.symbol}
         onChange={(event) => onChange({ ...row, symbol: event.currentTarget.value })}
       />
       <select
-        aria-label={`Sort ${index + 1}`}
+        aria-label={`Kind of symbol ${index + 1}`}
         value={row.sort}
         onChange={(event) => onChange({ ...row, sort: event.currentTarget.value })}
       >

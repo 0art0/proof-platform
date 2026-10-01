@@ -326,7 +326,9 @@ describe("drag gestures in the stored workspace", () => {
     // Previewing changed nothing; only Apply commits.
     expect(callsTo("/move-previews")).toHaveLength(1);
     expect(callsTo("/commands")).toHaveLength(0);
-    fireEvent.click(within(preview.closest("li")!).getByRole("button", { name: "Apply" }));
+    fireEvent.click(
+      within(preview.closest("li")!).getByRole("button", { name: "Apply this step" }),
+    );
     await screen.findByText(/advanced to node:command:web/);
     expect(callsTo("/commands")).toHaveLength(1);
   });

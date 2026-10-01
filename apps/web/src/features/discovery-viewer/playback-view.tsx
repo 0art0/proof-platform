@@ -27,24 +27,28 @@ function EntryDetail({
   if (entry.kind === "transition") {
     const { edge } = entry;
     return (
-      <dl className={styles.facts} aria-label="Transition">
-        <dt>Move</dt>
-        <dd>{edge.label}</dd>
-        <dt>Operation</dt>
-        <dd>
-          <code>{edge.operationKind}</code>
-        </dd>
-        <dt>Transition class</dt>
-        <dd>{edge.transitionClass}</dd>
-        <dt>From node</dt>
-        <dd>
-          <code>{edge.parentNodeId}</code>
-        </dd>
-        <dt>To node</dt>
-        <dd>
-          <code>{edge.childNodeId}</code>
-        </dd>
-      </dl>
+      <>
+        <p>{edge.label}</p>
+        <details className={styles.technicalDetails}>
+          <summary>Recorded step details</summary>
+          <dl className={styles.facts} aria-label="Transition">
+            <dt>Operation</dt>
+            <dd>
+              <code>{edge.operationKind}</code>
+            </dd>
+            <dt>Transition class</dt>
+            <dd>{edge.transitionClass}</dd>
+            <dt>From node</dt>
+            <dd>
+              <code>{edge.parentNodeId}</code>
+            </dd>
+            <dt>To node</dt>
+            <dd>
+              <code>{edge.childNodeId}</code>
+            </dd>
+          </dl>
+        </details>
+      </>
     );
   }
   if (entry.kind === "inquiry") {
@@ -121,12 +125,15 @@ export function PlaybackView({ artifact }: Readonly<{ artifact: ProofArtifact }>
 
   return (
     <ViewerShell artifact={artifact} active="playback">
-      <p className={styles.muted} data-testid="playback-order-note">
-        {timeline.counts.transitions} proof steps, {timeline.counts.interactions} interaction events
-        and {timeline.counts.inquiries} inquiry records. Transitions carry no timestamp, so they are
-        played in causal order (parents before children); interaction events and inquiry records
-        follow the step they belong to, by recorded time.
-      </p>
+      <details className={styles.technicalDetails} data-testid="playback-order-note">
+        <summary>How this playback is ordered</summary>
+        <p>
+          {timeline.counts.transitions} proof steps, {timeline.counts.interactions} interaction
+          events and {timeline.counts.inquiries} inquiry records. Transitions carry no timestamp, so
+          they are played in causal order (parents before children); interaction events and inquiry
+          records follow the step they belong to, by recorded time.
+        </p>
+      </details>
       <div className={styles.toolbarRow}>
         <ViewToggle view={view} onChange={setView} />
       </div>
@@ -179,9 +186,7 @@ export function PlaybackView({ artifact }: Readonly<{ artifact: ProofArtifact }>
                 {PLAYBACK_KIND_LABELS[entry.kind]}: {entry.title}
               </h2>
               <EntryDetail entry={entry} artifact={artifact} explain={explain} />
-              <h3>
-                Stored snapshot at <code>{entry.nodeId}</code>
-              </h3>
+              <h3>Proof state at this point</h3>
               {node === undefined ? (
                 <p>This node is not retained in the artifact.</p>
               ) : (

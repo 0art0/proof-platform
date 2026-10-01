@@ -13,6 +13,7 @@ import {
   ProvenanceBadge,
   SourceBadge,
   TransitionClassBadge,
+  transitionMeaning,
 } from "./suggestion-badges";
 import styles from "./suggestion-panel.module.css";
 
@@ -103,10 +104,9 @@ export function SuggestionCard({
       <header className={styles.cardHeader}>
         <div>
           <h3>{suggestion.name}</h3>
-          <code>{suggestion.artifactId}</code>
         </div>
         <span className={styles.applicability} data-applicability={suggestion.applicability}>
-          {suggestion.applicability === "applicable" ? "Applicable" : "Needs input"}
+          {suggestion.applicability === "applicable" ? "Ready to preview" : "Needs input"}
         </span>
       </header>
       <div
@@ -115,53 +115,74 @@ export function SuggestionCard({
         role="group"
       >
         <SourceBadge source={suggestion.source} />
-        <ProvenanceBadge />
-        <MatchBadge
-          exact={suggestion.exactRepresentationMatch}
-          abstractionFit={suggestion.abstractionFit}
-        />
         <CategoryBadge category={category} />
         {transitionClass === undefined ? null : (
           <TransitionClassBadge transitionClass={transitionClass} />
         )}
       </div>
-      <div className={styles.cardSection}>
-        <strong>Why it applies</strong>
-        <ul aria-label={`Reasons for ${suggestion.name}`}>
-          {suggestion.reasons.map((reason, index) => (
-            <li key={`${suggestion.id}:reason:${index}`}>{reason}</li>
-          ))}
-        </ul>
-      </div>
-      <div className={styles.cardSection}>
-        <strong>Matched selections</strong>
-        <ul aria-label={`Matched selections for ${suggestion.name}`}>
-          {suggestion.selectionMatches.map((match) => (
-            <li key={`${match.selectionId}:${match.selectionSlotId ?? match.patternId}`}>
-              {match.selectionId} → {match.selectionSlotId ?? match.patternId}
-            </li>
-          ))}
-        </ul>
-      </div>
-      {suggestion.substitutions.length > 0 ? (
-        <div className={styles.cardSection}>
-          <strong>Instantiation</strong>
-          <ul aria-label={`Instantiation for ${suggestion.name}`}>
-            {suggestion.substitutions.map(({ symbol, expression }) => (
-              <li key={symbol}>
-                <InlineLatex
-                  latex={`${presentation.latex(symbol)} \\mapsto ${presentation.latex(expression)}`}
-                />
+      {transitionClass === undefined ? null : (
+        <p className={styles.transitionMeaning}>{transitionMeaning(transitionClass)}</p>
+      )}
+      {suggestion.reasons[0] === undefined ? null : (
+        <p className={styles.reasonLead} data-suggestion-reason>
+          <NaturalLanguageText text={suggestion.reasons[0]} />
+        </p>
+      )}
+      {suggestion.reasons.length > 1 ||
+      suggestion.selectionMatches.length > 0 ||
+      suggestion.substitutions.length > 0 ? (
+        <details className={styles.explanationDetails}>
+          <summary>Why this was suggested</summary>
+          {suggestion.reasons.length > 1 ? (
+            <ul aria-label={`Reasons for ${suggestion.name}`}>
+              {suggestion.reasons.slice(1).map((reason, index) => (
+                <li key={`${suggestion.id}:reason:${index + 1}`} data-suggestion-reason>
+                  <NaturalLanguageText text={reason} />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div
+            className={styles.badgeRow}
+            aria-label={`Provenance and match for ${suggestion.name}`}
+            role="group"
+          >
+            <ProvenanceBadge />
+            <MatchBadge
+              exact={suggestion.exactRepresentationMatch}
+              abstractionFit={suggestion.abstractionFit}
+            />
+          </div>
+          <code>{suggestion.artifactId}</code>
+          <ul aria-label={`Matched selections for ${suggestion.name}`}>
+            {suggestion.selectionMatches.map((match) => (
+              <li key={`${match.selectionId}:${match.selectionSlotId ?? match.patternId}`}>
+                {match.selectionId} → {match.selectionSlotId ?? match.patternId}
               </li>
             ))}
           </ul>
-        </div>
+          {suggestion.substitutions.length === 0 ? null : (
+            <div className={styles.cardSection}>
+              <strong>Instantiation</strong>
+              <ul aria-label={`Instantiation for ${suggestion.name}`}>
+                {suggestion.substitutions.map(({ symbol, expression }) => (
+                  <li key={symbol}>
+                    <InlineLatex
+                      latex={`${presentation.latex(symbol)} \\mapsto ${presentation.latex(expression)}`}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </details>
       ) : null}
       {suggestion.predictedObligations === undefined ? null : (
-        <div className={styles.nearMiss} role="note">
-          <strong>
-            <span aria-hidden="true">≈ </span>Near miss: applies once these are proved
-          </strong>
+        <details className={styles.nearMiss}>
+          <summary>
+            Can apply after proving {suggestion.predictedObligations.length} condition
+            {suggestion.predictedObligations.length === 1 ? "" : "s"}
+          </summary>
           <ul aria-label={`Predicted obligations for ${suggestion.name}`}>
             {suggestion.predictedObligations.map((obligation) => (
               <li
@@ -175,26 +196,23 @@ export function SuggestionCard({
               </li>
             ))}
           </ul>
-          <span>Each becomes a new obligation when the result is applied.</span>
-        </div>
+          <span>Each condition becomes a new obligation when the result is applied.</span>
+        </details>
       )}
       {suggestion.applicability === "requires-input" ? (
         <div className={styles.missingInput} role="note">
-          <strong>Additional input required</strong>
+          <strong>Choose from the current context to continue</strong>
           <span>{missingInputText(suggestion)}</span>
           <details
             onToggle={(event) => {
               if (event.currentTarget.open) actions.onInputSummaryExpanded();
             }}
           >
-            <summary>Input menus</summary>
-            <ul aria-label={`Input menus for ${suggestion.name}`}>
-              {[...suggestion.unresolvedSelectionSlots, ...suggestion.unresolvedParameters].map(
-                (input) => (
-                  <li key={input}>{`Choose ${input}`}</li>
-                ),
-              )}
-            </ul>
+            <summary>Why input is needed</summary>
+            <p>
+              The menu offers choices from the current proof state to fill the missing selection or
+              value.
+            </p>
           </details>
           {menuResolvable ? (
             <button
@@ -228,14 +246,16 @@ export function SuggestionCard({
           disabled={mutationPending || !previewable || (active && move.kind !== "rejected")}
           onClick={actions.onPreview}
         >
-          {active && move.kind === "previewing" && menu === undefined ? "Previewing…" : "Preview"}
+          {active && move.kind === "previewing" && menu === undefined
+            ? "Preparing preview…"
+            : "Preview changes"}
         </button>
         <button
           type="button"
           disabled={mutationPending || preview === undefined}
           onClick={actions.onApply}
         >
-          {active && move.kind === "applying" ? "Applying…" : "Apply"}
+          {active && move.kind === "applying" ? "Applying…" : "Apply this step"}
         </button>
       </div>
       {active && move.kind === "rejected" ? (
@@ -251,8 +271,11 @@ export function SuggestionCard({
 }
 
 function missingInputText(suggestion: DisplayedSuggestion): string {
-  const inputs = [...suggestion.unresolvedSelectionSlots, ...suggestion.unresolvedParameters];
   if (suggestion.abstractionFit !== "not-used")
-    inputs.push("a concrete replacement for the abstraction");
-  return inputs.length === 0 ? "This suggestion cannot yet be executed." : inputs.join(", ");
+    return "Choose a concrete statement or expression to replace the pattern.";
+  if (suggestion.unresolvedSelectionSlots.length > 0)
+    return "Select the part of the proof state that supplies the missing piece.";
+  if (suggestion.unresolvedParameters.length > 0)
+    return "Choose the missing value from the options in this context.";
+  return "This suggestion needs more information before it can be applied.";
 }

@@ -59,9 +59,9 @@ export async function selectInAnyField(
 /** Preview, then apply, the displayed suggestion card for `artifactId`. */
 export async function previewAndApply(page: Page, artifactId: string) {
   const card = page.locator(`[data-artifact-id="${artifactId}"]`);
-  await card.getByRole("button", { name: "Preview" }).click();
+  await card.getByRole("button", { name: "Preview changes" }).click();
   await expect(card.getByLabel("Move preview")).toBeVisible();
-  await card.getByRole("button", { name: "Apply" }).click();
+  await card.getByRole("button", { name: "Apply this step" }).click();
 }
 
 export async function currentNodeId(page: Page): Promise<string> {

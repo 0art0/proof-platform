@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import Link from "next/link";
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, ProofEdge } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
@@ -50,6 +51,7 @@ export type SuggestionPanelProps = SuggestionPanelActions &
     mutationPending: boolean;
     presentation: Presentation;
     view: WorkspaceView;
+    authorMovesHref?: string | undefined;
   }>;
 
 /**
@@ -62,6 +64,7 @@ export function SuggestionPanel({
   mutationPending,
   presentation,
   view,
+  authorMovesHref,
   ...actions
 }: SuggestionPanelProps) {
   const displayedSet =
@@ -86,19 +89,35 @@ export function SuggestionPanel({
     />
   );
   return (
-    <section className={styles.suggestionPanel} aria-label="Persisted suggestions">
+    <section className={styles.suggestionPanel} aria-label="Available suggestions">
       <div className={styles.suggestionHeading}>
         <div>
           <h2>Suggestions</h2>
           <p className={styles.suggestionMeta}>
-            Deterministically ranked and persisted by the proof service.
+            Find a useful next step for the selected mathematics.
           </p>
         </div>
-        {displayedSet ? <code data-testid="suggestion-set-id">{displayedSet.id}</code> : null}
+        {displayedSet ? (
+          <details className={styles.suggestionRecord}>
+            <summary>About this list</summary>
+            <code data-testid="suggestion-set-id">{displayedSet.id}</code>
+          </details>
+        ) : null}
       </div>
       <p className={styles.status} data-state={suggestions.kind} role="status">
         {suggestionStatusText(suggestions)}
       </p>
+      {suggestions.kind === "empty" ? (
+        <p className={styles.emptyGuide}>
+          Try selecting a different part of the statement.
+          {authorMovesHref === undefined ? null : (
+            <>
+              {" "}
+              <Link href={authorMovesHref}>Create a reusable move</Link>
+            </>
+          )}
+        </p>
+      ) : null}
       {suggestions.kind === "ready" ? (
         <ol className={styles.suggestions} data-testid="suggestion-list">
           {layoutSuggestions(suggestions.suggestionSet).map((entry) =>
@@ -181,12 +200,11 @@ function bindActions(
 }
 
 function suggestionStatusText(state: SuggestionState): string {
-  if (state.kind === "idle")
-    return "Select one or more anchored occurrences to retrieve suggestions.";
-  if (state.kind === "loading") return "Loading suggestions for the current selection…";
-  if (state.kind === "empty") return "No persisted suggestions apply to this selection.";
-  if (state.kind === "stale") return `Stale selection: ${state.message}`;
-  if (state.kind === "rejected") return `Suggestion request rejected: ${state.message}`;
+  if (state.kind === "idle") return "Select a statement or expression to see suggestions.";
+  if (state.kind === "loading") return "Finding suggestions for the current selection…";
+  if (state.kind === "empty") return "No matching suggestions for this selection.";
+  if (state.kind === "stale") return `This selection is out of date: ${state.message}`;
+  if (state.kind === "rejected") return `Could not find suggestions: ${state.message}`;
   const count = state.suggestionSet.suggestions.length;
-  return `${count} persisted suggestion${count === 1 ? "" : "s"} in stored order.`;
+  return `${count} suggestion${count === 1 ? "" : "s"} to explore. Preview a step to inspect its effect before applying.`;
 }

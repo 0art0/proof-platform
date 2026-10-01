@@ -69,7 +69,10 @@ describe("DiscoveryTreeView", () => {
     render(<DiscoveryTreeView artifact={fixtureArtifact} />);
     fireEvent.click(screen.getByRole("button", { name: `Node ${ROOT}, depth 0` }));
     const detail = screen.getByTestId("node-detail");
-    expect(within(detail).getByRole("heading", { name: `Node ${ROOT}` })).toBeInTheDocument();
+    expect(within(detail).getByRole("heading", { name: "Starting point" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: `Node ${ROOT}, depth 0` })).toHaveTextContent(
+      "Starting point",
+    );
     expect(within(detail).getByTestId("state-snapshot")).toHaveTextContent("goal:main");
 
     const stored = fixtureArtifact.tree.suggestionSets.filter(({ nodeId }) => nodeId === ROOT);
@@ -93,10 +96,12 @@ describe("DiscoveryTreeView", () => {
     fireEvent.click(screen.getByRole("button", { name: `Node ${ROOT}, depth 0` }));
     const outgoing = screen.getByRole("list", { name: "Outgoing transitions" });
     fireEvent.click(
-      within(outgoing).getByRole("button", { name: /node:command:contraposition-1/ }),
+      outgoing.querySelector<HTMLButtonElement>(
+        '[data-child-node-id="node:command:contraposition-1"]',
+      )!,
     );
     const detail = screen.getByTestId("node-detail");
-    expect(within(detail).getByLabelText("Incoming transition")).toBeInTheDocument();
+    expect(within(detail).getByText("Recorded details")).toBeInTheDocument();
     expect(within(detail).getByText("introduce-implication")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: `Node node:command:contraposition-1, depth 1` }),

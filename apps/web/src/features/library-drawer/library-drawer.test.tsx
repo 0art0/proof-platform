@@ -54,6 +54,7 @@ describe("LibraryDrawer", () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     await screen.findByRole("search", { name: "Filter library" });
+    expect(screen.getByText(/Browse the definitions, results and moves/)).toBeVisible();
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       "/api/proof-sessions/session%3Atest/library",
       "/api/proof-sessions/session%3Atest/library/events",

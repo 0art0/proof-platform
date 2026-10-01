@@ -203,7 +203,7 @@ describe("ProofWorkspace", () => {
     expect(screen.getByText("goal goal:sum")).toBeVisible();
 
     rerender(<ProofWorkspace node={proofNode(["Equal", ["Add", "x", "y"], 5])} />);
-    expect(screen.getByText("No active occurrence.")).toBeVisible();
+    expect(screen.getByText("Nothing selected yet.")).toBeVisible();
     expect(screen.queryByText("goal goal:sum")).not.toBeInTheDocument();
   });
 

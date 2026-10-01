@@ -95,15 +95,12 @@ export function DiscoveryTreeView({ artifact }: Readonly<{ artifact: ProofArtifa
     <ViewerShell artifact={artifact} active="tree">
       <div className={styles.toolbarRow}>
         <ViewToggle view={view} onChange={setView} />
-        <span className={styles.muted}>
-          {layout.rows.length} nodes · {layout.edges.length} edges ·{" "}
-          {layout.rows.filter(({ routeStatus }) => routeStatus === "abandoned").length} abandoned
-        </span>
+        <span className={styles.muted}>{layout.rows.length} proof states</span>
       </div>
       <div className={styles.treeLayout}>
         <nav aria-label="Discovery tree outline" className={styles.outline}>
           <ol ref={outline} onKeyDown={moveFocus} data-testid="tree-outline">
-            {layout.rows.map((row) => (
+            {layout.rows.map((row, position) => (
               <li
                 key={row.nodeId}
                 data-node-id={row.nodeId}
@@ -117,7 +114,7 @@ export function DiscoveryTreeView({ artifact }: Readonly<{ artifact: ProofArtifa
                   aria-label={`Node ${row.nodeId}, depth ${row.depth}`}
                   onClick={() => setSelectedId(row.nodeId)}
                 >
-                  <code>{row.nodeId}</code>
+                  {row.isRoot ? "Starting point" : `State ${position + 1}`}
                 </button>
                 <NodeBadges row={row} />
                 <span className={styles.muted}>
@@ -134,61 +131,75 @@ export function DiscoveryTreeView({ artifact }: Readonly<{ artifact: ProofArtifa
           ) : (
             <>
               <h2>
-                Node <code>{selectedNode.id}</code>
+                {selectedId === artifact.tree.rootNodeId ? "Starting point" : "Selected state"}
               </h2>
               {selectedEdge === undefined ? (
-                <p>This is the root of the discovery tree.</p>
+                <p>This is where the proof began.</p>
               ) : (
-                <dl className={styles.facts} aria-label="Incoming transition">
-                  <dt>Reached by</dt>
-                  <dd>{treeEdgeView(index, selectedEdge).label}</dd>
-                  <dt>Operation</dt>
-                  <dd>
-                    <code>{selectedEdge.operation.kind}</code>
-                  </dd>
-                  <dt>Transition class</dt>
-                  <dd>{selectedEdge.transitionClass}</dd>
-                  <dt>Command</dt>
-                  <dd>
-                    <code>{selectedEdge.commandId}</code>
-                  </dd>
-                  <dt>From node</dt>
-                  <dd>
-                    <button type="button" onClick={() => setSelectedId(selectedEdge.parentNodeId)}>
-                      {selectedEdge.parentNodeId}
-                    </button>
-                  </dd>
-                </dl>
+                <>
+                  <p>Reached by {treeEdgeView(index, selectedEdge).label}.</p>
+                  <button type="button" onClick={() => setSelectedId(selectedEdge.parentNodeId)}>
+                    View previous state
+                  </button>
+                </>
               )}
-              <h3>Stored proof-state snapshot</h3>
+              <h3>Proof state here</h3>
               <StateSnapshotView
                 state={selectedNode.state}
                 presentation={presentation}
                 view={view}
               />
-              <h3>Displayed suggestions at this node</h3>
+              <h3>Suggestions shown here</h3>
               {suggestionSets.length === 0 ? (
-                <p>No suggestion set was stored for this node.</p>
+                <p>No suggestions were shown here.</p>
               ) : (
                 suggestionSets.map((set) => (
                   <SuggestionSetView key={set.id} set={set} chosenSuggestionIds={chosenIds} />
                 ))
               )}
-              <h3>Transitions out of this node</h3>
+              <h3>Next steps tried</h3>
               {outgoing.length === 0 ? (
-                <p>None: this node is a leaf.</p>
+                <p>No further steps were tried here.</p>
               ) : (
                 <ul aria-label="Outgoing transitions">
                   {outgoing.map((edge) => (
                     <li key={edge.id}>
                       <EdgeSummary edge={treeEdgeView(index, edge)} />{" "}
-                      <button type="button" onClick={() => setSelectedId(edge.childNodeId)}>
-                        Go to {edge.childNodeId}
+                      <button
+                        type="button"
+                        data-child-node-id={edge.childNodeId}
+                        aria-label={`View state after ${treeEdgeView(index, edge).label}`}
+                        onClick={() => setSelectedId(edge.childNodeId)}
+                      >
+                        View this state
                       </button>
                     </li>
                   ))}
                 </ul>
               )}
+              <details className={styles.technicalDetails}>
+                <summary>Recorded details</summary>
+                <dl className={styles.facts} aria-label="Incoming transition">
+                  <dt>Node</dt>
+                  <dd>
+                    <code>{selectedNode.id}</code>
+                  </dd>
+                  {selectedEdge === undefined ? null : (
+                    <>
+                      <dt>Operation</dt>
+                      <dd>
+                        <code>{selectedEdge.operation.kind}</code>
+                      </dd>
+                      <dt>Transition class</dt>
+                      <dd>{selectedEdge.transitionClass}</dd>
+                      <dt>Command</dt>
+                      <dd>
+                        <code>{selectedEdge.commandId}</code>
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              </details>
             </>
           )}
         </section>

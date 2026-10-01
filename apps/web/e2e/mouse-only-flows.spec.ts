@@ -32,6 +32,7 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
   await expect(page.getByLabel("Goal 1 conclusion")).toBeVisible();
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 1 goal/, COMMAND);
   await warmRoutes(page, sessionId);
+  await page.getByText("More proof actions").click();
   const rootId = await currentNodeId(page);
   const goalField = page.locator('[aria-label$="conclusion"]');
   const hypothesisFields = page.locator('[aria-label*=" hypothesis "]');
@@ -103,7 +104,7 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
 
   // Reimport it from the landing page by choosing the file in the file chooser.
   await page.goto("/");
-  const upload = page.getByRole("button", { name: "Upload artifact" });
+  const upload = page.getByRole("button", { name: "Open proof file" });
   await expect(upload).toBeDisabled();
   const choosing = page.waitForEvent("filechooser");
   await page.getByLabel("Artifact file", { exact: true }).click();
@@ -121,6 +122,7 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
   // The workspace marks the imported session read-only and disables every mutating action.
   await expect(page.getByTestId("read-only-badge")).toBeVisible(COMMAND);
+  await page.getByText("More proof actions").click();
   for (const name of [
     "Delete previous move…",
     "Backtrack with information…",
@@ -153,7 +155,7 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
     .click();
   const outline = page.getByTestId("tree-outline").getByRole("listitem");
   await expect(outline).toHaveCount(6, COMMAND);
-  await expect(page.getByText("6 nodes · 5 edges · 1 abandoned")).toBeVisible();
+  await expect(page.getByText("6 proof states")).toBeVisible();
   const abandoned = outline.filter({ hasText: "Abandoned" });
   await expect(abandoned).toHaveCount(1);
   await expect(abandoned).toContainText("Split classical cases");

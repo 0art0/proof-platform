@@ -127,7 +127,7 @@ afterEach(() => {
 
 const createCalls = () => calls.filter(({ url }) => url === "/api/proof-sessions");
 const validateCalls = () => calls.filter(({ url }) => url === "/api/problem-drafts/validate");
-const approveButton = () => screen.queryByRole("button", { name: "Approve and create session" });
+const approveButton = () => screen.queryByRole("button", { name: "Start exploring" });
 
 function renderForm() {
   const navigate = vi.fn();
@@ -149,19 +149,20 @@ function change(label: string, value: string) {
 function fillDraft() {
   change("Problem title", "Disjunction");
   change("Problem statement", "Show p or q from p.");
-  change("Background level", "school");
-  change("Background summary", "Logic.");
-  change("Symbol 1", "p");
-  fireEvent.click(screen.getByRole("button", { name: "Add declaration" }));
-  change("Symbol 2", "q");
-  change("Sort 2", "proposition");
+  fireEvent.click(screen.getByText("More setup choices (optional)"));
+  change("Assumed level", "school");
+  change("What the reader is expected to know", "Logic.");
+  change("Variable or object 1", "p");
+  fireEvent.click(screen.getByRole("button", { name: "Add variable or object" }));
+  change("Variable or object 2", "q");
+  change("Kind of symbol 2", "proposition");
   fireEvent.click(screen.getByRole("button", { name: "Add hypothesis" }));
   change("Hypothesis 1", "p");
   change("Goal 1", "p \\lor q");
 }
 
 async function reviewDraft() {
-  fireEvent.click(screen.getByRole("button", { name: "Review draft" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
   await waitFor(() => expect(approveButton()).toBeEnabled());
 }
 
@@ -170,7 +171,7 @@ describe("ProblemEntryForm approval gate", () => {
     const navigate = renderForm();
     fillDraft();
     expect(approveButton()).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("Nothing is stored until");
+    expect(screen.getByRole("status")).toHaveTextContent("created only after you approve");
 
     await reviewDraft();
     expect(validateCalls()).toHaveLength(1);
@@ -186,8 +187,9 @@ describe("ProblemEntryForm approval gate", () => {
       packs: [],
       libraryLayerIds: ["layer:global", "layer:initial-problem"],
     });
-    // The review shows the stored MathJSON rendered back.
+    // The review shows the entered problem and mathematical statements.
     expect(screen.getByRole("region", { name: "Review" })).toHaveTextContent("p \\lor q");
+    expect(screen.getByRole("region", { name: "Review" })).toHaveTextContent("Show p or q from p.");
 
     fireEvent.click(approveButton()!);
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/sessions/session%3Atest-1"));
@@ -206,7 +208,7 @@ describe("ProblemEntryForm approval gate", () => {
 
     change("Goal 1", "q \\lor p");
     expect(approveButton()).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("Nothing is stored until");
+    expect(screen.getByRole("status")).toHaveTextContent("created only after you approve");
     expect(createCalls()).toHaveLength(0);
 
     await reviewDraft();
@@ -247,7 +249,7 @@ describe("ProblemEntryForm approval gate", () => {
     );
     renderForm();
     fillDraft();
-    fireEvent.click(screen.getByRole("button", { name: "Review draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Goal 1 (undeclared-symbol): Goal 1 uses r, which is not declared.",
     );
@@ -281,12 +283,12 @@ describe("ProblemEntryForm approval gate", () => {
     change("Goal 1", "p \\lor");
     expect(screen.getByText(/could not be parsed/)).toBeInTheDocument();
     change("Goal 1", "p \\lor q");
-    expect(screen.getByText('["Or","p","q"]')).toBeInTheDocument();
+    expect(screen.getAllByText("Notation recognized.")).toHaveLength(2);
 
     change("Goal 1 format", "mathjson");
     change("Goal 1", '["Or", "p"');
     expect(screen.getByText(/not valid JSON/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Review draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Goal 1: The MathJSON is not valid JSON.",
     );

@@ -14,42 +14,45 @@ export function LandingActions({
     <div className={styles.actionsGrid}>
       <section className={styles.actionCard} aria-labelledby="action-new-problem">
         <h2 id="action-new-problem">New problem</h2>
-        <p>
-          Enter a problem, its background and an initial proof state. Nothing is stored until you
-          review and approve it.
-        </p>
+        <p>Set out a problem and its assumptions, then explore possible proofs.</p>
         <Link className={styles.primary} href="/problems/new">
-          Enter a new problem
+          Start a new problem
         </Link>
       </section>
 
       <section className={styles.actionCard} aria-labelledby="action-upload">
-        <h2 id="action-upload">Upload artifact</h2>
-        <p>
-          Open a previously exported proof artifact. It is revalidated in full and opens as a
-          read-only session.
-        </p>
+        <h2 id="action-upload">Open a proof file</h2>
+        <p>Explore a proof you exported earlier. Imported proofs open in read-only mode.</p>
         <ArtifactUpload />
       </section>
 
       <section className={styles.actionCard} aria-labelledby="action-fetch">
-        <h2 id="action-fetch">Fetch stored proof</h2>
-        <p>Open a stored proof session by its ID.</p>
+        <h2 id="action-fetch">Resume a saved proof</h2>
+        <p>Enter the ID from a saved proof link to continue exploring it.</p>
         <form className={styles.fetchForm} action="/sessions" method="get">
           <input
             name="id"
-            aria-label="Session ID"
+            aria-label="Saved proof ID"
             placeholder="session:…"
             required
             pattern="[A-Za-z0-9][A-Za-z0-9._:/\-]*"
           />
-          <button type="submit">Open session</button>
+          <button type="submit">Resume proof</button>
         </form>
-        <Link href={`/sessions/${encodeURIComponent(developmentSessionId)}`}>
-          Open the development session
-        </Link>
-        <p>Or download a stored session as a proof artifact.</p>
-        <ArtifactDownload />
+        <div className={styles.secondaryActions}>
+          <details>
+            <summary>Open an example proof</summary>
+            <p>Explore a prepared session to see how the workspace works.</p>
+            <Link href={`/sessions/${encodeURIComponent(developmentSessionId)}`}>
+              Explore the example proof
+            </Link>
+          </details>
+          <details>
+            <summary>Download a saved proof</summary>
+            <p>Enter its ID to save a portable copy.</p>
+            <ArtifactDownload />
+          </details>
+        </div>
       </section>
     </div>
   );

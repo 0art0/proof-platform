@@ -9,7 +9,7 @@ import {
   type PreviewTarget,
   type StatementChange,
 } from "./preview-diff";
-import { EvidenceBadge, TransitionClassBadge } from "./suggestion-badges";
+import { EvidenceBadge, TransitionClassBadge, transitionMeaning } from "./suggestion-badges";
 import styles from "./suggestion-panel.module.css";
 
 type ViewProps = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
@@ -34,12 +34,13 @@ export function PreviewDetails({
   return (
     <section className={styles.previewPanel} aria-label="Move preview">
       <div className={styles.previewHeading}>
-        <strong>Expected proof-state difference</strong>
+        <strong>Review the changes before applying</strong>
         <span className={styles.badgeRow}>
           <TransitionClassBadge transitionClass={preview.transitionClass} />
           <EvidenceBadge evidence={transitionEvidenceOf(preview.operation)} />
         </span>
       </div>
+      <p className={styles.previewMeaning}>{transitionMeaning(preview.transitionClass)}</p>
       <dl className={styles.previewCounts}>
         <div>
           <dt>Goals</dt>

@@ -280,7 +280,7 @@ describe("StoredProofWorkspace", () => {
     expect(screen.getByRole("status")).toHaveTextContent("could not be encoded safely");
 
     fireEvent.click(screen.getByRole("button", { name: "Select stale" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Stale selection");
+    expect(screen.getByRole("status")).toHaveTextContent("selection is out of date");
     expect(fetchMock.mock.calls.filter((call) => !isBackgroundRead(String(call[0])))).toHaveLength(
       0,
     );
@@ -341,7 +341,9 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Stale selection"));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("selection is out of date"),
+    );
   });
 
   it("ignores a delayed superseded success that arrives after the newer response", async () => {
@@ -398,7 +400,7 @@ describe("StoredProofWorkspace", () => {
     );
     const { rerender } = render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
-    expect(screen.getByRole("status")).toHaveTextContent("Loading suggestions");
+    expect(screen.getByRole("status")).toHaveTextContent("Finding suggestions");
 
     const nextNode = createProofNodeSchema().parse({
       ...node,
@@ -408,7 +410,7 @@ describe("StoredProofWorkspace", () => {
     rerender(
       <StoredProofWorkspace session={{ ...session, currentNodeId: nextNode.id }} node={nextNode} />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Select one or more");
+    expect(screen.getByRole("status")).toHaveTextContent("Select a statement or expression");
 
     await act(async () => {
       pending.resolve(
@@ -446,6 +448,11 @@ describe("StoredProofWorkspace", () => {
     const container = card.closest("[data-suggestion-id]");
     expect(container).toHaveAttribute("data-applicability", "applicable");
     expect(screen.getByText("The selected goal is a conjunction.")).toBeVisible();
+    const explanation = screen
+      .getByText("Why this was suggested")
+      .closest("details") as HTMLDetailsElement;
+    explanation.open = true;
+    fireEvent(explanation, new Event("toggle"));
     expect(screen.getByText("The target slot is fully matched.")).toBeVisible();
     expect(screen.getByText("selection:primary → target")).toBeVisible();
     expect(screen.getByText("equivalence")).toBeVisible();
@@ -471,10 +478,10 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    expect(within(card).getByText("Additional input required")).toBeVisible();
-    expect(within(card).getByText("choice")).toBeVisible();
-    expect(within(card).getByRole("button", { name: "Preview" })).toBeDisabled();
-    expect(within(card).getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(within(card).getByText("Choose from the current context to continue")).toBeVisible();
+    expect(within(card).getByText(/Choose the missing value from the options/)).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Apply this step" })).toBeDisabled();
   });
 
   it("previews without advancing, then applies and clears transient evidence", async () => {
@@ -526,12 +533,12 @@ describe("StoredProofWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
 
-    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
     await within(card).findByLabelText("Move preview");
     expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
     expect(within(card).getByText("Goals").nextSibling).toHaveTextContent("+0 −1 ~0");
 
-    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
     await screen.findByText(/advanced to node:command:web/);
     expect(screen.queryByTestId("suggestion-list")).not.toBeInTheDocument();
     const previewRequest = fetchMock.mock.calls.find((call) =>
@@ -583,16 +590,16 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
     await within(card).findByLabelText("Move preview");
-    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
 
     await screen.findByText("Apply rejected: The parent is stale.");
     expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
     expect(within(card).getByLabelText("Move preview")).toBeVisible();
-    expect(within(card).getByRole("button", { name: "Apply" })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: "Apply this step" })).toBeEnabled();
 
-    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
     await waitFor(() => expect(commandBodies).toHaveLength(2));
     expect(commandBodies[1]?.commandId).toBe(commandBodies[0]?.commandId);
   });
@@ -705,7 +712,7 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
     await within(card).findByLabelText("Move preview");
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
 
@@ -768,7 +775,7 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    const details = within(card).getByText("Input menus").closest("details")!;
+    const details = within(card).getByText("Why input is needed").closest("details")!;
     details.open = true;
     fireEvent(details, new Event("toggle"));
 
@@ -780,9 +787,9 @@ describe("StoredProofWorkspace", () => {
         suggestionId: "suggestion:split-goal",
       }),
     );
-    expect(within(card).getByLabelText("Input menus for Split goal conjunction")).toHaveTextContent(
-      "choice",
-    );
+    expect(
+      within(details as HTMLElement).getByText(/menu offers choices from the current proof state/),
+    ).toBeVisible();
   });
 
   it("shows the regenerated preview when apply finds stale definitions, then applies it", async () => {
@@ -851,16 +858,16 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
     await within(card).findByLabelText("Move preview");
-    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
 
     await screen.findByText(/Apply paused: The approved definitions behind the preview changed/);
     expect(previews).toBe(2);
     expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
     expect(within(card).getByLabelText("Move preview")).toBeVisible();
 
-    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
     await screen.findByText(/advanced to node:command:web/);
     expect(applies).toBe(2);
   });
@@ -974,7 +981,7 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    expect(within(card).getByRole("button", { name: "Preview" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
 
     fireEvent.click(within(card).getByRole("button", { name: "Choose inputs" }));
     const form = await within(card).findByRole("form", {
@@ -1007,7 +1014,7 @@ describe("StoredProofWorkspace", () => {
     expect(within(preview).getByLabelText("Chosen inputs")).toHaveTextContent("Conjunct:");
     expect(within(card).queryByRole("form")).not.toBeInTheDocument();
 
-    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
     await screen.findByText(/advanced to node:command:web/);
     expect(commandBodies).toEqual([
       {

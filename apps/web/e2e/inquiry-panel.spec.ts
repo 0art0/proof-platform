@@ -93,13 +93,13 @@ test("investigating a hypothesis records a Determine question shown in the inqui
   const investigate = panel.getByRole("button", { name: "Investigate this hypothesis" });
   await expect(investigate).toBeDisabled();
   await expect(panel.getByText("Select an occurrence in a hypothesis first.")).toBeVisible();
-  await expect(panel.getByTestId("inquiry-objective")).toContainText("None.", COMMAND);
+  await expect(panel.getByTestId("inquiry-objective")).toContainText("None yet.", COMMAND);
 
   await selectExpression(page.getByLabel("Goal 1 hypothesis 1"), ["And", "p", "q"]);
   await expect(investigate).toBeEnabled();
   await investigate.click();
   await expect(panel.getByTestId("inquiry-feedback")).toHaveText(
-    "Investigate this hypothesis recorded.",
+    "Recorded in this inquiry: Investigate this hypothesis.",
     COMMAND,
   );
 
@@ -107,7 +107,7 @@ test("investigating a hypothesis records a Determine question shown in the inqui
   const objective = panel.getByTestId("inquiry-objective");
   await expect(objective).toContainText("Elective · active", COMMAND);
   await expect(objective).toContainText(/determine|whether/i);
-  await expect(objective).not.toContainText("None.");
+  await expect(objective).not.toContainText("None yet.");
 });
 
 test("constructing an object on an existential goal shows its construction task", async ({

@@ -30,7 +30,7 @@ import { LibraryDrawer } from "../library-drawer";
 import { InquiryPanel } from "../inquiry-panel";
 import { GestureTray, useDragGestures } from "../gestures";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
-import { WorkspaceToolbar } from "./workspace-toolbar";
+import { WorkspaceToolbar, movesHref } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
 import type { MoveState, PendingMenus } from "./suggestion-card";
 import { SuggestionPanel, type SuggestionState } from "./suggestion-panel";
@@ -630,19 +630,22 @@ function StatefulStoredWorkspace({
         node={node}
         readOnly={readOnly}
       >
-        <ToolbarActionBar
-          sessionId={session.id}
-          readOnly={readOnly}
-          node={node}
-          rootNodeId={session.rootNodeId}
-          operators={session.operators}
-          selections={selections}
-          history={history}
-          mutationPending={mutationPending}
-          presentation={presentation}
-          view={view}
-          runCommand={runToolbarCommand}
-        />
+        <details className={styles.proofActions}>
+          <summary>More proof actions</summary>
+          <ToolbarActionBar
+            sessionId={session.id}
+            readOnly={readOnly}
+            node={node}
+            rootNodeId={session.rootNodeId}
+            operators={session.operators}
+            selections={selections}
+            history={history}
+            mutationPending={mutationPending}
+            presentation={presentation}
+            view={view}
+            runCommand={runToolbarCommand}
+          />
+        </details>
       </WorkspaceToolbar>
       <LibraryDrawer
         sessionId={session.id}
@@ -686,6 +689,7 @@ function StatefulStoredWorkspace({
         suggestions={suggestions}
         move={moveState}
         mutationPending={mutationPending || readOnly}
+        authorMovesHref={readOnly ? undefined : movesHref(session.id)}
         presentation={presentation}
         view={view}
         {...panelActions}

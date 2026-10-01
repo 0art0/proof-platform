@@ -63,6 +63,7 @@ async function openFreshSession(page: Page): Promise<string> {
     COMMAND,
   );
   await warmRoutes(page, sessionId);
+  await page.getByText("More proof actions").click();
   return sessionId;
 }
 
@@ -77,9 +78,9 @@ async function currentNodeId(page: Page): Promise<string> {
 async function applySplitAtRoot(page: Page) {
   await selectExpression(page.getByLabel("Goal 1 conclusion"), ["And", "q", "p"]);
   const card = page.locator('[data-artifact-id="move:split-goal-conjunction"]');
-  await card.getByRole("button", { name: "Preview" }).click();
+  await card.getByRole("button", { name: "Preview changes" }).click();
   await expect(card.getByLabel("Move preview")).toBeVisible();
-  await card.getByRole("button", { name: "Apply" }).click();
+  await card.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByText(/advanced to node:/)).toBeVisible(COMMAND);
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 2 goals/, COMMAND);
 }

@@ -218,12 +218,24 @@ describe("SuggestionCard", () => {
     expect(card).toHaveAttribute("data-source", "result");
     expect(card).toHaveAttribute("data-category", "near-miss");
     const badges = within(card).getByRole("group", { name: "Classification of Modus ponens" });
-    expect(within(badges).getByText("Result application")).toBeVisible();
-    expect(within(badges).getByText("Deterministic")).toBeVisible();
-    expect(within(badges).getByText("Structural match")).toBeVisible();
     expect(within(badges).getByText("Near miss")).toBeVisible();
+    expect(within(badges).getByText("Result application")).toBeVisible();
+    expect(within(card).getByText(/Applies if/)).toBeVisible();
+    const details = within(card).getByText("Why this was suggested");
+    const explanation = details.closest("details") as HTMLDetailsElement;
+    expect(explanation).not.toHaveAttribute("open");
+    explanation.open = true;
+    fireEvent(explanation, new Event("toggle"));
+    const provenanceAndMatch = within(card).getByRole("group", {
+      name: "Provenance and match for Modus ponens",
+    });
+    expect(within(provenanceAndMatch).getByText("Deterministic")).toBeVisible();
+    expect(within(provenanceAndMatch).getByText("Structural match")).toBeVisible();
     // Every badge carries a text label and a data value, never colour alone.
-    for (const badge of badges.querySelectorAll("[data-badge]")) {
+    for (const badge of [
+      ...badges.querySelectorAll("[data-badge]"),
+      ...provenanceAndMatch.querySelectorAll("[data-badge]"),
+    ]) {
       expect(badge.textContent?.trim().length).toBeGreaterThan(1);
       expect(badge.querySelector('[aria-hidden="true"]')).not.toBeNull();
     }
@@ -231,6 +243,8 @@ describe("SuggestionCard", () => {
     const instantiation = within(card).getByLabelText("Instantiation for Modus ponens");
     expect(latexIn(instantiation)).toEqual(["P \\mapsto p", "Q \\mapsto q"]);
 
+    const requirements = within(card).getByText("Can apply after proving 2 conditions");
+    fireEvent.click(requirements);
     const obligations = within(card).getByLabelText("Predicted obligations for Modus ponens");
     const items = within(obligations).getAllByRole("listitem");
     expect(items.map((item) => item.getAttribute("data-obligation-kind"))).toEqual([
@@ -240,8 +254,7 @@ describe("SuggestionCard", () => {
     expect(items[0]).toHaveTextContent("Premise");
     expect(latexIn(items[0]!)).toEqual(["p"]);
     expect(items[1]).toHaveTextContent("Side condition the domain is nonempty");
-    expect(within(card).getByText(/Near miss: applies once these are proved/)).toBeVisible();
-    expect(within(card).getByRole("button", { name: "Preview" })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: "Preview changes" })).toBeEnabled();
   });
 
   it("shows the stored transition class of a move and the recorded evidence after preview", () => {
@@ -275,7 +288,7 @@ describe("SuggestionCard", () => {
     expect(preview.querySelector('[data-evidence="library-result"]')).toHaveTextContent(
       "Library result cited",
     );
-    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Apply this step" })).toBeEnabled();
   });
 });
 
@@ -330,6 +343,26 @@ describe("PreviewDetails", () => {
 });
 
 describe("SuggestionPanel", () => {
+  it("offers a focused move-authoring link when no suggestions match", () => {
+    const set = suggestionSet([]);
+    render(
+      <SuggestionPanel
+        suggestions={{ kind: "empty", suggestionSet: set, transitionClasses: [] }}
+        move={{ kind: "idle" }}
+        mutationPending={false}
+        presentation={presentation}
+        view="formal"
+        authorMovesHref="/sessions/session%3Atest/moves"
+        {...noActions()}
+      />,
+    );
+    expect(screen.getByText(/No matching suggestions/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "Create a reusable move" })).toHaveAttribute(
+      "href",
+      "/sessions/session%3Atest/moves",
+    );
+  });
+
   it("groups stored variants behind an expandable control without reranking", () => {
     const set = suggestionSet(
       [
@@ -362,6 +395,8 @@ describe("SuggestionPanel", () => {
       />,
     );
     const list = screen.getByTestId("suggestion-list");
+    expect(screen.getByText("About this list").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("suggestion-set-id")).toHaveTextContent(set.id);
     const titles = () => [...list.querySelectorAll("h3")].map(({ textContent }) => textContent);
     expect(titles()).toEqual(["Transitivity", "Other result"]);
 

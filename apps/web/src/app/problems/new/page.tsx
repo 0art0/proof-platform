@@ -16,13 +16,13 @@ export default async function NewProblemPage() {
   return (
     <main className={styles.page}>
       <p>
-        <Link href="/">← Back</Link>
+        <Link href="/">← Home</Link>
       </p>
       <h1>New problem</h1>
       <p className={styles.lead}>
-        State the problem and its background, choose library layers and packs, and enter the initial
-        proof state. Declarations take their sort from a menu; hypotheses and goals are LaTeX or
-        MathJSON.
+        Give the problem a name, then enter what is known and what you want to prove. You can check
+        the mathematical setup before starting; your proof session is created only after you approve
+        it.
       </p>
       {options === undefined ? (
         <p role="alert" className={styles.warning}>

@@ -243,12 +243,12 @@ test("stale anchors are rejected and the persisted order and reasons are read ba
   ).toBeDefined();
   const suggestionSetId = await page.getByTestId("suggestion-set-id").textContent();
   expect(suggestionSetId).toBeTruthy();
-  // Each card shows two stored lists: the reasons and the matched selections. Both must be read
-  // back exactly as persisted, so they are compared separately.
+  // Each card preserves the stored reasons and matched selections, including the details
+  // shown on demand. Both are compared with the persisted suggestion.
   const displayed = await page.locator("[data-suggestion-id]").evaluateAll((cards) =>
     cards.map((card) => ({
       id: card.getAttribute("data-suggestion-id"),
-      reasons: [...card.querySelectorAll('ul[aria-label^="Reasons for"] li')].map(
+      reasons: [...card.querySelectorAll("[data-suggestion-reason]")].map(
         (reason) => reason.textContent,
       ),
       matches: [...card.querySelectorAll('ul[aria-label^="Matched selections for"] li')].map(
@@ -309,9 +309,8 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   await expect(splitCard).toBeVisible();
   await expect(splitCard.locator('[data-applicability="applicable"]')).toBeVisible();
   await expect(splitCard.locator('[data-transition-class="equivalence"]')).toBeVisible();
-  expect(
-    await splitCard.getByLabel("Reasons for Split conjunction goal").locator("li").count(),
-  ).toBeGreaterThan(0);
+  expect(await splitCard.locator("[data-suggestion-reason]").count()).toBeGreaterThan(0);
+  await splitCard.getByText("Why this was suggested").click();
   await expect(splitCard.getByText("selection:primary → target", { exact: true })).toBeVisible();
 
   const splitSuggestionSetId = await page.getByTestId("suggestion-set-id").textContent();
@@ -319,10 +318,10 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   expect(splitSuggestionSetId).toBeTruthy();
   expect(splitSuggestionId).toBeTruthy();
 
-  await splitCard.getByRole("button", { name: "Preview" }).click();
+  await splitCard.getByRole("button", { name: "Preview changes" }).click();
   const preview = splitCard.getByLabel("Move preview");
   await expect(preview).toBeVisible();
-  await expect(preview.getByText("Expected proof-state difference")).toBeVisible();
+  await expect(preview.getByText("Review the changes before applying")).toBeVisible();
   await expect(preview.getByText("None.", { exact: true })).toBeVisible();
   await expect(page.getByText(`Current node ${rootNodeId}`, { exact: true })).toBeVisible();
 
@@ -335,7 +334,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   expect(afterPreview.data.session.currentNodeId).toBe(rootNodeId);
   expect(afterPreview.data.edges).toHaveLength(initialEdgeCount);
 
-  await splitCard.getByRole("button", { name: "Apply" }).click();
+  await splitCard.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByText(/advanced to node:/)).toBeVisible();
   const firstChildId = await page
     .locator('[data-history-node-id][data-current="true"]')
@@ -343,7 +342,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   expect(firstChildId).toBeTruthy();
   expect(firstChildId).not.toBe(rootNodeId);
   await expect(
-    page.getByText("Select one or more anchored occurrences to retrieve suggestions."),
+    page.getByText("Select a statement or expression to see suggestions."),
   ).toBeVisible();
 
   const staleApply = await page.evaluate(
@@ -377,9 +376,9 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   ).toBeDefined();
   const expandCard = page.locator('[data-artifact-id="move:expand-hypothesis-conjunction"]');
   await expect(expandCard.locator('[data-applicability="applicable"]')).toBeVisible();
-  await expandCard.getByRole("button", { name: "Preview" }).click();
+  await expandCard.getByRole("button", { name: "Preview changes" }).click();
   await expect(expandCard.getByLabel("Move preview")).toBeVisible();
-  await expandCard.getByRole("button", { name: "Apply" }).click();
+  await expandCard.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByText(/advanced to node:/)).toBeVisible();
 
   const branched = await page.evaluate(async (apiBase) => {
@@ -433,6 +432,7 @@ test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw 
   await page.getByRole("button", { name: "Formal (LaTeX)" }).click();
   await expect(page.getByLabel("Goal 1 conclusion")).toBeVisible();
 
+  await page.getByText("More tools").click();
   await page.getByText("View raw MathJSON").click();
   const raw = JSON.parse((await page.getByTestId("raw-proof-state").textContent()) ?? "{}");
   expect(raw.state.id).toBe("state:development-root");

@@ -54,6 +54,7 @@ test("a move authored from a recorded step is validated, approved, then offered 
   const secondSplit = await currentNodeId(page);
 
   // The workspace links to the authoring page.
+  await page.getByText("More tools").click();
   await page.getByRole("link", { name: "Author moves" }).click();
   await expect(page.getByRole("heading", { name: "Author moves" })).toBeVisible(COMMAND);
   await expect(
@@ -146,8 +147,8 @@ test("a move authored from a recorded step is validated, approved, then offered 
   await expect(offered).toContainText("Split a conjunction goal");
 
   // Applying it goes through the same kernel path as the built-in move.
-  await offered.getByRole("button", { name: "Preview" }).click();
+  await offered.getByRole("button", { name: "Preview changes" }).click();
   await expect(offered.getByLabel("Move preview")).toBeVisible(COMMAND);
-  await offered.getByRole("button", { name: "Apply" }).click();
+  await offered.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 4 goals/, COMMAND);
 });

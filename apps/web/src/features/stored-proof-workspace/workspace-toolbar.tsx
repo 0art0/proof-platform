@@ -97,38 +97,43 @@ export function WorkspaceToolbar({
             </button>
           ))}
         </div>
-        <button type="button" className={styles.toolbarButton} onClick={() => void copyState()}>
-          Copy proof state as JSON
-        </button>
-        <span className={styles.copyFeedback} aria-live="polite" data-state={copy.kind}>
-          {copy.kind === "copied" ? "Proof state copied to the clipboard." : null}
-          {copy.kind === "failed" ? copy.message : null}
-        </span>
         <ExportAction sessionId={sessionId} />
         <Link className={styles.toolbarButton} href={treeHref(sessionId)}>
           Open full discovery tree
         </Link>
-        {readOnly ? (
-          <button
-            type="button"
-            className={styles.toolbarButton}
-            disabled
-            title={READ_ONLY_REASON}
-            aria-label={`Author moves (${READ_ONLY_REASON})`}
-          >
-            Author moves
-          </button>
-        ) : (
-          <Link className={styles.toolbarButton} href={movesHref(sessionId)}>
-            Author moves
-          </Link>
-        )}
+        <details className={styles.moreTools}>
+          <summary>More tools</summary>
+          <div className={styles.moreToolsPanel}>
+            <button type="button" className={styles.toolbarButton} onClick={() => void copyState()}>
+              Copy proof state as JSON
+            </button>
+            <span className={styles.copyFeedback} aria-live="polite" data-state={copy.kind}>
+              {copy.kind === "copied" ? "Proof state copied to the clipboard." : null}
+              {copy.kind === "failed" ? copy.message : null}
+            </span>
+            {readOnly ? (
+              <button
+                type="button"
+                className={styles.toolbarButton}
+                disabled
+                title={READ_ONLY_REASON}
+                aria-label={`Author moves (${READ_ONLY_REASON})`}
+              >
+                Author moves
+              </button>
+            ) : (
+              <Link className={styles.toolbarButton} href={movesHref(sessionId)}>
+                Author moves
+              </Link>
+            )}
+            <details className={styles.rawState}>
+              <summary>View raw MathJSON</summary>
+              <pre data-testid="raw-proof-state">{proofStateJson(sessionId, node)}</pre>
+            </details>
+          </div>
+        </details>
       </div>
       {children}
-      <details className={styles.rawState}>
-        <summary>View raw MathJSON</summary>
-        <pre data-testid="raw-proof-state">{proofStateJson(sessionId, node)}</pre>
-      </details>
     </div>
   );
 }

@@ -157,6 +157,7 @@ describe("toolbar actions in the stored workspace", () => {
         json({ ok: true, data: { session: current.session, node: current.node } }),
     });
     render(<StoredProofWorkspace session={session} node={root} />);
+    fireEvent.click(screen.getByText("More proof actions"));
     fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
     const sorry = screen.getByRole("button", { name: "Mark sorry" });
     await waitFor(() => expect(sorry).toBeEnabled());
@@ -203,6 +204,7 @@ describe("toolbar actions in the stored workspace", () => {
         ),
     });
     render(<StoredProofWorkspace session={session} node={root} />);
+    fireEvent.click(screen.getByText("More proof actions"));
     fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
     const split = screen.getByRole("button", { name: "Case split on selection" });
     await waitFor(() => expect(split).toBeEnabled());
@@ -223,6 +225,7 @@ describe("toolbar actions in the stored workspace", () => {
       },
     });
     render(<StoredProofWorkspace session={session} node={root} />);
+    fireEvent.click(screen.getByText("More proof actions"));
     fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
     const sorry = screen.getByRole("button", { name: "Mark sorry" });
     await waitFor(() => expect(sorry).toBeEnabled());
@@ -243,6 +246,7 @@ describe("toolbar actions in the stored workspace", () => {
     expect(screen.getByTestId("read-only-reason")).toHaveTextContent(
       "This session is read-only (imported artifact)",
     );
+    fireEvent.click(screen.getByText("More proof actions"));
     fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
     for (const name of [
       "Delete previous move…",

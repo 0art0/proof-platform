@@ -109,7 +109,7 @@ type ValidatedProofWorkspaceProps = Readonly<{
 }>;
 
 const INITIAL_SELECTION_NOTICE =
-  "Select a hypothesis or conclusion. Ctrl/Cmd-click adds an independent occurrence; Escape clears.";
+  "Click a goal or hypothesis to see relevant results and methods. Ctrl/Cmd-click adds another selection; Escape clears.";
 
 function ValidatedProofWorkspace({
   node,
@@ -181,7 +181,9 @@ function ValidatedProofWorkspace({
   }
   const selectionNotice =
     selectionState.feedback === undefined
-      ? INITIAL_SELECTION_NOTICE
+      ? view === "formal"
+        ? INITIAL_SELECTION_NOTICE
+        : "Switch to the formal view to select goals and hypotheses."
       : describeSelectionFeedback(selectionState.feedback);
   const statementEnvironment: StatementEnvironment = {
     view,
@@ -242,7 +244,7 @@ function ValidatedProofWorkspace({
           </div>
 
           {selectionState.active.length === 0 ? (
-            <p className={styles.emptySelection}>No active occurrence.</p>
+            <p className={styles.emptySelection}>Nothing selected yet.</p>
           ) : (
             <ol className={styles.selectionList}>
               {resolvedSelections.map(({ selection, resolved }) => (

@@ -207,6 +207,7 @@ describe("WorkspaceToolbar", () => {
         node={snapshot}
       />,
     );
+    fireEvent.click(screen.getByText("More tools"));
     const details = screen.getByText("View raw MathJSON").closest("details")!;
     expect(details).not.toHaveAttribute("open");
     fireEvent.click(screen.getByText("View raw MathJSON"));
@@ -225,6 +226,7 @@ describe("WorkspaceToolbar", () => {
         node={snapshot}
       />,
     );
+    fireEvent.click(screen.getByText("More tools"));
     fireEvent.click(screen.getByRole("button", { name: "Copy proof state as JSON" }));
     await screen.findByText("Proof state copied to the clipboard.");
     expect(writeText).toHaveBeenCalledWith(proofStateJson("session:test", snapshot));
@@ -246,6 +248,7 @@ describe("WorkspaceToolbar", () => {
         node={snapshot}
       />,
     );
+    fireEvent.click(screen.getByText("More tools"));
     fireEvent.click(screen.getByRole("button", { name: "Copy proof state as JSON" }));
     await screen.findByText(/Copy failed: clipboard permission was denied/);
   });
@@ -260,6 +263,7 @@ describe("WorkspaceToolbar", () => {
         node={snapshot}
       />,
     );
+    fireEvent.click(screen.getByText("More tools"));
     fireEvent.click(screen.getByRole("button", { name: "Copy proof state as JSON" }));
     await waitFor(() =>
       expect(screen.getByText(/Copy failed: the clipboard is unavailable/)).toBeVisible(),

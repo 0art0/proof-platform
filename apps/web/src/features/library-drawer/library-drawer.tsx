@@ -169,6 +169,11 @@ function DrawerPanel({
           Close <kbd aria-hidden="true">Esc</kbd>
         </button>
       </header>
+      <p className={styles.muted}>
+        Browse the definitions, results and moves available in this proof. Select an entry to see
+        its statement and source.
+        {gestures === undefined ? null : " Drag a result onto a statement to preview it."}
+      </p>
 
       {state.kind === "loading" ? (
         <p role="status" className={styles.muted}>
