@@ -623,7 +623,13 @@ function StatefulStoredWorkspace({
         readOnly={readOnly}
         breadcrumb={breadcrumb}
       />
-      <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node}>
+      <WorkspaceToolbar
+        view={view}
+        onViewChange={setView}
+        sessionId={session.id}
+        node={node}
+        readOnly={readOnly}
+      >
         <ToolbarActionBar
           sessionId={session.id}
           readOnly={readOnly}

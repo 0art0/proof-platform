@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ProofNode } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
 import { ExportAction } from "./export-action";
+import { READ_ONLY_REASON } from "./toolbar-actions";
 import styles from "./stored-proof-workspace.module.css";
 
 export type WorkspaceToolbarProps = Readonly<{
@@ -12,6 +13,8 @@ export type WorkspaceToolbarProps = Readonly<{
   onViewChange: (view: WorkspaceView) => void;
   sessionId: string;
   node: ProofNode;
+  /** An imported artifact: authoring moves is disabled. */
+  readOnly?: boolean | undefined;
   /** The proof actions (N31), rendered as a second toolbar row. */
   children?: ReactNode;
 }>;
@@ -31,6 +34,11 @@ export function treeHref(sessionId: string): string {
   return `/sessions/${encodeURIComponent(sessionId)}/tree`;
 }
 
+/** Move authoring for a session (roadmap N35). */
+export function movesHref(sessionId: string): string {
+  return `/sessions/${encodeURIComponent(sessionId)}/moves`;
+}
+
 /** The exact stored snapshot, serialized deterministically; nothing is recomputed. */
 export function proofStateJson(sessionId: string, node: ProofNode): string {
   return JSON.stringify({ sessionId, nodeId: node.id, state: node.state }, null, 2);
@@ -41,6 +49,7 @@ export function WorkspaceToolbar({
   onViewChange,
   sessionId,
   node,
+  readOnly = false,
   children,
 }: WorkspaceToolbarProps) {
   const [copy, setCopy] = useState<CopyState>({ kind: "idle" });
@@ -99,6 +108,21 @@ export function WorkspaceToolbar({
         <Link className={styles.toolbarButton} href={treeHref(sessionId)}>
           Open full discovery tree
         </Link>
+        {readOnly ? (
+          <button
+            type="button"
+            className={styles.toolbarButton}
+            disabled
+            title={READ_ONLY_REASON}
+            aria-label={`Author moves (${READ_ONLY_REASON})`}
+          >
+            Author moves
+          </button>
+        ) : (
+          <Link className={styles.toolbarButton} href={movesHref(sessionId)}>
+            Author moves
+          </Link>
+        )}
       </div>
       {children}
       <details className={styles.rawState}>
