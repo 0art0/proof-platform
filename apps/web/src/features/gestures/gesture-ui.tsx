@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, type DragEvent, type KeyboardEvent } from "react";
 import { formatOperandPath, type AnchoredProofSelection } from "@proof/selections";
 import {
   isSelectionAbstract,
@@ -105,10 +105,14 @@ export type AbstractionControls = Readonly<{
   disabled: boolean;
 }>;
 
+const ABSTRACT_HINT =
+  "Abstract: search for results that fit any expression of this type, not just this exact one.";
+
 function AbstractionToggles({
   controls,
   selections,
 }: Readonly<{ controls: AbstractionControls; selections: readonly AnchoredProofSelection[] }>) {
+  const hintId = useId();
   if (selections.length === 0) return null;
   return (
     <ul className={styles.abstractList} aria-label="Abstract selections" data-testid="abstraction">
@@ -117,27 +121,43 @@ function AbstractionToggles({
         const role = controls.roleOf(selection);
         const binder = role === "binder";
         const name = selections.length === 1 ? "this selection" : `selection ${index + 1}`;
+        const unavailable = binder
+          ? "Not available: a binder declaration names a variable, so it cannot stand for any expression."
+          : controls.disabled
+            ? "Not available while a move is being applied."
+            : undefined;
+        const itemId = `${hintId}-${index}`;
         return (
           <li key={JSON.stringify(selection)} className={styles.abstractItem}>
             <button
               type="button"
               className={styles.trayButton}
               aria-pressed={abstract}
-              disabled={controls.disabled || binder}
+              aria-describedby={`${itemId}-hint ${itemId}-state`}
+              disabled={unavailable !== undefined}
               data-abstract-toggle={abstract ? "on" : "off"}
               onClick={() => controls.toggle(selection)}
             >
               Abstract {name}
             </button>
+            {/* Revealed by hover or keyboard focus on the toggle; always read by screen readers. */}
             <span
-              className={abstract ? styles.abstractOn : styles.help}
+              id={`${itemId}-hint`}
+              className={styles.abstractHint}
+              data-testid="abstraction-hint"
+            >
+              {ABSTRACT_HINT}
+            </span>
+            <span
+              id={`${itemId}-state`}
+              className={abstract && unavailable === undefined ? styles.abstractOn : styles.help}
               data-testid="abstraction-indicator"
             >
-              {binder
-                ? "A binder declaration cannot be abstracted."
+              {unavailable !== undefined
+                ? unavailable
                 : abstract
-                  ? `Abstract (${role === "proposition" ? "any proposition" : "any term"}): used for retrieval only. Previews and Apply use the concrete selection.`
-                  : "Concrete: retrieval matches this exact occurrence."}
+                  ? `Abstract (${role === "proposition" ? "any proposition" : "any term"}): searching for results that fit any ${role === "proposition" ? "proposition" : "term"} here, not just this exact one. Only the search changes; previews and Apply still use your exact selection.`
+                  : "Concrete: searching for results that match this exact expression."}
             </span>
           </li>
         );

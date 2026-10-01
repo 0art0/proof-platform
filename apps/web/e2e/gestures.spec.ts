@@ -100,7 +100,7 @@ test("abstracting a selection asks retrieval for abstraction matches without tou
   await page.keyboard.press("Enter");
   await expect(toggle).toHaveAttribute("aria-pressed", "true", COMMAND);
   await expect(page.getByTestId("abstraction-indicator")).toContainText(
-    "Abstract (any proposition): used for retrieval only",
+    "Abstract (any proposition): searching for results that fit any proposition here",
   );
   const badge = page.locator('[data-badge="match"][data-match="abstraction"]').first();
   await expect(badge).toBeVisible(COMMAND);

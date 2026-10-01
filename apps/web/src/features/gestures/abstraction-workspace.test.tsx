@@ -13,6 +13,8 @@ import {
   type AnchoredProofSelection,
   type StatementAnchor,
 } from "@proof/selections";
+import { GestureTray } from "./gesture-ui";
+import type { GestureBindings } from "./use-drag-gestures";
 import { StoredProofWorkspace } from "../stored-proof-workspace/stored-proof-workspace";
 
 /** N33: abstracting a selection changes retrieval only. */
@@ -266,7 +268,7 @@ describe("abstract selections in the stored workspace", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     // Not colour alone: the state is spelled out.
     expect(screen.getByTestId("abstraction-indicator")).toHaveTextContent(
-      "Abstract (any proposition): used for retrieval only",
+      "Abstract (any proposition): searching for results that fit any proposition here, not just this exact one. Only the search changes",
     );
     const badge = await waitFor(() => {
       const found = document.querySelector('[data-badge="match"]');
@@ -339,5 +341,46 @@ describe("abstract selections in the stored workspace", () => {
     expect(JSON.stringify(callsTo("/interaction-events").map(({ body }) => body))).not.toMatch(
       /abstraction|wildcard/,
     );
+  });
+});
+
+describe("abstraction toggle guidance", () => {
+  it("explains itself in plain language through a hint tied to the toggle", async () => {
+    await selectGoal();
+    const toggle = screen.getByRole("button", { name: "Abstract this selection" });
+    const hint = screen.getByTestId("abstraction-hint");
+    expect(hint).toHaveTextContent(
+      "Abstract: search for results that fit any expression of this type, not just this exact one.",
+    );
+    expect(toggle.getAttribute("aria-describedby")).toContain(hint.id);
+    expect(toggle).toHaveAccessibleDescription(/fit any expression of this type/);
+    // No popups or dialogs: guidance is inline text only.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  const bindings = {
+    enabled: true,
+    carrying: undefined,
+    state: { phase: "idle" },
+    disabledReason: undefined,
+  } as unknown as GestureBindings;
+
+  it.each([
+    ["a binder declaration", "binder", false, /a binder declaration names a variable/],
+    ["a pending move", "proposition", true, /while a move is being applied/],
+  ] as const)("says why the toggle is disabled for %s", (_label, role, disabled, reason) => {
+    render(
+      <GestureTray
+        bindings={bindings}
+        selections={[exact([])]}
+        view="formal"
+        abstraction={{ abstractKeys: [], roleOf: () => role, toggle: vi.fn(), disabled }}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Abstract this selection" });
+    expect(toggle).toBeDisabled();
+    expect(screen.getByTestId("abstraction-indicator")).toHaveTextContent(reason);
+    expect(toggle).toHaveAccessibleDescription(reason);
   });
 });
