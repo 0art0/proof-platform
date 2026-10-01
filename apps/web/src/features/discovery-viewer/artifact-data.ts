@@ -17,6 +17,7 @@ import type {
   PrunedProof,
   TransitionEvent,
 } from "@proof/protocol";
+import { macroStepLabel } from "../macro-labels";
 
 export type StoredSuggestion = DisplayedSuggestionSet["suggestions"][number];
 
@@ -104,6 +105,8 @@ export function humanize(identifier: string): string {
 
 /** The name of the chosen stored suggestion, else the operation kind in words. */
 export function edgeLabel(index: ArtifactIndex, edge: ProofEdge): string {
+  // A step of a macro application carries no suggestion evidence; it is named by its macro.
+  if (edge.macro !== undefined) return macroStepLabel(edge.macro);
   return (
     storedSuggestion(index, edge.suggestionSetId, edge.chosenSuggestionId)?.name ??
     humanize(edge.operation.kind)

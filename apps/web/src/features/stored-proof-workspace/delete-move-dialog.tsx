@@ -69,11 +69,24 @@ export function DeleteMoveDialog({
     <ToolbarDialog
       title="Delete previous move"
       description={
-        <p>
-          Removes “{impact.moveName}” and returns to its parent node {impact.parentNodeId}. Deleted
-          work leaves the discovery record and export; only an audit tombstone is kept. To keep this
-          branch, backtrack instead.
-        </p>
+        <>
+          {impact.macro === undefined ? (
+            <p>
+              Removes “{impact.moveName}” and returns to its parent node {impact.parentNodeId}.
+            </p>
+          ) : (
+            <p data-testid="delete-macro-note">
+              This move is the last step of the macro “{impact.macro.name}”, which was applied as{" "}
+              {impact.macro.stepCount} steps in a row. Deleting it removes the whole macro
+              application, all {impact.macro.stepCount} steps, and returns to node{" "}
+              {impact.parentNodeId}, where the macro started.
+            </p>
+          )}
+          <p>
+            Deleted work leaves the discovery record and export; only an audit tombstone is kept. To
+            keep this branch, backtrack instead.
+          </p>
+        </>
       }
       onClose={onClose}
     >

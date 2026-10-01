@@ -5,12 +5,14 @@ import type { DisplayedSuggestionSet, MenuChoices, MovePreview, ProofEdge } from
 import { useId } from "react";
 import type { WorkspaceView } from "../proof-workspace";
 import { InlineLatex, NaturalLanguageText } from "../proof-workspace/presentation";
+import type { MacroInfo } from "./macro-info";
 import { ParameterMenu, type DisplayedParameterMenu } from "./parameter-menu";
 import { PreviewDetails } from "./preview-details";
 import { suggestionCategory } from "./preview-diff";
 import {
   CategoryBadge,
   EvidenceBadge,
+  MacroBadge,
   MatchBadge,
   ProvenanceBadge,
   SourceBadge,
@@ -57,6 +59,10 @@ export type SuggestionCardProps = SuggestionCardActions &
   Readonly<{
     suggestion: DisplayedSuggestion;
     transitionClass?: ProofEdge["transitionClass"] | undefined;
+    /** Set when this suggestion is an approved multi-step macro. */
+    macro?: MacroInfo | undefined;
+    /** What tells this card from another with the same name (for example a direction). */
+    qualifier?: string | undefined;
     move: MoveState;
     mutationPending: boolean;
     presentation: Presentation;
@@ -71,6 +77,8 @@ export type SuggestionCardProps = SuggestionCardActions &
 export function SuggestionCard({
   suggestion,
   transitionClass,
+  macro,
+  qualifier,
   move,
   mutationPending,
   presentation,
@@ -87,6 +95,8 @@ export function SuggestionCard({
         ? move.menu
         : undefined;
   const category = suggestionCategory(suggestion);
+  // The preview's own step list is authoritative; before it, the stored macro template says.
+  const macroStepCount = preview?.macro?.steps.length ?? macro?.stepCount;
   // Retrieval marks moves with menu parameters as requiring input; the menus resolve them.
   // Unresolved selection slots or a retrieval abstraction need a new selection instead.
   const menuResolvable =
@@ -115,7 +125,15 @@ export function SuggestionCard({
     >
       <header className={styles.cardHeader}>
         <div>
-          <h3>{suggestion.name}</h3>
+          <h3>
+            {suggestion.name}
+            {qualifier === undefined ? null : (
+              <span className={styles.cardQualifier} data-testid="card-qualifier">
+                {" "}
+                ({qualifier})
+              </span>
+            )}
+          </h3>
         </div>
         <span className={styles.applicability} data-applicability={suggestion.applicability}>
           {suggestion.applicability === "applicable" ? "Ready to preview" : "Needs input"}
@@ -127,6 +145,7 @@ export function SuggestionCard({
         role="group"
       >
         <SourceBadge source={suggestion.source} />
+        {macroStepCount === undefined ? null : <MacroBadge stepCount={macroStepCount} />}
         <CategoryBadge category={category} />
         {sorry ? <EvidenceBadge evidence="sorry" /> : null}
         {transitionClass === undefined ? null : (
@@ -139,7 +158,12 @@ export function SuggestionCard({
           equivalence.
         </p>
       ) : transitionClass === undefined ? null : (
-        <p className={styles.transitionMeaning}>{transitionMeaning(transitionClass)}</p>
+        <p className={styles.transitionMeaning}>
+          {macroStepCount === undefined
+            ? null
+            : `Applies ${macroStepCount} steps in a row; as a whole it is ${transitionClass === "equivalence" ? "an" : "a"} ${transitionClass}. `}
+          {transitionMeaning(transitionClass)}
+        </p>
       )}
       {suggestion.reasons[0] === undefined ? null : (
         <p className={styles.reasonLead} data-suggestion-reason>

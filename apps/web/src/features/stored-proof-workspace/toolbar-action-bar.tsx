@@ -52,6 +52,8 @@ export type ToolbarActionBarProps = Readonly<{
   operators: readonly OperatorDeclaration[];
   selections: readonly AnchoredProofSelection[];
   history: ToolbarHistory;
+  /** Authored names of multi-step macros, for the delete dialog. */
+  macroNames?: ReadonlyMap<string, string> | undefined;
   mutationPending: boolean;
   presentation: Presentation;
   view: WorkspaceView;
@@ -69,6 +71,7 @@ export function ToolbarActionBar({
   operators,
   selections,
   history,
+  macroNames,
   mutationPending,
   presentation,
   view,
@@ -85,7 +88,9 @@ export function ToolbarActionBar({
         ? `The stored history is unavailable: ${history.message}`
         : undefined;
   const impact =
-    history.kind === "ready" ? deletionImpact(rootNodeId, node.id, history.edges) : undefined;
+    history.kind === "ready"
+      ? deletionImpact(rootNodeId, node.id, history.edges, macroNames)
+      : undefined;
   const lock = <Value,>(availability: Availability<Value>): Availability<Value> =>
     readOnly ? { ok: false, reason: READ_ONLY_REASON } : availability;
   const deleteAvailability: Availability<true> =

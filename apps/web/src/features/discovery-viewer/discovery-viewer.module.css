@@ -364,3 +364,12 @@
     max-height: 24rem;
   }
 }
+
+.macroGroup {
+  display: block;
+  border-left: 4px solid var(--accent, currentColor);
+  padding-left: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}

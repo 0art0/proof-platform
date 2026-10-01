@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPresentation } from "@proof/language";
 import type { DisplayedSuggestionSet } from "@proof/protocol";
@@ -218,5 +218,75 @@ describe("suggestion badges", () => {
       badge.getAttribute("title"),
     );
     expect(new Set(titles).size).toBe(7);
+  });
+});
+
+describe("search-only results, same-name cards and the label key", () => {
+  it("keeps the first search-only result and folds the rest behind one summary line", () => {
+    renderPanel({
+      kind: "ready",
+      suggestionSet: setOf([
+        suggestion("suggestion:concrete", "Concrete result"),
+        abstractionResult("suggestion:search-a", "Search only A"),
+        abstractionResult("suggestion:search-b", "Search only B"),
+        abstractionResult("suggestion:search-c", "Search only C"),
+      ]),
+      transitionClasses: [],
+    });
+    const list = screen.getByTestId("suggestion-list");
+    expect(within(list).getByText("Concrete result")).toBeVisible();
+    expect(within(list).getByText("Search only A")).toBeVisible();
+    expect(within(list).queryByText("Search only B")).toBeNull();
+    const toggle = screen.getByRole("button", { name: /Show 2 more search-only results/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(within(list).getByText("Search only B")).toBeVisible();
+    expect(within(list).getByText("Search only C")).toBeVisible();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("adds no summary line for a single search-only result", () => {
+    renderPanel({
+      kind: "ready",
+      suggestionSet: setOf([abstractionResult("suggestion:only", "Only one")]),
+      transitionClasses: [],
+    });
+    expect(screen.queryByRole("button", { name: /search-only/ })).toBeNull();
+  });
+
+  it("tells two cards with the same name apart by the direction they are used in", () => {
+    renderPanel({
+      kind: "ready",
+      suggestionSet: setOf([
+        suggestion("suggestion:f", "Commutativity of conjunction", {
+          patternId: "pattern:conjunction-commutativity-forward",
+        }),
+        suggestion("suggestion:b", "Commutativity of conjunction", {
+          patternId: "pattern:conjunction-commutativity-backward",
+        }),
+        suggestion("suggestion:u", "Unique name"),
+      ]),
+      transitionClasses: [],
+    });
+    expect(
+      screen.getAllByTestId("card-qualifier").map(({ textContent }) => textContent?.trim()),
+    ).toEqual(["(forward direction)", "(backward direction)"]);
+  });
+
+  it("keeps a collapsed key to the labels, closed until asked for", () => {
+    renderPanel({
+      kind: "ready",
+      suggestionSet: setOf([suggestion("suggestion:ok", "Fine")]),
+      transitionClasses: [],
+    });
+    const key = screen.getByText("What do these labels mean?").closest("details")!;
+    expect(key).toHaveProperty("open", false);
+    expect(within(key).getByText("Near miss")).toBeInTheDocument();
+    expect(within(key).getByText("N-step move")).toBeInTheDocument();
+  });
+
+  it("shows no key before there is a list", () => {
+    renderPanel({ kind: "idle" });
+    expect(screen.queryByText("What do these labels mean?")).toBeNull();
   });
 });

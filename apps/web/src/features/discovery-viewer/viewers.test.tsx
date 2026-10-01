@@ -47,6 +47,52 @@ describe("the shell", () => {
   });
 });
 
+/** The fixture with its first two contraposition steps recorded as one macro application. */
+function macroArtifact() {
+  const link = (stepIndex: number) => ({
+    moveId: "authored:intro-twice",
+    previewId: "preview:macro",
+    stepIndex,
+    stepCount: 2,
+    stepId: `step-${stepIndex}`,
+  });
+  const macroEdges = new Map([
+    ["edge:command:contraposition-1", link(1)],
+    ["edge:command:contraposition-2", link(2)],
+  ]);
+  return {
+    ...fixtureArtifact,
+    tree: {
+      ...fixtureArtifact.tree,
+      edges: fixtureArtifact.tree.edges.map((edge) => {
+        const macro = macroEdges.get(edge.id);
+        return macro === undefined ? edge : { ...edge, macro };
+      }),
+    },
+  } as typeof fixtureArtifact;
+}
+
+describe("macro applications in the static viewers", () => {
+  it("heads a macro's first step with one group line and labels every step", () => {
+    render(<DiscoveryTreeView artifact={macroArtifact()} />);
+    const outline = screen.getByTestId("tree-outline");
+    const groups = outline.querySelectorAll("[data-macro-application]");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toHaveTextContent("Macro Intro twice: 2 steps applied as one move");
+    const first = outline.querySelector('[data-edge-id="edge:command:contraposition-1"]');
+    const second = outline.querySelector('[data-edge-id="edge:command:contraposition-2"]');
+    expect(first).toHaveTextContent("Macro Intro twice, step 1 of 2");
+    expect(first).toHaveTextContent("Introduce implication");
+    expect(second).toHaveTextContent("Macro Intro twice, step 2 of 2");
+  });
+
+  it("names the macro step in playback", () => {
+    render(<PlaybackView artifact={macroArtifact()} />);
+    const list = screen.getByTestId("step-list");
+    expect(within(list).getByText("Macro Intro twice, step 2 of 2")).toBeInTheDocument();
+  });
+});
+
 describe("DiscoveryTreeView", () => {
   it("lists every node with labelled edges and text badges for abandoned branches", () => {
     render(<DiscoveryTreeView artifact={fixtureArtifact} />);
@@ -223,6 +269,7 @@ describe("PrunedProofViewer", () => {
 
   it("shows no proof for an unsolved tree", () => {
     render(<PrunedProofViewer artifact={unsolvedFixture()} />);
+    expect(screen.getByText(/A pruned proof is the successful route only/)).toBeInTheDocument();
     expect(screen.getByTestId("not-solved")).toBeInTheDocument();
     expect(screen.queryByTestId("proof-steps")).not.toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Open targets" })).toHaveTextContent("goal:main");
