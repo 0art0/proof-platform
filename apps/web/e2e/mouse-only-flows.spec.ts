@@ -71,8 +71,8 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
   await selectInAnyField(goalField, "q");
   await page.getByRole("button", { name: "Backtrack with information…" }).click();
   const backtrack = page.getByRole("dialog", { name: "Backtrack with information" });
-  await expect(backtrack.getByText("Free symbols: q")).toBeVisible();
-  await backtrack.getByRole("button", { name: /^Split on P here/ }).click();
+  await expect(backtrack.getByText("Symbols it mentions: q")).toBeVisible();
+  await backtrack.getByRole("button", { name: /^Split here/ }).click();
   await expect(page.getByText(/Backtrack with information committed; now at node:/)).toBeVisible(
     COMMAND,
   );
@@ -127,7 +127,7 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
     "Delete previous move…",
     "Backtrack with information…",
     "Replay a sequence here…",
-    "Mark sorry",
+    "Mark as sorry (assume)",
     "Case split on selection",
   ]) {
     const action = page.getByRole("button", { name });

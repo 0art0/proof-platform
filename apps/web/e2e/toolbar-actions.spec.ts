@@ -87,7 +87,7 @@ async function applySplitAtRoot(page: Page) {
 
 test("mark sorry acts on the selected goal", async ({ page }) => {
   await openFreshSession(page);
-  const sorry = page.getByRole("button", { name: "Mark sorry" });
+  const sorry = page.getByRole("button", { name: "Mark as sorry (assume)" });
   await expect(sorry).toBeDisabled();
   await expect(
     page.getByText("Select an occurrence in a goal or obligation first.").first(),
@@ -110,7 +110,7 @@ test("a move and its descendant are deleted only after confirmation", async ({ p
   const splitId = await currentNodeId(page);
   // A descendant of the split: mark its first goal sorry, then return to the split node.
   await selectExpression(page.getByLabel("Goal 1 conclusion"), "q");
-  await page.getByRole("button", { name: "Mark sorry" }).click();
+  await page.getByRole("button", { name: "Mark as sorry (assume)" }).click();
   await expect(page.getByText(/Mark sorry committed/)).toBeVisible(COMMAND);
   await page.locator(`[data-history-node-id="${splitId}"]`).click();
   await expect(page.getByText(`Backtracked to ${splitId}.`, { exact: true })).toBeVisible(COMMAND);
@@ -174,12 +174,12 @@ test("backtracking with information splits at the chosen ancestor", async ({ pag
   await selectExpression(page.getByLabel("Goal 1 hypothesis 1"), ["And", "p", "q"]);
   await page.getByRole("button", { name: "Backtrack with information…" }).click();
   const dialog = page.getByRole("dialog", { name: "Backtrack with information" });
-  await expect(dialog.getByText("Free symbols: p, q")).toBeVisible();
+  await expect(dialog.getByText("Symbols it mentions: p, q")).toBeVisible();
   const ancestor = dialog.getByRole("radio");
   await expect(ancestor).toHaveCount(1, COMMAND);
   await expect(ancestor).toHaveValue(rootId);
   await expect(ancestor).toBeChecked();
-  await dialog.getByRole("button", { name: "Split on P here" }).click();
+  await dialog.getByRole("button", { name: "Split here" }).click();
   await expect(page.getByText(/Backtrack with information committed; now at node:/)).toBeVisible(
     COMMAND,
   );

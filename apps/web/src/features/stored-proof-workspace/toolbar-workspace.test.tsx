@@ -159,7 +159,7 @@ describe("toolbar actions in the stored workspace", () => {
     render(<StoredProofWorkspace session={session} node={root} />);
     fireEvent.click(screen.getByText("More proof actions"));
     fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
-    const sorry = screen.getByRole("button", { name: "Mark sorry" });
+    const sorry = screen.getByRole("button", { name: "Mark as sorry (assume)" });
     await waitFor(() => expect(sorry).toBeEnabled());
     fireEvent.click(sorry);
 
@@ -176,7 +176,7 @@ describe("toolbar actions in the stored workspace", () => {
     expect(commandCall?.[0]).toBe("/api/proof-sessions/session%3Atest/protocol-commands");
     expect(commandCall?.[1]).toMatchObject({ method: "POST" });
     // The selection of the old snapshot no longer applies.
-    expect(screen.getByRole("button", { name: "Mark sorry" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Mark as sorry (assume)" })).toBeDisabled();
   });
 
   it("shows a stale-basis refusal as a readable message and keeps the node", async () => {
@@ -227,7 +227,7 @@ describe("toolbar actions in the stored workspace", () => {
     render(<StoredProofWorkspace session={session} node={root} />);
     fireEvent.click(screen.getByText("More proof actions"));
     fireEvent.click(screen.getByRole("button", { name: "Select goal" }));
-    const sorry = screen.getByRole("button", { name: "Mark sorry" });
+    const sorry = screen.getByRole("button", { name: "Mark as sorry (assume)" });
     await waitFor(() => expect(sorry).toBeEnabled());
     fireEvent.click(sorry);
     expect(
@@ -252,7 +252,7 @@ describe("toolbar actions in the stored workspace", () => {
       "Delete previous move…",
       "Backtrack with information…",
       "Replay a sequence here…",
-      "Mark sorry",
+      "Mark as sorry (assume)",
       "Case split on selection",
     ]) {
       const button = screen.getByRole("button", { name });

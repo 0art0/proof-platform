@@ -400,14 +400,14 @@ describe("SuggestionPanel", () => {
     const titles = () => [...list.querySelectorAll("h3")].map(({ textContent }) => textContent);
     expect(titles()).toEqual(["Transitivity", "Other result"]);
 
-    const toggle = screen.getByRole("button", { name: /Show 1 related variant of Transitivity/ });
+    const toggle = screen.getByRole("button", { name: /Show 1 other version of Transitivity/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(titles()).toEqual(["Transitivity", "Transitivity (flipped)", "Other result"]);
-    expect(screen.getByRole("list", { name: "Related variants of Transitivity" })).toBeVisible();
+    expect(screen.getByRole("list", { name: "Other versions of Transitivity" })).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: /Hide related variants/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Hide other versions/ }));
     expect(titles()).toEqual(["Transitivity", "Other result"]);
   });
 });

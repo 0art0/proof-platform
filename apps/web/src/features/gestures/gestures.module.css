@@ -49,6 +49,21 @@
   outline-offset: 2px;
 }
 
+.carryingOverlay {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  z-index: 20;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  max-width: min(42rem, calc(100vw - 2rem));
+  transform: translateX(-50%);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+}
+
 .carrying {
   margin: 0;
   border: 2px dashed var(--accent);
@@ -125,11 +140,19 @@
   background: var(--accent-soft);
 }
 
-.statusArea {
-  display: grid;
-  align-content: start;
-  gap: 0.4rem;
-  min-height: 5.5rem;
+.trayDetails {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.trayDetails > summary {
+  width: fit-content;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.trayDetails > p {
+  margin-top: 0.3rem;
 }
 
 .dropZone {

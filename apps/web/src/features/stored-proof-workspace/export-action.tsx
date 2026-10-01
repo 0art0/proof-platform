@@ -122,7 +122,7 @@ export function ExportAction({
       {state.kind === "confirming" ? (
         <ToolbarDialog
           title="Export a private session"
-          description="This session is private. Export it anyway?"
+          description="Exporting saves the full proof history and problem setup as one file. This session is private. Export it anyway?"
           onClose={cancel}
         >
           <div className={styles.toolbar}>

@@ -58,6 +58,8 @@ export type WorkspaceHeaderProps = Readonly<{
   sessionId: string;
   /** Problem metadata is not stored yet (N05/N26); the session id is the fallback title. */
   title?: string | undefined;
+  /** The problem statement as entered, shown in a collapsed section. */
+  statement?: string | undefined;
   background?: string | undefined;
   currentNodeId: string;
   counts: SnapshotCounts;
@@ -72,6 +74,7 @@ export type WorkspaceHeaderProps = Readonly<{
 export function WorkspaceHeader({
   sessionId,
   title,
+  statement,
   background,
   currentNodeId,
   counts,
@@ -83,7 +86,13 @@ export function WorkspaceHeader({
     <header className={styles.sessionHeader} aria-label="Problem">
       <div className={styles.headerTitle}>
         <p className={styles.headerEyebrow}>{title === undefined ? "Proof session" : sessionId}</p>
-        <h1>{title ?? sessionId}</h1>
+        <h1 title={title === undefined ? undefined : sessionId}>{title ?? sessionId}</h1>
+        {statement === undefined || statement.length === 0 ? null : (
+          <details className={styles.headerStatement}>
+            <summary>Problem statement</summary>
+            <p>{statement}</p>
+          </details>
+        )}
         {background === undefined || background.length === 0 ? null : (
           <p className={styles.headerBackground}>{background}</p>
         )}

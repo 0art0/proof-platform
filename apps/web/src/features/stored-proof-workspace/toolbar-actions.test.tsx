@@ -347,7 +347,7 @@ describe("ToolbarActionBar", () => {
     expect(button("Backtrack with information…")).toHaveAccessibleDescription(
       "The root node has no ancestor to backtrack to.",
     );
-    expect(button("Mark sorry")).toHaveAccessibleDescription(
+    expect(button("Mark as sorry (assume)")).toHaveAccessibleDescription(
       "Select an occurrence in a goal or obligation first.",
     );
     expect(button("Case split on selection")).toBeDisabled();
@@ -398,12 +398,12 @@ describe("ToolbarActionBar", () => {
     expect(
       screen.getByRole("button", { name: "Case split on selection" }),
     ).toHaveAccessibleDescription("The selection is a term, not a proposition.");
-    expect(screen.getByRole("button", { name: "Mark sorry" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Mark as sorry (assume)" })).toBeEnabled();
   });
 
   it("marks the selected target sorry through one command envelope", async () => {
     const { runCommand } = renderBar({ selections: [selection(nodeC, conclusion, [1])] });
-    fireEvent.click(screen.getByRole("button", { name: "Mark sorry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark as sorry (assume)" }));
     await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
     expect(runCommand.mock.calls[0]![0]).toBe("Mark sorry");
     expect(lastEnvelope(runCommand)).toEqual({
@@ -509,7 +509,13 @@ describe("ToolbarActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Backtrack with information…" }));
     const dialog = screen.getByRole("dialog", { name: "Backtrack with information" });
     expect(within(dialog).getByRole("status")).toHaveTextContent("Asking the proof service");
-    expect(await within(dialog).findByText("Free symbols: r")).toBeVisible();
+    // Plain words: no bare "P", and the selected statement is named as such.
+    expect(dialog).toHaveTextContent("the selected statement is true, or it is false");
+    expect(dialog).not.toHaveTextContent(/\bP\b/);
+    expect(within(dialog).getByTestId("backtrack-proposition")).toHaveTextContent(
+      "Selected statement:",
+    );
+    expect(await within(dialog).findByText("Symbols it mentions: r")).toBeVisible();
     // The analysis is the worker's: one dry-run request for this proposition, no local analysis.
     const analysisCalls = fetchMock.mock.calls.filter(([url]) =>
       String(url).endsWith("/session%3Atest/backtrack-analysis"),
@@ -530,11 +536,11 @@ describe("ToolbarActionBar", () => {
     await waitFor(() => expect(options[0]).toHaveFocus());
     expect(options[2]).toBeDisabled();
     expect(dialog.querySelector('[data-ancestor-node-id="node:root"]')).toHaveTextContent(
-      "Unavailable symbols: r",
+      "Not yet declared here: r",
     );
 
     fireEvent.click(options[1]!);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Split on P here" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Split here" }));
     await waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
     const envelope = lastEnvelope(runCommand);
     expect(envelope).toMatchObject({
@@ -564,7 +570,7 @@ describe("ToolbarActionBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Backtrack with information…" }));
     const dialog = screen.getByRole("dialog", { name: "Backtrack with information" });
     await within(dialog).findAllByRole("radio");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Split on P here" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Split here" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Backtrack with information rejected (backtrack-with-information-rejected): The symbol r is unavailable at node:a.",
     );
@@ -590,7 +596,7 @@ describe("ToolbarActionBar", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Backtracking is unavailable: The source target is not a goal or obligation of the source node. (backtrack-with-information-rejected)",
     );
-    expect(within(dialog).getByRole("button", { name: "Split on P here" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Split here" })).toBeDisabled();
   });
 
   it("closes a dialog on Escape without letting Escape clear the selection", () => {
@@ -835,7 +841,7 @@ describe("a read-only imported session", () => {
       "Delete previous move…",
       "Backtrack with information…",
       "Replay a sequence here…",
-      "Mark sorry",
+      "Mark as sorry (assume)",
       "Case split on selection",
     ]) {
       const button = screen.getByRole("button", { name });
@@ -847,7 +853,7 @@ describe("a read-only imported session", () => {
 
   it("leaves the actions alone for a writable session", () => {
     renderBar({ readOnly: false, selections: [selection(nodeC, conclusion, [1])] });
-    expect(screen.getByRole("button", { name: "Mark sorry" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Mark as sorry (assume)" })).toBeEnabled();
   });
 });
 
@@ -869,5 +875,32 @@ describe("WorkspaceToolbar export and tree", () => {
     expect(exportFileName("session:x/y")).toBe("session-x-y.proof.json");
     const tree = screen.getByRole("link", { name: "Open full discovery tree" });
     expect(tree).toHaveAttribute("href", "/sessions/session%3Atest/tree");
+  });
+});
+
+describe("toolbar guidance", () => {
+  it("shows a disabled action's reason as a tooltip and keeps it visible for a writable session", () => {
+    renderBar({ node: root, history: { kind: "ready", nodes, edges } });
+    const del = screen.getByRole("button", { name: "Delete previous move…" });
+    expect(del.closest("span")).toHaveAttribute("title", "The root node has no previous move.");
+    expect(screen.getByText("The root node has no previous move.")).toBeVisible();
+    expect(screen.queryByTestId("toolbar-read-only-note")).toBeNull();
+  });
+
+  it("describes an available action in plain words", () => {
+    renderBar({ selections: [selection(nodeC, conclusion, [1])] });
+    expect(
+      screen.getByRole("button", { name: "Mark as sorry (assume)" }),
+    ).toHaveAccessibleDescription(
+      "Assume the selected claim without proving it; it stays flagged as a sorry.",
+    );
+  });
+
+  it("states a read-only session once, not once per action", () => {
+    renderBar({ readOnly: true, selections: [selection(nodeC, conclusion, [1])] });
+    expect(screen.getByTestId("toolbar-read-only-note")).toBeVisible();
+    const reasons = screen.getAllByText(READ_ONLY_REASON);
+    expect(reasons).toHaveLength(5);
+    for (const reason of reasons) expect(reason).toHaveClass("visually-hidden");
   });
 });

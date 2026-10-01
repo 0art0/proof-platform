@@ -79,6 +79,7 @@ export function InquiryPanel(props: InquiryPanelProps) {
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>();
   const busy = mutationPending || pending;
+  const [userOpen, setUserOpen] = useState<boolean>();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -190,6 +191,13 @@ export function InquiryPanel(props: InquiryPanelProps) {
   const findConditions = findConditionsAvailability(node, selections);
   const useThis = useThisAvailability(node, selections, summary);
 
+  // Collapsed until there is something to show: an objective, a selection, or open work.
+  const hasContent =
+    description?.objective !== undefined ||
+    selections.length > 0 ||
+    (summary?.unresolvedConstructions.length ?? 0) > 0 ||
+    feedback !== undefined;
+  const expanded = userOpen ?? hasContent;
   const open = summary?.unresolvedConstructions ?? [];
   const allTasks = node.state.constructions ?? [];
   const closed = allTasks.filter(({ status }) => status === "resolved" || status === "abandoned");
@@ -202,208 +210,221 @@ export function InquiryPanel(props: InquiryPanelProps) {
           <p className={styles.meta}>What is being tried and what stands in the way.</p>
         </div>
       </div>
-      {records.kind === "loading" ? (
-        <p className={styles.status} aria-live="polite">
-          Loading inquiry records…
-        </p>
-      ) : null}
-      {records.kind === "failed" ? (
-        <p className={styles.error} aria-live="polite">
-          Inquiry records unavailable: {records.message}
-        </p>
-      ) : null}
+      <details
+        className={styles.collapse}
+        open={expanded}
+        onToggle={(event) => {
+          if (event.currentTarget.open !== expanded) setUserOpen(event.currentTarget.open);
+        }}
+      >
+        <summary>
+          {expanded
+            ? "Hide inquiry details"
+            : "Show inquiry details (nothing is being tried yet; select a hypothesis or goal to begin)"}
+        </summary>
+        {records.kind === "loading" ? (
+          <p className={styles.status} aria-live="polite">
+            Loading inquiry records…
+          </p>
+        ) : null}
+        {records.kind === "failed" ? (
+          <p className={styles.error} aria-live="polite">
+            Inquiry records unavailable: {records.message}
+          </p>
+        ) : null}
 
-      <dl className={styles.summary} data-testid="inquiry-summary">
-        <SummaryRow label="Active objective" testId="inquiry-objective">
-          {description?.objective === undefined ? (
-            <span className={styles.empty}>
-              None yet. Select a goal and find sufficient conditions, or select a hypothesis to
-              investigate it.
-            </span>
-          ) : (
-            <>
-              <Sentence text={description.objective.text} />
-              <small>
-                {description.objective.necessity === "required" ? "Required" : "Elective"} ·{" "}
-                {description.objective.status}
-              </small>
-            </>
-          )}
-        </SummaryRow>
-        <SummaryRow label="Current attempt" testId="inquiry-attempt">
-          {description?.attempt === undefined ? (
-            <span className={styles.empty}>None yet.</span>
-          ) : (
-            <>
-              <Sentence text={description.attempt.text} />
-              <small>
-                {description.attempt.proposedBy ? "Proposed this objective · " : ""}
-                {description.attempt.status}
-              </small>
-              {description.sufficiency === undefined ? null : (
-                <Sentence text={description.sufficiency} />
-              )}
-            </>
-          )}
-        </SummaryRow>
-        <SummaryRow
-          label={
-            description?.blocker?.kind === "requirement" ? "Next requirement" : "Top obstruction"
-          }
-          testId="inquiry-blocker"
-        >
-          {description?.blocker === undefined ? (
-            <span className={styles.empty}>None recorded.</span>
-          ) : (
-            <Sentence text={description.blocker.text} />
-          )}
-        </SummaryRow>
-      </dl>
+        <dl className={styles.summary} data-testid="inquiry-summary">
+          <SummaryRow label="Active objective" testId="inquiry-objective">
+            {description?.objective === undefined ? (
+              <span className={styles.empty}>
+                None yet. Select a goal and find sufficient conditions, or select a hypothesis to
+                investigate it.
+              </span>
+            ) : (
+              <>
+                <Sentence text={description.objective.text} />
+                <small>
+                  {description.objective.necessity === "required" ? "Required" : "Elective"} ·{" "}
+                  {description.objective.status}
+                </small>
+              </>
+            )}
+          </SummaryRow>
+          <SummaryRow label="Current attempt" testId="inquiry-attempt">
+            {description?.attempt === undefined ? (
+              <span className={styles.empty}>None yet.</span>
+            ) : (
+              <>
+                <Sentence text={description.attempt.text} />
+                <small>
+                  {description.attempt.proposedBy ? "Proposed this objective · " : ""}
+                  {description.attempt.status}
+                </small>
+                {description.sufficiency === undefined ? null : (
+                  <Sentence text={description.sufficiency} />
+                )}
+              </>
+            )}
+          </SummaryRow>
+          <SummaryRow
+            label={
+              description?.blocker?.kind === "requirement" ? "Next requirement" : "Top obstruction"
+            }
+            testId="inquiry-blocker"
+          >
+            {description?.blocker === undefined ? (
+              <span className={styles.empty}>None recorded.</span>
+            ) : (
+              <Sentence text={description.blocker.text} />
+            )}
+          </SummaryRow>
+        </dl>
 
-      {description !== undefined && description.later.length > 0 ? (
-        <section className={styles.later} aria-label="Later interpretations">
-          <h3>Later interpretations</h3>
-          <p className={styles.meaning}>Recorded afterwards; not the reason for the action.</p>
-          <ul>
-            {description.later.map((entry) => (
-              <li key={entry.id}>
-                <Sentence text={entry.text} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      <section className={styles.constructions} aria-label="Unresolved constructions">
-        <h3>
-          Unresolved constructions <span>({open.length})</span>
-        </h3>
-        {open.length === 0 ? (
-          <p className={styles.empty}>None. Select an existential goal to construct an object.</p>
-        ) : (
-          <ul className={styles.taskList}>
-            {open.map((task) => (
-              <li key={task.id}>
-                <details data-testid="construction-entry">
-                  <summary>
-                    <strong>{task.displayName}</strong> · {task.status.replace("-", " ")} ·{" "}
-                    {task.requirements.length} requirement
-                    {task.requirements.length === 1 ? "" : "s"}
-                  </summary>
-                  <ConstructionTaskView
-                    model={constructionTaskModel(task, allTasks)}
-                    presentation={presentation}
-                    view={view}
-                  />
-                </details>
-              </li>
-            ))}
-          </ul>
-        )}
-        {closed.length === 0 ? null : (
-          <details>
-            <summary>Closed constructions ({closed.length})</summary>
-            <ul className={styles.taskList}>
-              {closed.map((task) => (
-                <li key={task.id}>
-                  <ConstructionTaskView
-                    model={constructionTaskModel(task, allTasks)}
-                    presentation={presentation}
-                    view={view}
-                  />
+        {description !== undefined && description.later.length > 0 ? (
+          <section className={styles.later} aria-label="Later interpretations">
+            <h3>Later interpretations</h3>
+            <p className={styles.meaning}>Recorded afterwards; not the reason for the action.</p>
+            <ul>
+              {description.later.map((entry) => (
+                <li key={entry.id}>
+                  <Sentence text={entry.text} />
                 </li>
               ))}
             </ul>
-          </details>
-        )}
-      </section>
+          </section>
+        ) : null}
 
-      <div className={styles.actions} role="group" aria-label="Inquiry actions">
-        <strong className={styles.actionsHeading}>Choose a next step</strong>
-        <ActionButton
-          label="Use this"
-          availability={useThis}
-          busy={busy}
-          onClick={() => {
-            if (!useThis.ok) return;
-            void record(
-              "Use this",
-              useThisEnvelope({
-                commandId: inquiryCommandId("use-this"),
-                nodeId: node.id,
-                plan: useThis.value,
-              }),
-            );
-          }}
-        />
-        <ActionButton
-          label="Construct an object"
-          availability={construct}
-          busy={busy}
-          onClick={() => {
-            if (!construct.ok) return;
-            void advance(
-              "Construct an object",
-              constructEnvelope({ nodeId: node.id, plan: construct.value }),
-            );
-          }}
-        />
-        <ActionButton
-          label="Find sufficient conditions"
-          availability={findConditions}
-          busy={busy}
-          onClick={() => {
-            if (!findConditions.ok) return;
-            void record(
-              "Find sufficient conditions",
-              findConditionsEnvelope({
-                commandId: inquiryCommandId("find-conditions"),
-                nodeId: node.id,
-                plan: findConditions.value,
-              }),
-            );
-          }}
-        />
-        <ActionButton
-          label="Investigate this hypothesis"
-          availability={investigate}
-          busy={busy}
-          onClick={() => {
-            if (!investigate.ok) return;
-            void record(
-              "Investigate this hypothesis",
-              investigateEnvelope({
-                commandId: inquiryCommandId("investigate"),
-                nodeId: node.id,
-                plan: investigate.value,
-              }),
-            );
-          }}
-        />
-        <ActionButton
-          label="Try this method"
-          availability={tryMethod}
-          busy={busy}
-          onClick={() => {
-            if (!tryMethod.ok) return;
-            void advance(
-              "Try this method",
-              tryMethodEnvelope({ nodeId: node.id, plan: tryMethod.value }),
-            );
-          }}
-        />
-      </div>
-      {feedback === undefined ? null : (
-        <p
-          className={feedback.state === "rejected" ? styles.error : styles.status}
-          {...(feedback.state === "rejected"
-            ? { role: "alert" }
-            : { "aria-live": "polite" as const })}
-          data-testid="inquiry-feedback"
-        >
-          {feedback.text}
-        </p>
-      )}
+        <section className={styles.constructions} aria-label="Unresolved constructions">
+          <h3>
+            Unresolved constructions <span>({open.length})</span>
+          </h3>
+          {open.length === 0 ? (
+            <p className={styles.empty}>None. Select an existential goal to construct an object.</p>
+          ) : (
+            <ul className={styles.taskList}>
+              {open.map((task) => (
+                <li key={task.id}>
+                  <details data-testid="construction-entry">
+                    <summary>
+                      <strong>{task.displayName}</strong> · {task.status.replace("-", " ")} ·{" "}
+                      {task.requirements.length} requirement
+                      {task.requirements.length === 1 ? "" : "s"}
+                    </summary>
+                    <ConstructionTaskView
+                      model={constructionTaskModel(task, allTasks)}
+                      presentation={presentation}
+                      view={view}
+                    />
+                  </details>
+                </li>
+              ))}
+            </ul>
+          )}
+          {closed.length === 0 ? null : (
+            <details>
+              <summary>Closed constructions ({closed.length})</summary>
+              <ul className={styles.taskList}>
+                {closed.map((task) => (
+                  <li key={task.id}>
+                    <ConstructionTaskView
+                      model={constructionTaskModel(task, allTasks)}
+                      presentation={presentation}
+                      view={view}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </section>
+
+        <div className={styles.actions} role="group" aria-label="Inquiry actions">
+          <strong className={styles.actionsHeading}>Choose a next step</strong>
+          <ActionButton
+            label="Use this"
+            availability={useThis}
+            busy={busy}
+            onClick={() => {
+              if (!useThis.ok) return;
+              void record(
+                "Use this",
+                useThisEnvelope({
+                  commandId: inquiryCommandId("use-this"),
+                  nodeId: node.id,
+                  plan: useThis.value,
+                }),
+              );
+            }}
+          />
+          <ActionButton
+            label="Construct an object"
+            availability={construct}
+            busy={busy}
+            onClick={() => {
+              if (!construct.ok) return;
+              void advance(
+                "Construct an object",
+                constructEnvelope({ nodeId: node.id, plan: construct.value }),
+              );
+            }}
+          />
+          <ActionButton
+            label="Find sufficient conditions"
+            availability={findConditions}
+            busy={busy}
+            onClick={() => {
+              if (!findConditions.ok) return;
+              void record(
+                "Find sufficient conditions",
+                findConditionsEnvelope({
+                  commandId: inquiryCommandId("find-conditions"),
+                  nodeId: node.id,
+                  plan: findConditions.value,
+                }),
+              );
+            }}
+          />
+          <ActionButton
+            label="Investigate this hypothesis"
+            availability={investigate}
+            busy={busy}
+            onClick={() => {
+              if (!investigate.ok) return;
+              void record(
+                "Investigate this hypothesis",
+                investigateEnvelope({
+                  commandId: inquiryCommandId("investigate"),
+                  nodeId: node.id,
+                  plan: investigate.value,
+                }),
+              );
+            }}
+          />
+          <ActionButton
+            label="Try this method"
+            availability={tryMethod}
+            busy={busy}
+            onClick={() => {
+              if (!tryMethod.ok) return;
+              void advance(
+                "Try this method",
+                tryMethodEnvelope({ nodeId: node.id, plan: tryMethod.value }),
+              );
+            }}
+          />
+        </div>
+        {feedback === undefined ? null : (
+          <p
+            className={feedback.state === "rejected" ? styles.error : styles.status}
+            {...(feedback.state === "rejected"
+              ? { role: "alert" }
+              : { "aria-live": "polite" as const })}
+            data-testid="inquiry-feedback"
+          >
+            {feedback.text}
+          </p>
+        )}
+      </details>
     </section>
   );
 }

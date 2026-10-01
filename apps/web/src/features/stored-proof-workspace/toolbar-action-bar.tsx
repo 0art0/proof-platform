@@ -122,26 +122,39 @@ export function ToolbarActionBar({
 
   return (
     <div className={styles.actionBar} role="group" aria-label="Proof actions">
+      {readOnly ? (
+        <p className={styles.readOnlyNote} role="note" data-testid="toolbar-read-only-note">
+          Read-only: this imported session cannot be changed, so these actions are off.
+        </p>
+      ) : null}
       <ActionButton
         label="Delete previous move…"
+        hint="Remove the latest step, and anything built on it."
+        quiet={readOnly}
         availability={lock(deleteAvailability)}
         busy={busy}
         onClick={() => setDialog("delete")}
       />
       <ActionButton
         label="Backtrack with information…"
+        hint="Split on the selected statement at an earlier step."
+        quiet={readOnly}
         availability={lock(backtrackAvailability)}
         busy={busy}
         onClick={() => setDialog("backtrack")}
       />
       <ActionButton
         label="Replay a sequence here…"
+        hint="Repeat the steps of another branch from here."
+        quiet={readOnly}
         availability={lock(replayAvailability)}
         busy={busy}
         onClick={() => setDialog("replay")}
       />
       <ActionButton
-        label="Mark sorry"
+        label="Mark as sorry (assume)"
+        hint="Assume the selected claim without proving it; it stays flagged as a sorry."
+        quiet={readOnly}
         availability={lock(sorry)}
         busy={busy}
         onClick={() => {
@@ -159,6 +172,8 @@ export function ToolbarActionBar({
       />
       <ActionButton
         label="Case split on selection"
+        hint="Handle the cases where the selected statement is true and where it is false."
+        quiet={readOnly}
         availability={lock(proposition)}
         busy={busy}
         onClick={() => {
@@ -213,30 +228,42 @@ export function ToolbarActionBar({
 /** A toolbar action that stays visible when unavailable and says why. */
 function ActionButton({
   label,
+  hint,
+  quiet,
   availability,
   busy,
   onClick,
 }: Readonly<{
   label: string;
+  /** One plain sentence on what the action does; shown on hover and read by screen readers. */
+  hint: string;
+  /** Keep the unavailability reason for assistive technology only (the bar states it once). */
+  quiet: boolean;
   availability: Availability<unknown>;
   busy: boolean;
   onClick: () => void;
 }>) {
   const reasonId = useId();
+  const hintId = useId();
+  const reason = availability.ok ? undefined : availability.reason;
   return (
-    <span className={styles.action}>
+    <span className={styles.action} title={reason ?? hint}>
       <button
         type="button"
         className={styles.actionButton}
         disabled={busy || !availability.ok}
-        {...(availability.ok ? {} : { "aria-describedby": reasonId })}
+        aria-describedby={availability.ok ? hintId : reasonId}
         onClick={onClick}
       >
         {label}
       </button>
-      {availability.ok ? null : (
-        <span id={reasonId} className={styles.reason}>
-          {availability.reason}
+      {availability.ok ? (
+        <span id={hintId} className="visually-hidden">
+          {hint}
+        </span>
+      ) : (
+        <span id={reasonId} className={quiet ? "visually-hidden" : styles.reason}>
+          {reason}
         </span>
       )}
     </span>

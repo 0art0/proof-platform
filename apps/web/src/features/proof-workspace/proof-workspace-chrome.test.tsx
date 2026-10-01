@@ -213,3 +213,43 @@ describe("ProofWorkspace natural-language view", () => {
     expect(conclusion.querySelector("[data-latex]")).not.toBeNull();
   });
 });
+
+describe("ProofWorkspace guidance", () => {
+  it("collapses the colour key and keeps ids in tooltips", () => {
+    render(<ProofWorkspace node={proofNode()} />);
+    expect(screen.getByRole("heading", { name: "Goals and obligations" })).toBeVisible();
+    const key = screen.getByText("Colour and symbol key").closest("details")!;
+    expect(key).not.toHaveAttribute("open");
+    expect(key).toContainElement(screen.getByRole("list", { name: "Colour key" }));
+    const goal = document.querySelector('[data-target-id="goal:sum"]') as HTMLElement;
+    expect(goal).toHaveAttribute("title", "goal:sum");
+    expect(within(goal).queryByText("goal:sum")).toBeNull();
+  });
+
+  it("links to the suggestions once something is selected", async () => {
+    render(
+      <ProofWorkspace
+        node={proofNode()}
+        suggestionsLink={{ href: "#suggestion-panel", text: "3 suggestions below" }}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: "3 suggestions below" })).toBeNull();
+    fireEvent.pointerUp(await screen.findByLabelText("Goal 1 conclusion"));
+    expect(screen.getByRole("link", { name: "3 suggestions below" })).toHaveAttribute(
+      "href",
+      "#suggestion-panel",
+    );
+  });
+});
+
+describe("ProofWorkspace keyboard", () => {
+  it("lets Tab leave a read-only math field instead of letting MathLive consume it", async () => {
+    render(<ProofWorkspace node={proofNode()} />);
+    const field = await screen.findByLabelText("Goal 1 conclusion");
+    const seen: string[] = [];
+    field.addEventListener("keydown", (event) => seen.push((event as KeyboardEvent).key));
+    fireEvent.keyDown(field, { key: "Tab" });
+    fireEvent.keyDown(field, { key: "a" });
+    expect(seen).toEqual(["a"]);
+  });
+});

@@ -39,6 +39,8 @@ export function ToolbarDialog({ title, description, onClose, children }: Toolbar
     // The first control of the body (not the Close button), else the dialog itself.
     const first = body.current?.querySelector<HTMLElement>(FOCUSABLE);
     (first ?? panel.current)?.focus();
+    // On a small screen the dialog may start below the fold: bring it into view.
+    panel.current?.scrollIntoView?.({ block: "nearest" });
     // Capture phase: the dialog sees Escape before the workspace's selection shortcut does.
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;

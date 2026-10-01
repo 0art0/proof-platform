@@ -401,22 +401,40 @@ describe("drag gestures in the stored workspace", () => {
       displayed(pair, [{ artifactId: "move:close-by-hypothesis", slots: ["fact", "target"] }]),
     );
     render(<StoredProofWorkspace session={session} node={node} />);
-    const dropOnSelection = screen.getByRole("button", { name: "Drop on selection" });
-    expect(dropOnSelection).toBeDisabled();
+    // Nothing is carried or selected yet: the tray stays a single line, with no buttons.
+    expect(screen.queryByRole("button", { name: "Drop on selection" })).toBeNull();
 
     click("Pick up hypothesis");
+    const dropOnSelection = screen.getByRole("button", { name: "Drop on selection" });
     expect(dropOnSelection).toBeDisabled();
     click("Select goal");
     await waitFor(() => expect(callsTo("/suggestion-sets")).toHaveLength(1));
     // Selecting a target is an ordinary selection: it requests suggestions for it alone.
     expect(callsTo("/suggestion-sets")[0]!.body.selections).toHaveLength(1);
-    await waitFor(() => expect(dropOnSelection).toBeEnabled());
+    // The button moves from the drag overlay into the tray once a target is selected.
+    const dropNow = () => screen.getByRole("button", { name: "Drop on selection" });
+    await waitFor(() => expect(dropNow()).toBeEnabled());
 
-    fireEvent.click(dropOnSelection);
+    fireEvent.click(dropNow());
     await screen.findByLabelText("Move preview");
     expect(callsTo("/suggestion-sets")).toHaveLength(2);
     expect(callsTo("/suggestion-sets")[1]!.body.selections).toHaveLength(2);
     expect(callsTo("/commands")).toHaveLength(0);
+  });
+
+  it("keeps the tray to one line until something is carried or selected", () => {
+    serve(() => {
+      throw new Error("no request expected");
+    });
+    render(<StoredProofWorkspace session={session} node={node} />);
+    const tray = document.querySelector("[data-gesture-tray]") as HTMLElement;
+    expect(within(tray).getByTestId("gesture-help")).toHaveTextContent("Tip: drag a hypothesis");
+    expect(within(tray).queryAllByRole("button")).toHaveLength(0);
+    const help = within(tray).getByText("Dragging and keyboard help").closest("details")!;
+    expect(help).not.toHaveAttribute("open");
+    expect(help).toHaveTextContent("Keyboard: pick something up");
+    click("Pick up hypothesis");
+    expect(within(tray).getByRole("button", { name: "Cancel drag" })).toBeEnabled();
   });
 
   it("puts a carried item down with Escape", () => {

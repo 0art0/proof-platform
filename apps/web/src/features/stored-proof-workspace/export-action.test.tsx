@@ -46,6 +46,7 @@ describe("ExportAction", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export proof" }));
     const dialog = await screen.findByRole("dialog", { name: "Export a private session" });
     expect(dialog).toHaveTextContent("This session is private. Export it anyway?");
+    expect(dialog).toHaveTextContent("full proof history and problem setup");
     expect(startDownload).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Export anyway" }));
     expect(startDownload).toHaveBeenCalledExactlyOnceWith(
