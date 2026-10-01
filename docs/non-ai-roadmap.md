@@ -321,7 +321,7 @@ otherwise automate — the substrate is in scope.
       objective, current attempt, unresolved constructions, top obstruction or requirement) and the actions
       "Use this", "Construct an object", "Find sufficient conditions", "Investigate this hypothesis", and
       "Try this method". Add a construction-task view with requirements by role.
-- [~] **N35 Move authoring without AI (§13.1, refinement §7).** Add:
+- [x] **N35 Move authoring without AI (§13.1, refinement §7).** Add:
   - a visual move-template editor: selection contract, patterns picked from selections, parameters from
     menus, required artifacts, plan as a kernel-operation sequence, class, and examples;
   - validation of examples by running the plan;
@@ -964,3 +964,37 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
   - Gaps: multi-step macros are still not applicable (N35 backend gap). Macro capture is tested only with
     a fabricated two-step path. Example menu choices come only from recorded steps. The 64 KiB
     protocol-commands proxy limit could refuse a draft with many large example states.
+- 2026-10-01 — N35 (macro application; N35 complete) — `7b8daa0` — approved multi-step macros are
+  retrievable and applicable. Retrieval indexes a macro by its first step's contract
+  (`authoredMacroDefinition`), held in `DefinitionCatalog.macros` apart from `moves`, so the command path
+  never applies a macro as one move. Preview plans every step with `planMove` and returns the final state,
+  the composed class (checked against the steps) and `macro.steps[]`; a later step that fails to re-match
+  returns 422 `macro-step-failed` naming the step and writes nothing. `executeMacroPreview` applies the
+  steps in one transaction as ordinary `apply-kernel-operation` commands `<cmd>:macro:<i>`; edges and
+  commands carry `macro: {moveId, previewId, stepIndex, stepCount, stepId}`. Retries replay; a moved
+  cursor gives 409. Delete-previous-move removes the whole application (tombstone `macroSteps`). Import
+  re-runs each application with the artifact's own approved macro; tampering is rejected.
+  - Gaps: macro-step edges cannot be semantically replayed; a macro cannot be tried as an inquiry method;
+    the web UI does not yet show macro cards with step counts, per-step previews or grouped history.
+- 2026-10-01 — interface usability — `d61ec5b` (user) — see
+  [`interface-usability-improvements.md`](./interface-usability-improvements.md): the home page separates
+  starting a problem, opening a proof file and resuming a saved proof; the workspace keeps the current
+  proof and next action in view with secondary tools behind compact controls; suggestion cards focus on
+  the proposed step with details on demand; the library drawer and history views explain themselves.
+- 2026-10-01 — discoverability follow-ups (audit of the whole app by a newcomer persona) — `22ec048`,
+  `0bdc0f4` — built on `d61ec5b` without changing its design.
+  - Entry points: not-found pages with "Back to the start" and "Enter a new problem"; a "Recent proofs"
+    list on the home page (localStorage inside try/catch, recorded on approval, file open and resume);
+    a rejected upload shows its message once with diagnostics under "Technical details"; required fields
+    are marked and "Check setup" lists every missing required field; no horizontal overflow at 390 px.
+  - Workspace: the mark-sorry card carries "Sorry (unproved assumption)" and says it is not an equivalence
+    beside its stored class; a disabled Preview says why (search-only result, missing values); the
+    abstraction note says its results are browse-only; one read-only note replaces per-action reasons and
+    each action has a plain-language hint ("Mark as sorry (assume)"); the backtrack dialog is in plain
+    words; the gesture tray is one line with buttons only when something is selected; the inquiry panel
+    starts collapsed until there is something to show; each formula is one tab stop (MathLive Tab
+    pass-through); the colour key is collapsed; an "N suggestions below" link joins the Active selections
+    card. No dialog or disclosure opens unprompted.
+  - Open: the session page does not yet pass the problem title and statement to `WorkspaceHeader`;
+    sessions opened by URL are not recorded as recent; abstraction-only results are not collapsed into a
+    summary; same-name suggestion cards are not disambiguated; no keyboard way to select a sub-expression.
