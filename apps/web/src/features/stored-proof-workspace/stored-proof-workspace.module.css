@@ -58,9 +58,15 @@
   font-size: 0.78rem;
 }
 
+.headerFacts {
+  min-width: 0;
+}
+
 .headerFacts > span {
   color: var(--text-muted);
   font-size: 0.78rem;
+  /* Node IDs of applied steps are long and unbroken: wrap them instead of widening the page. */
+  overflow-wrap: anywhere;
 }
 
 .historyNode {
@@ -85,6 +91,7 @@
   background: var(--accent-soft);
   padding: 0.7rem 0.8rem;
   color: var(--accent-text);
+  overflow-wrap: anywhere;
 }
 
 .actionNotice[data-state="rejected"] {
@@ -170,6 +177,11 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.breadcrumb li {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .breadcrumb li + li::before {
@@ -371,4 +383,21 @@ a.toolbarButton {
   margin: 0.3rem 0 0;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.historyMacroHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  align-items: baseline;
+  border-left: 4px solid var(--accent);
+  background: var(--accent-soft);
+  padding-block: 0.3rem;
+  padding-right: 0.6rem;
+  color: var(--accent-text);
+  font-size: 0.8rem;
+}
+
+.historyItem[data-macro-step] {
+  border-left: 4px solid var(--accent);
 }

@@ -1,5 +1,6 @@
 import type { ProofEdge } from "@proof/protocol";
 import type { SuggestionCategory, TransitionEvidence } from "./preview-diff";
+import { stepCountText } from "../macro-labels";
 import styles from "./suggestion-panel.module.css";
 
 /**
@@ -164,6 +165,21 @@ export function MatchBadge({
     >
       <Glyph glyph={kind === "exact" ? "=" : kind === "structural" ? "≅" : "?"} />
       <span>{label}</span>
+    </span>
+  );
+}
+
+/** A move that applies several steps in a row as one action. */
+export function MacroBadge({ stepCount }: Readonly<{ stepCount: number }>) {
+  return (
+    <span
+      className={styles.badge}
+      data-badge="macro"
+      data-step-count={stepCount}
+      title={`Applies ${stepCount} steps in a row as one action. Preview shows what each step does.`}
+    >
+      <Glyph glyph="⇶" />
+      <span>{stepCountText(stepCount)}</span>
     </span>
   );
 }

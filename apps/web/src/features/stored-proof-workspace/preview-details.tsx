@@ -1,6 +1,7 @@
-import type { MovePreview } from "@proof/protocol";
+import type { MacroPreviewStep, MovePreview } from "@proof/protocol";
 import type { Presentation } from "@proof/language";
 import type { WorkspaceView } from "../proof-workspace";
+import { humanizeMoveId } from "../macro-labels";
 import { StatementView } from "../proof-workspace/presentation";
 import { MenuItemLabel } from "./parameter-menu";
 import {
@@ -51,6 +52,7 @@ export function PreviewDetails({
           <dd>{deltaText(preview.delta.obligations)}</dd>
         </div>
       </dl>
+      {preview.macro === undefined ? null : <MacroSteps steps={preview.macro.steps} />}
       {chosen.length > 0 ? (
         <div>
           <strong>Chosen inputs</strong>
@@ -118,6 +120,45 @@ export function PreviewDetails({
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** What one macro step changed, in words: counts only, since the final state is shown below. */
+export function stepDifferenceText(delta: MacroPreviewStep["delta"]): string {
+  const part = (noun: string, change: MacroPreviewStep["delta"]["goals"]) => {
+    const pieces = [
+      change.updated.length > 0 ? `${change.updated.length} changed` : undefined,
+      change.added.length > 0 ? `${change.added.length} added` : undefined,
+      change.removed.length > 0 ? `${change.removed.length} closed` : undefined,
+    ].filter((piece): piece is string => piece !== undefined);
+    return pieces.length === 0 ? `no ${noun} changes` : `${noun}: ${pieces.join(", ")}`;
+  };
+  return `${part("goals", delta.goals)}; ${part("obligations", delta.obligations)}`;
+}
+
+/**
+ * The outcome of each step of a multi-step move, in order. The first step is open; the rest are
+ * collapsed so a long macro stays short until someone wants a step's detail.
+ */
+function MacroSteps({ steps }: Readonly<{ steps: readonly MacroPreviewStep[] }>) {
+  return (
+    <div>
+      <strong>What each step does</strong>
+      <ol className={styles.macroSteps} aria-label="Steps of this move">
+        {steps.map((step) => (
+          <li key={step.id} data-macro-step={step.index}>
+            <details open={step.index === 1}>
+              <summary>
+                Step {step.index} of {steps.length}: {humanizeMoveId(step.moveId)}{" "}
+                <TransitionClassBadge transitionClass={step.transitionClass} />
+              </summary>
+              <p>{transitionMeaning(step.transitionClass)}</p>
+              <p data-testid="macro-step-difference">{stepDifferenceText(step.delta)}.</p>
+            </details>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

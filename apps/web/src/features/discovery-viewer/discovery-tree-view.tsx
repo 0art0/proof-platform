@@ -14,6 +14,7 @@ import {
   type TreeEdgeView,
   type TreeRowView,
 } from "./tree-layout";
+import { humanizeMoveId, macroDisplayName } from "../macro-labels";
 import { ViewerShell } from "./viewer-shell";
 
 const EVIDENCE_LABELS = {
@@ -28,6 +29,9 @@ function EdgeSummary({ edge }: Readonly<{ edge: TreeEdgeView }>) {
     <span className={styles.edgeSummary} data-edge-id={edge.edgeId}>
       <span aria-hidden="true">↳ </span>
       <strong>{edge.label}</strong>
+      {edge.moveId === undefined || edge.macro === undefined ? null : (
+        <span className={styles.chip}>{humanizeMoveId(edge.moveId)}</span>
+      )}
       <span className={styles.chip}>{edge.transitionClass}</span>
       {edge.evidence === undefined ? null : (
         <span className={styles.chip}>{EVIDENCE_LABELS[edge.evidence]}</span>
@@ -107,6 +111,12 @@ export function DiscoveryTreeView({ artifact }: Readonly<{ artifact: ProofArtifa
                 data-depth={row.depth}
                 style={{ paddingInlineStart: `${row.depth * 1.1}rem` }}
               >
+                {row.parentEdge?.macro?.stepIndex !== 1 ? null : (
+                  <span className={styles.macroGroup} data-macro-application>
+                    Macro {macroDisplayName(row.parentEdge.macro.moveId)}:{" "}
+                    {row.parentEdge.macro.stepCount} steps applied as one move
+                  </span>
+                )}
                 {row.parentEdge === undefined ? null : <EdgeSummary edge={row.parentEdge} />}
                 <button
                   type="button"

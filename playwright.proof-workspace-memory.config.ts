@@ -17,6 +17,7 @@ export default defineConfig({
     "mouse-only-flows.spec.ts",
     "gestures.spec.ts",
     "move-authoring.spec.ts",
+    "macro-application.spec.ts",
   ],
   globalSetup: "./apps/web/e2e/global-warmup.ts",
   timeout: 60_000,

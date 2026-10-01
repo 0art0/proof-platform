@@ -1,6 +1,10 @@
 import { notFound } from "next/navigation";
 import { StoredProofWorkspace } from "../../../features/stored-proof-workspace";
-import { ProofServiceError, readCurrentProofSession } from "../../../server/proof-service";
+import {
+  ProofServiceError,
+  readCurrentProofSession,
+  readProofSessionMetadata,
+} from "../../../server/proof-service";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -22,9 +26,19 @@ export default async function SessionPage({
     }
     throw error;
   }
+  const metadata = await readProofSessionMetadata(loaded.session.id);
+  const session =
+    metadata === undefined
+      ? loaded.session
+      : {
+          ...loaded.session,
+          title: metadata.problem.title,
+          statement: metadata.problem.statement,
+          background: metadata.background.summary,
+        };
   return (
     <main>
-      <StoredProofWorkspace session={loaded.session} node={loaded.node} />
+      <StoredProofWorkspace session={session} node={loaded.node} />
     </main>
   );
 }

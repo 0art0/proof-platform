@@ -15,6 +15,7 @@ import {
   executeStoredProofCommand,
   ProofServiceError,
   readCurrentProofSession,
+  readProofSessionMetadata,
   readProofHistory,
   readStoredSuggestionSet,
   recordStoredInteractionEvent,
@@ -204,6 +205,26 @@ describe("proof-service adapter", () => {
         headers: { accept: "application/json" },
       }),
     );
+  });
+
+  it("reads the stored problem metadata for display and degrades to undefined", async () => {
+    const metadata = {
+      problem: { title: "Commutativity", statement: "Show that p and q is q and p." },
+      background: { level: "undergraduate", summary: "Propositional logic", assumptions: [] },
+      libraryLayerIds: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...sessionEnvelope(), metadata }));
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.PROOF_HTTP_ORIGIN = "http://proof-worker.test";
+    await expect(readProofSessionMetadata(SESSION_ID)).resolves.toEqual(metadata);
+    expect(fetchMock.mock.calls[0]?.[0]).toEqual(
+      new URL("http://proof-worker.test/proof-sessions/session%3Atest?include=metadata"),
+    );
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(sessionEnvelope())));
+    await expect(readProofSessionMetadata(SESSION_ID)).resolves.toBeUndefined();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    await expect(readProofSessionMetadata(SESSION_ID)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -691,6 +712,59 @@ describe("proof-service adapter", () => {
     );
     await expect(executeStoredProofCommand(SESSION_ID, choice)).rejects.toMatchObject({
       code: "invalid_upstream_response",
+    });
+  });
+
+  it("accepts the receipt of a macro's last step for the command that applied the macro", async () => {
+    const responseBody = {
+      session: sessionEnvelopeSession({ currentNodeId: appliedNode.id }),
+      node: appliedNode,
+      receipt,
+      replayed: false,
+    };
+    const macroId = `${choice.commandId}:macro:2`;
+    const macroBody = { ...responseBody, receipt: { ...receipt, commandId: macroId } };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(macroBody, 201)));
+    await expect(executeStoredProofCommand(SESSION_ID, choice)).resolves.toMatchObject({
+      receipt: { commandId: macroId },
+    });
+
+    for (const commandId of [`${choice.commandId}:macro:`, `${choice.commandId}:macro:x`]) {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse({ ...responseBody, receipt: { ...receipt, commandId } }, 201),
+          ),
+      );
+      await expect(executeStoredProofCommand(SESSION_ID, choice)).rejects.toMatchObject({
+        code: "invalid_upstream_response",
+      });
+    }
+  });
+
+  it("reports a macro step that failed to apply as a 422 that names the step", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            diagnostics: [
+              {
+                code: "macro-step-failed",
+                message: "Macro step 2 of 2 was rejected: no match.",
+              },
+            ],
+          },
+          422,
+        ),
+      ),
+    );
+    await expect(executeStoredProofCommand(SESSION_ID, choice)).rejects.toMatchObject({
+      code: "macro-step-failed",
+      status: 422,
+      message: "Macro step 2 of 2 was rejected: no match.",
     });
   });
 

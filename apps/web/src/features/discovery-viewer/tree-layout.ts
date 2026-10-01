@@ -2,7 +2,7 @@
  * The full discovery tree as an ordered outline (design plan §4.6, §16; roadmap N28). Pure: it reads
  * only the stored nodes, edges, suggestion sets and final material of the artifact.
  */
-import type { DiscoveryEvidence, ProofArtifact, ProofEdge } from "@proof/protocol";
+import type { DiscoveryEvidence, MacroLink, ProofArtifact, ProofEdge } from "@proof/protocol";
 import { edgeLabel, indexArtifact, storedAnalysis, type ArtifactIndex } from "./artifact-data";
 
 export type TreeEdgeView = Readonly<{
@@ -14,6 +14,8 @@ export type TreeEdgeView = Readonly<{
   label: string;
   operationKind: string;
   moveId?: string | undefined;
+  /** Set on a step of a multi-step macro application. */
+  macro?: MacroLink | undefined;
   transitionClass: ProofEdge["transitionClass"];
   /** Stored evidence kind; only edges of the stored route carry it. */
   evidence?: DiscoveryEvidence | undefined;
@@ -57,6 +59,7 @@ export function treeEdgeView(index: ArtifactIndex, edge: ProofEdge): TreeEdgeVie
     label: edgeLabel(index, edge),
     operationKind: edge.operation.kind,
     moveId: edge.moveId,
+    macro: edge.macro,
     transitionClass: edge.transitionClass,
     evidence: index.evidenceByEdge.get(edge.id),
   };

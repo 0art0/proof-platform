@@ -258,6 +258,33 @@ describe("starting a move from the stored history", () => {
     expect(within(patterns).queryByText("Implies(Not(q), Not(p))")).toBeNull();
   });
 
+  it("names recorded steps by what was done, never by a node ID, and explains the primitive", async () => {
+    stubFetch();
+    render(<MoveAuthoring session={session} />);
+    const end = await screen.findByLabelText("Path ending at");
+    const labels = [...end.querySelectorAll("option")].map(({ textContent }) => textContent);
+    expect(labels.length).toBeGreaterThan(0);
+    for (const label of labels) {
+      expect(label).toMatch(/^After “.+”/);
+      expect(label).not.toMatch(/node:/);
+    }
+    const start = screen.getByLabelText("Starting after");
+    expect([...start.querySelectorAll("option")].map(({ textContent }) => textContent)).toContain(
+      "The very start",
+    );
+    expect(screen.getByText(/A kernel operation is one of the basic proof steps/)).toBeVisible();
+  });
+
+  it("numbers the review step only once a draft is being edited", async () => {
+    stubFetch();
+    render(<MoveAuthoring session={session} />);
+    await screen.findByLabelText("Path ending at");
+    expect(screen.getByRole("heading", { name: "Review and approve saved moves" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "6. Review and approve" })).toBeNull();
+    await startFromIntroduceStep();
+    expect(screen.getByRole("heading", { name: "6. Review and approve" })).toBeVisible();
+  });
+
   it("starts from a primitive kernel operation", async () => {
     stubFetch();
     render(<MoveAuthoring session={session} />);

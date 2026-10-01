@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createMovePreviewSchema,
   createProofEdgeSchema,
@@ -29,6 +29,14 @@ import type { Presentation } from "@proof/language";
 import { LibraryDrawer } from "../library-drawer";
 import { InquiryPanel } from "../inquiry-panel";
 import { GestureTray, useDragGestures } from "../gestures";
+import {
+  explainMacroFailure,
+  macroDisplayName,
+  macroStepLabel,
+  humanizeMoveId,
+} from "../macro-labels";
+import { recordRecentSession } from "../problem-entry/recent-sessions";
+import { macroNames, useMacroInfo, type MacroInfoMap } from "./macro-info";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar, movesHref } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
@@ -142,6 +150,11 @@ function StatefulStoredWorkspace({
   }, [session.id, session.operators]);
 
   useEffect(() => void loadHistory(), [loadHistory]);
+
+  // Sessions opened by URL join the home page's recent proofs (a known title is kept).
+  useEffect(() => {
+    recordRecentSession({ id: initialSession.id, title: initialSession.title });
+  }, [initialSession.id, initialSession.title]);
   useEffect(
     () => () => {
       requestGeneration.current += 1;
@@ -494,9 +507,16 @@ function StatefulStoredWorkspace({
       setSession(result.session);
       setNode(result.node);
       resetTransientState();
+      // A readable name, never the raw suggestion ID; a macro reports its steps and composed class.
+      const appliedName =
+        set.suggestions.find(({ id }) => id === suggestionId)?.name ?? "the chosen step";
+      const macroSteps = retryState.preview.macro?.steps.length;
       setNotice({
         state: "committed",
-        message: `Applied ${suggestionId}; advanced to ${result.node.id} (${result.receipt.transitionClass}).`,
+        message:
+          macroSteps === undefined
+            ? `Applied “${appliedName}”; advanced to ${result.node.id} (${result.receipt.transitionClass}).`
+            : `Applied “${appliedName}” (${macroSteps} steps in a row); advanced to ${result.node.id} (${retryState.preview.transitionClass}).`,
       });
       void loadHistory();
     },
@@ -618,6 +638,15 @@ function StatefulStoredWorkspace({
     [applySuggestion, moveState, node.id, previewSuggestion, recordInteraction],
   );
 
+  // Macro names and step counts are read once something on the page could be a multi-step move.
+  const macrosWanted =
+    (suggestions.kind === "ready" || suggestions.kind === "empty"
+      ? suggestions.suggestionSet.suggestions.some(
+          ({ source, artifactId }) => source === "move" && !artifactId.startsWith("move:"),
+        )
+      : false) ||
+    (history.kind === "ready" && history.edges.some(({ edge }) => edge.macro !== undefined));
+  const macros = useMacroInfo(session.id, macrosWanted);
   const suggestionCount =
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.suggestionSet.suggestions.length
@@ -661,6 +690,7 @@ function StatefulStoredWorkspace({
             operators={session.operators}
             selections={selections}
             history={history}
+            macroNames={macroNames(macros)}
             mutationPending={mutationPending}
             presentation={presentation}
             view={view}
@@ -712,6 +742,7 @@ function StatefulStoredWorkspace({
         move={moveState}
         mutationPending={mutationPending || readOnly}
         authorMovesHref={readOnly ? undefined : movesHref(session.id)}
+        macros={macros}
         presentation={presentation}
         view={view}
         {...panelActions}
@@ -732,6 +763,7 @@ function StatefulStoredWorkspace({
       <HistoryView
         history={history}
         currentNodeId={node.id}
+        macros={macros}
         mutationPending={mutationPending || readOnly}
         presentation={presentation}
         view={view}
@@ -746,6 +778,7 @@ type ReadOnlyPresentation = Readonly<{ presentation: Presentation; view: Workspa
 function HistoryView({
   history,
   currentNodeId,
+  macros,
   mutationPending,
   presentation,
   view,
@@ -754,6 +787,7 @@ function HistoryView({
   Readonly<{
     history: HistoryState;
     currentNodeId: string;
+    macros: MacroInfoMap;
     mutationPending: boolean;
     onBacktrack: (id: string) => Promise<void>;
   }>) {
@@ -772,31 +806,51 @@ function HistoryView({
       ) : null}
       {history.kind === "ready" ? (
         <ol className={styles.historyList}>
-          {orderedHistory(history.nodes, history.edges).map(({ node, incoming, depth }) => (
-            <li
-              className={styles.historyItem}
-              key={node.id}
-              style={{ paddingLeft: `${depth * 1.1}rem` }}
-            >
-              <button
-                className={styles.historyNode}
-                data-current={node.id === currentNodeId}
-                data-history-node-id={node.id}
-                disabled={node.id === currentNodeId || mutationPending}
-                type="button"
-                onClick={() => void onBacktrack(node.id)}
-              >
-                <span>
-                  <HistoryNodeLabel node={node} presentation={presentation} view={view} />
-                </span>
-                <small>
-                  {incoming === undefined
-                    ? `Root · ${node.id}`
-                    : `${incoming.name} · ${incoming.edge.transitionClass} · ${node.id}`}
-                </small>
-              </button>
-            </li>
-          ))}
+          {orderedHistory(history.nodes, history.edges).map(({ node, incoming, depth }) => {
+            const link = incoming?.edge.macro;
+            return (
+              <Fragment key={node.id}>
+                {link === undefined || link.stepIndex !== 1 ? null : (
+                  <li
+                    className={styles.historyMacroHeader}
+                    data-macro-application={link.previewId}
+                    style={{ paddingLeft: `${depth * 1.1}rem` }}
+                  >
+                    <strong>Macro: {macroDisplayName(link.moveId, macroNames(macros))}</strong>{" "}
+                    <span>
+                      {link.stepCount} steps applied as one move. Deleting the previous move removes
+                      them all.
+                    </span>
+                  </li>
+                )}
+                <li
+                  className={styles.historyItem}
+                  data-macro-step={link?.stepIndex}
+                  style={{ paddingLeft: `${depth * 1.1}rem` }}
+                >
+                  <button
+                    className={styles.historyNode}
+                    data-current={node.id === currentNodeId}
+                    data-history-node-id={node.id}
+                    disabled={node.id === currentNodeId || mutationPending}
+                    type="button"
+                    onClick={() => void onBacktrack(node.id)}
+                  >
+                    <span>
+                      <HistoryNodeLabel node={node} presentation={presentation} view={view} />
+                    </span>
+                    <small>
+                      {incoming === undefined
+                        ? `Root · ${node.id}`
+                        : link === undefined
+                          ? `${incoming.name} · ${incoming.edge.transitionClass} · ${node.id}`
+                          : `${macroStepLabel(link, macroNames(macros))} · ${humanizeMoveId(incoming.name)} · ${incoming.edge.transitionClass} · ${node.id}`}
+                    </small>
+                  </button>
+                </li>
+              </Fragment>
+            );
+          })}
         </ol>
       ) : null}
     </section>
@@ -923,7 +977,11 @@ async function requestMovePreview(
     const parsed = movePreviewApiResponseSchema.safeParse(await response.json());
     if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
     if (!parsed.data.ok) {
-      return { ok: false, code: parsed.data.error.code, message: parsed.data.error.message };
+      return {
+        ok: false,
+        code: parsed.data.error.code,
+        message: explainMacroFailure(parsed.data.error.code, parsed.data.error.message),
+      };
     }
     const preview = createMovePreviewSchema({ operators }).safeParse(parsed.data.data.preview);
     return preview.success ? { ok: true, preview: preview.data } : invalidActionResponse();
@@ -945,7 +1003,7 @@ async function requestApply(
       return {
         ok: false as const,
         code: parsed.data.error.code,
-        message: parsed.data.error.message,
+        message: explainMacroFailure(parsed.data.error.code, parsed.data.error.message),
       };
     }
     const node = createProofNodeSchema({ operators }).safeParse(parsed.data.data.node);

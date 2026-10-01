@@ -16,6 +16,7 @@ import {
   type ReplayOverride,
 } from "@proof/protocol";
 import type { PlainMathJson } from "@proof/mathjson-model";
+import { macroDisplayName } from "../macro-labels";
 import type { z } from "zod";
 import {
   resolveProofSelection,
@@ -217,6 +218,8 @@ export type DeletionImpact =
       deletedNodeCount: number;
       /** Nodes below the current node; confirmation is required when positive. */
       descendantCount: number;
+      /** Set when the move is the last step of a macro application: all its steps go together. */
+      macro?: Readonly<{ name: string; stepCount: number }> | undefined;
     }>;
 
 /** What "Delete previous move" would remove, planned by the protocol from the stored tree. */
@@ -224,6 +227,7 @@ export function deletionImpact(
   rootNodeId: string,
   currentNodeId: string,
   edges: readonly HistoryEdge[],
+  macroNames?: ReadonlyMap<string, string> | undefined,
 ): DeletionImpact {
   if (currentNodeId === rootNodeId) return { kind: "root" };
   const planned = planPreviousMoveDeletion({
@@ -234,12 +238,22 @@ export function deletionImpact(
   });
   if (!planned.ok) return { kind: "unavailable", reason: planned.diagnostics[0].message };
   const entering = edges.find(({ edge }) => edge.childNodeId === currentNodeId);
+  const link = entering?.edge.macro;
   return {
     kind: "ready",
     moveName: entering?.name ?? "the previous move",
     parentNodeId: planned.plan.parentNodeId,
     deletedNodeCount: planned.plan.deletedNodeIds.length,
-    descendantCount: planned.plan.deletedNodeIds.length - 1,
+    // The earlier steps of a macro application go with it and are not descendants.
+    descendantCount: planned.plan.descendantCount,
+    ...(planned.plan.macroSteps === undefined || link === undefined
+      ? {}
+      : {
+          macro: {
+            name: macroDisplayName(link.moveId, macroNames),
+            stepCount: planned.plan.macroSteps,
+          },
+        }),
   };
 }
 

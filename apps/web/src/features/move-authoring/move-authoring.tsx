@@ -346,6 +346,7 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
         </p>
       ) : (
         <RevisionsPanel
+          numbered={draft !== undefined}
           sessionId={session.id}
           moves={authored.value.moves}
           disabledReason={disabledReason}

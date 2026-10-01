@@ -1,10 +1,16 @@
 import type { ProofNode } from "@proof/protocol";
+import { humanizeMoveId } from "../macro-labels";
 import styles from "./stored-proof-workspace.module.css";
 
 export type BranchCrumb = Readonly<{ nodeId: string; label: string }>;
 /** The part of a stored history edge that the breadcrumb reads. */
 export type HistoryEdgeRecord = Readonly<{
-  edge: Readonly<{ parentNodeId: string; childNodeId: string }>;
+  edge: Readonly<{
+    parentNodeId: string;
+    childNodeId: string;
+    /** Set on a step of a multi-step macro application. */
+    macro?: Readonly<{ stepIndex: number; stepCount: number }> | undefined;
+  }>;
   name: string;
 }>;
 
@@ -27,7 +33,15 @@ export function branchBreadcrumb(
     if (visited.has(nodeId) || !known.has(nodeId)) return undefined;
     visited.add(nodeId);
     const record = incoming.get(nodeId);
-    crumbs.push({ nodeId, label: record === undefined ? "Root" : record.name });
+    crumbs.push({
+      nodeId,
+      label:
+        record === undefined
+          ? "Root"
+          : record.edge.macro === undefined
+            ? record.name
+            : `${humanizeMoveId(record.name)} (step ${record.edge.macro.stepIndex} of ${record.edge.macro.stepCount})`,
+    });
     nodeId = record?.edge.parentNodeId;
   }
   return crumbs.reverse();

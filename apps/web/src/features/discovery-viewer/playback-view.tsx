@@ -13,6 +13,7 @@ import {
   type PlaybackEntry,
 } from "./playback-timeline";
 import { StateSnapshotView, ViewToggle } from "./statement-views";
+import { humanizeMoveId } from "../macro-labels";
 import { ViewerShell } from "./viewer-shell";
 
 function EntryDetail({
@@ -29,6 +30,11 @@ function EntryDetail({
     return (
       <>
         <p>{edge.label}</p>
+        {edge.macro === undefined || edge.moveId === undefined ? null : (
+          <p className={styles.muted}>
+            One step of a multi-step move; this step applies {humanizeMoveId(edge.moveId)}.
+          </p>
+        )}
         <details className={styles.technicalDetails}>
           <summary>Recorded step details</summary>
           <dl className={styles.facts} aria-label="Transition">

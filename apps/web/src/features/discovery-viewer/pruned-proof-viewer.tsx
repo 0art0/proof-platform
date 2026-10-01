@@ -149,6 +149,10 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
       ) : (
         <section aria-label="Unsolved">
           <h2>No pruned proof</h2>
+          <p className={styles.muted}>
+            A pruned proof is the successful route only: the steps that lead from the starting point
+            to a finished proof, without the branches that were set aside.
+          </p>
           <p data-testid="not-solved">
             The stored discovery tree is not solved, so there is no pruned proof to show.
           </p>

@@ -99,7 +99,7 @@ function ValidationResult({
           <span data-testid="validation-retrievable">
             {outcome.value.report.retrievable
               ? "Once approved this move is offered as a suggestion in the workspace."
-              : "A multi-step macro is validated and stored but not offered as a suggestion; apply it as a replay."}
+              : "This move is validated and can be stored, but it cannot be offered as a suggestion."}
           </span>
           <ul className={styles.list}>
             {outcome.value.report.examples.map((example) => (

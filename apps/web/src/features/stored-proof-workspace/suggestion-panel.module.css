@@ -488,3 +488,74 @@
   font-size: 0.76rem;
   line-height: 1.4;
 }
+
+.cardQualifier {
+  color: var(--text-muted);
+  font-size: 0.8em;
+  font-weight: 650;
+}
+
+.macroSteps {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.3rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.macroSteps details {
+  border: 1px solid var(--border-soft);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  padding: 0.35rem 0.55rem;
+}
+
+.macroSteps summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.macroSteps summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.macroSteps p {
+  margin: 0.3rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.searchOnlyGroup,
+.labelKey {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.labelKey {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.labelKey summary {
+  cursor: pointer;
+}
+
+.labelKey summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.labelKey dl {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+}
+
+.labelKey dt {
+  color: var(--text);
+  font-weight: 750;
+}
+
+.labelKey dd {
+  margin: 0;
+}

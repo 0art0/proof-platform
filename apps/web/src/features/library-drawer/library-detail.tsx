@@ -52,7 +52,7 @@ export function LibraryDetail({
         <Fact label="Source">{sourceLabel(entry.source)}</Fact>
         <Fact label="Domains">{artifact.classification.domains.join(", ")}</Fact>
         <Fact label="Level">{artifact.classification.level}</Fact>
-        <Fact label="Provenance">{provenanceLabel(artifact.provenance)}</Fact>
+        <Fact label="Origin">{provenanceLabel(artifact.provenance)}</Fact>
         <Fact label="Approval">
           <span data-approval={artifact.approval.status}>{approvalLabel(artifact.approval)}</span>
         </Fact>

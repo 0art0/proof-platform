@@ -198,8 +198,13 @@ function DrawerPanel({
             >
               Artifacts ({entries.length})
             </button>
-            <button type="button" aria-pressed={tab === "events"} onClick={() => setTab("events")}>
-              Addition events ({state.events.events.length})
+            <button
+              type="button"
+              aria-pressed={tab === "events"}
+              title="What was added to this session's library, and what was turned away"
+              onClick={() => setTab("events")}
+            >
+              Recently added ({state.events.events.length})
             </button>
           </div>
           {tab === "events" ? (

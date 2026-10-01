@@ -5,7 +5,9 @@ import Link from "next/link";
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, ProofEdge } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
-import { layoutSuggestions } from "./preview-diff";
+import { NO_MACROS, type MacroInfoMap } from "./macro-info";
+import { layoutSuggestions, type SuggestionLayoutEntry } from "./preview-diff";
+import { suggestionQualifiers } from "./suggestion-qualifiers";
 import {
   SuggestionCard,
   type DisplayedSuggestion,
@@ -55,6 +57,8 @@ export type SuggestionPanelProps = SuggestionPanelActions &
     presentation: Presentation;
     view: WorkspaceView;
     authorMovesHref?: string | undefined;
+    /** Approved multi-step macros of the session, by move ID. */
+    macros?: MacroInfoMap | undefined;
   }>;
 
 /**
@@ -68,6 +72,7 @@ export function SuggestionPanel({
   presentation,
   view,
   authorMovesHref,
+  macros = NO_MACROS,
   ...actions
 }: SuggestionPanelProps) {
   const displayedSet =
@@ -79,11 +84,14 @@ export function SuggestionPanel({
       ? suggestions.transitionClasses.map((entry) => [entry.suggestionId, entry.transitionClass])
       : [],
   );
+  const qualifiers = suggestionQualifiers(displayedSet?.suggestions ?? []);
   const card = (set: DisplayedSuggestionSet, suggestion: DisplayedSuggestion) => (
     <SuggestionCard
       key={suggestion.id}
       suggestion={suggestion}
       transitionClass={classes.get(suggestion.id)}
+      macro={suggestion.source === "move" ? macros.get(suggestion.artifactId) : undefined}
+      qualifier={qualifiers.get(suggestion.id)}
       move={move}
       mutationPending={mutationPending}
       presentation={presentation}
@@ -91,6 +99,59 @@ export function SuggestionPanel({
       {...bindActions(actions, set, suggestion.id)}
     />
   );
+  const isActive = (id: string) => move.kind !== "idle" && move.suggestionId === id;
+  const entryContains = (entry: SuggestionLayoutEntry, test: (id: string) => boolean) =>
+    entry.kind === "single"
+      ? test(entry.suggestion.id)
+      : [entry.lead, ...entry.variants].some(({ id }) => test(id));
+  const entryNode = (set: DisplayedSuggestionSet, entry: SuggestionLayoutEntry) =>
+    entry.kind === "single" ? (
+      card(set, entry.suggestion)
+    ) : (
+      <VariantGroup
+        key={`variant-group:${entry.familyId}`}
+        familyId={entry.familyId}
+        lead={card(set, entry.lead)}
+        variants={entry.variants.map((variant) => card(set, variant))}
+        activeInside={entry.variants.some(({ id }) => isActive(id))}
+        showLabel={(count) =>
+          `Show ${count} other version${count === 1 ? "" : "s"} of ${entry.name}`
+        }
+        hideLabel={`Hide other versions of ${entry.name}`}
+        listLabel={`Other versions of ${entry.name}`}
+      />
+    );
+  /**
+   * Results found only by searching for any expression of the selected kind cannot be previewed:
+   * the first stays where it is and the rest sit behind one summary line. Nothing is dropped.
+   */
+  const renderEntries = (set: DisplayedSuggestionSet) => {
+    const entries = layoutSuggestions(set);
+    const searchOnly = entries.filter((entry) =>
+      entryContains(entry, (id) => abstractionOnly(set, id)),
+    );
+    const [firstSearchOnly, ...restSearchOnly] = searchOnly;
+    return entries.map((entry) => {
+      if (firstSearchOnly === undefined || restSearchOnly.length === 0)
+        return entryNode(set, entry);
+      if (restSearchOnly.includes(entry)) return null;
+      if (entry !== firstSearchOnly) return entryNode(set, entry);
+      return (
+        <VariantGroup
+          key="search-only-group"
+          familyId="search-only"
+          lead={entryNode(set, firstSearchOnly)}
+          variants={restSearchOnly.map((rest) => entryNode(set, rest))}
+          activeInside={restSearchOnly.some((rest) => entryContains(rest, isActive))}
+          showLabel={(count) =>
+            `Show ${count} more search-only result${count === 1 ? "" : "s"} (browse only; they cannot be previewed)`
+          }
+          hideLabel="Hide the other search-only results"
+          listLabel="Other search-only results"
+        />
+      );
+    });
+  };
   return (
     <section
       id={SUGGESTION_PANEL_ID}
@@ -127,40 +188,30 @@ export function SuggestionPanel({
       ) : null}
       {suggestions.kind === "ready" ? (
         <ol className={styles.suggestions} data-testid="suggestion-list">
-          {layoutSuggestions(suggestions.suggestionSet).map((entry) =>
-            entry.kind === "single" ? (
-              card(suggestions.suggestionSet, entry.suggestion)
-            ) : (
-              <VariantGroup
-                key={`variant-group:${entry.familyId}`}
-                familyId={entry.familyId}
-                name={entry.name}
-                lead={card(suggestions.suggestionSet, entry.lead)}
-                variants={entry.variants.map((variant) => card(suggestions.suggestionSet, variant))}
-                activeInside={entry.variants.some(
-                  ({ id }) => move.kind !== "idle" && move.suggestionId === id,
-                )}
-              />
-            ),
-          )}
+          {renderEntries(suggestions.suggestionSet)}
         </ol>
       ) : null}
+      {suggestions.kind === "ready" ? <LabelKey /> : null}
     </section>
   );
 }
 
 function VariantGroup({
   familyId,
-  name,
   lead,
   variants,
   activeInside,
+  showLabel,
+  hideLabel,
+  listLabel,
 }: Readonly<{
   familyId: string;
-  name: string;
   lead: ReactNode;
   variants: readonly ReactNode[];
   activeInside: boolean;
+  showLabel: (count: number) => string;
+  hideLabel: string;
+  listLabel: string;
 }>) {
   const [expanded, setExpanded] = useState(false);
   const listId = `variants-${familyId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
@@ -178,16 +229,54 @@ function VariantGroup({
         onClick={() => setExpanded(!open)}
       >
         <span aria-hidden="true">{open ? "▾ " : "▸ "}</span>
-        {open
-          ? `Hide other versions of ${name}`
-          : `Show ${count} other version${count === 1 ? "" : "s"} of ${name}`}
+        {open ? hideLabel : showLabel(count)}
       </button>
       {open ? (
-        <ol id={listId} className={styles.suggestions} aria-label={`Other versions of ${name}`}>
+        <ol id={listId} className={styles.suggestions} aria-label={listLabel}>
           {variants}
         </ol>
       ) : null}
     </li>
+  );
+}
+
+function abstractionOnly(set: DisplayedSuggestionSet, id: string): boolean {
+  return set.suggestions.some(
+    (suggestion) => suggestion.id === id && suggestion.abstractionFit !== "not-used",
+  );
+}
+
+const LABEL_KEY: readonly (readonly [string, string])[] = [
+  ["Result application", "Uses a named result from the library on your selection."],
+  ["Move", "Runs a built-in or authored proof step on your selection."],
+  ["N-step move", "A move that applies several steps in a row as one action."],
+  ["Immediate", "Ready to preview now."],
+  ["Near miss", "Applies once a few conditions are proved; they become new obligations."],
+  ["Needs input", "Choose a value or selection first."],
+  [
+    "Exact match / Structural match",
+    "Whether your selection is written exactly like the pattern or only has its shape.",
+  ],
+  ["⇔ equivalence", "The new state means the same as the old one."],
+  ["⇐ strengthening", "The new state is stronger; solving it proves the original."],
+  ["⇒ weakening", "The new state is weaker; solving it alone does not prove the original."],
+  ["Sorry", "An unproved assumption, kept visibly separate from proved steps."],
+];
+
+/** A collapsed key to the labels on the cards; nothing opens unprompted. */
+function LabelKey() {
+  return (
+    <details className={styles.labelKey}>
+      <summary>What do these labels mean?</summary>
+      <dl>
+        {LABEL_KEY.map(([term, meaning]) => (
+          <div key={term}>
+            <dt>{term}</dt>
+            <dd>{meaning}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

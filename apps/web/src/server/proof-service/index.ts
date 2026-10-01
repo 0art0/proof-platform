@@ -114,6 +114,8 @@ const repositoryDiagnosticCodeSchema = z.enum([
   "interaction-event-conflict",
   "invalid-interaction-event-record",
   "session-read-only",
+  // A later step of an approved multi-step macro did not re-match (HTTP 422); nothing was written.
+  "macro-step-failed",
 ]);
 
 const proofServiceFailureSchema = z
@@ -310,6 +312,33 @@ export async function readCurrentProofSession(
   return { session, node };
 }
 
+/**
+ * The stored problem metadata (title, statement, background) of a session, for display only.
+ * Absent when the session has none or the worker does not return it: the workspace then falls back
+ * to the session id, so a failure here never blocks opening a proof.
+ */
+export async function readProofSessionMetadata(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProofSessionMetadata | undefined> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  try {
+    const response = await requestProofService(
+      `/proof-sessions/${encodeURIComponent(sessionId)}?include=metadata`,
+      { method: "GET", ...signalOption(options.signal) },
+    );
+    const value = await readValidatedEnvelope(response);
+    if (response.status !== 200) return undefined;
+    const envelope = z
+      .object({ metadata: proofSessionMetadataSchema.optional() })
+      .passthrough()
+      .safeParse(value);
+    return envelope.success ? envelope.data.metadata : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Persist deterministic retrieval evidence; no suggestion is recomputed in the web app. */
 export async function createStoredSuggestionSet(
   sessionIdInput: unknown,
@@ -497,13 +526,26 @@ export async function executeStoredProofCommand(
     session.id !== sessionId ||
     node === undefined ||
     session.currentNodeId !== node.id ||
-    receipt.commandId !== request.commandId ||
+    !receiptIsForCommand(receipt.commandId, request.commandId) ||
     receipt.nodeId !== node.id ||
     receipt.resultStateId !== node.state.id
   ) {
     throw invalidUpstreamResponse();
   }
   return { session, node, receipt, replayed: envelope.data.replayed };
+}
+
+/**
+ * The receipt of an applied choice names the command itself, or, for a multi-step macro applied as
+ * a sequence of ordinary commands, the macro's last step: `<command>:macro:<n>` (roadmap N35).
+ */
+function receiptIsForCommand(receiptCommandId: string, requestedCommandId: string): boolean {
+  const prefix = `${requestedCommandId}:macro:`;
+  return (
+    receiptCommandId === requestedCommandId ||
+    (receiptCommandId.startsWith(prefix) &&
+      /^[1-9]\d?$/.test(receiptCommandId.slice(prefix.length)))
+  );
 }
 
 /** Read the retained, rooted proof-discovery tree without recomputing historical evidence. */
@@ -948,6 +990,10 @@ function failureForResponse(status: number, value: unknown): ProofServiceError {
   const failure = proofServiceFailureSchema.safeParse(value);
   if (!failure.success || status < 400 || status > 599) throw invalidUpstreamResponse();
   const diagnostic = failure.data.diagnostics[0];
+  // A later macro step did not re-match: well-formed, refused, nothing written (not a bad gateway).
+  if (status === 422 && diagnostic.code === "macro-step-failed") {
+    return new ProofServiceError(diagnostic.code, diagnostic.message, 422);
+  }
   return new ProofServiceError(diagnostic.code, diagnostic.message, publicFailureStatus(status));
 }
 
