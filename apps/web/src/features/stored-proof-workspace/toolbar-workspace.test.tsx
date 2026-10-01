@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProofNodeSchema, type ProofNode } from "@proof/protocol";
 import type { AnchoredProofSelection } from "@proof/selections";
+import { RECENT_SESSIONS_KEY, readRecentSessions } from "../problem-entry/recent-sessions";
 import { StoredProofWorkspace } from "./stored-proof-workspace";
 
 vi.mock("../proof-workspace", () => ({
@@ -235,6 +236,26 @@ describe("toolbar actions in the stored workspace", () => {
         "Mark sorry rejected (unavailable): The proof service could not be reached. Try again once the proof service is available.",
       ),
     ).toBeVisible();
+  });
+
+  it("records the opened session among the recent proofs, keeping a known title", () => {
+    window.localStorage.clear();
+    stubFetch({
+      "/history": () => json({ ok: true, data: { session, nodes: [root], edges: [] } }),
+    });
+    window.localStorage.setItem(
+      RECENT_SESSIONS_KEY,
+      JSON.stringify([{ id: session.id, title: "Known title" }, { id: "session:other" }]),
+    );
+    render(<StoredProofWorkspace session={session} node={root} />);
+    expect(readRecentSessions()).toEqual([
+      { id: session.id, title: "Known title" },
+      { id: "session:other" },
+    ]);
+    cleanup();
+    window.localStorage.clear();
+    render(<StoredProofWorkspace session={{ ...session, title: "Fresh title" }} node={root} />);
+    expect(readRecentSessions()).toEqual([{ id: session.id, title: "Fresh title" }]);
   });
 
   it("marks an imported session read-only: badge, reason, and every toolbar action disabled", async () => {

@@ -29,6 +29,7 @@ import type { Presentation } from "@proof/language";
 import { LibraryDrawer } from "../library-drawer";
 import { InquiryPanel } from "../inquiry-panel";
 import { GestureTray, useDragGestures } from "../gestures";
+import { recordRecentSession } from "../problem-entry/recent-sessions";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar, movesHref } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
@@ -142,6 +143,11 @@ function StatefulStoredWorkspace({
   }, [session.id, session.operators]);
 
   useEffect(() => void loadHistory(), [loadHistory]);
+
+  // Sessions opened by URL join the home page's recent proofs (a known title is kept).
+  useEffect(() => {
+    recordRecentSession({ id: initialSession.id, title: initialSession.title });
+  }, [initialSession.id, initialSession.title]);
   useEffect(
     () => () => {
       requestGeneration.current += 1;
