@@ -4,6 +4,7 @@
  * other lacks. Each flow returns a discriminated result; rendering stays with the caller.
  */
 import {
+  retrievalWildcardSchema,
   stableIdentifierSchema,
   suggestionIdSchema,
   transitionClassSchema,
@@ -16,6 +17,7 @@ import {
   type ProtocolEnvironment,
 } from "@proof/protocol";
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
+import { resolveProofSelection } from "@proof/selections";
 import { z } from "zod";
 import type { DefinitionCatalog } from "../approved-catalog";
 import { executeTryResultCommand } from "../inquiry-methods";
@@ -27,6 +29,7 @@ import {
   materializeMoveChoice,
   recordDisplayedSuggestionSet,
   recordMovePreview,
+  repositoryFailure,
   type ExecuteProofCommandResult,
   type moveChoiceSchema,
   type MoveRequiresInput,
@@ -64,6 +67,7 @@ export const proofHttpSelectionDescriptorSchema = z.discriminatedUnion("kind", [
       kind: z.literal("exact"),
       anchor: statementAnchorSchema,
       path: operandPathSchema,
+      abstraction: retrievalWildcardSchema.optional(),
     })
     .strict(),
   z
@@ -74,6 +78,7 @@ export const proofHttpSelectionDescriptorSchema = z.discriminatedUnion("kind", [
       startOperand: z.number().int().nonnegative(),
       endOperand: z.number().int().nonnegative(),
       displayRange: displayRangeSchema.optional(),
+      abstraction: retrievalWildcardSchema.optional(),
     })
     .strict()
     .refine(
@@ -209,14 +214,25 @@ export async function recordSuggestions(
   if (loaded.status !== "loaded") return { status: "failed", failure: loaded };
   const index = approvedRetrievalIndex(definitions, loaded.session.operators);
   if (!index.ok) return { status: "invalid-catalog", message: index.message };
+  const abstracting = selections.some(({ abstraction }) => abstraction !== undefined);
+  if (abstracting) {
+    const mismatch = abstractionSortMismatch(loaded.node.state, selections, loaded.session);
+    if (mismatch !== undefined) {
+      return {
+        status: "failed",
+        failure: repositoryFailure("rejected", "suggestion-set-rejected", mismatch),
+      };
+    }
+  }
   const requestSelection =
-    selections.length === 1
+    selections.length === 1 && !abstracting
       ? selections[0]
       : {
           kind: "selection-query" as const,
-          selections: selections.map((selection, position) => ({
+          selections: selections.map(({ abstraction, ...selection }, position) => ({
             id: `selection:request-${position + 1}`,
             selection,
+            ...(abstraction === undefined ? {} : { abstraction }),
           })),
         };
   const recorded = await recordDisplayedSuggestionSet(store, index.index, sessionId, {
@@ -225,6 +241,31 @@ export async function recordSuggestions(
   });
   if (recorded.status !== "committed") return { status: "failed", failure: recorded };
   return { status: "recorded", suggestionSet: recorded.suggestionSet, replayed: recorded.replayed };
+}
+
+/**
+ * An abstraction is retrieval-only and sort-preserving: a proposition wildcard may replace only a
+ * proposition occurrence and a term-sorted wildcard only a term occurrence. Returns the reason an
+ * abstraction does not fit its occurrence, or undefined when every abstraction is well-formed.
+ */
+function abstractionSortMismatch(
+  state: ProofNode["state"],
+  selections: readonly ProofHttpSelectionDescriptor[],
+  session: ProofSession,
+): string | undefined {
+  for (const { abstraction, ...selection } of selections) {
+    if (abstraction === undefined) continue;
+    const resolved = resolveProofSelection(state, selection, { operators: session.operators });
+    if (!resolved.ok) return resolved.diagnostics[0].message;
+    const { role } = resolved.selection.position;
+    if (role === "binder") return "A binder declaration cannot be abstracted for retrieval.";
+    if (abstraction.sort === undefined) continue;
+    const wildcardRole = abstraction.sort.kind === "proposition" ? "proposition" : "term";
+    if (wildcardRole !== role) {
+      return `The abstraction sort (${abstraction.sort.kind}) does not match the selected ${role} occurrence.`;
+    }
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------------------------

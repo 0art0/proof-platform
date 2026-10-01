@@ -1,4 +1,5 @@
 export { DragHandle, GestureTray } from "./gesture-ui";
+export type { AbstractionControls } from "./gesture-ui";
 export { dragReducer, IDLE_DRAG_STATE } from "./drag-state";
 export type { DragAction, DragInput, DragOutcome, DragSource, DragState } from "./drag-state";
 export {

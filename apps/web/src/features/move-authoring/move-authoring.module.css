@@ -1,0 +1,316 @@
+.page {
+  display: grid;
+  gap: 1rem;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem;
+  color: var(--text);
+}
+
+.pageHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.pageHeader h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.pageHeader a {
+  color: var(--accent-text);
+  font-size: 0.85rem;
+}
+
+.panel {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: var(--surface);
+  padding: 0.9rem 1.05rem;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.panel h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.panel p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.error {
+  color: var(--warning-text);
+  font-size: 0.85rem;
+}
+
+.notice {
+  color: var(--accent-text);
+  font-size: 0.85rem;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+}
+
+.fieldGrid input[type="text"],
+.fieldGrid textarea,
+.fieldGrid select,
+.inline select,
+.inline input[type="text"],
+.reviewForm textarea {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface-strong);
+  padding: 0.4rem 0.55rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.fieldGrid textarea,
+.reviewForm textarea {
+  min-height: 4rem;
+  resize: vertical;
+}
+
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.button {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+  padding: 0.4rem 0.75rem;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.button:focus-visible,
+.fieldGrid input:focus-visible,
+.fieldGrid select:focus-visible,
+.fieldGrid textarea:focus-visible,
+.inline select:focus-visible,
+.reviewForm textarea:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.primary {
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+  color: var(--goal-fg);
+}
+
+.list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface-strong);
+  padding: 0.45rem 0.65rem;
+  font-size: 0.85rem;
+}
+
+.item[data-outcome="rejected"] {
+  border-left: 4px solid var(--warning-border);
+}
+
+.item[data-outcome="applied"] {
+  border-left: 4px solid var(--goal-border);
+}
+
+.itemBody {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.badge[data-status="approved"],
+.badge[data-retrievable="true"] {
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+  color: var(--goal-fg);
+}
+
+.badge[data-status="rejected"],
+.badge[data-status="changes-requested"],
+.badge[data-retrievable="false"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.diagnostics {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diagnostic {
+  border-left: 4px solid var(--warning-border);
+  border-radius: 0.3rem;
+  background: var(--warning-bg);
+  padding: 0.35rem 0.6rem;
+  color: var(--warning-text);
+  font-size: 0.82rem;
+}
+
+.diagnostic strong {
+  display: block;
+}
+
+.report {
+  display: grid;
+  gap: 0.35rem;
+  border-left: 4px solid var(--goal-border);
+  border-radius: 0.3rem;
+  background: var(--goal-bg);
+  padding: 0.4rem 0.65rem;
+  color: var(--goal-fg);
+  font-size: 0.85rem;
+}
+
+.reviewForm {
+  display: grid;
+  gap: 0.5rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.reviewForm fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.snapshot {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.revision {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.help {
+  font-size: 0.82rem;
+}
+
+.help summary {
+  width: fit-content;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.help summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.helpBody {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.helpBody p,
+.helpBody ul {
+  margin: 0;
+}
+
+.advice {
+  display: block;
+  margin-top: 0.15rem;
+  font-style: italic;
+}
+
+.example {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.empty {
+  border: 1px dashed var(--border);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}

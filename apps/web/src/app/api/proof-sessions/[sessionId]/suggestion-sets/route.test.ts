@@ -66,6 +66,40 @@ describe("POST /api/proof-sessions/:sessionId/suggestion-sets", () => {
     });
   });
 
+  it("passes a well-formed per-selection abstraction through unchanged", async () => {
+    const abstraction = {
+      id: "wildcard:request-1",
+      symbol: "_a1",
+      role: "retrieval-wildcard",
+      sort: { kind: "proposition" },
+    };
+    const body = { id: "suggestion-set:test", selections: [{ ...descriptor, abstraction }] };
+    mocks.createStoredSuggestionSet.mockResolvedValue({
+      suggestionSet: { id: "suggestion-set:test" },
+      replayed: false,
+      transitionClasses: [],
+    });
+    const incoming = request(body);
+    const response = await POST(incoming, context);
+    expect(response.status).toBe(201);
+    expect(mocks.createStoredSuggestionSet).toHaveBeenCalledExactlyOnceWith("session:test", body, {
+      signal: incoming.signal,
+    });
+  });
+
+  it.each([
+    ["a malformed role", { id: "wildcard:x", symbol: "_a", role: "universal" }],
+    ["extra fields", { id: "wildcard:x", symbol: "_a", role: "retrieval-wildcard", extra: 1 }],
+    ["a malformed id", { id: "not an id", symbol: "_a", role: "retrieval-wildcard" }],
+  ])("rejects an abstraction with %s without reaching the worker", async (_label, abstraction) => {
+    const response = await POST(
+      request({ id: "suggestion-set:test", selections: [{ ...descriptor, abstraction }] }),
+      context,
+    );
+    expect(response.status).toBe(400);
+    expect(mocks.createStoredSuggestionSet).not.toHaveBeenCalled();
+  });
+
   it("returns 200 when the worker replays identical persisted evidence", async () => {
     mocks.createStoredSuggestionSet.mockResolvedValue({
       suggestionSet: { id: "suggestion-set:test" },

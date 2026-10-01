@@ -144,3 +144,54 @@
   background: var(--surface-strong);
   pointer-events: none;
 }
+
+.abstractList {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.abstractItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.abstractOn {
+  margin: 0;
+  border-left: 4px solid var(--accent);
+  padding-left: 0.5rem;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+/* Hidden until the toggle is hovered or focused, but still exposed to assistive technology. */
+.abstractHint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.abstractItem:hover .abstractHint,
+.abstractItem:focus-within .abstractHint {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-style: italic;
+}

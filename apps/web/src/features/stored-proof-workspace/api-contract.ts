@@ -5,6 +5,7 @@ import {
   operatorDeclarationSchema,
   proofCommandReceiptSchema,
   proofNodeIdSchema,
+  retrievalWildcardSchema,
   stableIdentifierSchema as protocolStableIdentifierSchema,
   suggestionIdSchema,
   suggestionSetIdSchema,
@@ -30,7 +31,13 @@ const statementAnchorSchema = z
 
 export const proofSelectionDescriptorSchema = z.discriminatedUnion("kind", [
   z
-    .object({ kind: z.literal("exact"), anchor: statementAnchorSchema, path: operandPathSchema })
+    .object({
+      kind: z.literal("exact"),
+      anchor: statementAnchorSchema,
+      path: operandPathSchema,
+      /** Retrieval-only wildcard for this occurrence; never part of the occurrence itself. */
+      abstraction: retrievalWildcardSchema.optional(),
+    })
     .strict(),
   z
     .object({
@@ -40,6 +47,7 @@ export const proofSelectionDescriptorSchema = z.discriminatedUnion("kind", [
       startOperand: z.number().int().nonnegative(),
       endOperand: z.number().int().nonnegative(),
       displayRange: displayRangeSchema.optional(),
+      abstraction: retrievalWildcardSchema.optional(),
     })
     .strict()
     .refine(

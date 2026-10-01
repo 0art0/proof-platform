@@ -67,6 +67,13 @@ import {
   type SessionLibrary,
   type SessionLibraryEvents,
 } from "../../features/library-drawer/api-contract";
+import {
+  authoredMovesSchema,
+  templateValidationSchema,
+  validateTemplateRequestSchema,
+  type AuthoredMoves,
+  type TemplateValidation,
+} from "../../features/move-authoring/api-contract";
 
 const DEFAULT_PROOF_HTTP_ORIGIN = "http://127.0.0.1:8787";
 const DEFAULT_PROOF_SESSION_ID = "session:development";
@@ -653,6 +660,13 @@ const protocolStructuredFailureSchema = z.union([
     })
     .strict(),
   protocolDiagnosticsResponseSchema,
+  // A refused move-authoring command (N35) also carries the template validation diagnostics.
+  z
+    .object({
+      diagnostics: protocolDiagnosticsResponseSchema.shape.diagnostics,
+      validation: z.array(z.unknown()),
+    })
+    .strict(),
 ]);
 
 /** Send one command envelope, from a human or an agent, to the worker's command service. */
@@ -977,7 +991,7 @@ function suggestionSetMatchesRequest(
     return false;
   }
 
-  if (request.selections.length === 1) {
+  if (request.selections.length === 1 && request.selections[0]?.abstraction === undefined) {
     const descriptor = request.selections[0];
     return (
       descriptor !== undefined &&
@@ -997,7 +1011,8 @@ function suggestionSetMatchesRequest(
     return (
       descriptor !== undefined &&
       subject.id === `selection:request-${index + 1}` &&
-      subject.abstraction === undefined &&
+      // The abstraction is stored exactly as requested (static history).
+      jsonEquals(subject.abstraction ?? null, descriptor.abstraction ?? null) &&
       resolvedSelectionMatchesDescriptor(subject.selection, descriptor)
     );
   });
@@ -1431,6 +1446,54 @@ async function visibilityAnswer(
   const value = await readValidatedEnvelope(response);
   if (response.status !== 200) throw failureForResponse(response.status, value);
   const parsed = sessionVisibilityEnvelopeSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Authored moves (roadmap N35): the worker lists and dry-runs; commands go through the envelope
+// ---------------------------------------------------------------------------------------------
+
+const MAX_AUTHORED_MOVES_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/** Every authored move of the session with its draft revisions, reviews and retrievable state. */
+export async function readAuthoredMoves(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<AuthoredMoves> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/authored-moves`,
+    { method: "GET", ...signalOption(options.signal) },
+  );
+  const value = await readValidatedEnvelope(response, MAX_AUTHORED_MOVES_RESPONSE_BYTES);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = authoredMovesSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+/** Dry-run a move template in the session's environment; nothing is recorded. */
+export async function validateAuthoredMoveTemplate(
+  sessionIdInput: unknown,
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<TemplateValidation> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const request = validateTemplateRequestSchema.safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The template validation request is invalid.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/authored-moves/validate`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response, MAX_AUTHORED_MOVES_RESPONSE_BYTES);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = templateValidationSchema.safeParse(value);
   if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
   return parsed.data;
 }

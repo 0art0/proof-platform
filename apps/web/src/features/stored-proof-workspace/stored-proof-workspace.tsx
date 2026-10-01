@@ -14,8 +14,16 @@ import {
   type ProofEdge,
   type ProofNode,
 } from "@proof/protocol";
-import type { AnchoredProofSelection } from "@proof/selections";
+import { resolveProofSelection, type AnchoredProofSelection } from "@proof/selections";
 import { ProofWorkspace, type WorkspaceView } from "../proof-workspace";
+import {
+  EMPTY_ABSTRACT_SELECTION_STATE,
+  abstractSelectionReducer,
+  abstractionForRole,
+  isSelectionAbstract,
+  type AbstractSelectionAction,
+  type AbstractSelectionState,
+} from "../proof-workspace/selection-state";
 import { StatementView, usePresentation } from "../proof-workspace/presentation";
 import type { Presentation } from "@proof/language";
 import { LibraryDrawer } from "../library-drawer";
@@ -89,6 +97,11 @@ function StatefulStoredWorkspace({
   const readOnly = initialSession.readOnly === true;
   const [view, setView] = useState<WorkspaceView>("formal");
   const [selections, setSelections] = useState<readonly AnchoredProofSelection[]>([]);
+  // Selections marked abstract: a retrieval-only flag, mirrored in a ref for synchronous reads.
+  const [abstractKeys, setAbstractKeys] = useState<AbstractSelectionState>(
+    EMPTY_ABSTRACT_SELECTION_STATE,
+  );
+  const abstractRef = useRef<AbstractSelectionState>(EMPTY_ABSTRACT_SELECTION_STATE);
   const presentation = usePresentation(session.operators);
   const requestGeneration = useRef(0);
   const actionGeneration = useRef(0);
@@ -107,6 +120,11 @@ function StatefulStoredWorkspace({
     ((selections: readonly AnchoredProofSelection[]) => void) | undefined
   >(undefined);
   const resetDrag = useRef<(() => void) | undefined>(undefined);
+
+  const updateAbstract = useCallback((action: AbstractSelectionAction) => {
+    abstractRef.current = abstractSelectionReducer(abstractRef.current, action);
+    setAbstractKeys(abstractRef.current);
+  }, []);
 
   const loadHistory = useCallback(async () => {
     const generation = ++historyGeneration.current;
@@ -142,8 +160,9 @@ function StatefulStoredWorkspace({
     setSuggestions({ kind: "idle" });
     setMoveState({ kind: "idle" });
     setSelections([]);
+    updateAbstract({ type: "clear" });
     resetDrag.current?.();
-  }, []);
+  }, [updateAbstract]);
 
   /** Record that the shown preview was left without being applied. */
   const rejectShownPreview = useCallback(
@@ -165,6 +184,7 @@ function StatefulStoredWorkspace({
     (selections: readonly AnchoredProofSelection[]) => {
       if (mutationPendingRef.current) return;
       setSelections(selections);
+      updateAbstract({ type: "retain", selections });
       notifyDragSelection.current?.(selections);
       // The workspace of a newly committed snapshot reports its empty selection once it mounts.
       // Nothing changed, so keep the notice of the apply or backtrack that produced it.
@@ -197,7 +217,17 @@ function StatefulStoredWorkspace({
       }
       const request = suggestionRequestSchema.safeParse({
         id: suggestionSetId(node.state.id, generation),
-        selections: selections.map(toDescriptor),
+        selections: selections.map((selection, position) =>
+          toDescriptor(
+            selection,
+            isSelectionAbstract(abstractRef.current, selection)
+              ? abstractionForRole(
+                  position,
+                  selectionRole(node.state, session.operators, selection),
+                )
+              : undefined,
+          ),
+        ),
       });
       if (!request.success) {
         setSuggestions({
@@ -216,7 +246,8 @@ function StatefulStoredWorkspace({
       recordInteraction({
         kind: "selection-changed",
         nodeId: node.id,
-        selections: request.data.selections,
+        // Abstraction is retrieval-only; the recorded selection is always the concrete occurrence.
+        selections: selections.map((selection) => toDescriptor(selection)),
       });
       recordInteraction({
         kind: "suggestions-requested",
@@ -258,7 +289,34 @@ function StatefulStoredWorkspace({
         });
       });
     },
-    [node.id, node.state.id, recordInteraction, rejectShownPreview, session.id],
+    [
+      node.id,
+      node.state,
+      recordInteraction,
+      rejectShownPreview,
+      session.id,
+      session.operators,
+      updateAbstract,
+    ],
+  );
+
+  /** "Abstract this selection": flip the flag and re-request suggestions; nothing else changes. */
+  const toggleAbstract = useCallback(
+    (selection: AnchoredProofSelection) => {
+      updateAbstract({ type: "toggle", selection });
+      handleSelectionChange(selections);
+    },
+    [handleSelectionChange, selections, updateAbstract],
+  );
+  const abstraction = useMemo(
+    () => ({
+      abstractKeys,
+      roleOf: (selection: AnchoredProofSelection) =>
+        selectionRole(node.state, session.operators, selection),
+      toggle: toggleAbstract,
+      disabled: mutationPending,
+    }),
+    [abstractKeys, mutationPending, node.state, session.operators, toggleAbstract],
   );
 
   const commandIdFor = useCallback(
@@ -565,7 +623,13 @@ function StatefulStoredWorkspace({
         readOnly={readOnly}
         breadcrumb={breadcrumb}
       />
-      <WorkspaceToolbar view={view} onViewChange={setView} sessionId={session.id} node={node}>
+      <WorkspaceToolbar
+        view={view}
+        onViewChange={setView}
+        sessionId={session.id}
+        node={node}
+        readOnly={readOnly}
+      >
         <ToolbarActionBar
           sessionId={session.id}
           readOnly={readOnly}
@@ -591,7 +655,12 @@ function StatefulStoredWorkspace({
           {notice.message}
         </p>
       ) : null}
-      <GestureTray bindings={drag.bindings} selections={selections} view={view} />
+      <GestureTray
+        bindings={drag.bindings}
+        selections={selections}
+        view={view}
+        abstraction={abstraction}
+      />
       <div
         className={styles.interactionShell}
         data-busy={mutationPending}
@@ -752,10 +821,25 @@ function HistoryNodeLabel({
   );
 }
 
-function toDescriptor(selection: AnchoredProofSelection): ProofSelectionDescriptor {
+/** The role of the selected occurrence (proposition, term or binder), or undefined if unresolved. */
+function selectionRole(
+  state: ProofNode["state"],
+  operators: readonly OperatorDeclaration[],
+  selection: AnchoredProofSelection,
+): "proposition" | "term" | "binder" | undefined {
+  const resolved = resolveProofSelection(state, selection, { operators });
+  return resolved.ok ? resolved.selection.position.role : undefined;
+}
+
+function toDescriptor(
+  selection: AnchoredProofSelection,
+  abstraction?: ProofSelectionDescriptor["abstraction"],
+): ProofSelectionDescriptor {
+  const retrievalOnly = abstraction === undefined ? {} : { abstraction };
   return selection.kind === "exact"
-    ? { kind: "exact", anchor: selection.anchor, path: [...selection.path] }
+    ? { kind: "exact", anchor: selection.anchor, path: [...selection.path], ...retrievalOnly }
     : {
+        ...retrievalOnly,
         kind: "associative",
         anchor: selection.anchor,
         containerPath: [...selection.containerPath],

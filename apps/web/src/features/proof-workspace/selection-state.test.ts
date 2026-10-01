@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AnchoredProofSelection, StatementAnchor } from "@proof/selections";
 import {
+  EMPTY_ABSTRACT_SELECTION_STATE,
   EMPTY_SELECTION_GESTURE_STATE,
+  abstractSelectionReducer,
+  abstractionForRole,
   describeSelectionFeedback,
+  isSelectionAbstract,
   proofSelectionKey,
   selectionGestureReducer,
   selectionsOverlap,
@@ -263,5 +267,74 @@ describe("selection overlap", () => {
     expect(selectionsOverlap(exact("goal:left", [0]), exact("goal:left", [0, 1]))).toBe(true);
     expect(selectionsOverlap(exact("goal:left", [0]), exact("goal:left", [1]))).toBe(false);
     expect(selectionsOverlap(exact("goal:left", []), exact("goal:right", []))).toBe(false);
+  });
+});
+
+describe("abstract selection flags", () => {
+  const first = exact("goal:left", [0]);
+  const second = exact("goal:left", [1]);
+
+  it("toggles one occurrence on and off without touching the others", () => {
+    const on = abstractSelectionReducer(EMPTY_ABSTRACT_SELECTION_STATE, {
+      type: "toggle",
+      selection: first,
+    });
+    expect(isSelectionAbstract(on, first)).toBe(true);
+    expect(isSelectionAbstract(on, second)).toBe(false);
+    const both = abstractSelectionReducer(on, { type: "toggle", selection: second });
+    expect(both).toHaveLength(2);
+    const off = abstractSelectionReducer(both, { type: "toggle", selection: first });
+    expect(isSelectionAbstract(off, first)).toBe(false);
+    expect(isSelectionAbstract(off, second)).toBe(true);
+  });
+
+  it("is order-independent so equal flag sets compare by value", () => {
+    const ab = [first, second].reduce<readonly string[]>(
+      (state, selection) => abstractSelectionReducer(state, { type: "toggle", selection }),
+      EMPTY_ABSTRACT_SELECTION_STATE,
+    );
+    const ba = [second, first].reduce<readonly string[]>(
+      (state, selection) => abstractSelectionReducer(state, { type: "toggle", selection }),
+      EMPTY_ABSTRACT_SELECTION_STATE,
+    );
+    expect(ab).toEqual(ba);
+  });
+
+  it("retains flags only for occurrences that are still selected", () => {
+    const both = [first, second].reduce<readonly string[]>(
+      (state, selection) => abstractSelectionReducer(state, { type: "toggle", selection }),
+      EMPTY_ABSTRACT_SELECTION_STATE,
+    );
+    const kept = abstractSelectionReducer(both, { type: "retain", selections: [second] });
+    expect(isSelectionAbstract(kept, first)).toBe(false);
+    expect(isSelectionAbstract(kept, second)).toBe(true);
+    expect(abstractSelectionReducer(kept, { type: "retain", selections: [second] })).toBe(kept);
+    expect(abstractSelectionReducer(kept, { type: "retain", selections: [] })).toEqual([]);
+  });
+
+  it("clears every flag and keeps the empty state referentially stable", () => {
+    const on = abstractSelectionReducer(EMPTY_ABSTRACT_SELECTION_STATE, {
+      type: "toggle",
+      selection: first,
+    });
+    expect(abstractSelectionReducer(on, { type: "clear" })).toEqual([]);
+    expect(abstractSelectionReducer(EMPTY_ABSTRACT_SELECTION_STATE, { type: "clear" })).toBe(
+      EMPTY_ABSTRACT_SELECTION_STATE,
+    );
+  });
+
+  it("builds sort-preserving wildcards and refuses binders", () => {
+    expect(abstractionForRole(0, "proposition")).toEqual({
+      id: "wildcard:request-1",
+      symbol: "_a1",
+      role: "retrieval-wildcard",
+      sort: { kind: "proposition" },
+    });
+    expect(abstractionForRole(1, "term")).toEqual({
+      id: "wildcard:request-2",
+      symbol: "_a2",
+      role: "retrieval-wildcard",
+    });
+    expect(abstractionForRole(0, "binder")).toBeUndefined();
   });
 });
