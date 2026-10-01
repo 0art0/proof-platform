@@ -5,8 +5,7 @@ import { COMMAND, currentNodeId, selectInAnyField } from "./mouse-helpers";
 test.slow();
 
 // Roadmap N33 (design plan §8.3): dragging a hypothesis onto a goal shows a preview first, and
-// only the existing Apply commits. Abstraction is not covered: the proof-session HTTP boundary
-// does not accept an abstraction on suggestion requests yet.
+// only the existing Apply commits. Abstracting a selection (below) changes retrieval only.
 
 const DRAFT: IsolatedDraft = {
   problem: { title: "Commute a conjunction", statement: "From p and q, show q and p." },
@@ -83,5 +82,37 @@ test("the keyboard can pick up a hypothesis and drop it on the selected goal", a
   await expect(page.getByTestId("carrying")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("carrying")).toHaveCount(0);
+  expect(await currentNodeId(page)).toBe(rootId);
+});
+
+test("abstracting a selection asks retrieval for abstraction matches without touching the proof", async ({
+  page,
+}) => {
+  await openFreshSession(page);
+  const rootId = await currentNodeId(page);
+  await selectInAnyField(page.getByLabel("Goal 1 conclusion"), ["And", "q", "p"]);
+  const toggle = page.getByRole("button", { name: "Abstract this selection" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false", COMMAND);
+  await expect(page.locator('[data-badge="match"][data-match="abstraction"]')).toHaveCount(0);
+
+  // Keyboard-operable: the toggle is a real button.
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true", COMMAND);
+  await expect(page.getByTestId("abstraction-indicator")).toContainText(
+    "Abstract (any proposition): used for retrieval only",
+  );
+  const badge = page.locator('[data-badge="match"][data-match="abstraction"]').first();
+  await expect(badge).toBeVisible(COMMAND);
+  await expect(badge).toContainText("Abstraction");
+  // An abstraction-backed suggestion needs concrete input: it cannot be previewed or applied.
+  const card = page.locator("li[data-applicability]", { has: badge }).first();
+  await expect(card.getByRole("button", { name: "Preview" })).toBeDisabled();
+  expect(await currentNodeId(page)).toBe(rootId);
+
+  // Turning it off restores the concrete suggestions.
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false", COMMAND);
+  await expect(page.locator('[data-badge="match"][data-match="abstraction"]')).toHaveCount(0);
   expect(await currentNodeId(page)).toBe(rootId);
 });

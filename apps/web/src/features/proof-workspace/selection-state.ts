@@ -1,3 +1,5 @@
+import { retrievalWildcardSchema } from "@proof/protocol";
+import type { z } from "zod";
 import {
   isOperandPathPrefix,
   parentOperandPath,
@@ -141,6 +143,62 @@ export function selectionGestureReducer(
       ...fallback,
     },
   };
+}
+
+/**
+ * The selections the user marked "abstract": a retrieval-only flag kept beside, never inside, the
+ * selection set. It is a sorted list of `proofSelectionKey`s so equal states compare by value.
+ */
+export type AbstractSelectionState = readonly string[];
+
+export type AbstractSelectionAction =
+  | Readonly<{ type: "toggle"; selection: AnchoredProofSelection }>
+  /** A selection change keeps the flag only for occurrences that are still selected. */
+  | Readonly<{ type: "retain"; selections: readonly AnchoredProofSelection[] }>
+  | Readonly<{ type: "clear" }>;
+
+export const EMPTY_ABSTRACT_SELECTION_STATE: AbstractSelectionState = Object.freeze([]);
+
+export function abstractSelectionReducer(
+  state: AbstractSelectionState,
+  action: AbstractSelectionAction,
+): AbstractSelectionState {
+  if (action.type === "clear") {
+    return state.length === 0 ? state : EMPTY_ABSTRACT_SELECTION_STATE;
+  }
+  if (action.type === "retain") {
+    const selected = new Set(action.selections.map(proofSelectionKey));
+    const kept = state.filter((key) => selected.has(key));
+    return kept.length === state.length ? state : kept;
+  }
+  const key = proofSelectionKey(action.selection);
+  return state.includes(key) ? state.filter((entry) => entry !== key) : [...state, key].sort();
+}
+
+export function isSelectionAbstract(
+  state: AbstractSelectionState,
+  selection: AnchoredProofSelection,
+): boolean {
+  return state.includes(proofSelectionKey(selection));
+}
+
+/**
+ * The typed wildcard for an abstract selection at request position `position` (0-based). It
+ * preserves the occurrence's sort where it is knowable: a proposition occurrence is abstracted by
+ * a proposition wildcard; a term keeps an unsorted wildcard because the selection does not carry
+ * the term's sort. A binder declaration, or an unresolved occurrence, cannot be abstracted.
+ */
+export function abstractionForRole(
+  position: number,
+  role: "proposition" | "term" | "binder" | undefined,
+): z.infer<typeof retrievalWildcardSchema> | undefined {
+  if (role === undefined || role === "binder") return undefined;
+  return retrievalWildcardSchema.parse({
+    id: `wildcard:request-${position + 1}`,
+    symbol: `_a${position + 1}`,
+    role: "retrieval-wildcard",
+    ...(role === "proposition" ? { sort: { kind: "proposition" } } : {}),
+  });
 }
 
 const OUTCOME_MESSAGES: Readonly<Record<SelectionGestureOutcome, string>> = Object.freeze({

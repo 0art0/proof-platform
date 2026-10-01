@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, type DragEvent, type KeyboardEvent } from "react";
 import { formatOperandPath, type AnchoredProofSelection } from "@proof/selections";
+import {
+  isSelectionAbstract,
+  type AbstractSelectionState,
+} from "../proof-workspace/selection-state";
 import type { DragSource } from "./drag-state";
 import { dragSourceForSelection, dragSourceKey } from "./drop-resolution";
 import type { GestureBindings } from "./use-drag-gestures";
@@ -89,11 +93,65 @@ const SOURCE_NAMES = {
   result: "Result",
 } as const;
 
+/**
+ * Abstract-selection controls (roadmap N33). An abstract selection becomes a typed wildcard for
+ * retrieval only: it never changes the stored occurrence, the preview, or what Apply commits.
+ */
+export type AbstractionControls = Readonly<{
+  abstractKeys: AbstractSelectionState;
+  /** The occurrence role, or undefined while unknown; a binder declaration cannot be abstracted. */
+  roleOf: (selection: AnchoredProofSelection) => "proposition" | "term" | "binder" | undefined;
+  toggle: (selection: AnchoredProofSelection) => void;
+  disabled: boolean;
+}>;
+
+function AbstractionToggles({
+  controls,
+  selections,
+}: Readonly<{ controls: AbstractionControls; selections: readonly AnchoredProofSelection[] }>) {
+  if (selections.length === 0) return null;
+  return (
+    <ul className={styles.abstractList} aria-label="Abstract selections" data-testid="abstraction">
+      {selections.map((selection, index) => {
+        const abstract = isSelectionAbstract(controls.abstractKeys, selection);
+        const role = controls.roleOf(selection);
+        const binder = role === "binder";
+        const name = selections.length === 1 ? "this selection" : `selection ${index + 1}`;
+        return (
+          <li key={JSON.stringify(selection)} className={styles.abstractItem}>
+            <button
+              type="button"
+              className={styles.trayButton}
+              aria-pressed={abstract}
+              disabled={controls.disabled || binder}
+              data-abstract-toggle={abstract ? "on" : "off"}
+              onClick={() => controls.toggle(selection)}
+            >
+              Abstract {name}
+            </button>
+            <span
+              className={abstract ? styles.abstractOn : styles.help}
+              data-testid="abstraction-indicator"
+            >
+              {binder
+                ? "A binder declaration cannot be abstracted."
+                : abstract
+                  ? `Abstract (${role === "proposition" ? "any proposition" : "any term"}): used for retrieval only. Previews and Apply use the concrete selection.`
+                  : "Concrete: retrieval matches this exact occurrence."}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export type GestureTrayProps = Readonly<{
   bindings: GestureBindings;
   /** The active selections: a single one can be dragged, picked up, or be the drop target. */
   selections: readonly AnchoredProofSelection[];
   view: "formal" | "natural-language";
+  abstraction?: AbstractionControls;
 }>;
 
 /**
@@ -101,7 +159,7 @@ export type GestureTrayProps = Readonly<{
  * dragged or picked up; once something is carried, "Drop on selection" drops it on the single
  * active selection. Every drop only produces a preview.
  */
-export function GestureTray({ bindings, selections, view }: GestureTrayProps) {
+export function GestureTray({ bindings, selections, view, abstraction }: GestureTrayProps) {
   const { state, carrying } = bindings;
   const only = selections.length === 1 ? selections[0] : undefined;
 
@@ -160,6 +218,9 @@ export function GestureTray({ bindings, selections, view }: GestureTrayProps) {
           Cancel drag
         </button>
       </div>
+      {abstraction === undefined ? null : (
+        <AbstractionToggles controls={abstraction} selections={selections} />
+      )}
       {/* A fixed-height area: cues that appear at pick-up must not shift the page under a drag. */}
       <div className={styles.statusArea}>
         {carrying === undefined ? null : (

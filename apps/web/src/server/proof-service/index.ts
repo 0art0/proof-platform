@@ -977,7 +977,7 @@ function suggestionSetMatchesRequest(
     return false;
   }
 
-  if (request.selections.length === 1) {
+  if (request.selections.length === 1 && request.selections[0]?.abstraction === undefined) {
     const descriptor = request.selections[0];
     return (
       descriptor !== undefined &&
@@ -997,7 +997,8 @@ function suggestionSetMatchesRequest(
     return (
       descriptor !== undefined &&
       subject.id === `selection:request-${index + 1}` &&
-      subject.abstraction === undefined &&
+      // The abstraction is stored exactly as requested (static history).
+      jsonEquals(subject.abstraction ?? null, descriptor.abstraction ?? null) &&
       resolvedSelectionMatchesDescriptor(subject.selection, descriptor)
     );
   });

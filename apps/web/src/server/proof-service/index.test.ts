@@ -456,6 +456,88 @@ describe("proof-service adapter", () => {
     ).rejects.toMatchObject({ code: "invalid_upstream_response" });
   });
 
+  it("forwards an abstraction and requires the stored set to record exactly that abstraction", async () => {
+    const abstraction = {
+      id: "wildcard:request-1",
+      symbol: "_a1",
+      role: "retrieval-wildcard",
+      sort: { kind: "proposition" },
+    } as const;
+    const resolved = suggestionSet.selection;
+    if (resolved.kind === "selection-query") throw new Error("Expected an exact fixture.");
+    const abstractSet = (stored: unknown) =>
+      displayedSuggestionSetSchema.parse({
+        ...suggestionSet,
+        id: "suggestion-set:abstract",
+        selection: {
+          kind: "selection-query",
+          stateId: STATE_ID,
+          selections: [
+            {
+              id: "selection:request-1",
+              selection: resolved,
+              ...(stored === undefined ? {} : { abstraction: stored }),
+            },
+          ],
+        },
+      });
+    const request = {
+      id: "suggestion-set:abstract",
+      selections: [{ ...exactDescriptor, abstraction }],
+    };
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          { suggestionSet: abstractSet(abstraction), replayed: false, transitionClasses: [] },
+          201,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(createStoredSuggestionSet(SESSION_ID, request)).resolves.toMatchObject({
+      replayed: false,
+    });
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual(request);
+
+    for (const stored of [undefined, { ...abstraction, symbol: "_other" }]) {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse(
+              { suggestionSet: abstractSet(stored), replayed: false, transitionClasses: [] },
+              201,
+            ),
+          ),
+      );
+      await expect(createStoredSuggestionSet(SESSION_ID, request)).rejects.toMatchObject({
+        code: "invalid_upstream_response",
+      });
+    }
+
+    // A set recording an abstraction nobody requested is also refused.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { suggestionSet: abstractSet(abstraction), replayed: false, transitionClasses: [] },
+            201,
+          ),
+        ),
+    );
+    await expect(
+      createStoredSuggestionSet(SESSION_ID, {
+        id: "suggestion-set:abstract",
+        selections: [exactDescriptor],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_upstream_response" });
+  });
+
   it.each([
     ["suggestion-set ID", { ...suggestionSet, id: "suggestion-set:other" }],
     ["state identity", { ...suggestionSet, stateId: "state:other" }],

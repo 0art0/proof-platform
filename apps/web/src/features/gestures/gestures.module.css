@@ -144,3 +144,28 @@
   background: var(--surface-strong);
   pointer-events: none;
 }
+
+.abstractList {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.abstractItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.abstractOn {
+  margin: 0;
+  border-left: 4px solid var(--accent);
+  padding-left: 0.5rem;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
