@@ -313,10 +313,10 @@ otherwise automate — the substrate is in scope.
 - [x] **N32 Library drawer (§17.1).** Add a drawer with layers, search/filter by kind and domain,
       artifact detail views (statement, premises, directions, variants, provenance, approval), and addition
       events.
-- [~] **N33 Abstraction and drag gestures (§8.3).** Add an abstract-selection gesture that turns a selection
-  into a typed wildcard for retrieval only. Add drag gestures that show a preview before commit:
-  result → expression (deep apply/rewrite), hypothesis → goal (use/specialize/rewrite), and term →
-  binder or argument slot (instantiate).
+- [x] **N33 Abstraction and drag gestures (§8.3).** Add an abstract-selection gesture that turns a selection
+      into a typed wildcard for retrieval only. Add drag gestures that show a preview before commit:
+      result → expression (deep apply/rewrite), hypothesis → goal (use/specialize/rewrite), and term →
+      binder or argument slot (instantiate).
 - [x] **N34 Inquiry and construction panels (refinement §10).** Add a compact inquiry panel (active
       objective, current attempt, unresolved constructions, top obstruction or requirement) and the actions
       "Use this", "Construct an object", "Find sufficient conditions", "Investigate this hypothesis", and
@@ -936,3 +936,31 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     web proxy (`suggestionSetMatchesRequest` requires `abstraction === undefined`) and the web request
     schema reject a per-selection `abstraction`. Term and result drops are covered by component tests
     only. Drop resolution hard-codes the slot ids `target`/`occurrence` and `term`/`witness`.
+- 2026-10-01 — N33 (abstract-selection gesture; N33 complete) — `ae9bc19`, `237f7df` — the
+  suggestion-request boundary accepts an optional per-selection `abstraction` (`retrievalWildcardSchema`)
+  in the worker descriptor schema, the web `proofSelectionDescriptorSchema` and the proxy. The worker
+  rejects a sort-mismatched or binder abstraction (400 `suggestion-set-rejected`). An abstract request is
+  recorded as a `selection-query` with the wildcard stored exactly as requested, and
+  `suggestionSetMatchesRequest` requires the stored abstraction to equal the requested one. Web:
+  `abstractSelectionReducer` keeps the abstract flag beside (never inside) the selection, pruned when the
+  selection changes. The gestures tray has a keyboard-operable "Abstract this selection" toggle with a
+  plain-language hover/focus hint, an indicator saying that only the search changes, and reasons when
+  disabled. Preview and apply bodies never carry an abstraction.
+  - Gaps: abstraction-backed cards are `requires-input` and not previewable (the user must turn
+    abstraction off to act). Term wildcards are unsorted until selections expose term sorts. A drop onto a
+    still-abstract selection finds no applicable suggestion.
+- 2026-10-01 — N35 (editor UI; macro application still open) — `aed2407` — web proxies `GET
+/api/proof-sessions/[id]/authored-moves` and `POST .../authored-moves/validate`, and a page
+  `/sessions/[id]/moves` linked from the toolbar ("Author moves", disabled for read-only sessions). The
+  editor is built only from stored data: a single step or macro is derived from a recorded path
+  (`deriveSemanticStep`, `macroFromSemanticSteps`; a single step drops its recorded selections so it
+  generalises), or a draft starts from one primitive operation. Patterns come from occurrences selected in
+  a stored snapshot; positive examples are recorded paths with the same plan (`recordedMacroExample`);
+  negative examples are clicked selections assigned to slots. Validation shows diagnostics beside the
+  fields and examples. Drafts are saved and reviewed through `author-move-draft`/`review-move-draft`; the
+  revisions list shows recorded reviews and the retrievable state. Written for newcomers: numbered steps,
+  hints, collapsed help, explained empty states and disabled buttons, no modals. E2E: author from two
+  recorded splits, validate, save, approve, then offered as a suggestion.
+  - Gaps: multi-step macros are still not applicable (N35 backend gap). Macro capture is tested only with
+    a fabricated two-step path. Example menu choices come only from recorded steps. The 64 KiB
+    protocol-commands proxy limit could refuse a draft with many large example states.
