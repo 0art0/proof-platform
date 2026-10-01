@@ -407,7 +407,11 @@ test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw 
   await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
 
-  await expect(page.getByRole("heading", { level: 1, name: "session:development" })).toBeVisible();
+  // The header names the problem (the stored title) and keeps the session ID as its eyebrow.
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Duplicated conjunction" }),
+  ).toBeVisible();
+  await expect(page.getByText("session:development", { exact: true })).toBeVisible();
   await expect(page.getByTestId("snapshot-status")).toHaveText(
     /Snapshot targets:\s*Open: 1 goal, 1 obligation/,
   );
