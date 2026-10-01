@@ -70,7 +70,12 @@ export function StartPanel({
 
   const nodeLabel = (id: string) => {
     const record = incoming.get(id);
-    return record === undefined ? `${id} (root)` : `${id} — after “${record.name}”`;
+    if (record === undefined) return "The very start";
+    // Several steps can share a name; the position tells them apart without showing an ID.
+    const same = nodes.filter(({ id: other }) => incoming.get(other)?.name === record.name);
+    return same.length > 1
+      ? `After “${record.name}” (#${same.findIndex((node) => node.id === id) + 1})`
+      : `After “${record.name}”`;
   };
 
   const startFromPath = () => {
@@ -109,7 +114,8 @@ export function StartPanel({
         </p>
         <p>
           One step becomes a suggestion in the workspace once it is approved. A run of several steps
-          becomes a macro: it is stored and approved the same way, and you apply it with Replay.
+          becomes a macro: it is stored and approved the same way, and is then offered as one
+          suggestion that applies every step in a row (Preview shows what each step does).
         </p>
       </Help>
       <h3>From a recorded path</h3>
@@ -184,8 +190,10 @@ export function StartPanel({
       )}
       <h3>From one basic operation</h3>
       <Hint>
-        Prefer this when you have not done the step yet. You still add examples from steps you
-        record later.
+        Prefer this when you have not done the step yet. A kernel operation is one of the basic
+        proof steps the platform already trusts, such as splitting a conjunction; your move starts
+        as that step (the “primitive”) and you add your own pattern and examples. You still add
+        examples from steps you record later.
       </Hint>
       <div className={styles.inline}>
         <label htmlFor={primitiveId}>Kernel operation</label>

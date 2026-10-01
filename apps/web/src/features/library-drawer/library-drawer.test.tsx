@@ -146,10 +146,26 @@ describe("LibraryDrawer", () => {
     expect(within(detail).getByText("No premises.")).toBeInTheDocument();
   });
 
+  it("calls the origin of an entry its origin and the events tab what was recently added", async () => {
+    stubFetch();
+    await openDrawer();
+    fireEvent.click(screen.getByRole("button", { name: /^Contrapositive/ }));
+    const detail = screen.getByRole("article", { name: "Contrapositive details" });
+    expect(within(detail).getByText("Origin")).toBeInTheDocument();
+    expect(within(detail).queryByText("Provenance")).toBeNull();
+    // The catalog an entry sits in keeps its own, different, label.
+    expect(within(detail).getByText("Source")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "← Back to list" }));
+    expect(screen.getByRole("button", { name: /Recently added \(2\)/ })).toHaveAttribute(
+      "title",
+      expect.stringContaining("added to this session"),
+    );
+  });
+
   it("lists addition events, with diagnostics for rejections", async () => {
     stubFetch();
     await openDrawer();
-    fireEvent.click(screen.getByRole("button", { name: /Addition events \(2\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Recently added \(2\)/ }));
     const events = screen.getByRole("list", { name: "Addition events" });
     const [admitted, rejected] = within(events).getAllByRole("listitem");
     expect(admitted).toHaveAttribute("data-decision", "admitted");
@@ -172,7 +188,7 @@ describe("LibraryDrawer", () => {
     });
     await openDrawer();
     expect(screen.getByText(/Read-only session/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Addition events \(0\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Recently added \(0\)/ }));
     expect(screen.getByText("No additions were recorded.")).toBeInTheDocument();
   });
 

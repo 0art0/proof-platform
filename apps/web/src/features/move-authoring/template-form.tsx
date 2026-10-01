@@ -191,7 +191,8 @@ export function TemplateForm({
         <h3>What the move does (plan)</h3>
         <Hint>
           The kernel operations the move performs, in order. One step becomes a suggestion in the
-          workspace; several steps make a macro that is replayed as a unit.
+          workspace; several steps make a macro, offered as one suggestion that applies all of its
+          steps in a row.
         </Hint>
         <ol className={styles.list}>
           {plan.map((step) => (

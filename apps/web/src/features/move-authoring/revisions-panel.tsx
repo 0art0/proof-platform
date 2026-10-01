@@ -27,6 +27,8 @@ export function reviewNotesRequired(decision: ReviewDecision): boolean {
 }
 
 export type RevisionsPanelProps = Readonly<{
+  /** Number the heading as the last step; false while no draft is being edited above. */
+  numbered?: boolean | undefined;
   sessionId: string;
   moves: readonly AuthoredMoveSummary[];
   /** Why drafts cannot be reviewed (a read-only session), if so. */
@@ -42,6 +44,7 @@ export type RevisionsPanelProps = Readonly<{
  * approved version is retrievable, and a review form for revisions still awaiting a decision.
  */
 export function RevisionsPanel({
+  numbered = true,
   sessionId,
   moves,
   disabledReason,
@@ -50,11 +53,11 @@ export function RevisionsPanel({
 }: RevisionsPanelProps) {
   return (
     <section className={styles.panel} aria-label="Authored moves">
-      <h2>6. Review and approve</h2>
+      <h2>{numbered ? "6. Review and approve" : "Review and approve saved moves"}</h2>
       <Hint>
         A saved draft is never offered as a suggestion. A reviewer approves it, rejects it, or asks
-        for changes; the decision and notes are recorded. Only an approved one-step move appears as
-        a suggestion in the workspace.
+        for changes; the decision and notes are recorded. Only an approved move (one step, or a
+        macro of several) appears as a suggestion in the workspace.
       </Hint>
       <Help summary="What happens after approval?">
         <p>
@@ -87,7 +90,7 @@ export function RevisionsPanel({
                   ? "Retrievable: offered as a suggestion"
                   : move.activeArtifactId === undefined
                     ? "Not retrievable: no approved version"
-                    : "Approved but not retrievable (a multi-step macro)"}
+                    : "Approved but not offered as a suggestion"}
               </span>
             </div>
             <ol className={styles.list}>
@@ -189,7 +192,7 @@ function ReviewForm({
         ? `Approved revision ${revision.revision} of ${moveId}; ${
             outcome.result.retrievable
               ? "it is now offered as a suggestion."
-              : "it is stored but not offered as a suggestion (multi-step macro)."
+              : "it is stored but cannot be offered as a suggestion."
           }`
         : `${DECISION_LABELS[outcome.result.decision]} recorded for revision ${revision.revision} of ${moveId}.`,
     );
