@@ -13,6 +13,7 @@ import {
   type Actor,
   type DisplayedSuggestionSet,
   type MovePreview,
+  type PrepareProofCommandSuccess,
   type ProofNode,
   type ProtocolEnvironment,
 } from "@proof/protocol";
@@ -24,6 +25,7 @@ import { executeTryResultCommand } from "../inquiry-methods";
 import type { LibraryStore } from "../library-repository";
 import {
   derivedMoveRecordIds,
+  executeMacroPreview,
   executeProofCommand,
   loadCurrentProofSession,
   materializeMoveChoice,
@@ -155,6 +157,8 @@ export function repositoryFailureStatus(
   if (CONFLICT.has(code)) return 409;
   if (code === "backtrack-symbols-unavailable") return 422;
   if (MOVE_AUTHORING_INVALID.has(code)) return 422;
+  // A later macro step failed to re-match or apply: the request is well-formed, nothing was written.
+  if (code === "macro-step-failed") return 422;
   if (REJECTED.has(code)) return 400;
   return 500;
 }
@@ -171,7 +175,8 @@ export function approvedRetrievalIndex(
   const result = createRetrievalIndex(
     {
       results: catalog.results,
-      moves: definitions.moves,
+      // A macro is retrieved by its first step's contract; later steps re-match at preview time.
+      moves: [...definitions.moves, ...(definitions.macros ?? []).map(({ move }) => move)],
       variantFamilies: catalog.variantFamilies,
     },
     { operators },
@@ -185,16 +190,20 @@ export function transitionClassesFor(
   definitions: DefinitionCatalog,
   suggestionSet: z.infer<typeof displayedSuggestionSetSchema>,
 ): readonly z.infer<typeof proofHttpTransitionClassificationSchema>[] {
-  const moves = new Map<string, DefinitionCatalog["moves"][number]>(
-    definitions.moves.map((move) => [move.id, move]),
-  );
+  // A macro's class is the one composed from its steps, not its first primitive's.
+  const classes = new Map<string, z.infer<typeof transitionClassSchema>>([
+    ...definitions.moves.map((move) => [move.id, move.transitionClass] as const),
+    ...(definitions.macros ?? []).map(
+      ({ move, template }) => [move.id, template.transitionClass] as const,
+    ),
+  ]);
   return suggestionSet.suggestions.flatMap((suggestion) => {
     if (suggestion.source !== "move") return [];
-    const move = moves.get(suggestion.artifactId);
+    const transitionClass = classes.get(suggestion.artifactId);
     const suggestionId = suggestionIdSchema.safeParse(suggestion.id);
-    return move === undefined || !suggestionId.success
+    return transitionClass === undefined || !suggestionId.success
       ? []
-      : [{ suggestionId: suggestionId.data, transitionClass: move.transitionClass }];
+      : [{ suggestionId: suggestionId.data, transitionClass }];
   });
 }
 
@@ -321,6 +330,8 @@ export type ApplyMoveChoiceResult =
       status: "applied";
       executed: Extract<ExecuteProofCommandResult, { status: "committed" }> & {
         records?: readonly unknown[];
+        /** For a macro application: every step's prepared result, in order (`result` is the last). */
+        macroResults?: readonly PrepareProofCommandSuccess[];
       };
       session: ProofSession;
       node: ProofNode;
@@ -368,6 +379,48 @@ export async function applyMoveChoice(
     };
   }
   const { preview } = recordedPreview;
+  if (preview.macro !== undefined) {
+    if (inquiryMethod !== undefined) {
+      return {
+        status: "failed",
+        failure: repositoryFailure(
+          "rejected",
+          "command-rejected",
+          "A multi-step macro cannot be tried as an inquiry method.",
+        ),
+      };
+    }
+    const applied = await executeMacroPreview(
+      store,
+      sessionId,
+      { commandId: choice.commandId, previewId: preview.id },
+      actor,
+      definitions,
+    );
+    if (applied.status !== "committed") return { status: "failed", failure: applied };
+    const last = applied.results.at(-1);
+    const loadedMacro = await loadCurrentProofSession(store, sessionId);
+    if (last === undefined || loadedMacro.status !== "loaded") {
+      return {
+        status: "failed",
+        failure:
+          loadedMacro.status === "loaded"
+            ? repositoryFailure("rejected", "command-rejected", "The macro recorded no steps.")
+            : loadedMacro,
+      };
+    }
+    return {
+      status: "applied",
+      executed: {
+        status: "committed",
+        result: last,
+        replayed: applied.replayed,
+        macroResults: applied.results,
+      },
+      session: loadedMacro.session,
+      node: loadedMacro.node,
+    };
+  }
   const ids = derivedMoveRecordIds(choice.commandId);
   const proofCommand = {
     commandId: choice.commandId,

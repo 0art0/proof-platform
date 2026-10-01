@@ -134,3 +134,103 @@ describe("move-deletion schemas", () => {
     ).toBe(false);
   });
 });
+
+describe("planPreviousMoveDeletion of a macro application", () => {
+  const macro = (stepIndex: number) => ({ previewId: "preview:macro", stepIndex });
+  const tree: readonly DeletionPlanEdge[] = [
+    {
+      id: "edge:m1",
+      parentNodeId: "node:root",
+      childNodeId: "node:m1",
+      commandId: "c:m1",
+      macro: macro(1),
+    },
+    {
+      id: "edge:m2",
+      parentNodeId: "node:m1",
+      childNodeId: "node:m2",
+      commandId: "c:m2",
+      macro: macro(2),
+    },
+    {
+      id: "edge:m3",
+      parentNodeId: "node:m2",
+      childNodeId: "node:m3",
+      commandId: "c:m3",
+      macro: macro(3),
+    },
+    { id: "edge:x", parentNodeId: "node:m1", childNodeId: "node:x", commandId: "c:x" },
+    { id: "edge:y", parentNodeId: "node:m3", childNodeId: "node:y", commandId: "c:y" },
+  ];
+
+  it("deletes the whole application, with its preview, from its last step", () => {
+    const result = planPreviousMoveDeletion({
+      rootNodeId: "node:root",
+      currentNodeId: "node:m3",
+      edges: tree.filter(({ id }) => id !== "edge:x" && id !== "edge:y"),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      plan: {
+        parentNodeId: "node:root",
+        deletedNodeIds: ["node:m3", "node:m2", "node:m1"],
+        deletedEdgeIds: ["edge:m3", "edge:m2", "edge:m1"],
+        chosenPreviewIds: ["preview:macro"],
+        descendantCount: 0,
+        macroSteps: 3,
+      },
+    });
+  });
+
+  it("counts only work branched off the application as descendants", () => {
+    const refused = planPreviousMoveDeletion({
+      rootNodeId: "node:root",
+      currentNodeId: "node:m3",
+      edges: tree,
+    });
+    expect(refused).toMatchObject({ ok: false, descendantCount: 2 });
+    const confirmed = planPreviousMoveDeletion({
+      rootNodeId: "node:root",
+      currentNodeId: "node:m3",
+      edges: tree,
+      confirmDescendants: true,
+    });
+    expect(confirmed).toMatchObject({
+      ok: true,
+      plan: { descendantCount: 2, macroSteps: 3, parentNodeId: "node:root" },
+    });
+  });
+
+  it("deletes the application prefix up to a middle step", () => {
+    const result = planPreviousMoveDeletion({
+      rootNodeId: "node:root",
+      currentNodeId: "node:m2",
+      edges: tree.filter(({ id }) => id === "edge:m1" || id === "edge:m2"),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      plan: { deletedNodeIds: ["node:m2", "node:m1"], macroSteps: 2 },
+    });
+  });
+
+  it("lets a deletion tombstone record the macro steps it removed", () => {
+    const record = {
+      id: "deletion:d",
+      commandId: "command:d",
+      actor: { id: "actor:human", kind: "human" },
+      expectedCurrentNodeId: "node:m2",
+      confirmDescendants: false,
+      parentNodeId: "node:root",
+      deletedNodeIds: ["node:m2", "node:m1"],
+      deletedEdgeIds: ["edge:m2", "edge:m1"],
+      deletedEventIds: [],
+      deletedCommandIds: ["c:m2", "c:m1"],
+      deletedSuggestionSetIds: [],
+      deletedPreviewIds: [],
+      occurredAt: "2026-10-01T00:00:00.000Z",
+    };
+    expect(proofDeletionRecordSchema.safeParse(record).success).toBe(false);
+    expect(proofDeletionRecordSchema.safeParse({ ...record, macroSteps: 2 }).success).toBe(true);
+    expect(proofDeletionRecordSchema.safeParse({ ...record, macroSteps: 3 }).success).toBe(false);
+  });
+});

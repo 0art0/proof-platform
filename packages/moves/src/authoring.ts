@@ -19,8 +19,10 @@
  *   with the expected outcome. The declared class must equal the class composed from the kernel
  *   transitions of the steps, both statically and on every positive example.
  * - A single-step template projects to an ordinary `MoveDefinition` that retrieval, materialization
- *   and the command path already understand. A multi-step macro is validated and stored, but is not
- *   projected: one command path edge carries one kernel operation.
+ *   and the command path already understand. A multi-step macro is NOT an ordinary definition (one
+ *   command path edge carries one kernel operation): `authoredMacroDefinition` projects only its
+ *   FIRST step, for retrieval, and callers apply the macro as a sequence of ordinary commands from
+ *   `runMovePlan`'s operations.
  */
 import {
   alphaEquivalent,
@@ -423,7 +425,10 @@ export type MoveTemplateReport = Readonly<{
   /** The class composed from the kernel transitions of the plan's primitives. */
   transitionClass: TransitionClass;
   stepCount: number;
-  /** True when the template projects to a retrievable `MoveDefinition` (a single step). */
+  /**
+   * True when, once approved, the template is retrievable: a single step as an ordinary
+   * definition, a macro through its first-step projection (`authoredMacroDefinition`).
+   */
   retrievable: boolean;
   examples: readonly ExampleReport[];
 }>;
@@ -524,9 +529,46 @@ export function authoredMoveDefinition(
   return definition.transitionClass === parsed.data.transitionClass ? definition : undefined;
 }
 
+/**
+ * The retrieval projection of an approved multi-step macro: its FIRST step's contract over the
+ * first primitive, under the macro's own ID, with the composed class of the whole plan recorded
+ * separately by `plannedTransitionClass`. Undefined for a single-step template (use
+ * `authoredMoveDefinition`) and for a template that does not parse.
+ *
+ * The projection must be used for retrieval only. It is not an applicable definition: applying
+ * it as a single primitive would run just the first step, so it never joins the command path's
+ * move catalog.
+ */
+export function authoredMacroDefinition(
+  template: unknown,
+  approval: Extract<MoveDefinition["approval"], { status: "approved" }>,
+  provenanceSource: string,
+): Readonly<{ definition: MoveDefinition; template: AuthoredMoveTemplate }> | undefined {
+  const parsed = authoredMoveTemplateSchema.safeParse(template);
+  if (!parsed.success || parsed.data.plan.steps.length < 2) return undefined;
+  const definition = firstStepDefinition(parsed.data, approval, provenanceSource);
+  if (definition === undefined) return undefined;
+  if (plannedTransitionClass(parsed.data.plan) !== parsed.data.transitionClass) return undefined;
+  return { definition, template: parsed.data };
+}
+
 // --------------------------------------------------------------------------------------------
 // Running a plan
 // --------------------------------------------------------------------------------------------
+
+/** One executed plan step: what it did and the state it left. */
+export type PlanRunStep = Readonly<{
+  /** 1-based position in the plan. */
+  index: number;
+  /** The plan step's own ID. */
+  id: string;
+  /** The hand-authored primitive move the step applied. */
+  moveId: MoveId;
+  operation: KernelOperation;
+  transitionClass: TransitionClass;
+  /** The state after this step. */
+  state: ExecutableProofState;
+}>;
 
 export type PlanRunDiagnostic = Readonly<{
   code:
@@ -541,6 +583,8 @@ export type PlanRunDiagnostic = Readonly<{
   cause?: string;
   stepIndex: number;
   missingParameters?: readonly string[];
+  /** The first step's menus so far, for `requires-input`. */
+  menus?: readonly ParameterMenu[];
 }>;
 
 export type PlanRunResult =
@@ -549,6 +593,9 @@ export type PlanRunResult =
       operations: readonly KernelOperation[];
       transitionClass: TransitionClass;
       state: ExecutableProofState;
+      steps: readonly PlanRunStep[];
+      /** The first step's menus as displayed, for static history. */
+      menus: readonly ParameterMenu[];
     }>
   | Readonly<{ ok: false; diagnostic: PlanRunDiagnostic }>;
 
@@ -587,6 +634,8 @@ export function runMovePlan(
   const correspondence: Correspondence = { symbols: new Map(), ids: new Map() };
   const operations: KernelOperation[] = [];
   const classes: TransitionClass[] = [];
+  const steps: PlanRunStep[] = [];
+  let menus: readonly ParameterMenu[] = [];
   let state = stateInput;
 
   for (const [stepIndex, step] of template.plan.steps.entries()) {
@@ -617,11 +666,13 @@ export function runMovePlan(
                 message: diagnostic.message,
                 stepIndex,
                 missingParameters: materialized.missingParameters,
+                menus: materialized.menus,
               },
             }
           : runFailure("materialization-failed", diagnostic.message, stepIndex, diagnostic.code);
       }
       operation = materialized.operation;
+      menus = materialized.menus;
     } else {
       const replayed = replayStep(step, primitive, state, generator, correspondence, environment);
       if (!replayed.ok) return { ok: false, diagnostic: { ...replayed.diagnostic, stepIndex } };
@@ -641,6 +692,14 @@ export function runMovePlan(
     operations.push(operation);
     classes.push(planned.preview.transitionClass);
     state = planned.preview.state;
+    steps.push({
+      index: stepIndex + 1,
+      id: step.id,
+      moveId: primitive.id,
+      operation,
+      transitionClass: planned.preview.transitionClass,
+      state,
+    });
   }
 
   const chained = planMoveSequence(stateInput, operations, environment, {
@@ -661,7 +720,7 @@ export function runMovePlan(
       0,
     );
   }
-  return { ok: true, operations, transitionClass, state };
+  return { ok: true, operations, transitionClass, state, steps, menus };
 }
 
 function runFailure(
@@ -1390,7 +1449,12 @@ function validate(input: unknown, options: MoveTemplateValidationOptions): MoveT
     report: {
       transitionClass: planned,
       stepCount: template.plan.steps.length,
-      retrievable: template.plan.steps.length === 1,
+      retrievable:
+        firstStepDefinition(
+          template,
+          { status: "approved", reviewerId: "reviewer:template-check" },
+          "template validation",
+        ) !== undefined,
       examples: reports,
     },
   };

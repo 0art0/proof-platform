@@ -67,6 +67,11 @@ export const proofDeletionRecordSchema = z
     deletedCommandIds: uniqueIds(commandIdSchema).min(1),
     deletedSuggestionSetIds: uniqueIds(suggestionSetIdSchema),
     deletedPreviewIds: uniqueIds(movePreviewIdSchema),
+    /**
+     * Set when the deleted move was the last step of a macro application (N35): the number of
+     * steps removed with it. They are one user action, so they need no descendant confirmation.
+     */
+    macroSteps: z.number().int().min(2).max(16).optional(),
     occurredAt: z.string().datetime({ offset: true }),
   })
   .strict()
@@ -89,7 +94,13 @@ export const proofDeletionRecordSchema = z
     if (record.deletedNodeIds.includes(record.parentNodeId)) {
       context.addIssue({ code: "custom", message: "The parent node cannot itself be deleted." });
     }
-    if (record.deletedNodeIds.length > 1 && !record.confirmDescendants) {
+    if (record.macroSteps !== undefined && record.macroSteps > record.deletedNodeIds.length) {
+      context.addIssue({
+        code: "custom",
+        message: "A macro application cannot have more steps than deleted nodes.",
+      });
+    }
+    if (record.deletedNodeIds.length > (record.macroSteps ?? 1) && !record.confirmDescendants) {
       context.addIssue({
         code: "custom",
         message: "Deleting descendants requires explicit confirmation.",
@@ -114,6 +125,8 @@ export type DeletionPlanEdge = Readonly<{
   childNodeId: string;
   commandId: string;
   previewId?: string | undefined;
+  /** Set on a step of a macro application (N35). */
+  macro?: Readonly<{ previewId: string; stepIndex: number }> | undefined;
 }>;
 
 export type PreviousMoveDeletionPlan = Readonly<{
@@ -126,6 +139,8 @@ export type PreviousMoveDeletionPlan = Readonly<{
   /** Previews chosen by deleted edges (they are anchored at the deleted edges' parents). */
   chosenPreviewIds: readonly string[];
   descendantCount: number;
+  /** The number of steps of the deleted macro application, when the move was a macro's last step. */
+  macroSteps?: number;
 }>;
 
 export type MoveDeletionDiagnosticCode =
@@ -142,6 +157,11 @@ export type PlanPreviousMoveDeletionResult =
 /**
  * Plan the removal of the latest move at `currentNodeId` from a validated rooted tree.
  * The root has no previous move; a current node with descendants requires `confirmDescendants`.
+ *
+ * A macro application (roadmap N35) is one user action, so deleting its last step deletes the
+ * WHOLE application: every earlier step of the same application is removed with it and the cursor
+ * returns to the node the application started from. The application's own earlier steps are not
+ * "descendants" for confirmation; only work branched off any of its nodes is.
  */
 export function planPreviousMoveDeletion(
   input: Readonly<{
@@ -169,6 +189,22 @@ export function planPreviousMoveDeletion(
   }
   const deletedEdges: DeletionPlanEdge[] = [entering];
   const visited = new Set<string>([input.currentNodeId]);
+  // Earlier steps of the same macro application, nearest first.
+  let earliest: DeletionPlanEdge = entering;
+  while (earliest.macro !== undefined && earliest.macro.stepIndex > 1) {
+    const link: NonNullable<DeletionPlanEdge["macro"]> = earliest.macro;
+    const previous: DeletionPlanEdge | undefined = input.edges.find(
+      (edge) =>
+        edge.childNodeId === earliest.parentNodeId &&
+        edge.macro?.previewId === link.previewId &&
+        edge.macro.stepIndex === link.stepIndex - 1,
+    );
+    if (previous === undefined || visited.has(previous.childNodeId)) break;
+    visited.add(previous.childNodeId);
+    deletedEdges.push(previous);
+    earliest = previous;
+  }
+  const applicationEdges = deletedEdges.length;
   for (let index = 0; index < deletedEdges.length; index += 1) {
     const parent = deletedEdges[index]?.childNodeId;
     if (parent === undefined) continue;
@@ -176,14 +212,15 @@ export function planPreviousMoveDeletion(
       left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
     );
     for (const edge of children) {
-      if (visited.has(edge.childNodeId) || edge.childNodeId === entering.parentNodeId) {
+      if (deletedEdges.includes(edge)) continue;
+      if (visited.has(edge.childNodeId) || edge.childNodeId === earliest.parentNodeId) {
         return failure("current-node-not-in-tree", "The retained history is not a rooted tree.");
       }
       visited.add(edge.childNodeId);
       deletedEdges.push(edge);
     }
   }
-  const descendantCount = deletedEdges.length - 1;
+  const descendantCount = deletedEdges.length - applicationEdges;
   if (descendantCount > 0 && input.confirmDescendants !== true) {
     return {
       ...failure(
@@ -197,18 +234,22 @@ export function planPreviousMoveDeletion(
   }
   const chosenPreviewIds = [
     ...new Set(
-      deletedEdges.flatMap(({ previewId }) => (previewId === undefined ? [] : [previewId])),
+      deletedEdges.flatMap(({ previewId, macro }) => [
+        ...(previewId === undefined ? [] : [previewId]),
+        ...(macro === undefined ? [] : [macro.previewId]),
+      ]),
     ),
   ];
   return {
     ok: true,
     plan: Object.freeze({
-      parentNodeId: entering.parentNodeId,
+      parentNodeId: earliest.parentNodeId,
       deletedNodeIds: Object.freeze(deletedEdges.map(({ childNodeId }) => childNodeId)),
       deletedEdgeIds: Object.freeze(deletedEdges.map(({ id }) => id)),
       deletedCommandIds: Object.freeze(deletedEdges.map(({ commandId }) => commandId)),
       chosenPreviewIds: Object.freeze(chosenPreviewIds),
       descendantCount,
+      ...(applicationEdges > 1 ? { macroSteps: applicationEdges } : {}),
     }),
     diagnostics: [],
   };
