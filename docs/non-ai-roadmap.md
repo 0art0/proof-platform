@@ -995,6 +995,20 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
     starts collapsed until there is something to show; each formula is one tab stop (MathLive Tab
     pass-through); the colour key is collapsed; an "N suggestions below" link joins the Active selections
     card. No dialog or disclosure opens unprompted.
-  - Open: the session page does not yet pass the problem title and statement to `WorkspaceHeader`;
-    sessions opened by URL are not recorded as recent; abstraction-only results are not collapsed into a
-    summary; same-name suggestion cards are not disambiguated; no keyboard way to select a sub-expression.
+  - Follow-ups closed by `45d7051` (sessions opened by URL are recorded as recent) and the entry below.
+- 2026-10-01 — macro UI and remaining discoverability items — `338aa04`, `23a490e`, `1f9af2b` — the
+  session page passes the stored problem title, statement and background to the header
+  (`readProofSessionMetadata`; the session id stays as the eyebrow; recent proofs record the real
+  title). Approved multi-step macros show an "N-step move" badge and composed class (step count from the
+  stored template before preview, from `preview.macro` after), a per-step preview (first step open), a
+  readable `macro-step-failed` message, one labelled macro application in the workspace history,
+  breadcrumb, tree, playback and pruned proof, and a delete dialog saying the whole application goes. The
+  web proxy now accepts a macro's last-step receipt (`<cmd>:macro:<n>`) and relays `macro-step-failed` as
+  422; both previously failed as "invalid response". The suggestion panel folds search-only results
+  behind one summary line, qualifies same-name cards (direction, variant or option number) and has a
+  collapsed "What do these labels mean?" key; applied moves are reported by name; the authoring start
+  panel names steps instead of node ids; the library says "Origin" and "Recently added". E2E: an approved
+  two-step macro is offered, previewed, applied, viewed and deleted as one.
+  - Gaps: the macro e2e authors its template through the envelope API rather than the editor UI;
+    viewers show a humanized macro id (artifacts carry no authored names); per-step previews show counts,
+    not intermediate statements; there is no keyboard way to select a sub-expression.
