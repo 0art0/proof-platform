@@ -37,8 +37,10 @@ export function StatementField({
   latex,
   onChange,
   onRemove,
+  required,
 }: Readonly<{
   label: string;
+  required?: boolean;
   row: StatementRow;
   latex: LatexRenderer;
   onChange: (row: StatementRow) => void;
@@ -49,7 +51,12 @@ export function StatementField({
   return (
     <div className={styles.statementRow}>
       <div className={styles.statementHeader}>
-        <label htmlFor={`statement-${row.key}`}>{label}</label>
+        <label
+          htmlFor={`statement-${row.key}`}
+          data-marker={required === true ? "required" : undefined}
+        >
+          {label}
+        </label>
         <select
           aria-label={`${label} format`}
           value={row.format}
