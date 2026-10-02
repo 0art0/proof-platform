@@ -21,8 +21,10 @@ import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import { resolveProofSelection } from "@proof/selections";
 import { z } from "zod";
 import type { DefinitionCatalog } from "../approved-catalog";
+import type { AiRuntime } from "../ai-runtime";
 import { executeTryResultCommand } from "../inquiry-methods";
 import type { LibraryStore } from "../library-repository";
+import type { LlmCallStore } from "../llm-call-repository";
 import {
   derivedMoveRecordIds,
   executeMacroPreview,
@@ -46,6 +48,8 @@ export type ServiceContext = Readonly<{
   now: (() => Date) | undefined;
   /** The library store; library commands are unavailable without it. */
   library: LibraryStore | undefined;
+  llmCalls?: LlmCallStore | undefined;
+  ai?: AiRuntime | undefined;
 }>;
 
 const operandPathSchema = z.array(z.number().int().nonnegative());

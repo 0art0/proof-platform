@@ -76,6 +76,13 @@ class MemoryLlmCallStore implements LlmCallStore {
       },
     });
   }
+
+  async listCallsForOwner(recordOwner: LlmCallOwner): Promise<readonly unknown[]> {
+    const prefix = `${recordOwner.kind}/${recordOwner.id}/`;
+    return [...this.calls.entries()]
+      .filter(([recordKey]) => recordKey.startsWith(prefix))
+      .map(([, value]) => structuredClone(value));
+  }
 }
 
 function key(recordOwner: LlmCallOwner, id: string): string {

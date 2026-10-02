@@ -30,6 +30,9 @@ migrations create and that every memory-store entity has a migrated table.
 topic-manifest review decisions. A `dispatching` record deliberately remains ambiguous after a
 worker crash: retry reads it as uncertain and does not silently dispatch the provider again.
 
+`0013_llm_formalizer_role.sql` expands the LLM-call role constraint to include the proof-state
+formalizer while preserving the immutability of the already-applied `0002` migration.
+
 `0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
 events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
 as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so

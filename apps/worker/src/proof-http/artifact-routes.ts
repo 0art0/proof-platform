@@ -14,10 +14,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   proofArtifactImportResponseSchema,
   proofArtifactRejectionResponseSchema,
+  type ProofArtifact,
 } from "@proof/protocol";
 import type { z } from "zod";
 import { exportProofArtifact } from "../artifact-export";
 import { importProofArtifact } from "../artifact-import";
+import { listLlmCalls } from "../llm-call-repository";
 import { proofSessionIdSchema } from "../proof-repository";
 import { readSessionVisibility } from "../session-admin";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
@@ -106,9 +108,26 @@ export async function handleArtifactRoute(
         return true;
       }
     }
+    const llmCalls =
+      context.llmCalls === undefined
+        ? undefined
+        : await listLlmCalls(context.llmCalls, { kind: "proof-session", id: sessionId.data });
+    if (llmCalls !== undefined && llmCalls.status !== "found") {
+      writeJson(response, repositoryFailureStatus(llmCalls), {
+        diagnostics: llmCalls.diagnostics,
+      });
+      return true;
+    }
     const exported = await exportProofArtifact(context.store, sessionId.data, {
       library: context.library,
       definitions: context.definitions,
+      ...(llmCalls === undefined
+        ? {}
+        : {
+            llmCalls: llmCalls.records.map(
+              (record) => JSON.parse(JSON.stringify(record)) as ProofArtifact["llmCalls"][number],
+            ),
+          }),
     });
     if (exported.status !== "exported") {
       writeJson(response, repositoryFailureStatus(exported), {

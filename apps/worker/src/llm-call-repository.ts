@@ -28,6 +28,8 @@ export const llmDispatchConfigurationSchema = z
     promptVersion: z.string().min(1).max(100),
     temperature: z.number().min(0).max(2).optional(),
     maxOutputTokens: z.number().int().positive().max(1_000_000).optional(),
+    reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+    minimumConfidence: z.number().min(0).max(1).optional(),
   })
   .strict();
 export type LlmDispatchConfiguration = z.infer<typeof llmDispatchConfigurationSchema>;
@@ -108,6 +110,7 @@ export interface LlmCallStore {
   transaction<Result>(
     work: (transaction: LlmCallStoreTransaction) => Promise<Result>,
   ): Promise<Result>;
+  listCallsForOwner(owner: LlmCallOwner): Promise<readonly unknown[]>;
 }
 
 export type LlmCallRepositoryDiagnosticCode =
@@ -272,6 +275,40 @@ export async function readLlmCall(
     });
   } catch (error: unknown) {
     return storageFailure(error, "The LLM call could not be read.");
+  }
+}
+
+export type ListLlmCallsResult =
+  Readonly<{ status: "found"; records: readonly StoredLlmCall[] }> | RepositoryFailure;
+
+/** Read an owner's immutable call history without invoking a transport. */
+export async function listLlmCalls(
+  store: LlmCallStore,
+  ownerInput: unknown,
+): Promise<ListLlmCallsResult> {
+  const owner = safeParse(llmCallOwnerSchema, ownerInput);
+  if (owner === undefined) {
+    return failure("rejected", "invalid-request", "The LLM call owner is invalid.");
+  }
+  try {
+    const inputs = await store.listCallsForOwner(owner);
+    const records = inputs.map((input) => {
+      const possibleId =
+        typeof input === "object" && input !== null && "id" in input ? input.id : undefined;
+      const callId = safeParse(llmCallIdSchema, possibleId) as LlmCallId | undefined;
+      return callId === undefined ? undefined : parseStoredCall(input, owner, callId);
+    });
+    if (records.some((record) => record === undefined)) {
+      return failure("rejected", "call-record-invalid", "Stored LLM call history is invalid.");
+    }
+    return {
+      status: "found",
+      records: Object.freeze(
+        (records as StoredLlmCall[]).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+      ),
+    };
+  } catch (error: unknown) {
+    return storageFailure(error, "The LLM call history could not be read.");
   }
 }
 

@@ -3,6 +3,10 @@ import { ensureDevelopmentProofSession } from "./development-session";
 import type { LibraryStore } from "./library-repository";
 import { MemoryLibraryStore } from "./memory-library-store";
 import { postgresLibraryStore } from "./postgres-library-store";
+import { MemoryLlmCallStore } from "./memory-llm-call-store";
+import { postgresLlmCallStore } from "./postgres-llm-call-store";
+import type { LlmCallStore } from "./llm-call-repository";
+import { createAiRuntime } from "./ai-runtime";
 import {
   DEFAULT_MIGRATIONS_DIRECTORY,
   applyMigrations,
@@ -21,6 +25,7 @@ export type ProofStoreSelection =
       kind: "memory" | "postgres";
       store: ProofStore;
       library: LibraryStore;
+      llmCalls: LlmCallStore;
       /**
        * Make the schema ready before serving. PostgreSQL: verify that every migration is applied
        * and unchanged, or apply the pending ones when `autoMigrate` is set; memory: nothing.
@@ -44,6 +49,7 @@ export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelecti
       kind: "memory" as const,
       store,
       library: store,
+      llmCalls: new MemoryLlmCallStore(),
       prepareSchema: async () => undefined,
       close: async () => undefined,
     });
@@ -69,6 +75,7 @@ export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelecti
     kind: "postgres" as const,
     store: postgresProofStore(pool),
     library: postgresLibraryStore(pool),
+    llmCalls: postgresLlmCallStore(pool),
     prepareSchema: async ({ autoMigrate }) => {
       const migrations = await loadMigrations(DEFAULT_MIGRATIONS_DIRECTORY);
       const sqlPool = pool as unknown as SqlPool;
@@ -102,7 +109,11 @@ export async function startProofWorker(env: ProofWorkerEnvironment): Promise<Sta
     if (seeded.status !== "ready") {
       throw new Error(`Development session seeding failed: ${seeded.diagnostics[0].message}`);
     }
-    const service = createProofHttpService(selection.store, { library: selection.library });
+    const service = createProofHttpService(selection.store, {
+      library: selection.library,
+      llmCalls: selection.llmCalls,
+      ai: createAiRuntime(env),
+    });
     const port = parsePort(env.PROOF_HTTP_PORT);
     const { origin } = await service.listen({ host: env.PROOF_HTTP_HOST ?? "127.0.0.1", port });
     return Object.freeze({
