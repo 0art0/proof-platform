@@ -1012,3 +1012,12 @@ command }`. Kinds: `request-suggestions`, `preview`, `apply` (menu items by id o
   - Gaps: the macro e2e authors its template through the envelope API rather than the editor UI;
     viewers show a humanized macro id (artifacts carry no authored names); per-step previews show counts,
     not intermediate statements; there is no keyboard way to select a sub-expression.
+- 2026-10-02 — Playwright configs — all three configs use a production build (`next build --webpack &&
+next start`; shared `playwright.shared.ts` with `WORKER_BACKED_SPECS` and `productionWebCommand`) and
+  distinct ports, so none reuses another's server. `npm run test:e2e` now runs only the worker-less
+  `mathjson-spike.spec.ts` (it previously also picked up every worker-backed spec with no worker behind
+  it). `npm run test:e2e:postgres` runs the full worker-backed suite against PostgreSQL through the real
+  worker startup (`PROOF_STORE=postgres PROOF_AUTO_MIGRATE=true`, `PROOF_DATABASE_URL`). First run
+  against a real database (throwaway PostgreSQL 18 from `embedded-postgres`): all 12 migrations applied
+  from scratch, 29/29 passed; a second run on the populated database also passed 29/29, and `npm run
+migrate -- --status` reported up to date.
