@@ -342,6 +342,41 @@ otherwise automate — the substrate is in scope.
       solve a corpus problem mouse-only, delete an accidental move, backtrack with information, export,
       reimport, and view the pruned proof.
 
+## Phase 10 — Closing recorded gaps
+
+Collected on 2026-10-02 from the "Gaps" notes in the progress log below; items already closed by later
+entries are omitted. Authentication and polymorphic sorts (needed for new domain packs) are design
+decisions for the user and are not scheduled here.
+
+- [ ] **N39 Transition classes with obligations (N06(a)).** `apply-result-forward` (and any primitive)
+      that creates obligations must be classified as strengthening, not equivalence. Kernel returns the
+      class from the actual outcome; `PRIMITIVE_TRANSITION_CLASSES` becomes a per-kind allowed set. Update
+      authoring class composition, badges and the N37 golden accordingly. _Accept:_ invariant/property
+      tests that a transition creating obligations is never an equivalence.
+- [ ] **N40 Stored transition evidence and sequence.** Store `TransitionEvidence` on previews, commands and
+      edges at apply time (the web currently derives it), and a per-session transition sequence so
+      playback is chronological. Migration, memory mirror, artifact schema version bump with import of
+      version 1. _Accept:_ static-history tests; playback order test.
+- [ ] **N41 Retrieval quality.** Backward result applications that need an instantiation menu must be
+      reachable within the displayed limit; `close-by-hypothesis` matches up to alpha-equivalence.
+      _Accept:_ corpus problems solved backward without forward scripting; ranking tests.
+- [ ] **N42 Construction moves and UI.** Moves and menus for the N11 construction operations (introduce
+      placeholder, add requirement, add candidate, resolve, abandon); placeholders render by display name
+      and are registered in selections and retrieval; add-requirement / add-candidate actions in the
+      construction view. _Accept:_ an e2e that constructs a witness and resolves it.
+- [ ] **N43 Keyboard sub-expression selection.** A keyboard way to select, widen and narrow an occurrence
+      inside a formula, equivalent to the pointer gestures. _Accept:_ component and e2e keyboard-only
+      selection.
+- [ ] **N44 Conditional lemmas over HTTP and in the UI.** Route and envelope for `extractConditionalLemma`
+      (library store is now wired), keeping only the hypotheses used, and a UI action. _Accept:_ HTTP and
+      e2e tests.
+- [ ] **N45 Replay coverage.** Semantic plans for steps applied without a displayed suggestion (backtrack
+      splits, auto-closes, macro steps), so every stored step can be replayed. _Accept:_ replay of a
+      branch containing a backtrack split and a macro application.
+- [ ] **N46 Typed binders in quantifier operations (N01).** Kernel quantifier operations accept
+      `["Element", x, S]` binders with a membership hypothesis or obligation; `moves/context-terms` and
+      retrieval binder keys use `binderShape`. _Accept:_ property tests over typed and untyped binders.
+
 ## Progress log
 
 Entries are appended as tasks complete: `date — task — commit — notes`.
