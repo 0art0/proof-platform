@@ -35,6 +35,11 @@ type StepUse = Readonly<{
   produced?: readonly string[];
   /** Hypotheses the step needs only if one of the hypotheses it produces is needed. */
   viaProduced?: readonly string[];
+  /**
+   * Set when the step may also rely on a context hypothesis its record does not name: if one of
+   * the hypotheses it produces is needed, every hypothesis is kept for this reason.
+   */
+  untracedIfProducedNeeded?: string;
 }>;
 
 type OperationRecord = Readonly<Record<string, unknown>>;
@@ -64,19 +69,27 @@ function stepUse(operation: OperationRecord): StepUse | string {
     case "choose-goal-disjunct":
     case "replace-goal":
     case "suffices":
-    case "introduce-universal":
     case "choose-existential-witness":
-    case "split-classical-cases":
-    case "assume-hypothesis":
-    case "introduce-implication":
-    case "introduce-negation":
     case "drop-hypothesis":
     case "apply-result-backward":
       return NO_USE;
+    case "introduce-universal":
+      // A typed binder produces the membership hypothesis `x ∈ S`, which needs nothing before it.
+      return { direct: [], produced: ids(operation["membershipHypothesisId"]) };
+    case "introduce-implication":
+    case "introduce-negation":
+    case "assume-hypothesis":
+      return { direct: [], produced: ids(operation["hypothesisId"]) };
+    case "split-classical-cases":
+      return { direct: [], produced: ids(operation["branchHypothesisIds"]) };
     case "close-by-hypothesis":
     case "close-false-hypothesis":
-    case "split-hypothesis-disjunction":
       return { direct: ids(operation["hypothesisId"]) };
+    case "split-hypothesis-disjunction":
+      return {
+        direct: ids(operation["hypothesisId"]),
+        produced: ids(operation["branchHypothesisIds"]),
+      };
     case "close-by-contradiction":
       return { direct: ids(operation["hypothesisId"], operation["negationHypothesisId"]) };
     case "rewrite-with-equality":
@@ -97,12 +110,26 @@ function stepUse(operation: OperationRecord): StepUse | string {
         produced: ids(operation["expandedHypothesisIds"]),
         viaProduced: ids(operation["hypothesisId"]),
       };
-    case "instantiate-universal-hypothesis":
     case "unpack-existential-hypothesis":
+      // A typed binder also produces `w ∈ S`; using only that still uses the unpacked hypothesis.
+      return {
+        direct: [],
+        produced: ids(operation["resultHypothesisId"], operation["membershipHypothesisId"]),
+        viaProduced: ids(operation["hypothesisId"]),
+      };
+    case "instantiate-universal-hypothesis":
+      // A typed binder `∀x∈S` instantiated at `t` is discharged by any hypothesis stating `t ∈ S`
+      // without the record naming it; only an obligation ID shows the membership was not found.
       return {
         direct: [],
         produced: ids(operation["resultHypothesisId"]),
         viaProduced: ids(operation["hypothesisId"]),
+        ...(operation["membershipObligationId"] === undefined
+          ? {
+              untracedIfProducedNeeded:
+                "an instantiated universal may have been discharged by a membership hypothesis the record does not name",
+            }
+          : {}),
       };
     case "apply-implication-hypothesis":
       return {
@@ -126,13 +153,20 @@ function stepUse(operation: OperationRecord): StepUse | string {
   }
 }
 
+function keepAll(
+  contextHypothesisIds: readonly string[],
+  conservative: readonly ConservativeHypothesisUse[],
+): HypothesisUsage {
+  return { usedHypothesisIds: [...contextHypothesisIds], unusedHypothesisIds: [], conservative };
+}
+
 /** Derive the hypotheses of `contextHypothesisIds` that the establishing route steps used. */
 export function usedHypotheses(
   contextHypothesisIds: readonly string[],
   steps: readonly DiscoveryRouteStep[],
 ): HypothesisUsage {
   const conservative: ConservativeHypothesisUse[] = [];
-  const uses: StepUse[] = [];
+  const uses: { edgeId: string; operationKind: string; use: StepUse }[] = [];
   for (const step of steps) {
     const operation = step.operation as unknown as OperationRecord;
     const operationKind = String(operation["kind"]);
@@ -152,20 +186,14 @@ export function usedHypotheses(
         reason: `${use}, so every hypothesis is kept`,
       });
     } else {
-      uses.push(use);
+      uses.push({ edgeId: step.edgeId, operationKind, use });
     }
   }
-  if (conservative.length > 0) {
-    return {
-      usedHypothesisIds: [...contextHypothesisIds],
-      unusedHypothesisIds: [],
-      conservative,
-    };
-  }
-  const needed = new Set<string>(uses.flatMap(({ direct }) => direct));
+  if (conservative.length > 0) return keepAll(contextHypothesisIds, conservative);
+  const needed = new Set<string>(uses.flatMap(({ use }) => use.direct));
   for (let grew = true; grew;) {
     grew = false;
-    for (const use of uses) {
+    for (const { use } of uses) {
       if (use.produced === undefined || !use.produced.some((id) => needed.has(id))) continue;
       for (const id of use.viaProduced ?? []) {
         if (!needed.has(id)) {
@@ -175,6 +203,32 @@ export function usedHypotheses(
       }
     }
   }
+  for (const { edgeId, operationKind, use } of uses) {
+    if (use.untracedIfProducedNeeded === undefined) continue;
+    if (use.produced?.some((id) => needed.has(id)) !== true) continue;
+    conservative.push({
+      edgeId,
+      operationKind,
+      reason: `${use.untracedIfProducedNeeded}, so every hypothesis is kept`,
+    });
+  }
+  // Every hypothesis the route needs must be a hypothesis of the context or one a step produced;
+  // an ID of unknown origin could be a context hypothesis the trace missed.
+  const known = new Set<string>([
+    ...contextHypothesisIds,
+    ...uses.flatMap(({ use }) => use.produced ?? []),
+  ]);
+  for (const stray of [...needed].filter((id) => !known.has(id))) {
+    const naming = uses.find(({ use }) =>
+      [...use.direct, ...(use.viaProduced ?? [])].includes(stray),
+    );
+    conservative.push({
+      edgeId: naming?.edgeId ?? "",
+      operationKind: naming?.operationKind ?? "",
+      reason: `the hypothesis ${stray} is neither in the context nor produced by an earlier step, so every hypothesis is kept`,
+    });
+  }
+  if (conservative.length > 0) return keepAll(contextHypothesisIds, conservative);
   return {
     usedHypothesisIds: contextHypothesisIds.filter((id) => needed.has(id)),
     unusedHypothesisIds: contextHypothesisIds.filter((id) => !needed.has(id)),

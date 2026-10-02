@@ -872,4 +872,93 @@ describe("Hypotheses used by a closed subtree", () => {
     expect(inference).toMatchObject({ usedHypothesisIds: ["h1", "h2"], unusedHypothesisIds: [] });
     expect(inference.conservative[0]?.reason).toMatch(/every hypothesis is kept/);
   });
+
+  describe("typed-binder hypotheses and untraceable uses", () => {
+    const route = (operations: readonly Record<string, unknown>[]) =>
+      operations.map(
+        (operation, index) =>
+          ({ edgeId: `edge:${index}`, operation, evidence: "structural" }) as never,
+      );
+    const unpack = (from: string, membership: string, result: string) => ({
+      kind: "unpack-existential-hypothesis",
+      hypothesisId: from,
+      resultHypothesisId: result,
+      witnessDeclarationId: `decl:${membership}`,
+      membershipHypothesisId: membership,
+    });
+
+    it("keeps the unpacked existential when only the membership hypothesis is used", () => {
+      const usage = usedHypotheses(
+        ["hyp:ex", "hyp:other"],
+        route([
+          unpack("hyp:ex", "hyp:member", "hyp:body"),
+          { kind: "close-by-hypothesis", hypothesisId: "hyp:member" },
+        ]),
+      );
+      expect(usage).toMatchObject({
+        usedHypothesisIds: ["hyp:ex"],
+        unusedHypothesisIds: ["hyp:other"],
+        conservative: [],
+      });
+    });
+
+    it("traces a typed universal's membership hypothesis to no context hypothesis", () => {
+      const usage = usedHypotheses(
+        ["hyp:a", "hyp:b"],
+        route([
+          { kind: "introduce-universal", parameterDeclarationId: "d", membershipHypothesisId: "m" },
+          { kind: "close-by-hypothesis", hypothesisId: "m" },
+        ]),
+      );
+      expect(usage).toMatchObject({ usedHypothesisIds: [], conservative: [] });
+    });
+
+    it("keeps every hypothesis, with the reason, for a hypothesis of unknown origin", () => {
+      const usage = usedHypotheses(
+        ["hyp:a", "hyp:b"],
+        route([{ kind: "close-by-hypothesis", hypothesisId: "hyp:mystery" }]),
+      );
+      expect(usage.usedHypothesisIds).toEqual(["hyp:a", "hyp:b"]);
+      expect(usage.conservative[0]?.reason).toMatch(/hyp:mystery.*every hypothesis is kept/);
+    });
+
+    it("keeps every hypothesis when an instantiated universal may rest on an unnamed membership", () => {
+      const instantiate = {
+        kind: "instantiate-universal-hypothesis",
+        hypothesisId: "hyp:all",
+        resultHypothesisId: "hyp:inst",
+      };
+      const used = route([instantiate, { kind: "close-by-hypothesis", hypothesisId: "hyp:inst" }]);
+      expect(usedHypotheses(["hyp:all", "hyp:t", "hyp:z"], used).unusedHypothesisIds).toEqual([]);
+      const unused = route([instantiate, { kind: "close-by-hypothesis", hypothesisId: "hyp:t" }]);
+      expect(usedHypotheses(["hyp:all", "hyp:t", "hyp:z"], unused)).toMatchObject({
+        usedHypothesisIds: ["hyp:t"],
+        conservative: [],
+      });
+    });
+
+    it("always retains the root of whichever produced hypothesis a closure uses (property)", () => {
+      const roots = ["hyp:r0", "hyp:r1", "hyp:r2"];
+      fc.assert(
+        fc.property(
+          fc.subarray([0, 1, 2], { minLength: 1 }),
+          fc.nat(),
+          fc.constantFrom("member", "body"),
+          (unpacked, pick, which) => {
+            const operations = unpacked.map((index) =>
+              unpack(roots[index]!, `hyp:m${index}`, `hyp:b${index}`),
+            );
+            const chosen = unpacked[pick % unpacked.length]!;
+            const closing = which === "member" ? `hyp:m${chosen}` : `hyp:b${chosen}`;
+            const usage = usedHypotheses(
+              roots,
+              route([...operations, { kind: "close-by-hypothesis", hypothesisId: closing }]),
+            );
+            expect(usage.conservative).toEqual([]);
+            expect(usage.usedHypothesisIds).toEqual([roots[chosen]]);
+          },
+        ),
+      );
+    });
+  });
 });
