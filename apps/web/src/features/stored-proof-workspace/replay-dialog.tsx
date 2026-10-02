@@ -11,6 +11,7 @@ import {
   type ReplayOverride,
   type SemanticReplayReport,
 } from "@proof/protocol";
+import { humanizeMoveId } from "../macro-labels";
 import { ToolbarDialog } from "./toolbar-dialog";
 import {
   ancestorsOf,
@@ -51,6 +52,75 @@ export function replayEndOptions(
 ): readonly string[] {
   const line = new Set([...ancestorsOf(edges, currentNodeId), currentNodeId]);
   return nodes.map(({ id }) => id as string).filter((id) => id !== rootNodeId && !line.has(id));
+}
+
+/** One replay step: a single stored edge, or the edges of one macro application. */
+export type ReplayStepEntry = Readonly<{
+  id: string;
+  name: string;
+  transitionClass: string;
+  /** Present for a whole macro application, which replays as one step. */
+  macroSteps?: number;
+}>;
+
+const CLASS_ORDER = ["equivalence", "strengthening", "weakening"];
+
+/**
+ * The replay steps of a source path. The edges of one complete macro application share a macro
+ * link and replay as ONE step; every other edge is a step of its own.
+ */
+export function replayStepEntries(steps: readonly HistoryEdge[]): readonly ReplayStepEntry[] {
+  const entries: ReplayStepEntry[] = [];
+  for (let position = 0; position < steps.length;) {
+    const { edge, name } = steps[position] as HistoryEdge;
+    const link = edge.macro;
+    const application = link === undefined ? [] : steps.slice(position, position + link.stepCount);
+    if (
+      link !== undefined &&
+      link.stepIndex === 1 &&
+      application.length === link.stepCount &&
+      application.every(
+        ({ edge: other }, offset) =>
+          other.macro?.previewId === link.previewId && other.macro.stepIndex === offset + 1,
+      )
+    ) {
+      const weakest = application.reduce(
+        (worst, { edge: other }) => Math.max(worst, CLASS_ORDER.indexOf(other.transitionClass)),
+        0,
+      );
+      entries.push({
+        id: edge.id,
+        name: humanizeMoveId(link.moveId),
+        transitionClass: CLASS_ORDER[weakest] ?? edge.transitionClass,
+        macroSteps: link.stepCount,
+      });
+      position += link.stepCount;
+      continue;
+    }
+    entries.push({ id: edge.id, name, transitionClass: edge.transitionClass });
+    position += 1;
+  }
+  return entries;
+}
+
+/** How a replayed step was originally applied, in plain words (nothing for a chosen suggestion). */
+function stepSourceLabel(
+  source: SemanticReplayReport["steps"][number]["source"],
+  macroSteps: number | undefined,
+): string | undefined {
+  switch (source) {
+    case undefined:
+    case "suggestion":
+      return undefined;
+    case "backtrack":
+      return "case split by backtracking (or closing the case it proves)";
+    case "raw-operation":
+      return "raw operation, applied without a suggestion";
+    case "macro":
+      return `macro applied again as one step${
+        macroSteps === undefined ? "" : ` (${macroSteps} steps)`
+      }`;
+  }
 }
 
 /** A one-line summary of a committed replay's report. */
@@ -105,7 +175,8 @@ export function ReplayDialog({
 
   const source: ReplaySource | undefined =
     toNodeId === undefined || fromNodeId === undefined ? undefined : { fromNodeId, toNodeId };
-  const steps = source === undefined ? undefined : replaySteps(edges, source);
+  const edgeSteps = source === undefined ? undefined : replaySteps(edges, source);
+  const steps = edgeSteps === undefined ? undefined : replayStepEntries(edgeSteps);
   const startOptions = toNodeId === undefined ? [] : ancestorsOf(edges, toNodeId);
 
   // The dry run asks exactly what a commit would send; only the request's content keys it.
@@ -250,13 +321,21 @@ export function ReplayDialog({
         <section aria-label="Steps to replay" className={styles.reportSection}>
           <h3>Steps to replay ({steps.length})</h3>
           <ol className={styles.stepList}>
-            {steps.map(({ edge, name }, index) => {
+            {steps.map(({ id, name, transitionClass, macroSteps }, index) => {
               const reported = report?.steps[index];
+              const sourceLabel =
+                reported === undefined ? undefined : stepSourceLabel(reported.source, macroSteps);
               return (
-                <li key={edge.id} data-step-status={reported?.status ?? "pending"}>
-                  <strong>{name}</strong> · {edge.transitionClass}
+                <li key={id} data-step-status={reported?.status ?? "pending"}>
+                  <strong>{name}</strong> · {transitionClass}
                   {reported === undefined ? null : (
                     <span className={styles.stepStatus}> · {stepStatusLabel(reported.status)}</span>
+                  )}
+                  {sourceLabel === undefined ? null : (
+                    <span className={styles.muted} data-step-source={reported?.source}>
+                      {" "}
+                      · {sourceLabel}
+                    </span>
                   )}
                   {reported?.diagnostic === undefined ? null : (
                     <span className={styles.choiceReason}>{reported.diagnostic.message}</span>

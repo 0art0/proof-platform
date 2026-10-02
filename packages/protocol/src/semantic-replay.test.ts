@@ -15,11 +15,14 @@ import {
 import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import {
   actorSchema,
+  deriveMacroStep,
+  deriveOperationStep,
   deriveSemanticStep,
   planSemanticReplay,
   prepareDisplayedSuggestionSet,
   prepareProofCommand,
   proofNodeIdSchema,
+  semanticOperationStepSchema,
   semanticReplayReportSchema,
   semanticStepSchema,
   type DisplayedSuggestionSet,
@@ -27,6 +30,7 @@ import {
   type ProofNode,
   type SemanticReplayInput,
   type SemanticReplaySourceStep,
+  type SemanticStep,
 } from "./index";
 
 const human = actorSchema.parse({ id: "actor:human", kind: "human" });
@@ -715,5 +719,590 @@ describe("planSemanticReplay", () => {
         },
       ],
     });
+  });
+});
+
+// --------------------------------------------------------------------------------------------
+// N45: steps applied without a displayed suggestion
+// --------------------------------------------------------------------------------------------
+
+/** A branch of raw kernel operations: no suggestion, no preview, optionally a move ID. */
+class RawBranch {
+  readonly nodes: ProofNode[];
+  readonly edges: ProofEdge[] = [];
+  readonly origins = new Map<string, "backtrack" | "raw-operation">();
+
+  constructor(root: ProofNode) {
+    this.nodes = [root];
+  }
+
+  get leaf(): ProofNode {
+    return this.nodes.at(-1) as ProofNode;
+  }
+
+  apply(
+    commandId: string,
+    operation: Record<string, unknown>,
+    options: { moveId?: string; origin?: "backtrack" | "raw-operation" } = {},
+  ): this {
+    const parent = this.leaf;
+    const ids = recordIds(commandId);
+    const result = prepareProofCommand(
+      parent,
+      {
+        commandId,
+        kind: "apply-kernel-operation",
+        actor: human,
+        parentNodeId: parent.id,
+        resultNodeId: ids.resultNodeId,
+        edgeId: ids.edgeId,
+        eventId: ids.eventId,
+        ...(options.moveId === undefined ? {} : { moveId: options.moveId }),
+        operation: {
+          ...operation,
+          expectedStateId: parent.state.id,
+          resultStateId: ids.resultStateId,
+        },
+      },
+      { trustedActor: human },
+    );
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    this.nodes.push(result.prepared.node);
+    this.edges.push(result.prepared.edge);
+    this.origins.set(result.prepared.edge.id, options.origin ?? "raw-operation");
+    return this;
+  }
+
+  steps(): SemanticReplaySourceStep[] {
+    return this.edges.map((edge) => {
+      const derived = deriveOperationStep({
+        parent: this.nodes.find(({ id }) => id === edge.parentNodeId) as ProofNode,
+        child: this.nodes.find(({ id }) => id === edge.childNodeId) as ProofNode,
+        edge,
+        origin: this.origins.get(edge.id) as "backtrack" | "raw-operation",
+      });
+      if (!derived.ok) throw new Error(derived.diagnostics[0].message);
+      return { sourceEdgeId: edge.id, step: derived.step };
+    });
+  }
+}
+
+const goalTarget = (id: string) => ({ kind: "goal", id });
+
+/** A case split on the goal's own conclusion (the backtracking shape), then its auto-close. */
+function backtrackBranch(conclusion: PlainMathJson, symbols: readonly string[]): RawBranch {
+  return new RawBranch(rootNode("node:source", "goal:main", symbols, conclusion))
+    .apply(
+      "b1",
+      {
+        kind: "split-classical-cases",
+        target: goalTarget("goal:main"),
+        proposition: conclusion,
+        childIds: ["statement:b1:case:1", "statement:b1:case:2"],
+        branchHypothesisIds: ["statement:b1:hypothesis:1", "statement:b1:hypothesis:2"],
+      },
+      { origin: "backtrack" },
+    )
+    .apply(
+      "b1:auto-close",
+      {
+        kind: "close-by-hypothesis",
+        target: goalTarget("statement:b1:case:1"),
+        hypothesisId: "statement:b1:hypothesis:1",
+      },
+      { origin: "backtrack" },
+    );
+}
+
+/** (p ∧ q) ⇒ (q ∧ p) by raw operations: introduce, expand, split, close the first conjunct. */
+function rawSwapBranch(): RawBranch {
+  return new RawBranch(
+    rootNode("node:source", "goal:main", ["p", "q"], SWAP as unknown as PlainMathJson),
+  )
+    .apply("r1", {
+      kind: "introduce-implication",
+      target: goalTarget("goal:main"),
+      hypothesisId: "statement:r1:hypothesis",
+    })
+    .apply("r2", {
+      kind: "expand-hypothesis-conjunction",
+      target: goalTarget("goal:main"),
+      hypothesisId: "statement:r1:hypothesis",
+      expandedHypothesisIds: ["statement:r2:left", "statement:r2:right"],
+    })
+    .apply("r3", {
+      kind: "split-goal-conjunction",
+      target: goalTarget("goal:main"),
+      childIds: ["statement:r3:first", "statement:r3:second"],
+    })
+    .apply("r4", {
+      kind: "close-by-hypothesis",
+      target: goalTarget("statement:r3:first"),
+      hypothesisId: "statement:r2:right",
+    });
+}
+
+const IMPLIES_QP = ["Implies", "q", "p"] as unknown as PlainMathJson;
+
+describe("deriveOperationStep", () => {
+  it("describes a backtracking split and auto-close by the target pattern and named hypotheses", () => {
+    const steps = backtrackBranch(IMPLIES_QP, ["p", "q"]).steps();
+    const [split, close] = steps.map(({ step }) => step);
+    expect(semanticOperationStepSchema.safeParse(split).success).toBe(true);
+    expect(split).toMatchObject({
+      source: "operation",
+      origin: "backtrack",
+      transitionClass: "equivalence",
+      referenced: [],
+      selections: [
+        {
+          slotId: "target",
+          target: { kind: "goal", id: "goal:main" },
+          statement: { role: "conclusion" },
+          occurrence: { kind: "exact", path: [] },
+          fragment: IMPLIES_QP,
+          variables: [
+            { symbol: "p", sort: PROPOSITION_SORT },
+            { symbol: "q", sort: PROPOSITION_SORT },
+          ],
+        },
+      ],
+    });
+    // "Close the case whose goal is the case hypothesis": the target and the hypothesis agree.
+    expect(close).toMatchObject({
+      origin: "backtrack",
+      referenced: ["statement:b1:hypothesis:1"],
+      selections: [
+        { slotId: "target", target: { kind: "goal", id: "statement:b1:case:1" } },
+        {
+          slotId: "ref:1",
+          statement: { role: "hypothesis", id: "statement:b1:hypothesis:1" },
+          fragment: IMPLIES_QP,
+        },
+      ],
+    });
+    expect(Object.isFrozen(split)).toBe(true);
+  });
+
+  it("names the hypotheses and the rewritten occurrence of a raw operation", () => {
+    const [, expand] = rawSwapBranch().steps();
+    expect(expand?.step).toMatchObject({
+      source: "operation",
+      origin: "raw-operation",
+      referenced: ["statement:r1:hypothesis"],
+      selections: [
+        { slotId: "target", statement: { role: "conclusion" } },
+        { slotId: "ref:1", statement: { role: "hypothesis", id: "statement:r1:hypothesis" } },
+      ],
+    });
+    const branch = new RawBranch(
+      rootNode(
+        "node:source",
+        "goal:main",
+        ["p", "q"],
+        ["Or", "p", "q"] as unknown as PlainMathJson,
+        [{ id: "statement:equivalence", expression: ["Equivalent", "p", "q"] as never }],
+      ),
+    ).apply("rw", {
+      kind: "rewrite-with-equivalence",
+      target: goalTarget("goal:main"),
+      statement: { kind: "conclusion" },
+      path: [0],
+      source: { kind: "hypothesis", hypothesisId: "statement:equivalence" },
+      direction: "forward",
+    });
+    expect(branch.steps()[0]?.step).toMatchObject({
+      referenced: ["statement:equivalence"],
+      selections: [
+        { slotId: "target", occurrence: { kind: "exact", path: [0] }, fragment: "p" },
+        { slotId: "ref:1", statement: { role: "hypothesis", id: "statement:equivalence" } },
+      ],
+    });
+  });
+
+  it("refuses snapshots that do not belong to the edge, and an unknown target", () => {
+    const branch = rawSwapBranch();
+    const edge = branch.edges[0] as ProofEdge;
+    expect(
+      deriveOperationStep({
+        parent: branch.nodes[1] as ProofNode,
+        child: branch.nodes[2] as ProofNode,
+        edge,
+      }),
+    ).toMatchObject({ ok: false, diagnostics: [{ code: "step-not-replayable" }] });
+    const bare = rootNode("node:other", "goal:other", ["p"], "p");
+    expect(
+      deriveOperationStep({
+        parent: bare,
+        child: bare,
+        edge: { ...edge, parentNodeId: bare.id, childNodeId: bare.id },
+      }),
+    ).toMatchObject({ ok: false, diagnostics: [{ code: "step-not-replayable" }] });
+  });
+});
+
+describe("deriveMacroStep", () => {
+  it("refuses edges that are not one complete, consecutive macro application", () => {
+    const branch = swapBranch();
+    const edges = branch.edges.slice(0, 2);
+    const set = branch.sets.get(edges[0]?.suggestionSetId as string) as DisplayedSuggestionSet;
+    const result = deriveMacroStep({
+      parent: branch.nodes[0] as ProofNode,
+      child: branch.nodes[2] as ProofNode,
+      edges,
+      preview: {
+        id: "preview:none",
+        suggestionSetId: set.id,
+        chosenSuggestionId: edges[0]?.chosenSuggestionId as string,
+      },
+      suggestionSet: set,
+    });
+    expect(result).toMatchObject({ ok: false, diagnostics: [{ code: "step-not-replayable" }] });
+    expect(
+      deriveMacroStep({
+        parent: branch.nodes[0] as ProofNode,
+        child: branch.nodes[1] as ProofNode,
+        edges: branch.edges.slice(0, 1),
+        preview: { id: "preview:none", suggestionSetId: set.id, chosenSuggestionId: "x" },
+        suggestionSet: set,
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("accepts a macro field only on a move step", () => {
+    const [first] = swapBranch().steps();
+    const plan = first?.step as SemanticStep;
+    const withMacro = {
+      ...plan,
+      macro: {
+        steps: [
+          { id: "step-one", moveId: plan.moveId, operation: plan.operation },
+          { id: "step-two", moveId: plan.moveId, operation: plan.operation },
+        ],
+      },
+    };
+    expect(semanticStepSchema.safeParse(withMacro).success).toBe(true);
+    expect(semanticStepSchema.safeParse({ ...withMacro, source: "result" }).success).toBe(false);
+  });
+});
+
+describe("planSemanticReplay over steps without a suggestion", () => {
+  const rawTarget = (
+    goalId: string,
+    names: Readonly<Record<string, string>>,
+    extra: string[] = [],
+  ) =>
+    rootNode(
+      "node:target",
+      goalId,
+      [...Object.values(names), ...extra],
+      rename(SWAP as unknown as PlainMathJson, names),
+    );
+
+  it("replays a backtracking split and auto-close exactly, as backtracking steps", () => {
+    const branch = backtrackBranch(IMPLIES_QP, ["p", "q"]);
+    const target = rootNode("node:target", "goal:main", ["p", "q"], IMPLIES_QP);
+    const result = planSemanticReplay(replayInput(branch.steps(), target));
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(semanticReplayReportSchema.safeParse(result.report).success).toBe(true);
+    expect(result.report).toMatchObject({ complete: true, substitutions: [] });
+    expect(result.report.steps.map(({ status, source }) => [status, source])).toEqual([
+      ["exact", "backtrack"],
+      ["exact", "backtrack"],
+    ]);
+    expect(result.replayed.map(({ prepared }) => prepared.receipt.commandId)).toEqual([
+      "replay:replay:1",
+      "replay:replay:2",
+    ]);
+    // The case assuming the proposition is closed; the other case remains, assuming its negation.
+    const [open, ...rest] = result.finalNode.state.goals;
+    expect(rest).toEqual([]);
+    expect(open?.sequent.context.hypotheses.map(({ statement }) => statement.expression)).toEqual([
+      ["Not", IMPLIES_QP],
+    ]);
+    expect(result.report.steps[1]?.selections.map(({ slotId }) => slotId)).toEqual([
+      "target",
+      "ref:1",
+    ]);
+    // The plans are recorded in the replayed branch's terms and stay operation plans.
+    expect(result.replayed.every(({ plan }) => plan.source === "operation")).toBe(true);
+  });
+
+  it("re-matches the split proposition on a renamed target and reports the adaptation", () => {
+    const branch = backtrackBranch(IMPLIES_QP, ["p", "q"]);
+    const target = rootNode("node:target", "goal:other", ["a", "b"], [
+      "Implies",
+      "b",
+      "a",
+    ] as never);
+    const result = planSemanticReplay(replayInput(branch.steps(), target));
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report.complete).toBe(true);
+    expect(result.report.substitutions).toEqual([
+      { symbol: "q", expression: "b" },
+      { symbol: "p", expression: "a" },
+    ]);
+    expect(result.report.steps.map(({ status }) => status)).toEqual(["adapted", "exact"]);
+    const split = result.replayed[0]?.prepared.prepared.edge.operation;
+    expect(split).toMatchObject({
+      kind: "split-classical-cases",
+      proposition: ["Implies", "b", "a"],
+      target: { kind: "goal", id: "goal:other" },
+    });
+    expect(
+      result.finalNode.state.goals[0]?.sequent.context.hypotheses.map(
+        ({ statement }) => statement.expression,
+      ),
+    ).toEqual([["Not", ["Implies", "b", "a"]]]);
+  });
+
+  it("fails a backtracking step whose target no longer matches, with repair candidates", () => {
+    const branch = backtrackBranch(IMPLIES_QP, ["p", "q"]);
+    const target = rootNode("node:target", "goal:main", ["p", "q"], ["Or", "p", "q"] as never);
+    const result = planSemanticReplay(replayInput(branch.steps(), target));
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report).toMatchObject({
+      complete: false,
+      firstFailure: { index: 1, diagnostic: { code: "no-matching-selection" } },
+    });
+    expect(result.report.steps.map(({ status, source }) => [status, source])).toEqual([
+      ["failed", "backtrack"],
+      ["not-attempted", "backtrack"],
+    ]);
+    expect(result.replayed).toEqual([]);
+  });
+
+  it("replays raw kernel operations as raw operations, mapping hypotheses and generating ids", () => {
+    const branch = rawSwapBranch();
+    const target = rawTarget("goal:other", { p: "a", q: "b" });
+    const result = planSemanticReplay(replayInput(branch.steps(), target));
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report.complete).toBe(true);
+    expect(result.report.steps.map(({ status, source }) => [status, source])).toEqual([
+      ["adapted", "raw-operation"],
+      ["exact", "raw-operation"],
+      ["exact", "raw-operation"],
+      ["exact", "raw-operation"],
+    ]);
+    expect(
+      result.finalNode.state.goals.map(({ sequent }) => sequent.conclusion.expression),
+    ).toEqual(["a"]);
+    // Every generated identifier is fresh and derived from the replayed command.
+    const expand = result.replayed[1]?.prepared.prepared.edge.operation;
+    expect(expand).toMatchObject({
+      kind: "expand-hypothesis-conjunction",
+      hypothesisId: expect.stringContaining("replay:replay:1"),
+      expandedHypothesisIds: [
+        expect.stringContaining("replay:replay:2"),
+        expect.stringContaining("replay:replay:2"),
+      ],
+    });
+    expect(
+      result.replayed.every(({ prepared }) => prepared.prepared.edge.suggestionSetId === undefined),
+    ).toBe(true);
+  });
+
+  it("is invariant under symbol and goal renaming for backtrack and raw steps", () => {
+    const backtrack = backtrackBranch(IMPLIES_QP, ["p", "q"]);
+    const raw = rawSwapBranch();
+    const backtrackSteps = backtrack.steps();
+    const rawSteps = raw.steps();
+    const names = fc
+      .stringMatching(/^[a-z][a-z0-9]{0,5}$/)
+      .filter((name) => !["p", "q", "e", "i"].includes(name));
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(names, { minLength: 2, maxLength: 2 }),
+        fc.stringMatching(/^goal:[a-z]{1,8}$/),
+        fc.boolean(),
+        ([first, second], goalId, shuffle) => {
+          const mapping = { p: first as string, q: second as string };
+          const symbols = shuffle ? [mapping.q, mapping.p] : [mapping.p, mapping.q];
+          const agrees = (
+            result: ReturnType<typeof planSemanticReplay>,
+            leaf: ProofNode,
+          ): boolean => {
+            if (!result.ok || !result.report.complete) return false;
+            const expected = leaf.state.goals.map(({ sequent }) =>
+              rename(sequent.conclusion.expression, mapping),
+            );
+            const actual = result.finalNode.state.goals.map(
+              ({ sequent }) => sequent.conclusion.expression,
+            );
+            return (
+              actual.length === expected.length &&
+              actual.every((expression, index) =>
+                alphaEquivalent(expression, expected[index] as PlainMathJson),
+              ) &&
+              result.report.substitutions.every(
+                ({ symbol, expression }) => expression === mapping[symbol as "p" | "q"],
+              )
+            );
+          };
+          const backtracked = planSemanticReplay(
+            replayInput(
+              backtrackSteps,
+              rootNode("node:target", goalId, symbols, rename(IMPLIES_QP, mapping)),
+            ),
+          );
+          const rawResult = planSemanticReplay(
+            replayInput(
+              rawSteps,
+              rootNode(
+                "node:target",
+                goalId,
+                symbols,
+                rename(SWAP as unknown as PlainMathJson, mapping),
+              ),
+            ),
+          );
+          return agrees(backtracked, backtrack.leaf) && agrees(rawResult, raw.leaf);
+        },
+      ),
+      { numRuns: 40 },
+    );
+  });
+
+  it("replays rewrite operations at the re-matched occurrence", () => {
+    const hypotheses = [{ id: "statement:equivalence", expression: ["Equivalent", "p", "q"] }];
+    const branch = new RawBranch(
+      rootNode(
+        "node:source",
+        "goal:main",
+        ["p", "q", "r"],
+        ["Or", "r", "p"] as unknown as PlainMathJson,
+        hypotheses as never,
+      ),
+    ).apply("rw", {
+      kind: "rewrite-with-equivalence",
+      target: goalTarget("goal:main"),
+      statement: { kind: "conclusion" },
+      path: [1],
+      source: { kind: "hypothesis", hypothesisId: "statement:equivalence" },
+      direction: "forward",
+    });
+    const target = rootNode(
+      "node:target",
+      "goal:renamed",
+      ["a", "b", "c"],
+      ["Or", "c", "a"] as unknown as PlainMathJson,
+      [{ id: "statement:renamed", expression: ["Equivalent", "a", "b"] }] as never,
+    );
+    const result = planSemanticReplay(replayInput(branch.steps(), target));
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report.complete).toBe(true);
+    expect(result.finalNode.state.goals[0]?.sequent.conclusion.expression).toEqual([
+      "Or",
+      "c",
+      "b",
+    ]);
+    expect(result.replayed[0]?.prepared.prepared.edge.operation).toMatchObject({
+      path: [1],
+      source: { kind: "hypothesis", hypothesisId: "statement:renamed" },
+    });
+  });
+
+  it("applies the approved macro again as one step, or fails naming the missing macro", () => {
+    const branch = swapBranch();
+    const [first] = branch.steps();
+    const plan = first?.step as SemanticStep;
+    // A macro plan whose template is absent from the catalog fails with a repair hint.
+    const macroPlan = semanticStepSchema.parse({
+      ...plan,
+      moveId: "authored:missing-macro",
+      macro: {
+        steps: [
+          { id: "step-one", moveId: plan.moveId, operation: plan.operation },
+          { id: "step-two", moveId: plan.moveId, operation: plan.operation },
+        ],
+      },
+    });
+    const target = rootNode(
+      "node:target",
+      "goal:main",
+      ["p", "q"],
+      SWAP as unknown as PlainMathJson,
+    );
+    const result = planSemanticReplay(
+      replayInput([{ sourceEdgeId: "edge:c1", step: macroPlan }], target),
+    );
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report).toMatchObject({
+      complete: false,
+      firstFailure: {
+        index: 1,
+        diagnostic: {
+          code: "move-unavailable",
+          message: expect.stringContaining("not approved in this session"),
+        },
+      },
+    });
+    expect(result.report.steps[0]?.source).toBe("macro");
+  });
+});
+
+describe("planSemanticReplay over typed-binder operations (N46)", () => {
+  const real = { kind: "named", id: "sort:real" };
+  const typedRoot = (nodeId: string, goalId: string): ProofNode => ({
+    id: proofNodeIdSchema.parse(nodeId),
+    state: executableProofStateSchema.parse({
+      id: `state:${nodeId}`,
+      goals: [
+        {
+          id: goalId,
+          sequent: {
+            context: {
+              declarations: [
+                { id: "declaration:a", symbol: "a", sort: real, role: "universal-parameter" },
+              ],
+              hypotheses: [],
+            },
+            conclusion: {
+              expression: [
+                "ForAll",
+                ["Element", "x", "RealNumbers"],
+                ["Less", "x", ["Add", "x", 1]],
+              ],
+            },
+          },
+        },
+      ],
+      obligations: [],
+    }),
+  });
+
+  it("generates fresh declaration and membership identifiers and carries them to later steps", () => {
+    const branch = new RawBranch(typedRoot("node:source", "goal:main"))
+      .apply("t1", {
+        kind: "introduce-universal",
+        target: goalTarget("goal:main"),
+        parameterDeclarationId: "statement:t1:parameter",
+        membershipHypothesisId: "statement:t1:membership",
+      })
+      .apply("t2", {
+        kind: "drop-hypothesis",
+        target: goalTarget("goal:main"),
+        hypothesisId: "statement:t1:membership",
+      });
+    const result = planSemanticReplay(
+      replayInput(branch.steps(), typedRoot("node:target", "goal:other")),
+    );
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report.complete).toBe(true);
+    const [introduce, drop] = result.replayed.map(
+      ({ prepared }) => prepared.prepared.edge.operation,
+    );
+    expect(introduce).toMatchObject({
+      kind: "introduce-universal",
+      target: { id: "goal:other" },
+      parameterDeclarationId: expect.stringContaining("replay:replay:1"),
+      membershipHypothesisId: expect.stringContaining("replay:replay:1"),
+    });
+    // The later step names the membership hypothesis the replayed step created.
+    expect(drop).toMatchObject({
+      kind: "drop-hypothesis",
+      hypothesisId: (introduce as { membershipHypothesisId: string }).membershipHypothesisId,
+    });
+    expect(result.finalNode.state.goals[0]?.sequent.context.hypotheses).toEqual([]);
   });
 });

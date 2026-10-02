@@ -904,3 +904,95 @@ describe("toolbar guidance", () => {
     for (const reason of reasons) expect(reason).toHaveClass("visually-hidden");
   });
 });
+
+describe("the replay dialog's step sources (N45)", () => {
+  const macroEdge = (parent: string, child: string, stepIndex: number): HistoryEdge => {
+    const base = edge(parent, child, "Introduce an implication");
+    return {
+      ...base,
+      edge: {
+        ...base.edge,
+        moveId: "move:introduce-implication",
+        macro: {
+          moveId: "authored:intro-twice",
+          previewId: "preview:macro",
+          stepIndex,
+          stepCount: 2,
+          stepId: `step-${stepIndex}`,
+        },
+      } as unknown as ProofEdge,
+    };
+  };
+  const macroEdges = [
+    macroEdge("node:root", "node:a", 1),
+    macroEdge("node:a", "node:b", 2),
+    edge("node:b", "node:c", "Case split"),
+    edge("node:root", "node:sibling", "Sibling move"),
+  ];
+
+  const step = (index: number, sourceEdgeId: string, source: string) => ({
+    index,
+    sourceEdgeId,
+    source,
+    status: "exact",
+    selections: [],
+    substitutions: [],
+    resultSubstitutions: [],
+    parameters: [],
+    obligations: [],
+    alternatives: [],
+  });
+
+  it("shows a macro application as one step and names how each step was applied", async () => {
+    stubDryRuns(
+      () =>
+        ({
+          ...completeReport(2),
+          steps: [step(1, "edge:a", "macro"), step(2, "edge:c", "backtrack")],
+        }) as unknown as SemanticReplayReport,
+    );
+    renderBar({ node: sibling, history: { kind: "ready", nodes, edges: macroEdges } });
+    fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
+    const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
+    fireEvent.change(within(dialog).getByLabelText("Replay the path ending at"), {
+      target: { value: "node:c" },
+    });
+    await within(dialog).findByRole("region", { name: "Replay report" });
+    const steps = within(dialog).getByRole("region", { name: "Steps to replay" });
+    // Three stored edges, two replay steps: the two macro edges replay once.
+    const items = within(steps).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("macro applied again as one step (2 steps)");
+    expect(items[1]).toHaveTextContent("case split by backtracking");
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Replay 2 steps here" })).toBeEnabled(),
+    );
+  });
+
+  it("names a raw operation, and shows a failed macro's repair hint", async () => {
+    stubDryRuns(
+      () =>
+        ({
+          ...completeReport(1),
+          complete: false,
+          steps: [{ ...step(1, "edge:sibling", "raw-operation"), status: "failed" }],
+          firstFailure: {
+            index: 1,
+            diagnostic: {
+              code: "move-unavailable",
+              message: "The macro intro-twice is not approved in this session.",
+            },
+            repairs: [],
+          },
+        }) as unknown as SemanticReplayReport,
+    );
+    renderBar({ node: nodeC, history: { kind: "ready", nodes, edges: macroEdges } });
+    fireEvent.click(screen.getByRole("button", { name: "Replay a sequence here…" }));
+    const dialog = screen.getByRole("dialog", { name: "Replay a sequence here" });
+    const report = await within(dialog).findByRole("region", { name: "Replay report" });
+    expect(report).toHaveTextContent("is not approved in this session");
+    const steps = within(dialog).getByRole("region", { name: "Steps to replay" });
+    expect(within(steps).getByText(/raw operation, applied without a suggestion/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Replay 1 step here" })).toBeDisabled();
+  });
+});

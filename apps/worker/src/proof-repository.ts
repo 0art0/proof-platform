@@ -80,6 +80,8 @@ import {
 } from "./approved-catalog";
 import {
   MAX_REPLAY_STEPS,
+  deriveMacroStep,
+  deriveOperationStep,
   deriveSemanticStep,
   planSemanticReplay,
   semanticReplayCommandSchema,
@@ -92,6 +94,7 @@ import {
   type SemanticReplayReport,
   type SemanticReplaySourceStep,
   type SemanticReplayStepRecord,
+  type SemanticStep,
 } from "@proof/protocol";
 
 const stableStorageIdentifierSchema = z
@@ -2441,8 +2444,10 @@ export async function commitSemanticReplay(
       if (!result.report.complete) {
         return { status: "replay-failed" as const, report: result.report };
       }
-      for (const step of result.replayed) {
-        const stepCommandId = step.prepared.prepared.command.commandId;
+      // A macro step applies several commands; the last one carries the step's command ID.
+      const allCommands = result.replayed.flatMap((step) => [...step.preceding, step.prepared]);
+      for (const command of allCommands) {
+        const stepCommandId = command.prepared.command.commandId;
         const deleted = await deletedCommandFailure(transaction, session.id, stepCommandId);
         if (deleted !== undefined) return deleted;
         if ((await transaction.readCommand(session.id, stepCommandId)) !== undefined) {
@@ -2459,15 +2464,21 @@ export async function commitSemanticReplay(
         transaction,
         session.id,
         environment,
-        result.replayed.map(({ prepared }) => prepared),
+        allCommands,
       );
-      for (const [position, step] of result.replayed.entries()) {
-        const sequenced = sequencedReplay[position] as PrepareProofCommandSuccess;
-        const { prepared } = sequenced;
-        await transaction.insertNode(session.id, prepared.node);
-        await transaction.insertEdge(session.id, prepared.edge);
-        await transaction.insertEvent(session.id, prepared.event);
-        await transaction.insertCommand(session.id, sequenced);
+      let offset = 0;
+      for (const step of result.replayed) {
+        const size = step.preceding.length + 1;
+        const sequencedStep = sequencedReplay.slice(offset, offset + size);
+        offset += size;
+        for (const sequenced of sequencedStep) {
+          const { prepared } = sequenced;
+          await transaction.insertNode(session.id, prepared.node);
+          await transaction.insertEdge(session.id, prepared.edge);
+          await transaction.insertEvent(session.id, prepared.event);
+          await transaction.insertCommand(session.id, sequenced);
+        }
+        const { prepared } = sequencedStep.at(-1) as PrepareProofCommandSuccess;
         const record = safeParse(semanticReplayStepRecordSchema, {
           commandId: prepared.command.commandId,
           replayCommandId: commandId,
@@ -2561,7 +2572,9 @@ async function planReplayInTransaction(
   }
 
   const steps: SemanticReplaySourceStep[] = [];
-  for (const edge of path) {
+  let backtrackCommands: ReadonlySet<string> | undefined;
+  for (let position = 0; position < path.length; position += 1) {
+    const edge = path[position] as ProofEdge;
     const parent = nodes.get(edge.parentNodeId);
     const child = nodes.get(edge.childNodeId);
     if (parent === undefined || child === undefined) {
@@ -2573,6 +2586,27 @@ async function planReplayInTransaction(
           "A source step's snapshots are missing.",
         ),
       };
+    }
+    // One macro application is one replay step (N45): its edges share a macro link.
+    if (edge.macro !== undefined && edge.macro.stepIndex === 1) {
+      const application = path.slice(position, position + edge.macro.stepCount);
+      const last = nodes.get(application.at(-1)?.childNodeId ?? "");
+      const macroStep =
+        last === undefined || application.length !== edge.macro.stepCount
+          ? undefined
+          : await deriveMacroInTransaction(
+              transaction,
+              session,
+              environment,
+              application,
+              parent,
+              last,
+            );
+      if (macroStep !== undefined) {
+        steps.push({ sourceEdgeId: edge.id, step: macroStep });
+        position += application.length - 1;
+        continue;
+      }
     }
     if (edge.suggestionSetId !== undefined) {
       const loaded = await loadSuggestionSet(transaction, session, edge.suggestionSetId);
@@ -2607,15 +2641,28 @@ async function planReplayInTransaction(
       steps.push({ sourceEdgeId: edge.id, step: record.plan });
       continue;
     }
-    steps.push({
-      sourceEdgeId: edge.id,
-      unavailable:
-        edge.macro === undefined
-          ? "The step was not applied from a displayed suggestion (for example a backtracking case " +
-            "split), so it has no recorded selections to re-match."
-          : `The step is step ${edge.macro.stepIndex} of the macro ${edge.macro.moveId}; it has no ` +
-            "recorded selections of its own, so apply the macro again instead of replaying its steps.",
+    // No displayed suggestion: a backtracking step or a raw operation, planned from its operation.
+    if (backtrackCommands === undefined) {
+      backtrackCommands = await backtrackCommandIds(transaction, session);
+    }
+    const derivedOperation = deriveOperationStep({
+      parent,
+      child,
+      edge,
+      origin:
+        edge.moveId === undefined &&
+        (backtrackCommands.has(edge.commandId) ||
+          (edge.commandId.endsWith(":auto-close") &&
+            backtrackCommands.has(edge.commandId.slice(0, -":auto-close".length))))
+          ? "backtrack"
+          : "raw-operation",
+      operators: session.operators,
     });
+    steps.push(
+      derivedOperation.ok
+        ? { sourceEdgeId: edge.id, step: derivedOperation.step }
+        : { sourceEdgeId: edge.id, unavailable: derivedOperation.diagnostics[0].message },
+    );
   }
 
   const result = planSemanticReplay({
@@ -2629,9 +2676,76 @@ async function planReplayInTransaction(
     operators: session.operators,
     ...(environment.results === undefined ? {} : { results: environment.results }),
     moves: definitions.moves,
+    ...(definitions.macros === undefined ? {} : { macros: definitions.macros }),
   });
   if (!result.ok) return rejected(result.diagnostics[0].message);
   return { ok: true, result, targetNodeId: target.id };
+}
+
+/**
+ * The plan of one stored macro application, from its stored preview and the suggestion set it was
+ * applied from. Undefined when either is gone: the application's steps are then replayed one by
+ * one as raw operations.
+ */
+async function deriveMacroInTransaction(
+  transaction: ProofStoreTransaction,
+  session: ProofSession,
+  environment: ProtocolEnvironment,
+  application: readonly ProofEdge[],
+  parent: ProofNode,
+  child: ProofNode,
+): Promise<SemanticStep | undefined> {
+  const previewId = application[0]?.macro?.previewId;
+  if (previewId === undefined) return undefined;
+  const previewInput = await transaction.readPreview(session.id, previewId);
+  const preview =
+    previewInput === undefined
+      ? undefined
+      : safeParse(createMovePreviewSchema(environment), previewInput);
+  if (preview === undefined || preview.id !== previewId) return undefined;
+  const loaded = await loadSuggestionSet(transaction, session, preview.suggestionSetId);
+  if (!loaded.ok) return undefined;
+  const derived = deriveMacroStep({
+    parent,
+    child,
+    edges: application,
+    preview,
+    suggestionSet: loaded.suggestionSet,
+    operators: session.operators,
+  });
+  return derived.ok ? derived.step : undefined;
+}
+
+/** The command IDs of the session's backtracking-with-information commands. */
+async function backtrackCommandIds(
+  transaction: ProofStoreTransaction,
+  session: ProofSession,
+): Promise<ReadonlySet<string>> {
+  const commands = new Set<string>();
+  let afterSequence = 0;
+  for (let page = 0; page < 1000; page += 1) {
+    const rows = await transaction.listInteractionEvents(session.id, {
+      afterSequence,
+      limit: MAX_INTERACTION_EVENTS_PER_READ,
+    });
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    for (const row of rows) {
+      if (!isDataRecord(row)) continue;
+      if (typeof row.sequence === "number" && row.sequence > afterSequence) {
+        afterSequence = row.sequence;
+      }
+      const event = row.event;
+      if (
+        isDataRecord(event) &&
+        event.kind === "backtracked-with-information" &&
+        typeof event.commandId === "string"
+      ) {
+        commands.add(event.commandId);
+      }
+    }
+    if (rows.length < MAX_INTERACTION_EVENTS_PER_READ) break;
+  }
+  return commands;
 }
 
 /** A retry of a recorded replay: the same request replays; anything else is a conflict. */
@@ -2672,14 +2786,19 @@ async function replaySemanticReplay(
         "The command ID is already recorded for a different replay.",
       );
     }
-    const commandInput = await transaction.readCommand(session.id, stepId);
-    const recorded =
-      commandInput === undefined
-        ? undefined
-        : safeParse(createPrepareProofCommandSuccessSchema(environment), commandInput);
-    if (recorded === undefined || recorded.prepared.command.commandId !== stepId) return invalid;
+    // A macro step recorded every command it applied; the last one is the step's own.
+    for (const commandId of record.report.commandIds ?? [stepId]) {
+      const commandInput = await transaction.readCommand(session.id, commandId);
+      const recorded =
+        commandInput === undefined
+          ? undefined
+          : safeParse(createPrepareProofCommandSuccessSchema(environment), commandInput);
+      if (recorded === undefined || recorded.prepared.command.commandId !== commandId) {
+        return invalid;
+      }
+      receipts.push(recorded.receipt);
+    }
     records.push(record);
-    receipts.push(recorded.receipt);
   }
   const last = records.at(-1);
   if (last === undefined) return invalid;
