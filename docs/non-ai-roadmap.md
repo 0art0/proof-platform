@@ -364,9 +364,10 @@ decisions for the user and are not scheduled here.
       placeholder, add requirement, add candidate, resolve, abandon); placeholders render by display name
       and are registered in selections and retrieval; add-requirement / add-candidate actions in the
       construction view. _Accept:_ an e2e that constructs a witness and resolves it.
-- [ ] **N43 Keyboard sub-expression selection.** A keyboard way to select, widen and narrow an occurrence
-      inside a formula, equivalent to the pointer gestures. _Accept:_ component and e2e keyboard-only
-      selection.
+- [-] **N43 Keyboard sub-expression selection.** _Deferred 2026-10-02 at the user's request; an interrupted
+  attempt is not in the repository._ A keyboard way to select, widen and narrow an occurrence
+  inside a formula, equivalent to the pointer gestures. _Accept:_ component and e2e keyboard-only
+  selection.
 - [ ] **N44 Conditional lemmas over HTTP and in the UI.** Route and envelope for `extractConditionalLemma`
       (library store is now wired), keeping only the hypotheses used, and a UI action. _Accept:_ HTTP and
       e2e tests.
