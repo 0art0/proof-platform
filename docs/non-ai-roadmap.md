@@ -387,10 +387,10 @@ decisions for the user and are not scheduled here.
   monomorphic data staying valid. _Accept:_ soundness properties (instantiation preserves
   well-sortedness; no ill-sorted transition is accepted), migrated packs, and at least one new pack.
 
-- [ ] **N48 Tighten built-in sort rules.** Found by the N47 design (§1.2): the checker accepts `Divide`
-      on ℕ/ℤ (so `n/m = n` validates), `Subtract` on ℕ, and order/`Abs` on ℂ. First a script reports any
-      stored session (memory/PostgreSQL) or artifact that would stop validating; then the rules are
-      tightened. _Accept:_ rejection tests per rule; corpus and coverage golden unchanged.
+- [-] **N48 Tighten built-in sort rules.** _Deferred 2026-10-02 at the user's request._ Found by the N47 design (§1.2): the checker accepts `Divide`
+  on ℕ/ℤ (so `n/m = n` validates), `Subtract` on ℕ, and order/`Abs` on ℂ. First a script reports any
+  stored session (memory/PostgreSQL) or artifact that would stop validating; then the rules are
+  tightened. _Accept:_ rejection tests per rule; corpus and coverage golden unchanged.
 
 ## Progress log
 
