@@ -1,9 +1,12 @@
 import {
+  CONSTRUCTION_OPERATION_KINDS,
+  CONSTRUCTION_TRANSITION_CLASSES,
   KERNEL_OPERATION_KINDS,
   applyTransition,
   KERNEL_TRANSITION_CLASSES,
   declaredTransitionClass,
   kernelOperationSchema,
+  type ConstructionOperationKind,
   type KernelEnvironment,
   type KernelOperation,
   type KernelOperationKind,
@@ -62,10 +65,21 @@ export const movePatternSchema = z
   .strict();
 export type MovePattern = z.infer<typeof movePatternSchema>;
 
+/**
+ * What a move can implement: a kernel primitive or a construction-task operation (N11, N42).
+ * Construction moves live in `CONSTRUCTION_MOVES`, apart from the `HAND_AUTHORED_MOVES` that
+ * retrieval ranks, because they are reached from a construction task rather than from a pattern.
+ */
+export const MOVE_OPERATION_KINDS = [
+  ...KERNEL_OPERATION_KINDS,
+  ...CONSTRUCTION_OPERATION_KINDS,
+] as const;
+export type MoveOperationKind = KernelOperationKind | ConstructionOperationKind;
+
 export const moveImplementationSchema = z
   .object({
     kind: z.literal("deterministic-kernel-primitive"),
-    operationKind: z.enum(KERNEL_OPERATION_KINDS),
+    operationKind: z.enum(MOVE_OPERATION_KINDS),
   })
   .strict();
 export type MoveImplementation = z.infer<typeof moveImplementationSchema>;
@@ -142,42 +156,45 @@ export type MoveDefinition = z.infer<typeof moveDefinitionSchema>;
  * the class the kernel reported for the actual outcome, which must be in this set.
  */
 export const PRIMITIVE_TRANSITION_CLASSES: Readonly<
-  Record<KernelOperationKind, readonly TransitionClass[]>
-> = KERNEL_TRANSITION_CLASSES;
+  Record<MoveOperationKind, readonly TransitionClass[]>
+> = Object.freeze({ ...KERNEL_TRANSITION_CLASSES, ...CONSTRUCTION_TRANSITION_CLASSES });
 
-export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, string>> = Object.freeze(
-  {
-    "close-by-hypothesis": "target",
-    "close-true": "target",
-    "close-false-hypothesis": "false",
-    "close-reflexive-equality": "target",
-    "close-by-contradiction": "negation",
-    "close-by-accepted-inference": "target",
-    "introduce-implication": "target",
-    "introduce-negation": "target",
-    "split-goal-conjunction": "target",
-    "choose-goal-disjunct": "target",
-    "expand-hypothesis-conjunction": "conjunction",
-    "split-hypothesis-disjunction": "disjunction",
-    "split-classical-cases": "target",
-    "assume-hypothesis": "target",
-    "replace-goal": "target",
-    suffices: "target",
-    "drop-hypothesis": "dropped",
-    "apply-implication-hypothesis": "implication",
-    "introduce-universal": "target",
-    "instantiate-universal-hypothesis": "universal",
-    "choose-existential-witness": "target",
-    "unpack-existential-hypothesis": "existential",
-    "rewrite-with-equality": "equality",
-    "rewrite-with-equivalence": "equivalence",
-    "rewrite-with-implication": "implication",
-    "apply-result-backward": "target",
-    "apply-result-forward": "target",
-    "mark-sorry": "target",
-    "close-by-assumption": "target",
-  },
-);
+export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<MoveOperationKind, string>> = Object.freeze({
+  "introduce-placeholder": "target",
+  "add-requirement": "target",
+  "add-candidate": "target",
+  "resolve-placeholder": "target",
+  "abandon-placeholder": "target",
+  "close-by-hypothesis": "target",
+  "close-true": "target",
+  "close-false-hypothesis": "false",
+  "close-reflexive-equality": "target",
+  "close-by-contradiction": "negation",
+  "close-by-accepted-inference": "target",
+  "introduce-implication": "target",
+  "introduce-negation": "target",
+  "split-goal-conjunction": "target",
+  "choose-goal-disjunct": "target",
+  "expand-hypothesis-conjunction": "conjunction",
+  "split-hypothesis-disjunction": "disjunction",
+  "split-classical-cases": "target",
+  "assume-hypothesis": "target",
+  "replace-goal": "target",
+  suffices: "target",
+  "drop-hypothesis": "dropped",
+  "apply-implication-hypothesis": "implication",
+  "introduce-universal": "target",
+  "instantiate-universal-hypothesis": "universal",
+  "choose-existential-witness": "target",
+  "unpack-existential-hypothesis": "existential",
+  "rewrite-with-equality": "equality",
+  "rewrite-with-equivalence": "equivalence",
+  "rewrite-with-implication": "implication",
+  "apply-result-backward": "target",
+  "apply-result-forward": "target",
+  "mark-sorry": "target",
+  "close-by-assumption": "target",
+});
 
 /**
  * Evidence each primitive's kernel transition may report. An accepted
@@ -194,8 +211,13 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, strin
  * exhaustive so a new primitive must choose its evidence explicitly.
  */
 export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
-  Record<KernelOperationKind, readonly TransitionEvidence[]>
+  Record<MoveOperationKind, readonly TransitionEvidence[]>
 > = deepFreeze({
+  "introduce-placeholder": ["structural"],
+  "add-requirement": ["structural"],
+  "add-candidate": ["structural"],
+  "resolve-placeholder": ["structural"],
+  "abandon-placeholder": ["structural"],
   "close-by-hypothesis": ["structural"],
   "close-true": ["structural"],
   "close-false-hypothesis": ["structural"],
@@ -231,7 +253,7 @@ type MoveCatalogInput = Readonly<{
   suffix: string;
   name: string;
   description: string;
-  operationKind: KernelOperationKind;
+  operationKind: MoveOperationKind;
   slots: readonly MoveSelectionSlot[];
   pattern: PlainMathJson;
   parameters: readonly MoveParameter[];
@@ -699,45 +721,146 @@ const catalogInputs: readonly MoveCatalogInput[] = [
   ),
 ];
 
-/** All trusted primitives have visible, inspectable move metadata; the catalog cannot mutate state. */
-export const HAND_AUTHORED_MOVES: readonly MoveDefinition[] = deepFreeze(
-  catalogInputs.map((input) =>
-    moveDefinitionSchema.parse({
-      id: `move:${input.suffix}`,
-      name: input.name,
-      description: input.description,
-      selectionContract: { slots: input.slots, allowAdditional: false },
-      patterns: [
-        {
-          id: `move-pattern:${input.suffix}`,
-          selectionSlotId: PRIMITIVE_PATTERN_SLOTS[input.operationKind],
-          expression: input.pattern,
-        },
-        ...(input.extraPatterns ?? []).map(({ slotId, pattern }) => ({
-          id: `move-pattern:${input.suffix}-${slotId}`,
-          selectionSlotId: slotId,
-          expression: pattern,
-        })),
-      ],
-      contextRequirements: ["All selected statements belong to the target contextual sequent."],
-      sideConditions: ["The kernel must validate the complete primitive operation."],
-      parameters: input.parameters,
-      requiredArtifacts: [],
-      implementation: {
-        kind: "deterministic-kernel-primitive",
-        operationKind: input.operationKind,
-      },
-      transitionClass: declaredTransitionClass(input.operationKind),
-      previewRenderer: "kernel-state-delta",
-      examples: { positive: input.positive, negative: [input.negative] },
-      provenance: { kind: "curated", source: "proof-platform Stage 2 move pack" },
-      approval: { status: "approved", reviewerId: "reviewer:core-moves" },
-    }),
+const constructionCatalogInputs: readonly MoveCatalogInput[] = [
+  catalogEntry(
+    "introduce-placeholder",
+    "Construct an object",
+    "Replace the witness of an existential target by a placeholder for the object to construct; its requirements and candidates are recorded on a construction task.",
+    [slot("target", "target-conclusion", "proposition")],
+    ["Exists", "x", "p"],
+    [
+      parameter("taskId", "Construction task ID", "generated-id"),
+      parameter("symbol", "Placeholder symbol", "generated-id"),
+      parameter("dependencies", "What the object may depend on", "menu"),
+    ],
+    [
+      "Construct a delta for an existential goal, allowed to depend on epsilon.",
+      "Construct a witness for a typed existential obligation, keeping its membership in the goal.",
+    ],
+    "The selected conclusion is not existential.",
   ),
-);
+  catalogEntry(
+    "add-requirement",
+    "Add requirement",
+    "Record a requirement an open construction must meet, taken from a statement of the proof state. It never becomes a hypothesis.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("taskId", "Construction", "menu"),
+      parameter("requirement", "Requirement", "menu"),
+      parameter("requirementId", "Requirement ID", "generated-id"),
+      parameter("attemptId", "Attempt ID", "generated-id"),
+    ],
+    [
+      "Record that the goal's own condition on the placeholder is sufficient.",
+      "Record a hypothesis mentioning the placeholder as a heuristic hint.",
+    ],
+    "No statement of the proof state mentions the open placeholder.",
+  ),
+  catalogEntry(
+    "add-candidate",
+    "Add candidate",
+    "Record a candidate object for an open construction, chosen from the terms the construction may depend on.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("taskId", "Construction", "menu"),
+      parameter("value", "Candidate", "menu"),
+      parameter("candidateId", "Candidate ID", "generated-id"),
+      parameter("attemptId", "Attempt ID", "generated-id"),
+    ],
+    [
+      "Offer epsilon as a candidate for delta when delta may depend on epsilon.",
+      "Offer a subterm of the goal as a candidate.",
+    ],
+    "A term that uses a variable outside the construction's allowed dependencies is not offered.",
+  ),
+  catalogEntry(
+    "resolve-placeholder",
+    "Use this candidate",
+    "Resolve an open construction with one of its candidates: the choice is substituted into every dependent statement and the remaining sufficient requirements become obligations.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("taskId", "Construction", "menu"),
+      parameter("candidateId", "Candidate", "menu"),
+      parameter("obligationIds", "Obligation IDs", "generated-id"),
+      parameter("attemptId", "Attempt ID", "generated-id"),
+    ],
+    [
+      "Resolve delta with the candidate epsilon, leaving its goal to prove.",
+      "Resolve a construction whose sufficient requirement was attested, which becomes an obligation.",
+    ],
+    "The construction has no candidate to use.",
+  ),
+  catalogEntry(
+    "abandon-placeholder",
+    "Abandon construction",
+    "Give up an open construction whose placeholder no longer occurs in the proof state; the record is kept as history.",
+    [slot("target", "target-conclusion", "proposition")],
+    "p",
+    [
+      parameter("taskId", "Construction", "menu"),
+      parameter("attemptId", "Attempt ID", "generated-id"),
+    ],
+    [
+      "Abandon an auxiliary construction nothing uses.",
+      "Abandon a construction after backtracking removed its placeholder.",
+    ],
+    "The placeholder still occurs in the proof state.",
+  ),
+];
+
+function buildMoves(inputs: readonly MoveCatalogInput[]): readonly MoveDefinition[] {
+  return deepFreeze(
+    inputs.map((input) =>
+      moveDefinitionSchema.parse({
+        id: `move:${input.suffix}`,
+        name: input.name,
+        description: input.description,
+        selectionContract: { slots: input.slots, allowAdditional: false },
+        patterns: [
+          {
+            id: `move-pattern:${input.suffix}`,
+            selectionSlotId: PRIMITIVE_PATTERN_SLOTS[input.operationKind],
+            expression: input.pattern,
+          },
+          ...(input.extraPatterns ?? []).map(({ slotId, pattern }) => ({
+            id: `move-pattern:${input.suffix}-${slotId}`,
+            selectionSlotId: slotId,
+            expression: pattern,
+          })),
+        ],
+        contextRequirements: ["All selected statements belong to the target contextual sequent."],
+        sideConditions: ["The kernel must validate the complete primitive operation."],
+        parameters: input.parameters,
+        requiredArtifacts: [],
+        implementation: {
+          kind: "deterministic-kernel-primitive",
+          operationKind: input.operationKind,
+        },
+        transitionClass: declaredTransitionClass(input.operationKind),
+        previewRenderer: "kernel-state-delta",
+        examples: { positive: input.positive, negative: [input.negative] },
+        provenance: { kind: "curated", source: "proof-platform Stage 2 move pack" },
+        approval: { status: "approved", reviewerId: "reviewer:core-moves" },
+      }),
+    ),
+  );
+}
+
+/** All trusted primitives have visible, inspectable move metadata; the catalog cannot mutate state. */
+export const HAND_AUTHORED_MOVES: readonly MoveDefinition[] = buildMoves(catalogInputs);
+
+/**
+ * Moves over the construction-task operations (N42). Their parameters are all menus or generated
+ * IDs, so no mathematics is typed. They are not retrieved by pattern: the construction view
+ * invokes them for an open task.
+ */
+export const CONSTRUCTION_MOVES: readonly MoveDefinition[] = buildMoves(constructionCatalogInputs);
 
 const moveById: ReadonlyMap<string, MoveDefinition> = new Map(
-  HAND_AUTHORED_MOVES.map((move) => [move.id, move]),
+  [...HAND_AUTHORED_MOVES, ...CONSTRUCTION_MOVES].map((move) => [move.id, move]),
 );
 
 /**
@@ -851,7 +974,7 @@ export function planMove(
 }
 
 function catalogEntry(
-  operationKind: KernelOperationKind,
+  operationKind: MoveOperationKind,
   name: string,
   description: string,
   slots: readonly MoveSelectionSlot[],

@@ -1306,3 +1306,144 @@ describe("planSemanticReplay over typed-binder operations (N46)", () => {
     expect(result.finalNode.state.goals[0]?.sequent.context.hypotheses).toEqual([]);
   });
 });
+
+describe("planSemanticReplay over construction operations (N42)", () => {
+  const real = { kind: "named", id: "sort:real" };
+  const context = {
+    declarations: [
+      { id: "declaration:eps", symbol: "eps", sort: real, role: "universal-parameter" },
+      { id: "declaration:delta", symbol: "delta", sort: real, role: "universal-parameter" },
+    ],
+    hypotheses: [{ id: "hypothesis:eps", statement: { expression: ["Greater", "eps", 0] } }],
+  };
+  const existential = [
+    "Exists",
+    "delta",
+    ["And", ["Greater", "delta", 0], ["Less", "delta", "eps"]],
+  ];
+  const goalWith = (id: string) => ({
+    id,
+    sequent: { context, conclusion: { expression: existential } },
+  });
+  const source = (): ProofNode => ({
+    id: proofNodeIdSchema.parse("node:source"),
+    state: executableProofStateSchema.parse({
+      id: "state:node:source",
+      goals: [goalWith("goal:main")],
+      obligations: [],
+    }),
+  });
+
+  function constructionBranch(): RawBranch {
+    return new RawBranch(source())
+      .apply("k1", {
+        kind: "introduce-placeholder",
+        target: goalTarget("goal:main"),
+        taskId: "task:delta",
+        symbol: "m",
+        displayName: "delta",
+        origin: { kind: "existential-goal" },
+        dependencies: ["eps"],
+        allowedTasks: [],
+      })
+      .apply("k2", {
+        kind: "add-candidate",
+        target: goalTarget("goal:main"),
+        taskId: "task:delta",
+        candidateId: "candidate:eps",
+        value: "eps",
+        attemptId: "attempt:k2",
+      })
+      .apply("k3", {
+        kind: "resolve-placeholder",
+        target: goalTarget("goal:main"),
+        taskId: "task:delta",
+        candidateId: "candidate:eps",
+        obligationIds: [],
+        attemptId: "attempt:k3",
+      });
+  }
+
+  /** The session after the first step already ran: its task and symbol are taken. */
+  function crowdedTarget(branch: RawBranch): ProofNode {
+    const afterIntroduction = branch.nodes[1] as ProofNode;
+    return {
+      id: proofNodeIdSchema.parse("node:target"),
+      state: executableProofStateSchema.parse({
+        ...afterIntroduction.state,
+        id: "state:node:target",
+        goals: [...afterIntroduction.state.goals, goalWith("goal:again")],
+      }),
+    };
+  }
+
+  it("replays into a session that already holds the recorded task and placeholder symbol", () => {
+    const branch = constructionBranch();
+    const result = planSemanticReplay(replayInput(branch.steps(), crowdedTarget(branch)));
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report.complete).toBe(true);
+    const [introduce, candidate, resolve] = result.replayed.map(
+      ({ prepared }) => prepared.prepared.edge.operation,
+    );
+    // The symbol is generated like an identifier, so the taken `m` is not reused.
+    expect(introduce).toMatchObject({
+      kind: "introduce-placeholder",
+      target: { id: "goal:again" },
+      symbol: expect.stringMatching(/^placeholder_[0-9a-f]{12}$/),
+      taskId: expect.stringContaining("replay:replay:1"),
+      dependencies: ["eps"],
+    });
+    const { taskId, symbol } = introduce as { taskId: string; symbol: string };
+    expect(symbol).not.toBe("m");
+    // Later steps follow the placeholder: the same fresh task, matched through the fresh symbol.
+    expect(candidate).toMatchObject({ kind: "add-candidate", taskId, value: "eps" });
+    expect(resolve).toMatchObject({ kind: "resolve-placeholder", taskId });
+    const final = result.finalNode.state;
+    expect(final.constructions?.map(({ status }) => status)).toEqual(["unresolved", "resolved"]);
+    expect(
+      final.goals.find(({ id }) => id === "goal:again")?.sequent.conclusion.expression,
+    ).toEqual(["And", ["Greater", "eps", 0], ["Less", "eps", "eps"]]);
+  });
+
+  it("replays onto a renamed variable the construction depends on", () => {
+    const branch = constructionBranch();
+    const renamed = executableProofStateSchema.parse({
+      id: "state:node:renamed",
+      goals: [
+        {
+          id: "goal:other",
+          sequent: {
+            context: {
+              declarations: [
+                { id: "declaration:a", symbol: "a", sort: real, role: "universal-parameter" },
+                { id: "declaration:d", symbol: "delta", sort: real, role: "universal-parameter" },
+              ],
+              hypotheses: [{ id: "hypothesis:a", statement: { expression: ["Greater", "a", 0] } }],
+            },
+            conclusion: {
+              expression: [
+                "Exists",
+                "delta",
+                ["And", ["Greater", "delta", 0], ["Less", "delta", "a"]],
+              ],
+            },
+          },
+        },
+      ],
+      obligations: [],
+    });
+    const result = planSemanticReplay(
+      replayInput(branch.steps(), { id: proofNodeIdSchema.parse("node:renamed"), state: renamed }),
+    );
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    expect(result.report.complete).toBe(true);
+    expect(result.replayed[0]?.prepared.prepared.edge.operation).toMatchObject({
+      dependencies: ["a"],
+    });
+    expect(result.finalNode.state.goals[0]?.sequent.conclusion.expression).toEqual([
+      "And",
+      ["Greater", "a", 0],
+      ["Less", "a", "a"],
+    ]);
+  });
+});

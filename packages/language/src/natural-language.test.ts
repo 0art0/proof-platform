@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { PROPOSITION_SORT, type PlainMathJson } from "@proof/mathjson-model";
+import {
+  PROPOSITION_SORT,
+  operatorDeclarationSchema,
+  type PlainMathJson,
+} from "@proof/mathjson-model";
 import { createNaturalLanguageRenderer, type NaturalLanguageContext } from "./natural-language";
 import {
   NUMBER_THEORY_PACK,
@@ -112,6 +116,32 @@ describe("relations", () => {
     expect(symbolic.statement(["Implies", ["Less", "x", "y"], ["Element", "x", "S"]])).toBe(
       "if $x < y$, then $x \\in S$",
     );
+  });
+});
+
+describe("construction placeholders", () => {
+  const placeholderRenderer = createNaturalLanguageRenderer({
+    operators: [
+      ...OPERATORS,
+      operatorDeclarationSchema.parse({
+        id: "construction-placeholder:task:m",
+        symbol: "ph",
+        signature: { parameters: [REAL], result: REAL },
+        presentation: { displayName: "δ" },
+      }),
+    ],
+  });
+
+  it("names a placeholder by its task, not as an application", () => {
+    expect(placeholderRenderer.statement(["Less", ["ph", "x"], "y"], context)).toBe(
+      "$\\boxed{δ}$ is less than $y$",
+    );
+    expect(
+      placeholderRenderer.statement(
+        ["And", ["Greater", ["ph", "x"], 0], ["Less", ["ph", "x"], "y"]],
+        context,
+      ),
+    ).toBe("$\\boxed{δ}$ is greater than $0$ and $\\boxed{δ}$ is less than $y$");
   });
 });
 

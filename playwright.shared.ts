@@ -7,6 +7,7 @@ export const WORKER_BACKED_SPECS = [
   "problem-entry.spec.ts",
   "toolbar-actions.spec.ts",
   "inquiry-panel.spec.ts",
+  "construction-actions.spec.ts",
   "mouse-only-flows.spec.ts",
   "gestures.spec.ts",
   "move-authoring.spec.ts",

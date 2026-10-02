@@ -7,8 +7,10 @@ import {
   type PlainMathJson,
 } from "@proof/mathjson-model";
 import {
+  CONSTRUCTION_TRANSITION_CLASSES,
   alphaEquivalent,
   applyTransition,
+  declaredTransitionClass,
   kernelOperationSchema,
   substitutePlaceholder,
 } from "./index";
@@ -160,6 +162,52 @@ function allHypotheses(state: ExecutableProofState): readonly PlainMathJson[] {
   );
 }
 
+describe("construction transition classes", () => {
+  it("reports each operation within its allowed class set", () => {
+    const state = introduced();
+    const withCandidate = ok(step(state, candidate("candidate:eps", "eps")));
+    const withRequirement = ok(
+      step(
+        withCandidate,
+        requirement("requirement:heuristic", "heuristic", ["Greater", m, 0], none),
+      ),
+    );
+    const resolved = step(withRequirement, resolve("candidate:eps"));
+    const auxiliary = step(initial(["Greater", "eps", 0]), auxiliaryOperation());
+    const results = {
+      "introduce-placeholder": step(initial(), introduce()),
+      "add-requirement": step(
+        state,
+        requirement("requirement:heuristic", "heuristic", ["Greater", m, 0], none),
+      ),
+      "add-candidate": step(state, candidate("candidate:eps", "eps")),
+      "resolve-placeholder": resolved,
+      "abandon-placeholder": step(ok(auxiliary), {
+        kind: "abandon-placeholder",
+        taskId: "task:aux",
+        attemptId: "attempt:9",
+      }),
+    } as const;
+    for (const [kind, result] of Object.entries(results)) {
+      expect(result.ok, kind).toBe(true);
+      if (!result.ok) continue;
+      expect(
+        CONSTRUCTION_TRANSITION_CLASSES[kind as keyof typeof CONSTRUCTION_TRANSITION_CLASSES],
+        kind,
+      ).toContain(result.transitionClass);
+      expect(declaredTransitionClass(kind as keyof typeof CONSTRUCTION_TRANSITION_CLASSES)).toBe(
+        kind === "resolve-placeholder" || kind === "introduce-placeholder"
+          ? "strengthening"
+          : "equivalence",
+      );
+    }
+  });
+
+  function auxiliaryOperation(): Readonly<Record<string, unknown>> {
+    return auxiliary("task:aux", "aux");
+  }
+});
+
 describe("introduce-placeholder", () => {
   it("replaces an existential witness by the placeholder applied to its dependencies", () => {
     const result = step(initial(), introduce());
@@ -212,6 +260,58 @@ describe("introduce-placeholder", () => {
         ],
       },
     });
+  });
+
+  describe("a typed existential binder", () => {
+    const body: PlainMathJson = ["And", ["Greater", "delta", 0], ["Less", "delta", "eps"]];
+    const typed = (): ExecutableProofState =>
+      initial(["Exists", ["Element", "delta", "RealNumbers"], body], ["eps"]);
+
+    it("takes the sort from the domain and keeps the membership in the goal", () => {
+      const result = step(typed(), introduce());
+      expect(result).toMatchObject({
+        ok: true,
+        transitionClass: "equivalence",
+        state: {
+          goals: [
+            {
+              sequent: {
+                conclusion: {
+                  expression: [
+                    "And",
+                    ["Element", m, "RealNumbers"],
+                    ["And", ["Greater", m, 0], ["Less", m, "eps"]],
+                  ],
+                },
+              },
+            },
+          ],
+          constructions: [{ symbol: "m", sort: realSort, status: "unresolved" }],
+        },
+      });
+      expect(executableProofStateSchema.safeParse(ok(result)).success).toBe(true);
+    });
+
+    it("is a strengthening without the sequent's variables", () => {
+      expect(step(typed(), introduce({ dependencies: [] }))).toMatchObject({
+        ok: true,
+        transitionClass: "strengthening",
+      });
+    });
+
+    it("resolves with a candidate, leaving the membership to prove", () => {
+      const withCandidate = ok(step(introduced0(), candidate("candidate:1", ["Divide", "eps", 2])));
+      const resolved = ok(step(withCandidate, resolve("candidate:1")));
+      expect(resolved.goals[0]?.sequent.conclusion.expression).toEqual([
+        "And",
+        ["Element", ["Divide", "eps", 2], "RealNumbers"],
+        ["And", ["Greater", ["Divide", "eps", 2], 0], ["Less", ["Divide", "eps", 2], "eps"]],
+      ]);
+    });
+
+    function introduced0(): ExecutableProofState {
+      return ok(step(typed(), introduce()));
+    }
   });
 
   it("rejects non-existential targets, stale names, and illegal dependencies", () => {

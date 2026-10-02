@@ -53,6 +53,7 @@ import {
   parseConstructionOperation,
   resolvePlaceholder,
   type ConstructionOperation,
+  type ConstructionOperationKind,
 } from "./constructions";
 import { operatorOperands, readQuantifier, type ReadQuantifier } from "./expression";
 import { closesByAssumption, sorryClosure } from "./obligations";
@@ -284,11 +285,38 @@ export const KERNEL_TRANSITION_CLASSES: Readonly<
 });
 
 /**
+ * The classes each construction-task operation may report (N11, N42). Introducing a placeholder is
+ * an equivalence when its dependencies cover the sequent and a strengthening otherwise; resolving
+ * is a strengthening; recording a requirement or candidate and abandoning an unused task leave
+ * the proof content unchanged.
+ */
+export const CONSTRUCTION_TRANSITION_CLASSES: Readonly<
+  Record<ConstructionOperationKind, readonly TransitionClass[]>
+> = Object.freeze({
+  "introduce-placeholder": classes("equivalence", "strengthening"),
+  "add-requirement": classes("equivalence"),
+  "add-candidate": classes("equivalence"),
+  "resolve-placeholder": classes("strengthening"),
+  "abandon-placeholder": classes("equivalence"),
+});
+
+const ALLOWED_TRANSITION_CLASSES = {
+  ...KERNEL_TRANSITION_CLASSES,
+  ...CONSTRUCTION_TRANSITION_CLASSES,
+} as Readonly<Record<string, readonly TransitionClass[] | undefined>>;
+
+/**
  * The class a move over this primitive declares before any outcome is known: the weakest of the
  * classes the primitive may report. The stored preview and edge carry the actual class.
  */
-export function declaredTransitionClass(kind: KernelOperationKind): TransitionClass {
-  return composeTransitionClasses(KERNEL_TRANSITION_CLASSES[kind]);
+export function declaredTransitionClass(
+  kind: KernelOperationKind | ConstructionOperationKind,
+): TransitionClass {
+  const allowed: readonly TransitionClass[] =
+    kind in CONSTRUCTION_TRANSITION_CLASSES
+      ? CONSTRUCTION_TRANSITION_CLASSES[kind as ConstructionOperationKind]
+      : KERNEL_TRANSITION_CLASSES[kind as KernelOperationKind];
+  return composeTransitionClasses(allowed);
 }
 
 /**
@@ -618,10 +646,7 @@ export function applyTransition(
   );
   if (!transition.ok) return { ...transition, state };
 
-  // Construction-task operations have no primitive entry; they report their own class.
-  const allowed = (
-    KERNEL_TRANSITION_CLASSES as Readonly<Record<string, readonly TransitionClass[] | undefined>>
-  )[operation.kind];
+  const allowed = ALLOWED_TRANSITION_CLASSES[operation.kind];
   if (allowed !== undefined && !allowed.includes(transition.transitionClass)) {
     return failure(
       state,

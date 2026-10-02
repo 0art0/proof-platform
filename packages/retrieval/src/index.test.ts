@@ -1312,6 +1312,73 @@ describe("starter domain packs", () => {
     expect(createRetrievalIndex(catalog, { operators: SET_OPERATOR_DECLARATIONS }).ok).toBe(false);
   });
 
+  it("matches a result on a term headed by an open construction placeholder", () => {
+    const orderPack = packs.find((pack) => pack.id === "pack:order")!;
+    const index = createRetrievalIndex({
+      results: orderPack.results,
+      moves: [],
+      variantFamilies: orderPack.variantFamilies,
+    });
+    if (!index.ok) throw new Error(index.diagnostics[0].message);
+    const real = { kind: "named", id: "sort:real" } as const;
+    const context = {
+      declarations: ["a", "c"].map((symbol) => ({
+        id: `declaration:${symbol}`,
+        symbol,
+        sort: real,
+        role: "universal-parameter",
+      })),
+      hypotheses: [] as unknown[],
+    };
+    const conclusion = ["Equal", ["m", "a"], "c"];
+    const hypotheses = [
+      ["LessEqual", ["m", "a"], "c"],
+      ["LessEqual", "c", ["m", "a"]],
+    ].map((expression, index) => ({
+      id: `hypothesis:${index}`,
+      statement: { expression },
+    }));
+    const proofState = proofStateSchema.parse({
+      id: "state:query",
+      goals: [
+        {
+          id: "goal:main",
+          sequent: {
+            context: { ...context, hypotheses },
+            conclusion: { expression: conclusion },
+          },
+        },
+      ],
+      obligations: [],
+      constructions: [
+        {
+          id: "task:m",
+          symbol: "m",
+          displayName: "δ",
+          sort: real,
+          origin: {
+            kind: "existential-goal",
+            target: { kind: "goal", id: "goal:main" },
+            statement: { expression: ["Exists", "d", ["Less", "d", "c"]] },
+          },
+          scope: context,
+          allowedDependencies: { declarations: ["a"], tasks: [] },
+          requirements: [],
+          candidates: [],
+          status: "unresolved",
+        },
+      ],
+    });
+    const result = index.index.query(proofState, selection(), { limit: 100 });
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    // Both premises are already hypotheses, so applying antisymmetry predicts no new obligation.
+    const suggestion = result.suggestions.find(
+      ({ artifactId }) => artifactId === "result:less-equal-antisymmetry",
+    );
+    expect(suggestion).toBeDefined();
+    expect(suggestion).not.toHaveProperty("predictedObligations");
+  });
+
   it("groups a transitivity law with its variants for an order goal", () => {
     const orderPack = packs.find((pack) => pack.id === "pack:order")!;
     const index = createRetrievalIndex({

@@ -7,6 +7,8 @@
  * stored with the preview, command and edge, so history is read back rather than recomputed.
  */
 import {
+  CONSTRUCTION_REQUIREMENT_ROLES,
+  constructionRequirementEvidenceSchema,
   plainMathJsonSchema,
   stableIdentifierSchema,
   statementIdSchema,
@@ -64,6 +66,19 @@ const menuValueSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("assumption"), assumptionId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("attestation"), attestationId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("generated-ids"), ids: z.array(stableIdentifierSchema) }).strict(),
+  z.object({ kind: z.literal("construction-task"), taskId: stableIdentifierSchema }).strict(),
+  z
+    .object({ kind: z.literal("construction-candidate"), candidateId: stableIdentifierSchema })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("construction-requirement"),
+      role: z.enum(CONSTRUCTION_REQUIREMENT_ROLES),
+      expression: plainMathJsonSchema,
+      evidence: constructionRequirementEvidenceSchema,
+    })
+    .strict(),
+  z.object({ kind: z.literal("symbols"), symbols: z.array(z.string().min(1)) }).strict(),
 ]);
 
 const menuItemOriginSchema = z.discriminatedUnion("kind", [
@@ -83,6 +98,7 @@ const menuItemOriginSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("attestation") }).strict(),
   z.object({ kind: z.literal("rule") }).strict(),
   z.object({ kind: z.literal("generated") }).strict(),
+  z.object({ kind: z.literal("construction"), taskId: stableIdentifierSchema }).strict(),
 ]);
 
 export const parameterMenuItemSchema = z

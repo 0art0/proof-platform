@@ -141,7 +141,12 @@ function primitiveBody(
   examples: readonly AuthoredExample[],
 ): TemplateBody {
   const steps: AuthoredPlanStep[] = [
-    { id: "step-1", moveId: primitive.id, operationKind: primitive.implementation.operationKind },
+    {
+      id: "step-1",
+      moveId: primitive.id,
+      // The catalog this builder draws from holds kernel primitives only.
+      operationKind: primitive.implementation.operationKind as AuthoredPlanStep["operationKind"],
+    },
     ...rest,
   ];
   const plan = { kind: "deterministic-plan" as const, steps };

@@ -14,6 +14,7 @@ import {
   MAIN_TARGET,
   METHOD_ENCODED,
   PREMISE_TARGET,
+  makeConstructedNode,
   makeNode,
   makeTask,
   recordSeries,
@@ -439,5 +440,88 @@ describe("InquiryPanel collapsing", () => {
     });
     await screen.findByTestId("inquiry-objective");
     expect(screen.getByText("Hide inquiry details").closest("details")).toHaveAttribute("open");
+  });
+});
+
+describe("InquiryPanel construction actions", () => {
+  it("keeps every construction action visible and says why one cannot apply", async () => {
+    stubFetch();
+    renderPanel({ node: makeConstructedNode() });
+    const entry = await screen.findByTestId("construction-entry");
+    const actions = within(entry).getByRole("group", { name: "Actions for delta" });
+    for (const name of ["Add requirement", "Add candidate", "Use this candidate", "Abandon"]) {
+      expect(within(actions).getByRole("button", { name })).toBeInTheDocument();
+    }
+    // No candidate yet, and the placeholder is still in the goal: both say so.
+    const use = within(actions).getByRole("button", { name: "Use this candidate" });
+    expect(use).toBeDisabled();
+    expect(use).toHaveAccessibleDescription("Add a candidate for delta first.");
+    const abandon = within(actions).getByRole("button", { name: "Abandon" });
+    expect(abandon).toBeDisabled();
+    expect(abandon).toHaveAccessibleDescription(/still occurs in the proof state/);
+    expect(within(actions).getByRole("button", { name: "Add requirement" })).toBeEnabled();
+    // Nothing opens, and nothing is sent, until a button is pressed.
+    expect(within(entry).queryByTestId("construction-choice")).not.toBeInTheDocument();
+  });
+
+  it("adds a candidate chosen from the menu through the workspace command path", async () => {
+    stubFetch();
+    const { runCommand } = renderPanel({ node: makeConstructedNode() });
+    const entry = await screen.findByTestId("construction-entry");
+    fireEvent.click(within(entry).getByRole("button", { name: "Add candidate" }));
+    const choice = within(entry).getByTestId("construction-choice");
+    const record = within(choice).getByRole("button", { name: "Record candidate" });
+    expect(record).toBeDisabled();
+    expect(choice).toHaveTextContent("Choose one of the items above first.");
+    const radios = within(choice).getAllByRole("radio");
+    expect(radios.length).toBeGreaterThan(0);
+    fireEvent.click(radios[0]!);
+    expect(record).toBeEnabled();
+    fireEvent.click(record);
+    await screen.findByTestId("inquiry-feedback");
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    const [action, envelope] = runCommand.mock.calls[0] as unknown as [
+      string,
+      { command: { kind: string; payloadSource: string; operation: { kind: string } } },
+    ];
+    expect(action).toBe("Add candidate (delta)");
+    expect(envelope.command).toMatchObject({
+      kind: "kernel-operation",
+      payloadSource: "validated-operation",
+      operation: { kind: "add-candidate" },
+    });
+  });
+
+  it("explains each requirement in plain words before recording it", async () => {
+    stubFetch();
+    renderPanel({ node: makeConstructedNode() });
+    const entry = await screen.findByTestId("construction-entry");
+    fireEvent.click(within(entry).getByRole("button", { name: "Add requirement" }));
+    const choice = within(entry).getByTestId("construction-choice");
+    expect(choice).toHaveTextContent(/Sufficient: the proof already needs this/);
+    expect(choice).toHaveTextContent(/Hint only: worth investigating; it establishes nothing/);
+    fireEvent.click(within(choice).getByRole("button", { name: "Cancel" }));
+    expect(within(entry).queryByTestId("construction-choice")).not.toBeInTheDocument();
+  });
+
+  it("uses a stored candidate after a confirming choice", async () => {
+    stubFetch();
+    const { runCommand } = renderPanel({
+      node: makeConstructedNode({
+        candidates: [{ id: "candidate:eps", value: "eps", attemptId: "attempt:1" }],
+      }),
+    });
+    const entry = await screen.findByTestId("construction-entry");
+    fireEvent.click(within(entry).getByRole("button", { name: "Use this candidate" }));
+    const choice = within(entry).getByTestId("construction-choice");
+    expect(choice).toHaveTextContent(/substituted for delta in every goal and obligation/);
+    fireEvent.click(within(choice).getByRole("radio"));
+    fireEvent.click(within(choice).getByRole("button", { name: "Use this candidate" }));
+    await screen.findByTestId("inquiry-feedback");
+    expect(runCommand.mock.calls[0]?.[0]).toBe("Use this candidate (delta)");
+    expect(
+      (runCommand.mock.calls[0]?.[1] as unknown as { command: { operation: { kind: string } } })
+        .command.operation,
+    ).toMatchObject({ kind: "resolve-placeholder", candidateId: "candidate:eps" });
   });
 });

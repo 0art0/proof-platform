@@ -31,11 +31,14 @@ import {
   matchExpressionPattern,
   type KernelEnvironment,
   type KernelOperation,
+  type KernelOperationKind,
   type TransitionClass,
 } from "@proof/kernel";
 import { libraryArtifactReferenceSchema } from "@proof/library";
 import {
+  CONSTRUCTION_REQUIREMENT_ROLES,
   binderShape,
+  constructionRequirementEvidenceSchema,
   createExecutableProofStateSchema,
   plainMathJsonSchema,
   sortSchema,
@@ -148,6 +151,19 @@ const menuValueSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("assumption"), assumptionId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("attestation"), attestationId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("generated-ids"), ids: z.array(stableIdentifierSchema) }).strict(),
+  z.object({ kind: z.literal("construction-task"), taskId: stableIdentifierSchema }).strict(),
+  z
+    .object({ kind: z.literal("construction-candidate"), candidateId: stableIdentifierSchema })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("construction-requirement"),
+      role: z.enum(CONSTRUCTION_REQUIREMENT_ROLES),
+      expression: plainMathJsonSchema,
+      evidence: constructionRequirementEvidenceSchema,
+    })
+    .strict(),
+  z.object({ kind: z.literal("symbols"), symbols: z.array(z.string().min(1)) }).strict(),
 ]);
 const menuOriginSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("selection"), slotId: stableIdentifierSchema }).strict(),
@@ -166,6 +182,7 @@ const menuOriginSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("attestation") }).strict(),
   z.object({ kind: z.literal("rule") }).strict(),
   z.object({ kind: z.literal("generated") }).strict(),
+  z.object({ kind: z.literal("construction"), taskId: stableIdentifierSchema }).strict(),
 ]);
 
 export const macroParameterSchema = z
@@ -1764,7 +1781,9 @@ export function macroFromSemanticSteps(
     steps.push({
       id: `step-${index + 1}`,
       moveId: primitive.id,
-      operationKind: primitive.implementation.operationKind,
+      // The hand-authored primitives are exactly the kernel primitives; construction moves are
+      // not in this catalog.
+      operationKind: primitive.implementation.operationKind as KernelOperationKind,
       selections: recorded.selections.map((selection) => structuredClone(selection)),
       parameters: recorded.parameters.map((parameter) => structuredClone(parameter)),
       operation: structuredClone(recorded.operation),

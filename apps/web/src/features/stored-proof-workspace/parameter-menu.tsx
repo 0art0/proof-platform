@@ -39,6 +39,7 @@ const ORIGINS: Readonly<Record<ParameterMenuItemRecord["origin"]["kind"], string
   attestation: "attestation",
   rule: "rule option",
   generated: "generated",
+  construction: "construction",
 };
 
 export type ParameterMenuProps = ViewProps &

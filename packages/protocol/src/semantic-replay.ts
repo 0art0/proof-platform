@@ -749,7 +749,7 @@ const REWRITE_OPERATIONS = new Set([
 ]);
 
 /** Keys whose values are mathematics, mapped through the symbol correspondence. */
-const EXPRESSION_KEYS = new Set(["proposition", "term", "witness"]);
+const EXPRESSION_KEYS = new Set(["proposition", "term", "witness", "value"]);
 
 /** Keys of the operation's own addressing, rebuilt from the re-matched occurrence. */
 const ADDRESS_KEYS = new Set(["target", "statement", "path", "lens"]);
@@ -1121,6 +1121,8 @@ type Correspondence = {
   order: string[];
   /** Source statement or assumption ID → replayed ID. */
   ids: Map<string, string>;
+  /** Source construction-placeholder symbol → the fresh symbol the replayed branch introduced. */
+  placeholders: Map<string, string>;
 };
 
 type Candidate = ReplayCandidate &
@@ -1180,7 +1182,12 @@ function replay(input: SemanticReplayInput): SemanticReplayResult {
     };
   }
   const operators = input.operators ?? [];
-  const correspondence: Correspondence = { symbols: new Map(), order: [], ids: new Map() };
+  const correspondence: Correspondence = {
+    symbols: new Map(),
+    order: [],
+    ids: new Map(),
+    placeholders: new Map(),
+  };
   const firstTarget = input.steps[0]?.step?.selections[0]?.target;
   if (input.focus !== undefined && firstTarget !== undefined) {
     correspondence.ids.set(firstTarget.id, input.focus.id);
@@ -1453,6 +1460,12 @@ function replayStep(
     }
   }
   pairIdentifiers(step.operation, success.operation, correspondence.ids);
+  if (
+    step.operation.kind === "introduce-placeholder" &&
+    success.operation.kind === step.operation.kind
+  ) {
+    correspondence.placeholders.set(step.operation.symbol, success.operation.symbol);
+  }
   if (step.source === "move" && step.macro !== undefined) {
     for (const [position, recorded] of step.macro.steps.entries()) {
       pairIdentifiers(recorded.operation, success.operations[position], correspondence.ids);
@@ -1946,6 +1959,9 @@ function attemptOperation(
   const counters = new Map<string, number>();
   let problem: string | undefined;
 
+  // The fresh symbol of a placeholder this step introduces: a symbol is spliced into mathematics,
+  // so it is generated like an identifier rather than copied.
+  let placeholderSymbol: string | undefined;
   const resolve = (id: string, key: string): string => {
     const mapped = hypotheses.get(id);
     if (mapped !== undefined) return mapped;
@@ -1977,12 +1993,27 @@ function attemptOperation(
   };
   const walk = (value: unknown, key: string): unknown => {
     if (EXPRESSION_KEYS.has(key)) return mapMath(value);
+    if (key === "dependencies" && Array.isArray(value)) {
+      // Declared symbols a construction may depend on follow the symbol correspondence.
+      return value.map((item) => {
+        const mapped = mapMath(item);
+        if (typeof mapped === "string") return mapped;
+        problem ??= "A construction dependency maps to something other than a variable.";
+        return item;
+      });
+    }
     if (key === "instantiation" && isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([symbol, item]) => [symbol, mapMath(item)]),
       );
     }
-    if (typeof value === "string") return isIdentifierKey(key) ? resolve(value, key) : value;
+    if (typeof value === "string") {
+      if (key === "symbol" && step.operation.kind === "introduce-placeholder") {
+        placeholderSymbol ??= generator.symbol("placeholder", 1);
+        return placeholderSymbol;
+      }
+      return isIdentifierKey(key) ? resolve(value, key) : value;
+    }
     if (Array.isArray(value)) return value.map((item) => walk(item, key));
     if (isRecord(value)) {
       return Object.fromEntries(
@@ -2142,6 +2173,7 @@ function slotCandidates(
       ? correspondence.ids.get(selection.statement.id)
       : undefined;
   const names = selection.variables.map(({ symbol }) => symbol);
+  const fragment = renamePlaceholders(selection.fragment, correspondence.placeholders);
   let order = 0;
   for (const [targetIndex, [kind, entry]] of entries.entries()) {
     const target: ReplayTarget = { kind, id: entry.id };
@@ -2176,7 +2208,7 @@ function slotCandidates(
               : 2;
       for (const found of occurrencesOf(expression, selection, operators)) {
         order += 1;
-        const matched = matchExpressionPattern(selection.fragment, found.subject, names, {
+        const matched = matchExpressionPattern(fragment, found.subject, names, {
           operators,
         });
         const bindings =
@@ -2186,7 +2218,7 @@ function slotCandidates(
         const match: ReplayMatch | undefined =
           bindings !== undefined
             ? classify(bindings, correspondence, operators)
-            : sameShape(selection.fragment, found.subject)
+            : sameShape(fragment, found.subject)
               ? "shape"
               : undefined;
         if (match === undefined) continue;
@@ -2552,12 +2584,31 @@ function mapExpression(
   correspondence: Correspondence,
   operators: readonly OperatorDeclaration[],
 ): PlainMathJson | undefined {
+  const renamed = renamePlaceholders(expression, correspondence.placeholders);
   const substitutions = [...correspondence.symbols].flatMap(([symbol, replacement]) =>
     isSymbol(replacement, symbol) ? [] : [{ symbol, replacement }],
   );
-  if (substitutions.length === 0) return expression;
-  const substituted = substituteMathJson(expression, substitutions, { operators });
+  if (substitutions.length === 0) return renamed;
+  const substituted = substituteMathJson(renamed, substitutions, { operators });
   return substituted.ok ? substituted.expression : undefined;
+}
+
+/**
+ * Rename construction placeholders in a source expression to the fresh ones the replayed branch
+ * introduced. A placeholder occurs only as the head of an application.
+ */
+function renamePlaceholders(
+  expression: PlainMathJson,
+  placeholders: ReadonlyMap<string, string>,
+): PlainMathJson {
+  if (placeholders.size === 0) return expression;
+  const parts = functionParts(expression);
+  if (parts === undefined) return expression;
+  const operands = parts.operands.map((operand) => renamePlaceholders(operand, placeholders));
+  const head = placeholders.get(parts.operator) ?? parts.operator;
+  return Array.isArray(expression)
+    ? ([head, ...operands] as PlainMathJson)
+    : ({ ...(expression as object), fn: [head, ...operands] } as PlainMathJson);
 }
 
 function mergeInto(
@@ -2603,7 +2654,8 @@ function pairIdentifiers(
         field === "instantiation" ||
         field === "proposition" ||
         field === "term" ||
-        field === "witness"
+        field === "witness" ||
+        field === "value"
       ) {
         continue;
       }

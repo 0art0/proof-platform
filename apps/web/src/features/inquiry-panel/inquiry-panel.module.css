@@ -261,3 +261,48 @@
 .collapse[open] > summary {
   margin-bottom: 0.85rem;
 }
+
+.taskActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: flex-start;
+  margin-top: 0.6rem;
+}
+
+.choice {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.choice legend {
+  padding: 0 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.choiceList {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.choiceList label {
+  display: grid;
+  gap: 0.15rem;
+  cursor: pointer;
+}
+
+.choiceActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}

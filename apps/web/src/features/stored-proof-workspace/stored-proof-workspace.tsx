@@ -115,7 +115,7 @@ function StatefulStoredWorkspace({
     EMPTY_ABSTRACT_SELECTION_STATE,
   );
   const abstractRef = useRef<AbstractSelectionState>(EMPTY_ABSTRACT_SELECTION_STATE);
-  const presentation = usePresentation(session.operators);
+  const presentation = usePresentation(session.operators, node.state);
   const requestGeneration = useRef(0);
   const actionGeneration = useRef(0);
   const historyGeneration = useRef(0);

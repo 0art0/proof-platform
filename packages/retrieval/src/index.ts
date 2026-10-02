@@ -1,6 +1,7 @@
 import {
   RESERVED_BUILTIN_SYMBOLS,
   binderShape,
+  constructionPlaceholderOperators,
   createProofStateSchema,
   mathJsonEquals,
   operatorDeclarationsSchema,
@@ -253,6 +254,14 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
     if (options === undefined) {
       return retrievalFailure("invalid-query", "The retrieval query options are invalid.");
     }
+    const stateResult = createProofStateSchema({ operators: this.#operators }).safeParse(
+      stateInput,
+    );
+    if (!stateResult.success) {
+      return retrievalFailure("selection-rejected", "The proof state could not be revalidated.");
+    }
+    // Open construction placeholders are registered operators for everything read from the state.
+    const operators = [...this.#operators, ...constructionPlaceholderOperators(stateResult.data)];
     const resolved = resolveRetrievalSelection(
       stateInput as ProofState,
       selectionInput,
@@ -260,12 +269,6 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
     );
     if (!resolved.ok) {
       return retrievalFailure("selection-rejected", resolved.message);
-    }
-    const stateResult = createProofStateSchema({ operators: this.#operators }).safeParse(
-      stateInput,
-    );
-    if (!stateResult.success) {
-      return retrievalFailure("selection-rejected", "The proof state could not be revalidated.");
     }
 
     const candidateMatches = resolved.subjects.flatMap((subject) =>
@@ -290,7 +293,7 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
             resolved.subjects,
             stateResult.data,
             available,
-            this.#operators,
+            operators,
             sortCache,
           ),
         ),

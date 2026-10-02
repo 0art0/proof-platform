@@ -31,7 +31,6 @@ import {
   parseKernelResultCatalog,
   type KernelEnvironment,
   type KernelOperation,
-  type KernelOperationKind,
   type KernelResult,
   type KernelResultParameter,
   type ResultApplicationDirection,
@@ -42,9 +41,12 @@ import {
   type TransitionTarget,
 } from "@proof/kernel";
 import {
+  attestationIdSchema,
   builtinBinderSorts,
+  constructionPlaceholderOperators,
   createExecutableProofStateSchema,
   freeSymbolNames,
+  isOpenConstructionTask,
   mathJsonEquals,
   operatorDeclarationsSchema,
   readBinderDeclaration,
@@ -52,6 +54,9 @@ import {
   statementIdSchema,
   substituteMathJson,
   type AdditionalAssumption,
+  type ConstructionRequirementEvidence,
+  type ConstructionRequirementRole,
+  type ConstructionTask,
   type ExecutableProofState,
   type Goal,
   type Hypothesis,
@@ -73,7 +78,7 @@ import {
   statementOccurrences,
   symbolValue,
 } from "./context-terms";
-import { HAND_AUTHORED_MOVES, type MoveDefinition } from "./index";
+import { HAND_AUTHORED_MOVES, type MoveDefinition, type MoveOperationKind } from "./index";
 
 /** Where a selection sits. Extra fields of a resolved selection (fragment, position) are ignored. */
 export type MoveSelectionAnchor = Readonly<{
@@ -108,6 +113,12 @@ export type MoveIdGenerator = Readonly<{
   statementId: (label: string, index: number) => string;
   /** Fresh additional-assumption ID for the `index`-th (1-based) ID with this label. */
   assumptionId: (label: string, index: number) => string;
+  /**
+   * Fresh symbol for the `index`-th (1-based) name with this label, such as a construction
+   * placeholder's operator symbol. Unlike an ID it is spliced into mathematics, so it holds no
+   * punctuation.
+   */
+  symbol: (label: string, index: number) => string;
 }>;
 
 export function commandIdGenerator(commandId: string): MoveIdGenerator {
@@ -115,6 +126,8 @@ export function commandIdGenerator(commandId: string): MoveIdGenerator {
     resultStateId: `state:${commandId}`,
     statementId: (label, index) => `statement:${commandId}:${label}:${index}`,
     assumptionId: (label, index) => `assumption:${commandId}:${label}:${index}`,
+    symbol: (label, index) =>
+      `${label}_${stableHash(commandId).slice(0, 12)}${index === 1 ? "" : `_${index}`}`,
   };
 }
 
@@ -142,7 +155,8 @@ export type MenuItemOrigin =
   | Readonly<{ kind: "result"; resultId: string }>
   | Readonly<{ kind: "attestation" }>
   | Readonly<{ kind: "rule" }>
-  | Readonly<{ kind: "generated" }>;
+  | Readonly<{ kind: "generated" }>
+  | Readonly<{ kind: "construction"; taskId: string }>;
 
 export type MenuValue =
   | Readonly<{ kind: "index"; index: number }>
@@ -153,7 +167,16 @@ export type MenuValue =
   | Readonly<{ kind: "result"; resultId: string }>
   | Readonly<{ kind: "assumption"; assumptionId: string }>
   | Readonly<{ kind: "attestation"; attestationId: string }>
-  | Readonly<{ kind: "generated-ids"; ids: readonly string[] }>;
+  | Readonly<{ kind: "generated-ids"; ids: readonly string[] }>
+  | Readonly<{ kind: "construction-task"; taskId: string }>
+  | Readonly<{ kind: "construction-candidate"; candidateId: string }>
+  | Readonly<{
+      kind: "construction-requirement";
+      role: ConstructionRequirementRole;
+      expression: PlainMathJson;
+      evidence: ConstructionRequirementEvidence;
+    }>
+  | Readonly<{ kind: "symbols"; symbols: readonly string[] }>;
 
 export type ParameterMenuItem = Readonly<{
   /** Stable content-derived ID: equal values in the same parameter always get the same ID. */
@@ -421,7 +444,7 @@ type TargetEntry = Goal | Obligation;
 
 type Context = Readonly<{
   state: ExecutableProofState;
-  kind: KernelOperationKind;
+  kind: MoveOperationKind;
   slotOrder: readonly string[];
   operators: readonly OperatorDeclaration[];
   results: readonly KernelResult[];
@@ -536,7 +559,8 @@ function runWalk(
       state,
       kind: move.implementation.operationKind,
       slotOrder,
-      operators: operators.data,
+      // Open construction placeholders are registered operators wherever the state is read.
+      operators: [...operators.data, ...constructionPlaceholderOperators(state)],
       results: catalog.results,
       environment: { operators: operators.data, results: catalog.results },
       target,
@@ -968,7 +992,399 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
     }
     case "close-by-assumption":
       return closeByAssumption(context, walk);
+    case "introduce-placeholder":
+      return introducePlaceholderFields(context, walk);
+    case "add-requirement":
+      return addRequirementFields(context, walk);
+    case "add-candidate":
+      return addCandidateFields(context, walk);
+    case "resolve-placeholder":
+      return resolvePlaceholderFields(context, walk);
+    case "abandon-placeholder":
+      return abandonPlaceholderFields(context, walk);
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Construction tasks (N11, N42)
+// ---------------------------------------------------------------------------------------------
+
+const PROBE_PREFIX = "statement:menu-probe";
+
+function openTasks(context: Context): readonly ConstructionTask[] {
+  return (context.state.constructions ?? []).filter(isOpenConstructionTask);
+}
+
+function taskMenuItem(task: ConstructionTask): ParameterMenuItem {
+  return menuItem(
+    "taskId",
+    { kind: "construction-task", taskId: task.id },
+    { kind: "text", text: task.displayName },
+    { kind: "construction", taskId: task.id },
+  );
+}
+
+/** The open task the user picks; `usable` keeps only tasks the move could act on. */
+function chooseTask(
+  context: Context,
+  walk: Walk,
+  usable: (task: ConstructionTask) => boolean,
+): ConstructionTask | undefined {
+  const items = openTasks(context).filter(usable).map(taskMenuItem);
+  const chosen = choose(context, walk, menu("taskId", "Construction", items));
+  const value = chosen?.value;
+  return value?.kind === "construction-task"
+    ? openTasks(context).find((task) => task.id === value.taskId)
+    : undefined;
+}
+
+/** A fresh symbol as an automatic menu; undefined (and no menu) without an ID generator. */
+function generatedSymbol(
+  context: Context,
+  walk: Walk,
+  parameterId: string,
+  label: string,
+): string | undefined {
+  const generator = context.idGenerator;
+  if (generator === undefined) return undefined;
+  const symbol = generator.symbol(label, 1);
+  const chosen = choose(
+    context,
+    walk,
+    menu(
+      parameterId,
+      parameterId,
+      [
+        menuItem(
+          parameterId,
+          { kind: "generated-ids", ids: [symbol] },
+          { kind: "text", text: symbol },
+          { kind: "generated" },
+        ),
+      ],
+      true,
+    ),
+  );
+  return chosen?.value.kind === "generated-ids" ? chosen.value.ids[0] : undefined;
+}
+
+function introducePlaceholderFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const conclusion = context.entry.sequent.conclusion.expression;
+  const parts = functionParts(conclusion);
+  const binder =
+    parts?.operator === "Exists" && parts.operands.length === 2
+      ? readBinderDeclaration(parts.operands[0] as PlainMathJson, ["symbol", "element"])
+      : undefined;
+  if (binder === undefined || quantifierSort(context, conclusion, "Exists") === undefined) {
+    return notApplicable(
+      walk,
+      "The target conclusion is not an existential statement over a variable with a known sort.",
+    );
+  }
+  const { declarations, hypotheses } = context.entry.sequent.context;
+  const mentioned = new Set(
+    [conclusion, ...hypotheses.map(({ statement }) => statement.expression)].flatMap((expression) =>
+      freeSymbolNames(expression, { operators: context.operators }),
+    ),
+  );
+  const complete = declarations
+    .filter(
+      ({ symbol, role }) =>
+        symbol !== binder.name &&
+        (role === "universal-parameter" || role === "local-witness") &&
+        mentioned.has(symbol),
+    )
+    .map(({ symbol }) => symbol);
+  const dependenciesMenu = menu("dependencies", "What the object may depend on", [
+    menuItem(
+      "dependencies",
+      { kind: "symbols", symbols: complete },
+      {
+        kind: "text",
+        text:
+          complete.length === 0
+            ? "Nothing: the goal mentions no variable"
+            : `Everything the goal mentions: ${complete.join(", ")}`,
+      },
+      { kind: "rule" },
+    ),
+    menuItem(
+      "dependencies",
+      { kind: "symbols", symbols: [] },
+      { kind: "text", text: "Nothing: a single choice for every case (a stronger claim)" },
+      { kind: "rule" },
+    ),
+  ]);
+  const chosen = choose(context, walk, dependenciesMenu);
+  const taskId = generated(context, walk, "taskId", "statement", "construction-task", 1);
+  const symbol = generatedSymbol(context, walk, "symbol", "placeholder");
+  if (chosen?.value.kind !== "symbols" || taskId === undefined || symbol === undefined) {
+    return undefined;
+  }
+  return {
+    taskId: taskId[0],
+    symbol,
+    displayName: binder.name,
+    origin: { kind: "existential-goal" },
+    dependencies: [...chosen.value.symbols],
+    allowedTasks: [],
+  };
+}
+
+/** Whether a symbol occurs anywhere in an expression, as a head or as an operand. */
+function mentionsSymbol(expression: PlainMathJson, symbol: string): boolean {
+  if (symbolValue(expression) === symbol) return true;
+  const parts = functionParts(expression);
+  return (
+    parts !== undefined &&
+    (parts.operator === symbol || parts.operands.some((operand) => mentionsSymbol(operand, symbol)))
+  );
+}
+
+function probeIds(count: number): string[] {
+  return Array.from({ length: count }, (_unused, index) => `${PROBE_PREFIX}:${index + 1}`);
+}
+
+function addRequirementFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const task = chooseTask(context, walk, () => true);
+  if (task === undefined) return undefined;
+  const isProposition = propositionFilter(task.scope.declarations, context.operators);
+  const mentionsTask = (expression: PlainMathJson): boolean =>
+    mentionsSymbol(expression, task.symbol);
+  const known = (expression: PlainMathJson, role: ConstructionRequirementRole): boolean =>
+    task.requirements.some(
+      (requirement) =>
+        requirement.role === role &&
+        alphaEquivalent(requirement.statement.expression, expression, {
+          operators: context.operators,
+        }),
+    );
+  const requirementItem = (
+    role: ConstructionRequirementRole,
+    expression: PlainMathJson,
+    evidence: ConstructionRequirementEvidence,
+    origin: MenuItemOrigin,
+  ): ParameterMenuItem =>
+    menuItem(
+      "requirement",
+      { kind: "construction-requirement", role, expression, evidence },
+      { kind: "math", expression },
+      origin,
+    );
+  const candidates: ParameterMenuItem[] = [];
+  // A sufficient requirement the proof state itself already demands: a target that is the
+  // requirement, which the kernel checks. It is tracked by that target, never copied.
+  for (const [kind, entries] of [
+    ["goal", context.state.goals],
+    ["obligation", context.state.obligations],
+  ] as const) {
+    for (const entry of entries) {
+      const expression = entry.sequent.conclusion.expression;
+      if (
+        mentionsTask(expression) &&
+        isProposition(expression) &&
+        !known(expression, "sufficient")
+      ) {
+        candidates.push(
+          requirementItem(
+            "sufficient",
+            expression,
+            { kind: "target", target: { kind, id: entry.id } },
+            { kind: "conclusion" },
+          ),
+        );
+      }
+    }
+  }
+  // A heuristic hint: any statement of the selected target that mentions the placeholder. It
+  // establishes nothing and never becomes a hypothesis.
+  const occurrences = occurrenceCandidates(context).filter(
+    (candidate) => mentionsTask(candidate.expression) && isProposition(candidate.expression),
+  );
+  for (const candidate of occurrences) {
+    if (!known(candidate.expression, "heuristic")) {
+      candidates.push(
+        requirementItem("heuristic", candidate.expression, { kind: "none" }, candidate.origin),
+      );
+    }
+  }
+  // A recorded attestation can back a necessary or a sufficient requirement.
+  for (const attestationId of context.attestationIds) {
+    for (const candidate of occurrences) {
+      for (const role of ["necessary", "sufficient"] as const) {
+        if (known(candidate.expression, role)) continue;
+        candidates.push(
+          requirementItem(
+            role,
+            candidate.expression,
+            { kind: "attestation", attestationId: attestationIdSchema.parse(attestationId) },
+            candidate.origin,
+          ),
+        );
+      }
+    }
+  }
+  const accepted = candidates.filter((item) => {
+    const { value } = item;
+    return (
+      value.kind === "construction-requirement" &&
+      kernelAccepts(context, {
+        taskId: task.id,
+        requirementId: `${PROBE_PREFIX}:requirement`,
+        role: value.role,
+        proposition: value.expression,
+        evidence: value.evidence,
+        attemptId: `${PROBE_PREFIX}:attempt`,
+      })
+    );
+  });
+  const chosen = choose(context, walk, menu("requirement", "Requirement", accepted));
+  const requirementId = generated(context, walk, "requirementId", "statement", "requirement", 1);
+  const attemptId = generated(context, walk, "attemptId", "statement", "attempt", 1);
+  if (
+    chosen?.value.kind !== "construction-requirement" ||
+    requirementId === undefined ||
+    attemptId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    taskId: task.id,
+    requirementId: requirementId[0],
+    role: chosen.value.role,
+    proposition: chosen.value.expression,
+    evidence: chosen.value.evidence,
+    attemptId: attemptId[0],
+  };
+}
+
+function addCandidateFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const task = chooseTask(context, walk, () => true);
+  if (task === undefined) return undefined;
+  // Terms the construction may use: its allowed variables, then subterms of the selected target.
+  const terms: Candidate[] = [
+    ...task.allowedDependencies.declarations.map((symbol) => ({
+      expression: symbol as PlainMathJson,
+      origin: {
+        kind: "declaration" as const,
+        declarationId:
+          task.scope.declarations.find((declaration) => declaration.symbol === symbol)?.id ??
+          symbol,
+      },
+    })),
+    ...occurrenceCandidates(context).filter(({ origin }) => origin.kind === "subterm-of"),
+  ];
+  const fresh = dedupeBy(terms, ({ expression }) => expression).filter(
+    ({ expression }) =>
+      !task.candidates.some((existing) =>
+        alphaEquivalent(existing.value, expression, { operators: context.operators }),
+      ) &&
+      kernelAccepts(context, {
+        taskId: task.id,
+        candidateId: `${PROBE_PREFIX}:candidate`,
+        value: expression,
+        attemptId: `${PROBE_PREFIX}:attempt`,
+      }),
+  );
+  const chosen = choose(
+    context,
+    walk,
+    menu(
+      "value",
+      "Candidate",
+      fresh.map(({ expression, origin }) =>
+        menuItem("value", { kind: "term", expression }, { kind: "math", expression }, origin),
+      ),
+    ),
+  );
+  const candidateId = generated(context, walk, "candidateId", "statement", "candidate", 1);
+  const attemptId = generated(context, walk, "attemptId", "statement", "attempt", 1);
+  if (chosen?.value.kind !== "term" || candidateId === undefined || attemptId === undefined) {
+    return undefined;
+  }
+  return {
+    taskId: task.id,
+    candidateId: candidateId[0],
+    value: chosen.value.expression,
+    attemptId: attemptId[0],
+  };
+}
+
+/** Sufficient requirements not already tracked by a target: the ones that become obligations. */
+function untrackedSufficient(task: ConstructionTask): number {
+  return task.requirements.filter(
+    (requirement) => requirement.role === "sufficient" && requirement.evidence.kind !== "target",
+  ).length;
+}
+
+function resolvePlaceholderFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const task = chooseTask(context, walk, (candidate) => candidate.candidates.length > 0);
+  if (task === undefined) return undefined;
+  const items = task.candidates
+    .filter((candidate) =>
+      kernelAccepts(context, {
+        taskId: task.id,
+        candidateId: candidate.id,
+        obligationIds: probeIds(untrackedSufficient(task)),
+        attemptId: `${PROBE_PREFIX}:attempt`,
+      }),
+    )
+    .map((candidate) =>
+      menuItem(
+        "candidateId",
+        { kind: "construction-candidate", candidateId: candidate.id },
+        { kind: "math", expression: candidate.value },
+        { kind: "construction", taskId: task.id },
+      ),
+    );
+  const chosen = choose(context, walk, menu("candidateId", "Candidate", items));
+  const obligationIds = generated(
+    context,
+    walk,
+    "obligationIds",
+    "statement",
+    "obligation",
+    untrackedSufficient(task),
+  );
+  const attemptId = generated(context, walk, "attemptId", "statement", "attempt", 1);
+  if (
+    chosen?.value.kind !== "construction-candidate" ||
+    obligationIds === undefined ||
+    attemptId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    taskId: task.id,
+    candidateId: chosen.value.candidateId,
+    obligationIds: [...obligationIds],
+    attemptId: attemptId[0],
+  };
+}
+
+function abandonPlaceholderFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const task = chooseTask(context, walk, (candidate) =>
+    kernelAccepts(context, { taskId: candidate.id, attemptId: `${PROBE_PREFIX}:attempt` }),
+  );
+  const attemptId = generated(context, walk, "attemptId", "statement", "attempt", 1);
+  return task === undefined || attemptId === undefined
+    ? undefined
+    : { taskId: task.id, attemptId: attemptId[0] };
 }
 
 function selectedHypothesis(context: Context, walk: Walk, slotId: string): StatementId | undefined {
