@@ -1792,6 +1792,11 @@ export const obligationProvenanceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("user") }).strict(),
   z.object({ kind: z.literal("case") }).strict(),
   z.object({ kind: z.literal("suffices") }).strict(),
+  /**
+   * The membership `t ∈ S` required to instantiate the typed universal hypothesis `hypothesisId`
+   * (`∀x∈S, …`) at a term `t` that no local hypothesis already places in `S`.
+   */
+  z.object({ kind: z.literal("binder-membership"), hypothesisId: statementIdSchema }).strict(),
   /** A sufficient requirement of a construction task, created when the task was resolved. */
   z
     .object({

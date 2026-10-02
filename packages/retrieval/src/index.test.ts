@@ -792,6 +792,36 @@ describe("deterministic structural retrieval", () => {
     ).toMatchObject({ ok: true, suggestions: [] });
   });
 
+  it("does not share artifact bindings across a typed binder scope", () => {
+    const source = structuredClone(HAND_AUTHORED_MOVES.find(({ id }) => id === "move:close-true")!);
+    const scoped = moveDefinitionSchema.parse({
+      ...source,
+      id: "move:typed-scoped-pair",
+      selectionContract: {
+        slots: [
+          { id: "left", role: "rewrite-occurrence", semanticRole: "proposition", required: true },
+          { id: "right", role: "rewrite-occurrence", semanticRole: "proposition", required: true },
+        ],
+        allowAdditional: false,
+      },
+      patterns: [
+        { id: "move-pattern:typed-left", selectionSlotId: "left", expression: "u" },
+        { id: "move-pattern:typed-right", selectionSlotId: "right", expression: "u" },
+      ],
+      parameters: [],
+    });
+    const proofState = state(["And", ["ForAll", ["Element", "x", "RealNumbers"], "p"], "p"]);
+    const result = indexFor({ results: [], moves: [scoped] }).query(
+      proofState,
+      selectionQuery([
+        { id: "selection:bound", selection: selection({ kind: "conclusion" }, [0, 1]) },
+        { id: "selection:free", selection: selection({ kind: "conclusion" }, [1]) },
+      ]),
+      { limit: 100 },
+    );
+    expect(result).toMatchObject({ ok: true, suggestions: [] });
+  });
+
   it("returns the same stable order when catalog insertion order changes", () => {
     const proofState = state(["And", "p", "q"]);
     const forward = suggestionIds(indexFor(), proofState);

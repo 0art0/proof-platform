@@ -294,6 +294,8 @@ function provenanceText(target: PreviewTarget): string | null {
       return ` · side condition of ${provenance.resultId}`;
     case "construction-requirement":
       return ` · construction requirement`;
+    case "binder-membership":
+      return ` · membership needed to instantiate ${provenance.hypothesisId}`;
     default:
       return ` · ${provenance.kind}`;
   }

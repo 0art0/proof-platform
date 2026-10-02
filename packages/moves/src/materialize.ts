@@ -42,10 +42,12 @@ import {
   type TransitionTarget,
 } from "@proof/kernel";
 import {
+  builtinBinderSorts,
   createExecutableProofStateSchema,
   freeSymbolNames,
   mathJsonEquals,
   operatorDeclarationsSchema,
+  readBinderDeclaration,
   stableIdentifierSchema,
   statementIdSchema,
   substituteMathJson,
@@ -673,8 +675,35 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
   switch (context.kind) {
     case "close-true":
     case "close-reflexive-equality":
-    case "introduce-universal":
       return {};
+    case "introduce-universal": {
+      const quantified = quantifierSort(
+        context,
+        context.entry.sequent.conclusion.expression,
+        "ForAll",
+      );
+      if (quantified === undefined) {
+        return notApplicable(walk, "The target conclusion is not a universal statement.");
+      }
+      if (!quantified.typed) return {};
+      const parameterDeclarationId = generatedDeclarationId(
+        context,
+        walk,
+        "parameterDeclarationId",
+        "parameter",
+      );
+      const ids = generated(
+        context,
+        walk,
+        "membershipHypothesisId",
+        "statement",
+        "membership-hypothesis",
+        1,
+      );
+      return parameterDeclarationId === undefined || ids === undefined
+        ? undefined
+        : { parameterDeclarationId, membershipHypothesisId: ids[0] };
+    }
     case "close-by-hypothesis": {
       const hypothesisId = selectedHypothesis(context, walk, "fact");
       return hypothesisId === undefined ? undefined : { hypothesisId };
@@ -788,9 +817,35 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
         "result-hypothesis",
         1,
       );
-      return hypothesisId === undefined || ids === undefined
+      if (hypothesisId === undefined || ids === undefined) return undefined;
+      const quantified = quantifierSort(
+        context,
+        statementExpression(context.entry, { kind: "hypothesis", id: hypothesisId }),
+        "Exists",
+      );
+      if (quantified?.typed !== true) return { hypothesisId, resultHypothesisId: ids[0] };
+      const witnessDeclarationId = generatedDeclarationId(
+        context,
+        walk,
+        "witnessDeclarationId",
+        "witness",
+      );
+      const membership = generated(
+        context,
+        walk,
+        "membershipHypothesisId",
+        "statement",
+        "membership-hypothesis",
+        1,
+      );
+      return witnessDeclarationId === undefined || membership === undefined
         ? undefined
-        : { hypothesisId, resultHypothesisId: ids[0] };
+        : {
+            hypothesisId,
+            resultHypothesisId: ids[0],
+            witnessDeclarationId,
+            membershipHypothesisId: membership[0],
+          };
     }
     case "choose-goal-disjunct": {
       const disjuncts = operatorOperands(context.entry.sequent.conclusion.expression, "Or") ?? [];
@@ -858,7 +913,7 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
       if (quantified === undefined) {
         return notApplicable(walk, "The hypothesis is not a universal statement.");
       }
-      const term = chooseTerm(context, walk, "term", "Instantiation term", quantified);
+      const term = chooseTerm(context, walk, "term", "Instantiation term", quantified.sort);
       const ids = generated(
         context,
         walk,
@@ -867,9 +922,24 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
         "result-hypothesis",
         1,
       );
-      return term === undefined || ids === undefined
+      if (term === undefined || ids === undefined) return undefined;
+      if (!quantified.typed) return { hypothesisId, term, resultHypothesisId: ids[0] };
+      const obligation = generated(
+        context,
+        walk,
+        "membershipObligationId",
+        "statement",
+        "membership-obligation",
+        1,
+      );
+      return obligation === undefined
         ? undefined
-        : { hypothesisId, term, resultHypothesisId: ids[0] };
+        : {
+            hypothesisId,
+            term,
+            resultHypothesisId: ids[0],
+            membershipObligationId: obligation[0],
+          };
     }
     case "choose-existential-witness": {
       const quantified = quantifierSort(
@@ -880,7 +950,7 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
       if (quantified === undefined) {
         return notApplicable(walk, "The target conclusion is not existential.");
       }
-      const witness = chooseTerm(context, walk, "witness", "Witness term", quantified);
+      const witness = chooseTerm(context, walk, "witness", "Witness term", quantified.sort);
       return witness === undefined ? undefined : { witness };
     }
     case "rewrite-with-equality":
@@ -927,17 +997,45 @@ function notApplicable(walk: Walk, message: string): undefined {
   return undefined;
 }
 
-/** The sort of a built-in quantifier's bound symbol, from the target's declarations. */
+/**
+ * The sort of a built-in quantifier's bound symbol and whether its binder is typed
+ * (`["Element", x, S]`). A bare binder takes its sort from the target's declarations; a typed one
+ * from its domain.
+ */
 function quantifierSort(
   context: Context,
   expression: PlainMathJson | undefined,
   quantifier: "ForAll" | "Exists",
-): Sort | undefined {
-  const operands = expression === undefined ? undefined : operatorOperands(expression, quantifier);
-  const symbol = operands?.length === 2 ? symbolValue(operands[0] as PlainMathJson) : undefined;
-  return context.entry.sequent.context.declarations.find(
-    (declaration) => declaration.symbol === symbol,
-  )?.sort;
+): Readonly<{ sort: Sort; typed: boolean }> | undefined {
+  const parts = expression === undefined ? undefined : functionParts(expression);
+  if (parts?.operator !== quantifier || parts.operands.length !== 2) return undefined;
+  const declarations = context.entry.sequent.context.declarations;
+  const declaration = readBinderDeclaration(parts.operands[0] as PlainMathJson, [
+    "symbol",
+    "element",
+  ]);
+  if (declaration === undefined) return undefined;
+  if (declaration.form === "symbol") {
+    const sort = declarations.find((candidate) => candidate.symbol === declaration.name)?.sort;
+    return sort === undefined ? undefined : { sort, typed: false };
+  }
+  const sort = builtinBinderSorts(
+    quantifier,
+    parts.operands,
+    new Map(declarations.map((candidate) => [candidate.symbol, candidate.sort])),
+    context.operators,
+  )?.get(declaration.name);
+  return sort === undefined ? undefined : { sort, typed: true };
+}
+
+/** A generated declaration ID, drawn from the statement-ID generator. */
+function generatedDeclarationId(
+  context: Context,
+  walk: Walk,
+  parameterId: string,
+  label: string,
+): string | undefined {
+  return generated(context, walk, parameterId, "statement", label, 1)?.[0];
 }
 
 function menu(

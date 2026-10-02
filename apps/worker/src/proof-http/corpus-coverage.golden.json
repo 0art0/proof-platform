@@ -1,25 +1,25 @@
 {
   "description": "Deterministic coverage of the benchmark corpus (roadmap N37). Every problem is solved through the proof HTTP service by displayed suggestions and menu choices only; no expression is typed and no model is called.",
   "totals": {
-    "problems": 37,
-    "steps": 124,
-    "selections": 180,
-    "suggestionRequests": 124,
-    "previewRequests": 142,
-    "menuChoices": 18,
-    "applies": 124,
-    "chosenBelowFirst": 29
+    "problems": 39,
+    "steps": 130,
+    "selections": 187,
+    "suggestionRequests": 130,
+    "previewRequests": 149,
+    "menuChoices": 19,
+    "applies": 130,
+    "chosenBelowFirst": 31
   },
   "domains": {
     "logic": {
-      "problems": 9,
-      "steps": 28,
-      "selections": 44,
-      "suggestionRequests": 28,
-      "previewRequests": 28,
-      "menuChoices": 0,
-      "applies": 28,
-      "chosenBelowFirst": 5
+      "problems": 11,
+      "steps": 34,
+      "selections": 51,
+      "suggestionRequests": 34,
+      "previewRequests": 35,
+      "menuChoices": 1,
+      "applies": 34,
+      "chosenBelowFirst": 7
     },
     "equality": {
       "problems": 1,
@@ -150,12 +150,14 @@
     ]
   },
   "moves": [
+    "move:choose-existential-witness",
     "move:choose-goal-disjunct",
     "move:close-by-contradiction",
     "move:close-by-hypothesis",
     "move:close-reflexive-equality",
     "move:expand-hypothesis-conjunction",
     "move:introduce-implication",
+    "move:introduce-universal",
     "move:rewrite-with-equality",
     "move:split-goal-conjunction",
     "move:split-hypothesis-disjunction"
@@ -163,12 +165,14 @@
   "operations": [
     "apply-result-backward",
     "apply-result-forward",
+    "choose-existential-witness",
     "choose-goal-disjunct",
     "close-by-contradiction",
     "close-by-hypothesis",
     "close-reflexive-equality",
     "expand-hypothesis-conjunction",
     "introduce-implication",
+    "introduce-universal",
     "rewrite-with-equality",
     "rewrite-with-equivalence",
     "split-goal-conjunction",
@@ -1623,6 +1627,77 @@
           "rank": "1/8",
           "operation": "apply-result-backward",
           "transition": "strengthening"
+        }
+      ]
+    },
+    {
+      "id": "corpus:typed-universal-reflexive",
+      "domain": "logic",
+      "packs": [],
+      "interactions": {
+        "problems": 1,
+        "steps": 2,
+        "selections": 2,
+        "suggestionRequests": 2,
+        "previewRequests": 2,
+        "menuChoices": 0,
+        "applies": 2,
+        "chosenBelowFirst": 0
+      },
+      "steps": [
+        {
+          "suggestion": "move:introduce-universal",
+          "rank": "1/8",
+          "operation": "introduce-universal",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-reflexive-equality",
+          "rank": "1/8",
+          "operation": "close-reflexive-equality",
+          "transition": "equivalence"
+        }
+      ]
+    },
+    {
+      "id": "corpus:typed-existential-witness",
+      "domain": "logic",
+      "packs": [],
+      "interactions": {
+        "problems": 1,
+        "steps": 4,
+        "selections": 5,
+        "suggestionRequests": 4,
+        "previewRequests": 5,
+        "menuChoices": 1,
+        "applies": 4,
+        "chosenBelowFirst": 2
+      },
+      "steps": [
+        {
+          "suggestion": "move:choose-existential-witness",
+          "rank": "2/8",
+          "operation": "choose-existential-witness",
+          "transition": "strengthening",
+          "menuChoices": 1
+        },
+        {
+          "suggestion": "move:split-goal-conjunction",
+          "rank": "3/8",
+          "operation": "split-goal-conjunction",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-by-hypothesis",
+          "rank": "1/1",
+          "operation": "close-by-hypothesis",
+          "transition": "equivalence"
+        },
+        {
+          "suggestion": "move:close-reflexive-equality",
+          "rank": "1/8",
+          "operation": "close-reflexive-equality",
+          "transition": "equivalence"
         }
       ]
     }

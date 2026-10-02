@@ -1,6 +1,6 @@
 import {
-  BUILTIN_BINDER_SPECIFICATIONS,
   RESERVED_BUILTIN_SYMBOLS,
+  binderShape,
   createProofStateSchema,
   mathJsonEquals,
   operatorDeclarationsSchema,
@@ -944,12 +944,7 @@ function selectionLexicalScopeKey(
     if (expression === undefined) break;
     const parts = functionParts(expression);
     if (parts === undefined) break;
-    const customBinder = operators.find(({ symbol }) => symbol === parts.operator)?.binder;
-    const builtinBinder =
-      parts.operator === "ForAll" || parts.operator === "Exists"
-        ? BUILTIN_BINDER_SPECIFICATIONS[parts.operator]
-        : undefined;
-    const binder = customBinder ?? builtinBinder;
+    const binder = binderShape(parts.operator, parts.operands.length, operators);
     if (binder?.scopedOperands.includes(operandIndex) === true) {
       binderPaths.push(`${traversed.join(".")}:${parts.operator}`);
     }

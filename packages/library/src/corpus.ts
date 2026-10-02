@@ -1170,6 +1170,59 @@ export const EXTENDED_CORPUS: readonly CorpusProblem[] = [
       closeByFact("closure-extensive", subset("A", closure("A")), "An instance of extensivity."),
     ],
   },
+  {
+    id: "corpus:typed-universal-reflexive",
+    title: "A typed universal statement",
+    statement: "Show that every real number x equals itself.",
+    domain: "logic",
+    packs: [],
+    operators: [],
+    declarations: [],
+    hypotheses: [],
+    goal: ["ForAll", ["Element", "x", "RealNumbers"], ["Equal", "x", "x"]],
+    steps: [
+      {
+        note: "Take an arbitrary real x, which adds x in R as a hypothesis.",
+        selections: [goal(["ForAll", ["Element", "x", "RealNumbers"], ["Equal", "x", "x"]])],
+        suggestion: { source: "move", artifactId: "move:introduce-universal" },
+      },
+      {
+        note: "Close the reflexive equality.",
+        selections: [goal(["Equal", "x", "x"])],
+        suggestion: { source: "move", artifactId: "move:close-reflexive-equality" },
+      },
+    ],
+  },
+  {
+    id: "corpus:typed-existential-witness",
+    title: "A typed existential statement",
+    statement: "For a real number a, show that some real number equals a.",
+    domain: "logic",
+    packs: [],
+    operators: [],
+    declarations: reals("a"),
+    hypotheses: [["Element", "a", "RealNumbers"]],
+    goal: ["Exists", ["Element", "y", "RealNumbers"], ["Equal", "y", "a"]],
+    steps: [
+      {
+        note: "Choose a as the witness; the goal becomes a in R and a = a.",
+        selections: [goal(["Exists", ["Element", "y", "RealNumbers"], ["Equal", "y", "a"]])],
+        suggestion: { source: "move", artifactId: "move:choose-existential-witness" },
+        menu: { witness: term("a") },
+      },
+      {
+        note: "Split the conjunction.",
+        selections: [goal(["And", ["Element", "a", "RealNumbers"], ["Equal", "a", "a"]])],
+        suggestion: { source: "move", artifactId: "move:split-goal-conjunction" },
+      },
+      closeByHypothesis(["Element", "a", "RealNumbers"]),
+      {
+        note: "Close the reflexive equality.",
+        selections: [goal(["Equal", "a", "a"])],
+        suggestion: { source: "move", artifactId: "move:close-reflexive-equality" },
+      },
+    ],
+  },
 ];
 
 /** The full benchmark corpus: the N16 elementary corpus followed by the N37 extension. */
