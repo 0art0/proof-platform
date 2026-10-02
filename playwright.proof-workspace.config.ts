@@ -1,30 +1,42 @@
 import { defineConfig } from "@playwright/test";
+import { productionWebCommand, WORKER_BACKED_SPECS } from "./playwright.shared";
 
-// Separate from playwright.config.ts because this spec is the only one that needs a
-// PostgreSQL-backed worker service; keeping it out of the default config means the
-// rest of the e2e suite (e.g. mathjson-spike.spec.ts) still runs without a database.
+// The worker-backed suite against a PostgreSQL store: real SQL, migrations and transactions.
+// Requires PROOF_DATABASE_URL (or DATABASE_URL) pointing at a throwaway database; the worker
+// applies pending migrations at startup (PROOF_AUTO_MIGRATE=true) and seeds session:development
+// if absent. Each run adds its own isolated sessions to the database.
+// Ports differ from playwright.proof-workspace-memory.config.ts so neither reuses the other's servers.
+const WORKER_PORT = 8787;
+const WEB_PORT = 3102;
+const workerOrigin = `http://127.0.0.1:${WORKER_PORT}`;
+
+// Read by apps/web/e2e/global-warmup.ts, which runs in this process.
+process.env.PROOF_E2E_WEB_PORT = String(WEB_PORT);
+
 export default defineConfig({
   testDir: "./apps/web/e2e",
-  testMatch: ["proof-workspace.spec.ts"],
-  timeout: 30_000,
+  testMatch: WORKER_BACKED_SPECS,
+  globalSetup: "./apps/web/e2e/global-warmup.ts",
+  timeout: 60_000,
+  expect: { timeout: 15_000 },
   use: {
-    baseURL: "http://127.0.0.1:3100",
+    // The API's same-origin check compares the browser Origin with the request URL Next reports
+    // (localhost), so the page must be served from localhost as well.
+    baseURL: `http://localhost:${WEB_PORT}`,
     trace: "retain-on-failure",
   },
   webServer: [
     {
-      command:
-        'npx tsx -e \'import { Pool } from "pg"; import { createPostgresProofHttpService, ensureDevelopmentProofSession, postgresProofStore } from "./apps/worker/src/index.ts"; void (async () => { const connectionString = process.env.PROOF_DATABASE_URL ?? process.env.DATABASE_URL; if (!connectionString) throw new Error("Set PROOF_DATABASE_URL (or DATABASE_URL) for proof-workspace e2e."); const pool = new Pool({ connectionString }); const ready = await ensureDevelopmentProofSession(postgresProofStore(pool)); if (ready.status !== "ready") throw new Error(ready.diagnostics[0].message); await createPostgresProofHttpService(pool).listen({ host: "127.0.0.1", port: 8787 }); })();\'',
-      url: "http://127.0.0.1:8787/proof-sessions/session%3Adevelopment",
-      reuseExistingServer: true,
+      command: `PROOF_STORE=postgres PROOF_AUTO_MIGRATE=true PROOF_HTTP_PORT=${WORKER_PORT} npx tsx apps/worker/src/main.ts`,
+      url: `${workerOrigin}/proof-sessions/session%3Adevelopment`,
+      reuseExistingServer: false,
       timeout: 120_000,
     },
     {
-      command:
-        "NEXT_TELEMETRY_DISABLED=1 PROOF_HTTP_ORIGIN=http://127.0.0.1:8787 npx next dev apps/web --hostname 127.0.0.1 --port 3100",
-      url: "http://127.0.0.1:3100",
-      reuseExistingServer: true,
-      timeout: 120_000,
+      command: productionWebCommand(WEB_PORT, workerOrigin),
+      url: `http://127.0.0.1:${WEB_PORT}`,
+      reuseExistingServer: false,
+      timeout: 300_000,
     },
   ],
 });

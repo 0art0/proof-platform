@@ -22,6 +22,7 @@
     "test:perf": "npm run test:perf --workspaces --if-present",
     "test:e2e": "playwright test",
     "test:e2e:workspace": "playwright test --config playwright.proof-workspace-memory.config.ts",
+    "test:e2e:postgres": "playwright test --config playwright.proof-workspace.config.ts",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "verify": "prettier --check . && npm run lint && npm run typecheck && npm test && npm run test:perf && npm run build"
   },
