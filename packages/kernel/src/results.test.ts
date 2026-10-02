@@ -10,6 +10,7 @@ import {
 } from "@proof/mathjson-model";
 import {
   alphaEquivalent,
+  KERNEL_TRANSITION_CLASSES,
   applyTransition,
   kernelOperationSchema,
   matchExpressionPattern,
@@ -479,7 +480,7 @@ describe("apply-result-forward", () => {
     );
     expect(result).toMatchObject({
       ok: true,
-      transitionClass: "equivalence",
+      transitionClass: "strengthening",
       state: {
         goals: [{ id: "goal:0" }],
         obligations: [
@@ -821,6 +822,47 @@ describe("result application invariants", () => {
     );
   });
 
+  it("classifies forward application from its outcome: obligations are never an equivalence", () => {
+    fc.assert(
+      fc.property(
+        propTerm,
+        natTerm,
+        natTerm,
+        fc.tuple(fc.boolean(), fc.boolean()),
+        (s, a, b, [matchFirst, matchSecond]) => {
+          const facts: Fact[] = [
+            ...(matchFirst
+              ? [{ id: "hypothesis:first", expression: ["Less", b, a] as PlainMathJson }]
+              : []),
+            ...(matchSecond ? [{ id: "hypothesis:second", expression: s }] : []),
+          ];
+          const unmet = [!matchFirst, !matchSecond].filter(Boolean).length;
+          const input = goalState("r", facts);
+          const result = applyTransition(
+            input,
+            forward(
+              "result:generic",
+              { s, a, b },
+              [matchFirst ? "hypothesis:first" : null, matchSecond ? "hypothesis:second" : null],
+              Array.from({ length: unmet }, (_, index) => `o:${index}`),
+            ),
+            invariantEnvironment,
+          );
+          expect(result.ok).toBe(true);
+          if (!result.ok) return;
+          expect(result.transitionClass).toBe(unmet === 0 ? "equivalence" : "strengthening");
+          expect(KERNEL_TRANSITION_CLASSES["apply-result-forward"]).toContain(
+            result.transitionClass,
+          );
+          if (result.state.obligations.length > input.obligations.length) {
+            expect(result.transitionClass).not.toBe("equivalence");
+          }
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+
   it("forward application with every premise unmet adds the conclusion and one obligation each", () => {
     fc.assert(
       fc.property(propTerm, natTerm, natTerm, (s, a, b) => {
@@ -830,7 +872,7 @@ describe("result application invariants", () => {
           forward("result:generic", { s, a, b }, [null, null], ["o:1", "o:2"]),
           invariantEnvironment,
         );
-        expect(result).toMatchObject({ ok: true, transitionClass: "equivalence" });
+        expect(result).toMatchObject({ ok: true, transitionClass: "strengthening" });
         if (!result.ok) return;
         const goal = result.state.goals[0];
         expect(goal?.sequent.conclusion.expression).toBe("r");

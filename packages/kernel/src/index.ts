@@ -91,6 +91,24 @@ export {
  */
 export type TransitionClass = "equivalence" | "strengthening" | "weakening";
 
+const TRANSITION_CLASS_ORDER: Readonly<Record<TransitionClass, number>> = {
+  equivalence: 0,
+  strengthening: 1,
+  weakening: 2,
+};
+
+/**
+ * The class of a composed transition is the weakest guarantee among its steps. Weakening
+ * dominates strengthening, which dominates equivalence. An empty sequence is an equivalence.
+ */
+export function composeTransitionClasses(classes: readonly TransitionClass[]): TransitionClass {
+  return classes.reduce<TransitionClass>(
+    (weakest, next) =>
+      TRANSITION_CLASS_ORDER[next] > TRANSITION_CLASS_ORDER[weakest] ? next : weakest,
+    "equivalence",
+  );
+}
+
 /**
  * How a transition's logical direction is supported (refinement §9). This is
  * orthogonal to the transition class. `structural` means the kernel checked
@@ -193,6 +211,58 @@ export const KERNEL_OPERATION_KINDS = [
   "close-by-assumption",
 ] as const;
 export type KernelOperationKind = (typeof KERNEL_OPERATION_KINDS)[number];
+
+const classes = (...allowed: TransitionClass[]): readonly TransitionClass[] =>
+  Object.freeze(allowed);
+
+/**
+ * The classes each primitive may report. The kernel classifies a transition from its actual
+ * outcome and refuses to report a class outside this set. Most primitives have one class;
+ * `apply-result-forward` is an equivalence only when every premise is matched by a hypothesis, and
+ * a strengthening when unmet premises become obligations. The record is exhaustive so a new
+ * primitive must choose its classes explicitly.
+ */
+export const KERNEL_TRANSITION_CLASSES: Readonly<
+  Record<KernelOperationKind, readonly TransitionClass[]>
+> = Object.freeze({
+  "close-by-hypothesis": classes("equivalence"),
+  "close-true": classes("equivalence"),
+  "close-false-hypothesis": classes("equivalence"),
+  "close-reflexive-equality": classes("equivalence"),
+  "close-by-contradiction": classes("equivalence"),
+  "close-by-accepted-inference": classes("equivalence"),
+  "introduce-implication": classes("equivalence"),
+  "introduce-negation": classes("equivalence"),
+  "split-goal-conjunction": classes("equivalence"),
+  "choose-goal-disjunct": classes("strengthening"),
+  "expand-hypothesis-conjunction": classes("equivalence"),
+  "split-hypothesis-disjunction": classes("equivalence"),
+  "split-classical-cases": classes("equivalence"),
+  "assume-hypothesis": classes("weakening"),
+  "replace-goal": classes("weakening"),
+  suffices: classes("strengthening"),
+  "drop-hypothesis": classes("strengthening"),
+  "apply-implication-hypothesis": classes("equivalence"),
+  "introduce-universal": classes("equivalence"),
+  "instantiate-universal-hypothesis": classes("equivalence"),
+  "choose-existential-witness": classes("strengthening"),
+  "unpack-existential-hypothesis": classes("equivalence"),
+  "rewrite-with-equality": classes("equivalence"),
+  "rewrite-with-equivalence": classes("equivalence"),
+  "rewrite-with-implication": classes("strengthening"),
+  "apply-result-backward": classes("strengthening"),
+  "apply-result-forward": classes("equivalence", "strengthening"),
+  "mark-sorry": classes("equivalence"),
+  "close-by-assumption": classes("equivalence"),
+});
+
+/**
+ * The class a move over this primitive declares before any outcome is known: the weakest of the
+ * classes the primitive may report. The stored preview and edge carry the actual class.
+ */
+export function declaredTransitionClass(kind: KernelOperationKind): TransitionClass {
+  return composeTransitionClasses(KERNEL_TRANSITION_CLASSES[kind]);
+}
 
 /**
  * The shared shape of every kernel operation. The target is the goal or
@@ -510,6 +580,28 @@ export function applyTransition(
   );
   if (!transition.ok) return { ...transition, state };
 
+  // Construction-task operations have no primitive entry; they report their own class.
+  const allowed = (
+    KERNEL_TRANSITION_CLASSES as Readonly<Record<string, readonly TransitionClass[] | undefined>>
+  )[operation.kind];
+  if (allowed !== undefined && !allowed.includes(transition.transitionClass)) {
+    return failure(
+      state,
+      "invalid-result-state",
+      `The ${operation.kind} transition reported ${transition.transitionClass}, which is outside its allowed classes.`,
+    );
+  }
+  if (
+    transition.transitionClass === "equivalence" &&
+    addsRequiredObligation(inputState.data, transition.state)
+  ) {
+    return failure(
+      state,
+      "invalid-result-state",
+      "A transition that creates required obligations cannot be an equivalence.",
+    );
+  }
+
   const candidate: ProofState = { ...transition.state, id: operation.resultStateId };
   const outputState = stateSchema.safeParse(candidate);
   if (!outputState.success) {
@@ -529,6 +621,16 @@ export function applyTransition(
     ...(transition.resultId === undefined ? {} : { resultId: transition.resultId }),
     diagnostics: [],
   };
+}
+
+/** Whether the transition appended an obligation a later proof must discharge (premise or sufficiency). */
+function addsRequiredObligation(before: ProofState, after: ProofState): boolean {
+  const existing = new Set(before.obligations.map((entry) => entry.id));
+  return after.obligations.some(
+    (entry) =>
+      !existing.has(entry.id) &&
+      (entry.provenance?.kind === "premise-of-result" || entry.provenance?.kind === "suffices"),
+  );
 }
 
 type InternalResult =
@@ -1218,8 +1320,9 @@ function applyResultBackward(
  * alpha-equivalence by the named local hypothesis or, for a null entry,
  * becomes an obligation in the target's local context. The instantiated
  * conclusion is appended to the target as a derived hypothesis. The kernel
- * classifies this as equivalence: the derived fact adds nothing unprovable,
- * and unmet premises remain as required obligations. Obligations follow an
+ * classifies this from the outcome: equivalence when every premise is matched
+ * (the derived fact adds nothing unprovable), strengthening when unmet premises
+ * remain as required obligations. Obligations follow an
  * obligation target directly and are appended after existing obligations for
  * a goal target, as with `suffices`.
  */
@@ -1296,7 +1399,14 @@ function applyResultForward(
           ...replaceTarget(state, operation.target, target.index, [derived]),
           obligations: [...state.obligations, ...obligations],
         };
-  return success(next, "equivalence", "library-result", operation.resultId);
+  // Unmet premises are required obligations, so the new state is stronger than the old one: it
+  // proves the original goal, but it is not interchangeable with it.
+  return success(
+    next,
+    unmet.length === 0 ? "equivalence" : "strengthening",
+    "library-result",
+    operation.resultId,
+  );
 }
 
 function locateTarget(state: ProofState, target: TransitionTarget): LocatedTarget | undefined {

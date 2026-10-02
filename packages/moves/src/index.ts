@@ -1,6 +1,8 @@
 import {
   KERNEL_OPERATION_KINDS,
   applyTransition,
+  KERNEL_TRANSITION_CLASSES,
+  declaredTransitionClass,
   kernelOperationSchema,
   type KernelEnvironment,
   type KernelOperation,
@@ -123,8 +125,7 @@ export const moveDefinitionSchema = guardedSchema(
           });
         }
       });
-      const expectedClass = PRIMITIVE_TRANSITION_CLASSES[move.implementation.operationKind];
-      if (move.transitionClass !== expectedClass) {
+      if (move.transitionClass !== declaredTransitionClass(move.implementation.operationKind)) {
         context.addIssue({
           code: "custom",
           message: "The declared transition class must match the deterministic primitive.",
@@ -135,38 +136,14 @@ export const moveDefinitionSchema = guardedSchema(
 );
 export type MoveDefinition = z.infer<typeof moveDefinitionSchema>;
 
-export const PRIMITIVE_TRANSITION_CLASSES: Readonly<Record<KernelOperationKind, TransitionClass>> =
-  Object.freeze({
-    "close-by-hypothesis": "equivalence",
-    "close-true": "equivalence",
-    "close-false-hypothesis": "equivalence",
-    "close-reflexive-equality": "equivalence",
-    "close-by-contradiction": "equivalence",
-    "close-by-accepted-inference": "equivalence",
-    "introduce-implication": "equivalence",
-    "introduce-negation": "equivalence",
-    "split-goal-conjunction": "equivalence",
-    "choose-goal-disjunct": "strengthening",
-    "expand-hypothesis-conjunction": "equivalence",
-    "split-hypothesis-disjunction": "equivalence",
-    "split-classical-cases": "equivalence",
-    "assume-hypothesis": "weakening",
-    "replace-goal": "weakening",
-    suffices: "strengthening",
-    "drop-hypothesis": "strengthening",
-    "apply-implication-hypothesis": "equivalence",
-    "introduce-universal": "equivalence",
-    "instantiate-universal-hypothesis": "equivalence",
-    "choose-existential-witness": "strengthening",
-    "unpack-existential-hypothesis": "equivalence",
-    "rewrite-with-equality": "equivalence",
-    "rewrite-with-equivalence": "equivalence",
-    "rewrite-with-implication": "strengthening",
-    "apply-result-backward": "strengthening",
-    "apply-result-forward": "equivalence",
-    "mark-sorry": "equivalence",
-    "close-by-assumption": "equivalence",
-  });
+/**
+ * The classes each primitive's kernel transition may report (the kernel's own table). A move
+ * declares `declaredTransitionClass(kind)`, the weakest of them; the stored preview and edge carry
+ * the class the kernel reported for the actual outcome, which must be in this set.
+ */
+export const PRIMITIVE_TRANSITION_CLASSES: Readonly<
+  Record<KernelOperationKind, readonly TransitionClass[]>
+> = KERNEL_TRANSITION_CLASSES;
 
 export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<KernelOperationKind, string>> = Object.freeze(
   {
@@ -750,7 +727,7 @@ export const HAND_AUTHORED_MOVES: readonly MoveDefinition[] = deepFreeze(
         kind: "deterministic-kernel-primitive",
         operationKind: input.operationKind,
       },
-      transitionClass: PRIMITIVE_TRANSITION_CLASSES[input.operationKind],
+      transitionClass: declaredTransitionClass(input.operationKind),
       previewRenderer: "kernel-state-delta",
       examples: { positive: input.positive, negative: [input.negative] },
       provenance: { kind: "curated", source: "proof-platform Stage 2 move pack" },
@@ -842,7 +819,9 @@ export function planMove(
       );
     }
     if (
-      transition.transitionClass !== move.transitionClass ||
+      !PRIMITIVE_TRANSITION_CLASSES[move.implementation.operationKind].includes(
+        transition.transitionClass,
+      ) ||
       !PRIMITIVE_TRANSITION_EVIDENCE[move.implementation.operationKind].includes(
         transition.evidence,
       )
@@ -1051,3 +1030,4 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
 export * from "./result-adapter";
 export * from "./materialize";
 export * from "./plan";
+export { declaredTransitionClass };

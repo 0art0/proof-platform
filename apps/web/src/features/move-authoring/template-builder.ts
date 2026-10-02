@@ -6,11 +6,7 @@
  * snapshots with the selections captured in them. No mathematics is typed and none is computed
  * here; the proof service validates the finished template by running its examples.
  */
-import {
-  HAND_AUTHORED_MOVES,
-  PRIMITIVE_TRANSITION_CLASSES,
-  type MoveDefinition,
-} from "@proof/moves";
+import { HAND_AUTHORED_MOVES, declaredTransitionClass, type MoveDefinition } from "@proof/moves";
 import {
   authoredExampleSchema,
   authoredMoveTemplateSchema,
@@ -231,7 +227,7 @@ export function planView(draft: TemplateDraft): readonly PlanStepView[] {
       moveName: primitive?.name ?? step.moveId,
       moveId: step.moveId,
       operationKind: step.operationKind,
-      transitionClass: PRIMITIVE_TRANSITION_CLASSES[step.operationKind],
+      transitionClass: declaredTransitionClass(step.operationKind),
       recorded: step.operation !== undefined,
     };
   });

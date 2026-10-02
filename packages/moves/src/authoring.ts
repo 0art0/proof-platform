@@ -50,7 +50,7 @@ import { z } from "zod";
 import { expressionAtPath, functionParts } from "./context-terms";
 import {
   HAND_AUTHORED_MOVES,
-  PRIMITIVE_TRANSITION_CLASSES,
+  declaredTransitionClass,
   moveDefinitionSchema,
   moveIdSchema,
   moveParameterSchema,
@@ -464,7 +464,7 @@ export function primitiveForStep(step: AuthoredPlanStep): MoveDefinition | undef
  * Undefined when a step names no primitive.
  */
 export function plannedTransitionClass(plan: AuthoredPlan): TransitionClass | undefined {
-  const classes = plan.steps.map((step) => PRIMITIVE_TRANSITION_CLASSES[step.operationKind]);
+  const classes = plan.steps.map((step) => declaredTransitionClass(step.operationKind));
   return classes.length === 0 ? undefined : composeTransitionClasses(classes);
 }
 
@@ -493,7 +493,7 @@ function firstStepDefinition(
     requiredArtifacts: template.requiredArtifacts,
     implementation: primitive.implementation,
     // The primitive's own class: the moves schema ties it to the implementation.
-    transitionClass: PRIMITIVE_TRANSITION_CLASSES[first.operationKind],
+    transitionClass: declaredTransitionClass(first.operationKind),
     previewRenderer: "kernel-state-delta",
     examples: {
       positive: template.examples
@@ -1637,10 +1637,15 @@ function runExample(
       ["expected"],
     );
   }
-  if (run.transitionClass !== template.transitionClass) {
+  // The template declares the weakest class its primitives may report; an example may run as that
+  // class or as a stronger one (a forward application with every premise matched), never weaker.
+  if (
+    composeTransitionClasses([run.transitionClass, template.transitionClass]) !==
+    template.transitionClass
+  ) {
     return problem(
       "class-mismatch",
-      `Example ${example.id} ran as ${run.transitionClass}, but the template declares ${template.transitionClass}.`,
+      `Example ${example.id} ran as ${run.transitionClass}, which is weaker than the ${template.transitionClass} the template declares.`,
       ["expected", "transitionClass"],
     );
   }
@@ -1787,7 +1792,7 @@ export function macroFromSemanticSteps(
     requiredArtifacts: [],
     plan: { kind: "deterministic-plan", steps },
     transitionClass: composeTransitionClasses(
-      steps.map((step) => PRIMITIVE_TRANSITION_CLASSES[step.operationKind]),
+      steps.map((step) => declaredTransitionClass(step.operationKind)),
     ),
     examples: metadata.examples ?? [],
     ...(metadata.discoveryContext === undefined

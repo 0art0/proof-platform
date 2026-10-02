@@ -520,6 +520,8 @@ describe("result suggestions through the proof HTTP service", () => {
     ]);
     expect(await historyEdge(session, "command:modus-ponens")).toMatchObject({
       moveId: "move:apply-result-forward",
+      // The unmet premise became an obligation, so the stored class is a strengthening.
+      transitionClass: "strengthening",
       operation: {
         kind: "apply-result-forward",
         resultId: "result:modus-ponens",
