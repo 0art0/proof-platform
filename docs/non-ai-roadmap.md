@@ -378,13 +378,19 @@ decisions for the user and are not scheduled here.
       `["Element", x, S]` binders with a membership hypothesis or obligation; `moves/context-terms` and
       retrieval binder keys use `binderShape`. _Accept:_ property tests over typed and untyped binders.
 
-- [ ] **N47 Polymorphic sorts (user request 2026-10-02).** Sort variables and parametric operators and
-      results, so packs can be stated once for any suitable sort (e.g. order over any ordered sort, sets of
-      any element sort), unlocking analysis, linear algebra and combinatorics packs. Design first
-      (`docs/polymorphic-sorts.md`, approved by the user), then staged implementation across
-      mathjson-model, kernel, library, retrieval, selections, problem setup and artifacts, with existing
-      monomorphic data staying valid. _Accept:_ soundness properties (instantiation preserves
-      well-sortedness; no ill-sorted transition is accepted), migrated packs, and at least one new pack.
+- [-] **N47 Polymorphic sorts (user request 2026-10-02).** _Deferred 2026-10-02 by the user after
+  reviewing the design (`docs/polymorphic-sorts.md`, `70cc65a`); not needed for the current packs._ Sort variables and parametric operators and
+  results, so packs can be stated once for any suitable sort (e.g. order over any ordered sort, sets of
+  any element sort), unlocking analysis, linear algebra and combinatorics packs. Design first
+  (`docs/polymorphic-sorts.md`, approved by the user), then staged implementation across
+  mathjson-model, kernel, library, retrieval, selections, problem setup and artifacts, with existing
+  monomorphic data staying valid. _Accept:_ soundness properties (instantiation preserves
+  well-sortedness; no ill-sorted transition is accepted), migrated packs, and at least one new pack.
+
+- [ ] **N48 Tighten built-in sort rules.** Found by the N47 design (§1.2): the checker accepts `Divide`
+      on ℕ/ℤ (so `n/m = n` validates), `Subtract` on ℕ, and order/`Abs` on ℂ. First a script reports any
+      stored session (memory/PostgreSQL) or artifact that would stop validating; then the rules are
+      tightened. _Accept:_ rejection tests per rule; corpus and coverage golden unchanged.
 
 ## Progress log
 
