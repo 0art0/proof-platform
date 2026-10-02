@@ -56,6 +56,7 @@ import type { z } from "zod";
 import { extractConditionalLemma, investigateHypothesis } from "../inquiry-methods";
 import { listInquiryRecords, recordInquiryCommand } from "../inquiry-repository";
 import { addLibraryArtifact } from "../library-repository";
+import { reviewConditionalLemma } from "../conditional-lemmas";
 import { authorMoveDraft, reviewMoveDraft } from "../move-authoring";
 import type { MoveTemplateValidationOptions } from "@proof/moves/authoring";
 import {
@@ -1011,7 +1012,7 @@ async function dispatch(
           occurredAt: now().toISOString(),
           nodeId: node.value.id,
           target: found.value,
-          lemma: command.lemma,
+          ...(command.lemma?.name === undefined ? {} : { name: command.lemma.name }),
         },
         actor,
         options,
@@ -1021,7 +1022,46 @@ async function dispatch(
         ok: true,
         value: {
           replayed: extracted.replayed,
-          result: { lemma: extracted.lemma, event: extracted.event, records: extracted.records },
+          result: {
+            lemma: extracted.lemma,
+            event: extracted.event,
+            records: extracted.records,
+            keptHypothesisIds: extracted.keptHypothesisIds,
+            unusedHypothesisIds: extracted.unusedHypothesisIds,
+          },
+        },
+      };
+    }
+
+    case "review-conditional-lemma": {
+      if (context.library === undefined) return libraryUnavailable();
+      if (actor.kind !== "human") {
+        return protocolFailure({
+          code: "payload-source-rejected",
+          message: "A conditional lemma is approved only by a human reviewer.",
+        });
+      }
+      const reviewed = await reviewConditionalLemma(context.library, {
+        commandId,
+        sessionId,
+        reviewerId: actor.id,
+        occurredAt: now().toISOString(),
+        draftArtifactId: command.draftArtifactId,
+        decision: command.decision,
+        notes: command.notes,
+      });
+      if (reviewed.status !== "recorded") return repositoryFailed(reviewed);
+      return {
+        ok: true,
+        value: {
+          replayed: reviewed.replayed,
+          result: {
+            artifactId: reviewed.artifact.id,
+            draftArtifactId: reviewed.draftArtifactId,
+            decision: reviewed.decision,
+            review: reviewed.artifact.review,
+            retrievable: reviewed.retrievable,
+          },
         },
       };
     }

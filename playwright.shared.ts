@@ -11,6 +11,7 @@ export const WORKER_BACKED_SPECS = [
   "gestures.spec.ts",
   "move-authoring.spec.ts",
   "macro-application.spec.ts",
+  "conditional-lemma.spec.ts",
 ];
 
 /**

@@ -18,6 +18,7 @@ import {
   deriveTryResultInquiry,
   planConditionalLemma,
   prepareInquiryCommand,
+  usedHypotheses,
   proofNodeIdSchema,
   type DisplayedSuggestionSet,
   type InquiryCommandContext,
@@ -27,7 +28,7 @@ import {
   type RecordInquiryCommandRequest,
 } from ".";
 
-const declarations = ["p", "q", "r"].map((symbol) => ({
+const declarations = ["p", "q", "r", "a", "b", "c", "d"].map((symbol) => ({
   id: `declaration:${symbol}`,
   symbol,
   sort: PROPOSITION_SORT,
@@ -687,7 +688,7 @@ describe("Extract a conditional lemma", () => {
   const nodes = [start, split.child, closeP.child, closeQ.child];
   const edges = [split.edge, closeP.edge, closeQ.edge];
 
-  it("plans the lemma from a closed target, retaining every hypothesis", () => {
+  it("plans the lemma from a closed target, retaining only the hypotheses used", () => {
     const planned = planConditionalLemma({
       nodes,
       edges,
@@ -697,7 +698,9 @@ describe("Extract a conditional lemma", () => {
     if (!planned.ok) throw new Error(planned.diagnostics[0].message);
     expect(planned.plan).toMatchObject({
       conclusion: { expression: ["And", "p", "q"] },
-      retainedHypothesisIds: ["hyp:p", "hyp:q", "hyp:r"],
+      retainedHypothesisIds: ["hyp:p", "hyp:q"],
+      unusedHypothesisIds: ["hyp:r"],
+      conservativeHypothesisUse: [],
       establishingEdgeIds: ["edge:node:split", "edge:node:p", "edge:node:q"],
       backgroundInferenceEdgeIds: [],
     });
@@ -718,6 +721,9 @@ describe("Extract a conditional lemma", () => {
         note: expect.stringContaining("Conditional lemma result:derived-main"),
       }),
     ]);
+    expect(prepared[0]).toMatchObject({
+      note: expect.stringContaining("1 unused hypothesis(es) are not retained"),
+    });
     expect(prepared.some((record) => "reason" in record)).toBe(false);
   });
 
@@ -755,5 +761,115 @@ describe("Extract a conditional lemma", () => {
         target: goal("goal:main"),
       }),
     ).toMatchObject({ ok: false, diagnostics: [{ code: "depends-on-sorry" }] });
+  });
+});
+
+describe("Hypotheses used by a closed subtree", () => {
+  const names = ["a", "b", "c", "d"] as const;
+  const hypotheses = names.map((name) => [`hyp:${name}`, name] as const);
+
+  it("keeps exactly the hypotheses a closing step names (property)", () => {
+    fc.assert(
+      fc.property(fc.constantFrom(...names), (used) => {
+        const start = node("node:prop", [{ id: "goal:g", conclusion: used, hypotheses }]);
+        const close = apply(start, "node:prop:close", {
+          kind: "close-by-hypothesis",
+          target: goal("goal:g"),
+          hypothesisId: `hyp:${used}`,
+        });
+        const planned = planConditionalLemma({
+          nodes: [start, close.child],
+          edges: [close.edge],
+          nodeId: "node:prop",
+          target: goal("goal:g"),
+        });
+        if (!planned.ok) throw new Error(planned.diagnostics[0].message);
+        expect(planned.plan.retainedHypothesisIds).toEqual([`hyp:${used}`]);
+        expect(planned.plan.unusedHypothesisIds).toEqual(
+          names.filter((name) => name !== used).map((name) => `hyp:${name}`),
+        );
+      }),
+    );
+  });
+
+  it("traces a hypothesis produced inside the subtree back to its source", () => {
+    const start = node("node:expand", [
+      {
+        id: "goal:g",
+        conclusion: "q",
+        hypotheses: [
+          ["hyp:pq", ["And", "p", "q"]],
+          ["hyp:r", "r"],
+        ],
+      },
+    ]);
+    const expand = apply(start, "node:expand:split", {
+      kind: "expand-hypothesis-conjunction",
+      target: goal("goal:g"),
+      hypothesisId: "hyp:pq",
+      expandedHypothesisIds: ["hyp:p2", "hyp:q2"],
+    });
+    const close = apply(expand.child, "node:expand:close", {
+      kind: "close-by-hypothesis",
+      target: goal("goal:g"),
+      hypothesisId: "hyp:q2",
+    });
+    const planned = planConditionalLemma({
+      nodes: [start, expand.child, close.child],
+      edges: [expand.edge, close.edge],
+      nodeId: "node:expand",
+      target: goal("goal:g"),
+    });
+    if (!planned.ok) throw new Error(planned.diagnostics[0].message);
+    expect(planned.plan.retainedHypothesisIds).toEqual(["hyp:pq"]);
+    expect(planned.plan.unusedHypothesisIds).toEqual(["hyp:r"]);
+  });
+
+  it("does not count a produced hypothesis nobody uses, nor a dropped one", () => {
+    const start = node("node:drop", [
+      {
+        id: "goal:g",
+        conclusion: ["Implies", "p", "p"],
+        hypotheses: [["hyp:r", "r"]],
+      },
+    ]);
+    const intro = apply(start, "node:drop:intro", {
+      kind: "introduce-implication",
+      target: goal("goal:g"),
+      hypothesisId: "hyp:assume",
+    });
+    const close = apply(intro.child, "node:drop:close", {
+      kind: "close-by-hypothesis",
+      target: goal("goal:g"),
+      hypothesisId: "hyp:assume",
+    });
+    const planned = planConditionalLemma({
+      nodes: [start, intro.child, close.child],
+      edges: [intro.edge, close.edge],
+      nodeId: "node:drop",
+      target: goal("goal:g"),
+    });
+    if (!planned.ok) throw new Error(planned.diagnostics[0].message);
+    expect(planned.plan.retainedHypothesisIds).toEqual([]);
+  });
+
+  it("keeps every hypothesis, with the reason, when a step's usage is unknown", () => {
+    const step = (evidence: string, kind: string) =>
+      ({
+        edgeId: "edge:unknown",
+        operation: { kind },
+        evidence,
+      }) as never;
+    const keepAll = usedHypotheses(["h1", "h2"], [step("structural", "future-operation")]);
+    expect(keepAll.usedHypothesisIds).toEqual(["h1", "h2"]);
+    expect(keepAll.conservative).toEqual([
+      expect.objectContaining({ edgeId: "edge:unknown", operationKind: "future-operation" }),
+    ]);
+    const inference = usedHypotheses(
+      ["h1", "h2"],
+      [step("background-inference", "close-by-accepted-inference")],
+    );
+    expect(inference).toMatchObject({ usedHypothesisIds: ["h1", "h2"], unusedHypothesisIds: [] });
+    expect(inference.conservative[0]?.reason).toMatch(/every hypothesis is kept/);
   });
 });

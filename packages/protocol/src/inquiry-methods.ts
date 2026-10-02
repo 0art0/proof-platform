@@ -25,8 +25,9 @@
  *   statement establishes nothing about the hypothesis's necessity; the question records none.
  * - "Extract a conditional lemma" (`extract-conditional-lemma`): `planConditionalLemma` checks that
  *   a target is closed in the stored subtree below its node without sorry assumptions and returns
- *   the context and conclusion for N12's `extractDerivedResult`, retaining every hypothesis; the
- *   derived command records an observation naming the lemma and its dependence on that subtree.
+ *   the context and conclusion for N12's `extractDerivedResult`, retaining only the hypotheses the
+ *   subtree used (`usedHypotheses`, conservative where usage is unknown); the derived command
+ *   records an observation naming the lemma and its dependence on that subtree.
  */
 import type { KernelOperation } from "@proof/kernel";
 import type { ProofContext, ProofState, StatementView } from "@proof/mathjson-model";
@@ -38,6 +39,7 @@ import {
   type RecordInquiryCommandRequest,
   type ResultCondition,
 } from "./inquiry";
+import { usedHypotheses, type ConservativeHypothesisUse } from "./lemma-hypotheses";
 import type { DisplayedSuggestionSet, ProofEdge, ProofNode } from "./index";
 
 export type InquiryTarget = Readonly<{ kind: "goal" | "obligation"; id: string }>;
@@ -458,8 +460,15 @@ export type ConditionalLemmaPlan = Readonly<{
   /** The target's local context and conclusion, for N12's `extractDerivedResult`. */
   context: ProofContext;
   conclusion: StatementView;
-  /** Every hypothesis of the context: the lemma retains them all as premises. */
+  /**
+   * The hypotheses of the context the establishing steps used (N44): the lemma's premises, in
+   * context order. When some step's usage is unknown, every hypothesis is retained.
+   */
   retainedHypothesisIds: readonly string[];
+  /** Context hypotheses no establishing step used, which the lemma does not retain. */
+  unusedHypothesisIds: readonly string[];
+  /** Steps whose usage could not be determined, which forced every hypothesis to be kept. */
+  conservativeHypothesisUse: readonly ConservativeHypothesisUse[];
   /** The route steps below the node that close the target and its replacements, in order. */
   establishingEdgeIds: readonly string[];
   /** Establishing steps supported by an accepted background inference. */
@@ -532,6 +541,10 @@ export function planConditionalLemma(input: ConditionalLemmaPlanInput): Conditio
       `The closure uses a sorry assumption at edge ${unsupported.edgeId}; a conditional lemma cannot retain it.`,
     );
   }
+  const usage = usedHypotheses(
+    entry.sequent.context.hypotheses.map(({ id }) => id),
+    establishing,
+  );
   return {
     ok: true,
     plan: freeze({
@@ -539,7 +552,9 @@ export function planConditionalLemma(input: ConditionalLemmaPlanInput): Conditio
       target: { kind: input.target.kind, id: input.target.id },
       context: structuredClone(entry.sequent.context),
       conclusion: structuredClone(entry.sequent.conclusion),
-      retainedHypothesisIds: entry.sequent.context.hypotheses.map(({ id }) => id),
+      retainedHypothesisIds: usage.usedHypothesisIds,
+      unusedHypothesisIds: usage.unusedHypothesisIds,
+      conservativeHypothesisUse: usage.conservative,
       establishingEdgeIds: establishing.map(({ edgeId }) => edgeId),
       backgroundInferenceEdgeIds: establishing
         .filter(({ evidence }) => evidence === "background-inference")
@@ -562,10 +577,17 @@ export function deriveConditionalLemmaInquiry(
 ): DeriveInquiryCommandResult {
   const { plan } = input;
   const hypotheses = plan.retainedHypothesisIds.length;
+  const unused = plan.unusedHypothesisIds.length;
   const background = plan.backgroundInferenceEdgeIds.length;
   const note =
     `Conditional lemma ${input.lemmaId}: the conclusion of ${plan.target.kind} ${plan.target.id} ` +
-    `holds under all ${hypotheses} hypothesis(es) of its context, which it retains as premises. ` +
+    `holds under the ${hypotheses} hypothesis(es) of its context that its proof used, which it retains as premises` +
+    (unused === 0 ? "" : ` (${unused} unused hypothesis(es) are not retained)`) +
+    (plan.conservativeHypothesisUse.length === 0
+      ? ". "
+      : `; every hypothesis is kept because ${plan.conservativeHypothesisUse
+          .map(({ edgeId, reason }) => `edge ${edgeId}: ${reason}`)
+          .join("; ")}. `) +
     `It depends on the ${plan.establishingEdgeIds.length} establishing step(s) below proof node ` +
     `${plan.nodeId}` +
     (background === 0

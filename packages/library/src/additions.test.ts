@@ -245,6 +245,51 @@ describe("library admission gate", () => {
     ).toEqual(["derived-layer-required"]);
   });
 
+  it("approves a derived result only through a consistent recorded review", () => {
+    const provenance = { kind: "derived", sessionId: SESSION, proofNodeId: "node:3" };
+    const review = {
+      decision: "approved",
+      reviewerId: "user:reviewer",
+      reviewedAt: "2026-10-02T00:00:00.000Z",
+      notes: "",
+      reviewOf: "result:test.draft",
+    };
+    const admit = (artifact: unknown) =>
+      codes(
+        admitLibraryArtifact({
+          artifact,
+          layer: "derived",
+          sessionId: SESSION,
+          proofNodeIds: ["node:3"],
+        }),
+      );
+    const approved = { status: "approved", reviewerId: "user:reviewer" };
+    expect(admit(result({ layer: "derived", provenance, approval: approved }))).toEqual([
+      "approval-required",
+    ]);
+    expect(admit(result({ layer: "derived", provenance, approval: approved, review }))).toEqual([]);
+    // A review must restate its decision in the approval and carry notes when negative.
+    expect(
+      libraryResultSchema.safeParse({
+        ...result({ layer: "derived", provenance, approval: approved, review }),
+        approval: { status: "draft" },
+      }).success,
+    ).toBe(false);
+    const rejected = { ...review, decision: "rejected", notes: "" };
+    expect(
+      libraryResultSchema.safeParse({
+        ...result({ layer: "derived", provenance, approval: { status: "draft" } }),
+        review: rejected,
+      }).success,
+    ).toBe(false);
+    expect(
+      libraryResultSchema.safeParse({
+        ...result({ layer: "derived", provenance, approval: { status: "draft" } }),
+        review: { ...rejected, notes: "Not general enough." },
+      }).success,
+    ).toBe(true);
+  });
+
   it("admits move-discovery additions as drafts only", () => {
     const layer = "move-discovery-draft";
     expect(

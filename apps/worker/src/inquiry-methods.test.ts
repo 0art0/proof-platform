@@ -381,12 +381,7 @@ describe("Extract a conditional lemma", () => {
       occurredAt: "2026-09-28T12:00:00.000Z",
       nodeId,
       target: { kind: "goal", id: targetId },
-      lemma: {
-        id: `result:derived-${suffix}`,
-        name: "p from p",
-        classification: { domains: ["logic"], level: "foundational" },
-        renderings: { latex: "p", naturalLanguage: "p holds" },
-      },
+      name: "p from p",
     };
   }
 
@@ -411,7 +406,8 @@ describe("Extract a conditional lemma", () => {
     });
     if (extracted.status !== "committed") throw new Error(JSON.stringify(extracted));
     expect(extracted.lemma).toMatchObject({
-      id: "result:derived-premise",
+      id: "result:lemma.command:lemma-premise",
+      name: "p from p",
       layer: "derived",
       approval: { status: "draft" },
       provenance: { kind: "derived", sessionId: SESSION, proofNodeId: child.id },
@@ -423,13 +419,13 @@ describe("Extract a conditional lemma", () => {
       expect.objectContaining({
         kind: "observation",
         references: [{ kind: "target", nodeId: child.id, target: { kind: "goal", id: first.id } }],
-        note: expect.stringContaining("Conditional lemma result:derived-premise"),
+        note: expect.stringContaining("Conditional lemma result:lemma.command:lemma-premise"),
       }),
     ]);
     const listed = await listLibrary(store, { sessionId: SESSION, layers: ["derived"] });
     expect(listed).toMatchObject({
       status: "found",
-      artifacts: [{ id: "result:derived-premise" }],
+      artifacts: [{ id: "result:lemma.command:lemma-premise" }],
     });
 
     const retried = await extractConditionalLemma(store, store, SESSION, request, human, {
@@ -449,7 +445,7 @@ describe("Extract a conditional lemma", () => {
         lemmaRequest("node:root", MAIN.id, "main"),
         human,
       ),
-    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "inquiry-command-rejected" }] });
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "lemma-not-closed" }] });
     expect(await listLibrary(store, { sessionId: SESSION, layers: ["derived"] })).toMatchObject({
       status: "found",
       artifacts: [],

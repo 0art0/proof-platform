@@ -67,6 +67,7 @@ export * from "./parameter-menus";
 export * from "./interaction-events";
 export * from "./inquiry";
 export * from "./inquiry-methods";
+export * from "./lemma-hypotheses";
 export * from "./command-protocol";
 export * from "./problem-setup";
 export * from "./artifact";

@@ -1,6 +1,7 @@
 "use client";
 
 import type { Presentation } from "@proof/language";
+import { LemmaReviewSection, type LemmaReviewHandler } from "../conditional-lemma";
 import type { WorkspaceView } from "../proof-workspace";
 import { StatementView } from "../proof-workspace/presentation";
 import type { LibraryArtifactView, LibraryEntry, VariantFamilyView } from "./api-contract";
@@ -23,6 +24,8 @@ export type LibraryDetailProps = Readonly<{
   presentation: Presentation;
   view: WorkspaceView;
   onSelect: (entry: LibraryEntry) => void;
+  /** Reviewing saved lemma drafts (N44); absent when reviewing is not offered. */
+  lemmaReview?: Readonly<{ readOnly: boolean; onReview: LemmaReviewHandler }> | undefined;
 }>;
 
 /**
@@ -36,6 +39,7 @@ export function LibraryDetail({
   presentation,
   view,
   onSelect,
+  lemmaReview,
 }: LibraryDetailProps) {
   const { artifact } = entry;
   const declarations = artifact.parameters as unknown as Declarations;
@@ -58,6 +62,14 @@ export function LibraryDetail({
         </Fact>
       </dl>
       <p className={styles.description}>{artifact.description}</p>
+      {lemmaReview === undefined ? null : (
+        <LemmaReviewSection
+          artifact={artifact}
+          entries={entries}
+          readOnly={lemmaReview.readOnly}
+          onReview={lemmaReview.onReview}
+        />
+      )}
 
       {artifact.statement === undefined ? null : (
         <section aria-label="Statement">

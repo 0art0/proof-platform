@@ -8,6 +8,7 @@ import { LibraryDrawer } from "./library-drawer";
 import { IDLE_DRAG_STATE } from "../gestures/drag-state";
 import type { GestureBindings } from "../gestures/use-drag-gestures";
 import { EVENTS, LIBRARY } from "./library-fixtures.testing";
+import { lemmaDraft, lemmaReviewed } from "../conditional-lemma/lemma-fixtures.testing";
 
 const presentation = createPresentation({ operators: [] });
 
@@ -299,5 +300,104 @@ describe("LibraryDrawer", () => {
       fireEvent.dragEnd(handle);
       expect(bindings.cancel).toHaveBeenCalled();
     });
+  });
+});
+
+describe("LibraryDrawer lemma review (N44)", () => {
+  const COMMITTED = {
+    kind: "review-conditional-lemma",
+    actor: { id: "actor:web", kind: "human" },
+    replayed: false,
+    cursor: { nodeId: "node:root", stateId: "state:root", eventSequence: 0, inquirySequence: 2 },
+    aliases: {
+      nodeId: "node:root",
+      stateId: "state:root",
+      goals: [],
+      obligations: [],
+      hypotheses: [],
+    },
+    delta: {
+      from: { nodeId: "node:root", stateId: "state:root" },
+      to: { nodeId: "node:root", stateId: "state:root" },
+      goals: { added: [], removed: [], updated: [] },
+      obligations: { added: [], removed: [], updated: [] },
+      assumptionsAdded: [],
+      assumptionsRemoved: [],
+    },
+    result: {},
+  };
+
+  function stubLibrary(readOnly = false) {
+    let reviewed = false;
+    const posts: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          posts.push(body);
+          reviewed = true;
+          return new Response(
+            JSON.stringify({ ok: true, data: { ...COMMITTED, commandId: body["commandId"] } }),
+            { status: 201 },
+          );
+        }
+        const data = url.endsWith("/events")
+          ? { sessionId: "session:test", readOnly, events: [] }
+          : {
+              ...LIBRARY,
+              readOnly,
+              entries: [
+                ...LIBRARY.entries,
+                lemmaDraft(),
+                ...(reviewed ? [lemmaReviewed("approved")] : []),
+              ],
+            };
+        return new Response(JSON.stringify({ ok: true, data }), { status: 200 });
+      }),
+    );
+    return posts;
+  }
+
+  async function openLemma() {
+    render(<LibraryDrawer sessionId="session:test" presentation={presentation} view="formal" />);
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+    await screen.findByRole("search", { name: "Filter library" });
+    fireEvent.click(screen.getByRole("button", { name: /Lemma: p/ }));
+  }
+
+  it("offers approve and reject on a saved lemma draft, and records the review", async () => {
+    const posts = stubLibrary();
+    await openLemma();
+    const review = await screen.findByRole("region", { name: "Lemma review" });
+    expect(within(review).getByRole("button", { name: "Reject lemma" })).toBeDisabled();
+    fireEvent.click(within(review).getByRole("button", { name: "Approve lemma" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toMatchObject({
+      actor: { id: "actor:web", kind: "human" },
+      command: {
+        kind: "review-conditional-lemma",
+        draftArtifactId: "result:lemma.command:save",
+        decision: "approved",
+      },
+    });
+    // The library is read again, and the draft now shows the recorded decision.
+    await waitFor(() => expect(screen.getByText(/You approved this lemma/)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Approve lemma" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer a review of an ordinary library result", async () => {
+    stubFetch();
+    await openDrawer();
+    fireEvent.click(screen.getByRole("button", { name: /Session lemma/ }));
+    expect(screen.queryByRole("region", { name: "Lemma review" })).not.toBeInTheDocument();
+  });
+
+  it("disables the review in a read-only session", async () => {
+    stubLibrary(true);
+    await openLemma();
+    const review = await screen.findByRole("region", { name: "Lemma review" });
+    expect(within(review).getByRole("button", { name: "Approve lemma" })).toBeDisabled();
   });
 });

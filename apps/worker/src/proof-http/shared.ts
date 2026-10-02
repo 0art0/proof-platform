@@ -116,6 +116,7 @@ const CONFLICT = new Set([
   "backtrack-with-information-conflict",
   "replay-conflict",
   "draft-already-reviewed",
+  "lemma-already-saved",
   // Writes to a session imported from an artifact (N27).
   "session-read-only",
   // Library repository conflicts.
@@ -137,6 +138,7 @@ const REJECTED = new Set([
   "replay-rejected",
   "invalid-request",
   "review-notes-required",
+  "lemma-target-not-found",
 ]);
 
 /** Move-authoring refusals of well-formed requests (N35). */
@@ -145,6 +147,11 @@ const MOVE_AUTHORING_INVALID = new Set([
   "move-validation-failed",
   "draft-corrupt",
   "library-admission-rejected",
+  // A target that cannot become a conditional lemma (N44): not closed, a sorry, a local object.
+  "lemma-not-closed",
+  "lemma-uses-sorry",
+  "lemma-local-dependency",
+  "lemma-invalid",
 ]);
 
 /** The HTTP status of a repository (or library repository) failure. */

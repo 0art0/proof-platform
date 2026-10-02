@@ -38,6 +38,7 @@ import {
 import type { LibraryStore } from "../library-repository";
 import { postgresProofStore } from "../postgres-proof-store";
 import { handleArtifactRoute } from "./artifact-routes";
+import { handleConditionalLemmaRoute } from "./conditional-lemma-routes";
 import { handleAuthoredMoveRoute, requestSessionId, scopedContext } from "./authored-move-routes";
 import { handleLibraryRoute } from "./library-routes";
 import { handleSessionAdminRoute } from "./session-admin-routes";
@@ -330,6 +331,7 @@ async function handleRequest(
   // A session's requests see the base definitions plus its approved authored moves (N35).
   const context = await scopedContext(baseContext, requestSessionId(request.url));
   if (await handleAuthoredMoveRoute(context, request, response)) return;
+  if (await handleConditionalLemmaRoute(context, request, response)) return;
   if (await handleProblemSetupRoute(context, request, response)) return;
   if (await handleArtifactRoute(context, request, response)) return;
   if (await handleLibraryRoute(context, request, response)) return;

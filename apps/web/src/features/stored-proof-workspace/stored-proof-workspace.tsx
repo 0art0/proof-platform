@@ -27,6 +27,7 @@ import {
 import { StatementView, usePresentation } from "../proof-workspace/presentation";
 import type { Presentation } from "@proof/language";
 import { LibraryDrawer } from "../library-drawer";
+import { ConditionalLemmaPanel } from "../conditional-lemma";
 import { InquiryPanel } from "../inquiry-panel";
 import { GestureTray, useDragGestures } from "../gestures";
 import {
@@ -759,6 +760,13 @@ function StatefulStoredWorkspace({
         operators={session.operators}
         view={view}
         runCommand={runToolbarCommand}
+      />
+      <ConditionalLemmaPanel
+        sessionId={session.id}
+        view={view}
+        readOnly={readOnly}
+        busy={mutationPending}
+        refreshKey={history}
       />
       <HistoryView
         history={history}

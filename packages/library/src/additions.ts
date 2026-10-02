@@ -410,6 +410,13 @@ export function admitLibraryArtifact(input: LibraryAdmissionInput): LibraryAdmis
         if (provenance.sessionId !== sessionId) {
           add("derived-session-mismatch", "The derived result was proved in another session.");
         }
+        // A derived result is approved only by a recorded human review (N44).
+        if (
+          artifact.approval.status === "approved" &&
+          !(artifact.kind === "result" && artifact.review?.decision === "approved")
+        ) {
+          add("approval-required", "A derived result is approved only by a recorded review.");
+        }
         if (
           input.proofNodeIds !== undefined &&
           !input.proofNodeIds.includes(provenance.proofNodeId)

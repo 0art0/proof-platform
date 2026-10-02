@@ -75,6 +75,14 @@ import {
   type TemplateValidation,
 } from "../../features/move-authoring/api-contract";
 
+import {
+  lemmaCandidatesSchema,
+  lemmaPreviewResponseSchema,
+  previewLemmaRequestSchema,
+  type LemmaCandidates,
+  type LemmaPreviewResponse,
+} from "../../features/conditional-lemma/api-contract";
+
 const DEFAULT_PROOF_HTTP_ORIGIN = "http://127.0.0.1:8787";
 const DEFAULT_PROOF_SESSION_ID = "session:development";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -1540,6 +1548,55 @@ export async function validateAuthoredMoveTemplate(
   const value = await readValidatedEnvelope(response, MAX_AUTHORED_MOVES_RESPONSE_BYTES);
   if (response.status !== 200) throw failureForResponse(response.status, value);
   const parsed = templateValidationSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Conditional lemmas (roadmap N44): the worker lists and previews; saving and reviewing go
+// through the command envelope
+// ---------------------------------------------------------------------------------------------
+
+const MAX_CONDITIONAL_LEMMA_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+/** Every step of the session that could become a lemma, with its preview or why it cannot yet. */
+export async function readConditionalLemmas(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<LemmaCandidates> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/conditional-lemmas`,
+    { method: "GET", ...signalOption(options.signal) },
+  );
+  const value = await readValidatedEnvelope(response, MAX_CONDITIONAL_LEMMA_RESPONSE_BYTES);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = lemmaCandidatesSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
+/** The lemma that saving one closed target would create, or why it cannot be saved. */
+export async function previewConditionalLemma(
+  sessionIdInput: unknown,
+  requestInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<LemmaPreviewResponse> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const request = previewLemmaRequestSchema.safeParse(requestInput);
+  if (!request.success) throw invalidRequest("The lemma preview request is invalid.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/conditional-lemmas/preview`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.data),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response, MAX_CONDITIONAL_LEMMA_RESPONSE_BYTES);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = lemmaPreviewResponseSchema.safeParse(value);
   if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
   return parsed.data;
 }

@@ -138,7 +138,10 @@ async function readLibrary(
     sessionId,
     readOnly: basis.imported !== undefined,
     entries: [
-      ...catalog.results.map((artifact) => ({ source: "approved-catalog" as const, artifact })),
+      // Approved conditional lemmas are in both the session catalog and the stored derived layer.
+      ...catalog.results
+        .filter(({ id }) => !stored.some((artifact) => artifact.id === id))
+        .map((artifact) => ({ source: "approved-catalog" as const, artifact })),
       ...stored.map((artifact) => ({ source: "stored-library" as const, artifact })),
     ],
     variantFamilies: catalog.variantFamilies,
