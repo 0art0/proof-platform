@@ -18,6 +18,7 @@
     "@proof/language": "*",
     "@proof/llm": "*",
     "@proof/library": "*",
+    "@proof/kernel": "*",
     "@proof/mathjson-model": "*",
     "@proof/moves": "*",
     "@proof/protocol": "*",

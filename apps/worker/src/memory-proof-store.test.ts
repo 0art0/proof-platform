@@ -121,7 +121,7 @@ describe("MemoryProofStore transactions", () => {
     });
   });
 
-  it("mirrors the evidence and transition-sequence constraints of migration 0013", async () => {
+  it("mirrors the evidence and transition-sequence constraints of migration 0014", async () => {
     const store = await seeded();
     type Work = Parameters<MemoryProofStore["transaction"]>[0];
     type Transaction = Parameters<Work>[0];

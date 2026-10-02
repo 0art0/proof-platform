@@ -36,7 +36,10 @@ import {
   recordInquiryCommand,
 } from "../inquiry-repository";
 import type { LibraryStore } from "../library-repository";
+import { createAiRuntime, type AiRuntime } from "../ai-runtime";
+import type { LlmCallStore } from "../llm-call-repository";
 import { postgresProofStore } from "../postgres-proof-store";
+import { handleAiRoute } from "./ai-routes";
 import { handleArtifactRoute } from "./artifact-routes";
 import { handleConditionalLemmaRoute } from "./conditional-lemma-routes";
 import { handleAuthoredMoveRoute, requestSessionId, scopedContext } from "./authored-move-routes";
@@ -270,6 +273,9 @@ export type ProofHttpServiceOptions = Readonly<{
   now?: () => Date;
   /** The session library store; library commands of the envelope need it. */
   library?: LibraryStore;
+  llmCalls?: LlmCallStore;
+  ai?: AiRuntime;
+  env?: Readonly<Record<string, string | undefined>>;
 }>;
 
 type HandlerContext = ServiceContext;
@@ -284,6 +290,8 @@ export function createProofHttpService(
     definitions: options.definitions ?? APPROVED_DEFINITIONS,
     now: options.now,
     library: options.library,
+    llmCalls: options.llmCalls,
+    ai: options.ai ?? createAiRuntime(options.env ?? process.env),
   };
   const server = createServer((request, response) => {
     void handleRequest(context, request, response).catch(() => {
@@ -330,6 +338,7 @@ async function handleRequest(
 ): Promise<void> {
   // A session's requests see the base definitions plus its approved authored moves (N35).
   const context = await scopedContext(baseContext, requestSessionId(request.url));
+  if (await handleAiRoute(context, request, response)) return;
   if (await handleAuthoredMoveRoute(context, request, response)) return;
   if (await handleConditionalLemmaRoute(context, request, response)) return;
   if (await handleProblemSetupRoute(context, request, response)) return;

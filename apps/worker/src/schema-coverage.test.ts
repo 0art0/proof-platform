@@ -61,13 +61,13 @@ describe("migration schema", () => {
     expect(schema.get("proof_events")?.columns).toContain("provenance_key");
   });
 
-  it("defines the stored transition evidence and sequence columns (0013)", () => {
+  it("defines the stored transition evidence and sequence columns (0014)", () => {
     for (const table of ["proof_edges", "proof_events"]) {
       const columns = schema.get(table)?.columns;
       expect(columns, table).toContain("evidence");
       expect(columns, table).toContain("transition_sequence");
     }
-    const sql = migrations.find((m) => m.name.startsWith("0013_"))?.sql ?? "";
+    const sql = migrations.find((m) => m.name.startsWith("0014_"))?.sql ?? "";
     // Per-session uniqueness of the sequence, the event-to-edge link, and the record mirror.
     expect(sql).toContain("UNIQUE (session_id, transition_sequence)");
     expect(sql).toContain("proof_events_edge_evidence_key_fk");

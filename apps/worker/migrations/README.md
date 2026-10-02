@@ -30,6 +30,9 @@ migrations create and that every memory-store entity has a migrated table.
 topic-manifest review decisions. A `dispatching` record deliberately remains ambiguous after a
 worker crash: retry reads it as uncertain and does not silently dispatch the provider again.
 
+`0013_llm_formalizer_role.sql` expands the LLM-call role constraint to include the proof-state
+formalizer while preserving the immutability of the already-applied `0002` migration.
+
 `0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
 events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
 as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so
@@ -180,7 +183,7 @@ Exports are not stored on the server: the artifact is built on demand from store
 `proof_artifact_imports` record; a downloaded file is outside the worker's reach. The global
 library layer and operator registry are not session data and are kept.
 
-`0013_transition_evidence.sql` stores the kernel's transition evidence and a per-session transition
+`0014_transition_evidence.sql` stores the kernel's transition evidence and a per-session transition
 sequence (roadmap N40). `proof_edges` and `proof_events` gain `evidence` (`structural`,
 `background-inference`, `library-result` or `sorry`) and `transition_sequence`; both also stay in the
 JSONB record, and CHECKs keep the columns identical to it. Previews and command results carry the

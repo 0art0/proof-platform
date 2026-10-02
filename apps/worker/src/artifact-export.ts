@@ -75,6 +75,8 @@ export type ExportProofArtifactOptions = Readonly<{
   /** The library store; without it a live session exports an empty library section. */
   library?: LibraryStore | undefined;
   definitions?: DefinitionCatalog;
+  /** Owner-scoped LLM call rows already read and validated by the worker repository. */
+  llmCalls?: ProofArtifact["llmCalls"] | undefined;
 }>;
 
 /** Rows read per page from the interaction-event and inquiry logs. */
@@ -111,7 +113,7 @@ export async function exportProofArtifact(
   }
   if ("diagnostics" in rows) return rows;
 
-  const library = await librarySection(rows, options.library);
+  const library = await librarySection(rows, options.library, options.llmCalls);
   if ("diagnostics" in library) return library;
 
   const { session, nodes } = rows;
@@ -316,6 +318,7 @@ type LibrarySectionResult =
 async function librarySection(
   rows: StoredRows,
   libraryStore: LibraryStore | undefined,
+  llmCalls: ProofArtifact["llmCalls"] | undefined,
 ): Promise<LibrarySectionResult> {
   const { session, importRecord } = rows;
   // An imported session's library and LLM calls are the static sections of its import record.
@@ -330,7 +333,7 @@ async function librarySection(
         backgroundRevisions: [],
         finalLibrary: [],
       },
-      llmCalls: [],
+      llmCalls: llmCalls ?? [],
     };
   }
   const [events, revisions, active, registry] = await Promise.all([
@@ -357,7 +360,7 @@ async function librarySection(
       backgroundRevisions: revisions.revisions,
       finalLibrary: active.artifacts,
     },
-    llmCalls: [],
+    llmCalls: llmCalls ?? [],
   };
 }
 

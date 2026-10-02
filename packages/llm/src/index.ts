@@ -11,6 +11,11 @@ import {
   type PlainMathJson,
   createProofNodeSchema,
   displayedSuggestionSetSchema,
+  problemDraftSchema,
+  problemStatementInputSchema,
+  problemSetupLayerIdSchema,
+  problemSetupPackIdSchema,
+  problemSetupSortIdSchema,
   suggestionSetMatchesNode,
   type DisplayedSuggestionSet,
   type ProofNode,
@@ -31,7 +36,11 @@ export const LLM_ROLES = [
 export const llmRoleSchema = z.enum(LLM_ROLES);
 export type LlmRole = z.infer<typeof llmRoleSchema>;
 
-export const SUPPORTED_LLM_ROLES = ["topic-extractor", "move-shortlister"] as const;
+export const SUPPORTED_LLM_ROLES = [
+  "topic-extractor",
+  "proof-state-formalizer",
+  "move-shortlister",
+] as const;
 export const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
 export type RenderedMathematics = Readonly<{ latex: string; naturalLanguage: string }>;
@@ -47,6 +56,7 @@ const uniqueShortTextsSchema = z
   .superRefine((values, context) => addDuplicateIssues(values, context));
 
 export { backgroundProfileSchema, type BackgroundProfile } from "@proof/protocol";
+export * from "./transport";
 
 const topicExtractorContextSchema = z
   .object({
@@ -156,6 +166,41 @@ const topicExtractorEnvelopeSchema = z
     context: topicExtractorContextSchema,
   })
   .strict();
+const formalizerLibraryResultSchema = z
+  .object({
+    id: stableIdentifierSchema,
+    name: shortTextSchema,
+    description: boundedTextSchema,
+    statement: plainMathJsonSchema,
+    premises: z.array(plainMathJsonSchema).max(32),
+  })
+  .strict();
+const formalizerContextSchema = z
+  .object({
+    problem: problemDraftSchema.shape.problem,
+    background: backgroundProfileSchema,
+    preferences: problemDraftSchema.shape.preferences,
+    libraryLayerIds: z.array(problemSetupLayerIdSchema).max(4),
+    packs: z.array(problemSetupPackIdSchema).max(7),
+    approvedLibrary: z
+      .object({
+        results: z.array(formalizerLibraryResultSchema).max(64),
+        operators: z.array(operatorDeclarationSchema).max(128),
+        sorts: z.array(problemSetupSortIdSchema).max(11),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((context, refinement) => {
+    addDuplicateIssues(context.libraryLayerIds, refinement);
+    addDuplicateIssues(context.packs, refinement);
+    addDuplicateIssues(
+      context.approvedLibrary.results.map(({ id }) => id),
+      refinement,
+    );
+    addDuplicateIssues(context.approvedLibrary.sorts, refinement);
+  });
+export type ProofStateFormalizerContext = z.infer<typeof formalizerContextSchema>;
 const moveShortlisterEnvelopeSchema = z
   .object({
     ...envelopeBaseShape,
@@ -163,8 +208,16 @@ const moveShortlisterEnvelopeSchema = z
     context: moveShortlisterContextSchema,
   })
   .strict();
+const proofStateFormalizerEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("proof-state-formalizer"),
+    context: formalizerContextSchema,
+  })
+  .strict();
 export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   topicExtractorEnvelopeSchema,
+  proofStateFormalizerEnvelopeSchema,
   moveShortlisterEnvelopeSchema,
 ]);
 export type LlmContextEnvelope = z.infer<typeof llmContextEnvelopeSchema>;
@@ -200,6 +253,13 @@ type LlmBoundaryFailure = Readonly<{
 export type BuildLlmContextResult =
   | Readonly<{ ok: true; envelope: LlmContextEnvelope; diagnostics: readonly [] }>
   | LlmBoundaryFailure;
+export type RoleLlmContextResult<Role extends LlmContextEnvelope["role"]> =
+  | Readonly<{
+      ok: true;
+      envelope: Extract<LlmContextEnvelope, { role: Role }>;
+      diagnostics: readonly [];
+    }>
+  | LlmBoundaryFailure;
 
 const topicExtractorRequestSchema = z
   .object({
@@ -224,6 +284,41 @@ export function buildTopicExtractorContext(input: unknown): BuildLlmContextResul
       ...(request.preferences === undefined ? {} : { preferences: request.preferences }),
     },
   });
+}
+
+const proofStateFormalizerRequestSchema = z
+  .object({
+    id: llmCallIdSchema,
+    problem: formalizerContextSchema.shape.problem,
+    background: backgroundProfileSchema,
+    preferences: formalizerContextSchema.shape.preferences,
+    libraryLayerIds: formalizerContextSchema.shape.libraryLayerIds,
+    packs: formalizerContextSchema.shape.packs,
+    approvedLibrary: formalizerContextSchema.shape.approvedLibrary,
+  })
+  .strict();
+
+/** Build a bounded setup envelope from the original problem and explicitly approved library. */
+export function buildProofStateFormalizerContext(
+  input: unknown,
+): RoleLlmContextResult<"proof-state-formalizer"> {
+  const request = safeParsePlain(proofStateFormalizerRequestSchema, input);
+  if (request === undefined) {
+    return failure("invalid-request", "The proof-state formalizer request is invalid.");
+  }
+  return envelopeSuccess({
+    id: request.id,
+    schemaVersion: "llm-context/v1",
+    role: "proof-state-formalizer",
+    context: {
+      problem: request.problem,
+      background: request.background,
+      ...(request.preferences === undefined ? {} : { preferences: request.preferences }),
+      libraryLayerIds: request.libraryLayerIds,
+      packs: request.packs,
+      approvedLibrary: request.approvedLibrary,
+    },
+  }) as RoleLlmContextResult<"proof-state-formalizer">;
 }
 
 const moveShortlisterRequestSchema = z
@@ -351,8 +446,129 @@ const shortlisterOutputSchema = z.union([
   shortlisterInsufficientContextSchema,
   declinedSchema,
 ]);
+const formalizerInsufficientContextSchema = z
+  .object({
+    kind: z.literal("insufficient-context"),
+    requestedCategories: z
+      .array(
+        z.enum([
+          "background-detail",
+          "notation-preference",
+          "library-result",
+          "operator-definition",
+        ]),
+      )
+      .min(1)
+      .max(4),
+    rationale: shortTextSchema,
+  })
+  .strict();
+export const proofStateFormalizationProposalSchema = z
+  .object({
+    kind: z.literal("formalization"),
+    draft: problemDraftSchema,
+  })
+  .strict();
+export type ProofStateFormalizationProposal = z.infer<typeof proofStateFormalizationProposalSchema>;
+const formalizerOutputSchema = z.union([
+  proofStateFormalizationProposalSchema,
+  formalizerInsufficientContextSchema,
+  declinedSchema,
+]);
+
+// Strict provider schemas require optional public N26 fields to be present as nullable fields.
+// The worker remains the sole conversion point from submitted LaTeX/MathJSON draft inputs to its
+// authoritative MathJSON proof state.
+const problemSchema = problemDraftSchema.shape.problem;
+const backgroundSchema = problemDraftSchema.shape.background;
+const preferencesSchema = problemDraftSchema.shape.preferences.unwrap();
+const wireBackgroundProfileSchema = z
+  .object({
+    level: backgroundSchema.shape.level,
+    summary: backgroundSchema.shape.summary,
+    assumptions: backgroundSchema.shape.assumptions,
+    domains: backgroundSchema.shape.domains.unwrap().nullable(),
+    maximumLevel: backgroundSchema.shape.maximumLevel.unwrap().nullable(),
+  })
+  .strict();
+const wirePreferencesSchema = z
+  .object({
+    domains: preferencesSchema.shape.domains.unwrap().nullable(),
+    notation: preferencesSchema.shape.notation.unwrap().nullable(),
+  })
+  .strict();
+const wireLatexStatementSchema = problemStatementInputSchema.options[0];
+const wireProblemDraftSchema = z
+  .object({
+    problem: problemSchema,
+    background: wireBackgroundProfileSchema,
+    preferences: wirePreferencesSchema,
+    libraryLayerIds: problemDraftSchema.shape.libraryLayerIds,
+    packs: problemDraftSchema.shape.packs,
+    declarations: problemDraftSchema.shape.declarations,
+    hypotheses: z.array(wireLatexStatementSchema).max(64),
+    goals: z.array(wireLatexStatementSchema).min(1).max(16),
+  })
+  .strict();
+const wireFormalizerProposalSchema = z
+  .object({
+    kind: z.literal("formalization"),
+    draft: wireProblemDraftSchema,
+  })
+  .strict();
+const formalizerWireResultSchema = z.union([
+  wireFormalizerProposalSchema,
+  formalizerInsufficientContextSchema,
+  declinedSchema,
+]);
+
 export type ValidatedLlmOutput =
-  z.infer<typeof topicOutputSchema> | z.infer<typeof shortlisterOutputSchema>;
+  | z.infer<typeof topicOutputSchema>
+  | z.infer<typeof shortlisterOutputSchema>
+  | z.infer<typeof formalizerOutputSchema>;
+
+const topicWireSchema = z.object({ result: topicOutputSchema }).strict();
+const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).strict();
+const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
+
+const jevChoiceResultSchema = z
+  .object({
+    kind: z.literal("jev-choice"),
+    providerRequest: z
+      .object({
+        model: z.string().min(1).max(200),
+        state: moveShortlisterEnvelopeSchema,
+        questions: z
+          .object({
+            shortlist: z
+              .object({
+                type: z.literal("choice"),
+                instructions: boundedTextSchema,
+                criteria: z.record(stableIdentifierSchema, shortTextSchema),
+              })
+              .strict(),
+          })
+          .strict(),
+      })
+      .strict(),
+    providerOutput: z
+      .object({
+        type: z.literal("choice"),
+        choice: stableIdentifierSchema,
+        probabilities: z.record(stableIdentifierSchema, z.number().finite().min(0).max(1)),
+        confidence: z.number().finite().min(0).max(1),
+      })
+      .strict(),
+    minimumConfidence: z.number().finite().min(0).max(1),
+  })
+  .strict();
+
+/** Strict provider JSON schemas, one request root for each supported role. */
+export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
+  if (role === "topic-extractor") return topicWireSchema;
+  if (role === "proof-state-formalizer") return formalizerWireSchema;
+  return shortlisterWireSchema;
+}
 
 const messageSchema = z
   .object({ role: z.enum(["system", "user"]), content: z.string().min(1) })
@@ -406,9 +622,13 @@ export function prepareLlmCall(
 }
 
 function expectedSystemMessage(role: SupportedLlmRole): string {
-  return role === "topic-extractor"
-    ? "Return only a topic manifest, a permitted context request, or a refusal. Do not solve the problem."
-    : "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
+  if (role === "topic-extractor") {
+    return "Return only a topic manifest, a permitted context request, or a refusal. Do not solve the problem.";
+  }
+  if (role === "proof-state-formalizer") {
+    return "Return one structured N26 problem draft, a permitted context request, or a refusal. Mirror the existing proof-state model in the draft: use the supplied problem, background, preferences, library layers, and selected packs exactly; use declarations with admitted sorts; express hypotheses and goals as LaTeX inputs. Do not add a separate presentation AST, a library result, proof steps, or unsupported variable kinds. The worker validates and parses the draft into authoritative plain MathJSON, then presents it for human review. The draft is a proposal, never an approved proof state.";
+  }
+  return "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
 }
 
 export function validateLlmOutput(
@@ -419,13 +639,81 @@ export function validateLlmOutput(
   | LlmBoundaryFailure {
   const call = safeParsePlain(preparedLlmCallSchema, callInput);
   if (call === undefined) return failure("invalid-request", "The prepared call is invalid.");
+  const wrapper = safeParsePlain(z.object({ result: z.unknown() }).strict(), outputInput);
+  const candidate = wrapper === undefined ? outputInput : wrapper.result;
   if (call.role === "topic-extractor") {
-    const output = safeParsePlain(topicOutputSchema, outputInput);
+    const output = safeParsePlain(topicOutputSchema, candidate);
     return output === undefined
       ? failure("invalid-output", "The LLM output is malformed.")
       : { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
-  const output = safeParsePlain(shortlisterOutputSchema, outputInput);
+
+  if (call.role === "proof-state-formalizer") {
+    const wireOutput = safeParsePlain(formalizerWireResultSchema, candidate);
+    const normalizedWire =
+      wireOutput === undefined || call.envelope.role !== "proof-state-formalizer"
+        ? undefined
+        : normalizeFormalizerWireOutput(wireOutput, call.envelope.context);
+    const output = normalizedWire ?? safeParsePlain(formalizerOutputSchema, candidate);
+    if (
+      output === undefined ||
+      call.envelope.role !== "proof-state-formalizer" ||
+      (output.kind === "formalization" &&
+        !formalizerDraftMatchesContext(output, call.envelope.context))
+    ) {
+      return failure(
+        "invalid-output",
+        "The LLM output is malformed or changes approved setup context.",
+      );
+    }
+    return { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  const jevResult = safeParsePlain(jevChoiceResultSchema, candidate);
+  if (jevResult !== undefined) {
+    if (call.envelope.role !== "move-shortlister") {
+      return failure("invalid-output", "Jev output is only valid for a move-shortlister call.");
+    }
+    const candidates = call.envelope.context.candidates;
+    const expectedIds = candidates.map(({ id }) => id).sort();
+    const probabilityIds = Object.keys(jevResult.providerOutput.probabilities).sort();
+    const criteria = jevResult.providerRequest.questions.shortlist.criteria;
+    const expectedCriteria = Object.fromEntries(candidates.map(({ id, name }) => [id, name]));
+    const probabilities = jevResult.providerOutput.probabilities;
+    const probabilityTotal = Object.values(probabilities).reduce((sum, value) => sum + value, 0);
+    const highestProbability = Math.max(...Object.values(probabilities));
+    const validJevResult =
+      jsonDataEquals(jevResult.providerRequest.state, call.envelope) &&
+      jsonDataEquals(criteria, expectedCriteria) &&
+      jsonDataEquals(probabilityIds, expectedIds) &&
+      Math.abs(probabilityTotal - 1) <= 0.02 &&
+      probabilities[jevResult.providerOutput.choice] === highestProbability;
+    if (!validJevResult) {
+      return failure(
+        "invalid-output",
+        "Jev probabilities or request context do not match the shortlist.",
+      );
+    }
+    const output =
+      jevResult.providerOutput.confidence < jevResult.minimumConfidence
+        ? {
+            kind: "declined" as const,
+            reason: "Jev shortlist confidence is below the configured threshold.",
+          }
+        : {
+            kind: "move-shortlist" as const,
+            choices: [
+              {
+                suggestionId: jevResult.providerOutput.choice,
+                rationale:
+                  "This candidate had the highest Jev probability and met the confidence threshold.",
+              },
+            ],
+          };
+    return { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  const output = safeParsePlain(shortlisterOutputSchema, candidate);
   if (output === undefined || call.envelope.role !== "move-shortlister") {
     return failure("invalid-output", "The LLM output is malformed.");
   }
@@ -446,6 +734,81 @@ export function validateLlmOutput(
   return { ok: true, output: freezeDetached(output), diagnostics: [] };
 }
 
+function normalizeFormalizerWireOutput(
+  output: z.infer<typeof formalizerWireResultSchema>,
+  context: ProofStateFormalizerContext,
+): z.infer<typeof formalizerOutputSchema> | undefined {
+  if (output.kind !== "formalization") return output;
+  const { domains, maximumLevel, ...background } = output.draft.background;
+  const { preferences: wirePreferences, ...draftWithoutPreferences } = output.draft;
+  const normalizedBackground = {
+    ...background,
+    ...(domains === null ? {} : { domains }),
+    ...(maximumLevel === null ? {} : { maximumLevel }),
+  };
+  const { domains: preferenceDomains, notation } = wirePreferences;
+  const preferences =
+    preferenceDomains === null && notation === null
+      ? context.preferences !== undefined && Object.keys(context.preferences).length === 0
+        ? {}
+        : undefined
+      : {
+          ...(preferenceDomains === null ? {} : { domains: preferenceDomains }),
+          ...(notation === null ? {} : { notation }),
+        };
+  const normalized = {
+    kind: output.kind,
+    draft: {
+      ...draftWithoutPreferences,
+      background: normalizedBackground,
+      ...(preferences === undefined ? {} : { preferences }),
+    },
+  };
+  return safeParsePlain(formalizerOutputSchema, normalized);
+}
+
+function formalizerDraftMatchesContext(
+  output: z.infer<typeof formalizerOutputSchema>,
+  context: ProofStateFormalizerContext,
+): boolean {
+  if (output.kind !== "formalization") return true;
+  return (
+    jsonDataEquals(output.draft.problem, context.problem) &&
+    jsonDataEquals(output.draft.background, context.background) &&
+    jsonDataEquals(output.draft.preferences, context.preferences) &&
+    jsonDataEquals(output.draft.libraryLayerIds, context.libraryLayerIds) &&
+    jsonDataEquals(output.draft.packs, context.packs)
+  );
+}
+
+function jsonDataEquals(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonDataEquals(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        jsonDataEquals(
+          (left as Record<string, unknown>)[key],
+          (right as Record<string, unknown>)[key],
+        ),
+    )
+  );
+}
+
 export type LlmTransport = (call: PreparedLlmCall) => Promise<unknown>;
 export type LlmCallEvidence = Readonly<{
   id: LlmCallId;
@@ -463,7 +826,9 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
     preparedCall: preparedLlmCallSchema,
     status: z.enum(["validated", "rejected", "transport-failed"]),
     rawResponse: z.unknown(),
-    output: z.union([topicOutputSchema, shortlisterOutputSchema]).optional(),
+    output: z
+      .union([topicOutputSchema, formalizerOutputSchema, shortlisterOutputSchema])
+      .optional(),
     diagnostics: z.array(llmBoundaryDiagnosticSchema),
   })
   .strict()
@@ -499,6 +864,8 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
       evidence.output !== undefined &&
       ((evidence.role === "topic-extractor" &&
         !topicOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "proof-state-formalizer" &&
+          !formalizerOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "move-shortlister" &&
           !shortlisterOutputSchema.safeParse(evidence.output).success))
     ) {

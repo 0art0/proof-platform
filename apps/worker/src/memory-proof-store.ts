@@ -1021,7 +1021,7 @@ class MemoryTransactionContext {
   }
 }
 
-/** The evidence and sequence checks that `0013_transition_evidence.sql` puts on edges and events. */
+/** The evidence and sequence checks that `0014_transition_evidence.sql` puts on edges and events. */
 function checkEvidenceColumns(
   table: "proof_edges" | "proof_events",
   row: Readonly<{ evidence?: string | undefined; sequence?: number | undefined }>,

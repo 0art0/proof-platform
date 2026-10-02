@@ -14,6 +14,19 @@ import type { SqlClient, SqlPool } from "./postgres-proof-store";
 export class PostgresLlmCallStore implements LlmCallStore {
   constructor(private readonly pool: SqlPool) {}
 
+  async listCallsForOwner(owner: LlmCallOwner): Promise<readonly unknown[]> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT record FROM llm_calls WHERE owner_kind = $1 AND owner_id = $2 ORDER BY id`,
+        [owner.kind, owner.id],
+      );
+      return result.rows.map(({ record }) => record);
+    } finally {
+      client.release();
+    }
+  }
+
   async transaction<Result>(
     work: (transaction: LlmCallStoreTransaction) => Promise<Result>,
   ): Promise<Result> {
