@@ -198,6 +198,8 @@ describe("backtrackWithInformation", () => {
         eventId: split.eventId,
         resultStateId: split.resultStateId,
         transitionClass: "equivalence",
+        evidence: "structural",
+        sequence: expect.any(Number),
       },
     ]);
     expect(result.session.currentNodeId).toBe(split.resultNodeId);

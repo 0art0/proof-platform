@@ -69,7 +69,18 @@ import {
   type TransitionEvent,
 } from "./index";
 
-export const PROOF_ARTIFACT_VERSION = 1;
+/**
+ * The version `exportProofArtifact` writes: transitions carry the kernel's evidence and a
+ * per-session transition sequence, and previews carry their evidence (design plan §19; N40).
+ */
+export const PROOF_ARTIFACT_VERSION = 2;
+/** Version 1 stored neither; an importer still accepts it and derives what it shows. */
+export const LEGACY_ARTIFACT_VERSION = 1;
+export const SUPPORTED_ARTIFACT_VERSIONS = [
+  LEGACY_ARTIFACT_VERSION,
+  PROOF_ARTIFACT_VERSION,
+] as const;
+export type ProofArtifactVersion = (typeof SUPPORTED_ARTIFACT_VERSIONS)[number];
 export const PROOF_ARTIFACT_KIND = "proof-artifact";
 
 export const proofArtifactDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
@@ -187,7 +198,7 @@ export type ProofArtifactLibrary = Readonly<{
 }>;
 
 export type ProofArtifact = Readonly<{
-  artifactVersion: typeof PROOF_ARTIFACT_VERSION;
+  artifactVersion: ProofArtifactVersion;
   kind: typeof PROOF_ARTIFACT_KIND;
   digest: ProofArtifactDigest;
   sessionId: string;
@@ -228,7 +239,10 @@ export function createProofArtifactSchema(
   const libraryArtifactSchema = createLibraryArtifactSchema(libraryEnvironment);
   return z
     .object({
-      artifactVersion: z.literal(PROOF_ARTIFACT_VERSION),
+      artifactVersion: z.union([
+        z.literal(LEGACY_ARTIFACT_VERSION),
+        z.literal(PROOF_ARTIFACT_VERSION),
+      ]),
       kind: z.literal(PROOF_ARTIFACT_KIND),
       digest: proofArtifactDigestSchema,
       sessionId: stableIdentifierSchema,
@@ -270,6 +284,7 @@ export function createProofArtifactSchema(
     })
     .strict()
     .superRefine((artifact, context) => {
+      addStoredEvidenceIssues(artifact as unknown as ProofArtifact, context);
       if (artifact.initialState.rootNodeId !== artifact.tree.rootNodeId) {
         context.addIssue({
           code: "custom",
@@ -348,10 +363,10 @@ export function parseProofArtifact(input: unknown): ParseProofArtifactResult {
     if (!isPlainObject(input)) {
       return parseFailure("invalid-artifact", "A proof artifact must be a JSON object.", []);
     }
-    if (input.artifactVersion !== PROOF_ARTIFACT_VERSION) {
+    if (!SUPPORTED_ARTIFACT_VERSIONS.some((version) => version === input.artifactVersion)) {
       return parseFailure(
         "unsupported-version",
-        `Only artifact version ${PROOF_ARTIFACT_VERSION} is supported.`,
+        `Only artifact versions ${SUPPORTED_ARTIFACT_VERSIONS.join(" and ")} are supported.`,
         ["artifactVersion"],
       );
     }
@@ -561,6 +576,156 @@ export type ProofArtifactImportRecord = Readonly<{
   library: JsonObject;
   llmCalls: readonly JsonObject[];
 }>;
+
+/**
+ * Version 1 stores no transition evidence or sequence, so a version-1 artifact must carry none.
+ * Version 2 stores both, so every edge, transition event, command record and preview must carry
+ * its evidence, every edge and event its sequence, the two records of one transition the same
+ * values, sequences must be distinct, and a transition must follow the one that produced its
+ * parent. Whether the stored evidence is what the kernel reports is the importer's replay check.
+ */
+function addStoredEvidenceIssues(artifact: ProofArtifact, context: z.RefinementCtx): void {
+  const { tree } = artifact;
+  const issue = (message: string, path: (string | number)[]) =>
+    context.addIssue({ code: "custom", message, path });
+  if (artifact.artifactVersion === LEGACY_ARTIFACT_VERSION) {
+    const stored = (value: Readonly<{ evidence?: unknown; sequence?: unknown }>) =>
+      value.evidence !== undefined || value.sequence !== undefined;
+    tree.edges.forEach((edge, index) => {
+      if (stored(edge))
+        issue("A version-1 artifact stores no transition evidence.", ["tree", "edges", index]);
+    });
+    tree.events.forEach((event, index) => {
+      if (stored(event))
+        issue("A version-1 artifact stores no transition evidence.", ["tree", "events", index]);
+    });
+    tree.commands.forEach((command, index) => {
+      const { edge, event } = command.prepared;
+      if (stored(edge) || stored(event) || stored(command.receipt)) {
+        issue("A version-1 artifact stores no transition evidence.", ["tree", "commands", index]);
+      }
+    });
+    tree.previews.forEach((preview, index) => {
+      if (
+        preview.evidence !== undefined ||
+        (preview.macro?.steps ?? []).some((step) => step.evidence !== undefined)
+      ) {
+        issue("A version-1 artifact stores no transition evidence.", ["tree", "previews", index]);
+      }
+    });
+    return;
+  }
+  tree.edges.forEach((edge, index) => {
+    if (edge.evidence === undefined || edge.sequence === undefined) {
+      issue("A version-2 edge must store its evidence and transition sequence.", [
+        "tree",
+        "edges",
+        index,
+      ]);
+    }
+  });
+  tree.events.forEach((event, index) => {
+    if (event.evidence === undefined || event.sequence === undefined) {
+      issue("A version-2 event must store its evidence and transition sequence.", [
+        "tree",
+        "events",
+        index,
+      ]);
+    }
+  });
+  tree.commands.forEach((command, index) => {
+    const { edge, event } = command.prepared;
+    if (
+      edge.evidence === undefined ||
+      edge.sequence === undefined ||
+      event.evidence === undefined ||
+      event.sequence === undefined ||
+      command.receipt.evidence === undefined ||
+      command.receipt.sequence === undefined
+    ) {
+      issue("A version-2 command record must store its evidence and transition sequence.", [
+        "tree",
+        "commands",
+        index,
+      ]);
+    }
+  });
+  tree.previews.forEach((preview, index) => {
+    if (
+      preview.evidence === undefined ||
+      (preview.macro?.steps ?? []).some((step) => step.evidence === undefined)
+    ) {
+      issue("A version-2 preview must store its evidence.", ["tree", "previews", index]);
+    }
+  });
+  const eventSequences = new Map(
+    tree.events.map((event) => [event.edgeId as string, event.sequence]),
+  );
+  const bySequence = new Map<number, number>();
+  const incoming = new Map<string, number | undefined>();
+  tree.edges.forEach((edge) => incoming.set(edge.childNodeId, edge.sequence));
+  tree.edges.forEach((edge, index) => {
+    if (edge.sequence === undefined) return;
+    if (bySequence.has(edge.sequence)) {
+      issue("Transition sequences must be distinct.", ["tree", "edges", index, "sequence"]);
+    }
+    bySequence.set(edge.sequence, index);
+    if (eventSequences.get(edge.id) !== edge.sequence) {
+      issue("An edge and its event must store the same transition sequence.", [
+        "tree",
+        "edges",
+        index,
+        "sequence",
+      ]);
+    }
+    const parentSequence = incoming.get(edge.parentNodeId);
+    if (parentSequence !== undefined && parentSequence >= edge.sequence) {
+      issue("A transition must be sequenced after the transition that produced its parent.", [
+        "tree",
+        "edges",
+        index,
+        "sequence",
+      ]);
+    }
+  });
+}
+
+/**
+ * Remove the stored transition evidence and sequence from a prepared command record: the shape a
+ * version-1 artifact (and a record written before they were stored) has.
+ */
+export function withoutStoredTransitionEvidence(
+  prepared: PrepareProofCommandSuccess,
+): PrepareProofCommandSuccess {
+  return {
+    ...prepared,
+    prepared: {
+      ...prepared.prepared,
+      edge: withoutEvidenceFields(prepared.prepared.edge),
+      event: withoutEvidenceFields(prepared.prepared.event),
+    },
+    receipt: withoutEvidenceFields(prepared.receipt),
+  };
+}
+
+/** The same for a preview and its macro steps. */
+export function previewWithoutStoredEvidence(preview: MovePreview): MovePreview {
+  const stripped = withoutEvidenceFields(preview);
+  return preview.macro === undefined
+    ? stripped
+    : {
+        ...stripped,
+        macro: { steps: preview.macro.steps.map((step) => withoutEvidenceFields(step)) },
+      };
+}
+
+/** Remove `evidence` and `sequence` from a stored edge, event or other record. */
+export function withoutEvidenceFields<Value extends object>(record: Value): Value {
+  const copy: Record<string, unknown> = { ...(record as Record<string, unknown>) };
+  delete copy.evidence;
+  delete copy.sequence;
+  return copy as Value;
+}
 
 function parseFailure(
   code: string,

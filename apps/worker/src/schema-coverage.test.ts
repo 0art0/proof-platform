@@ -61,6 +61,24 @@ describe("migration schema", () => {
     expect(schema.get("proof_events")?.columns).toContain("provenance_key");
   });
 
+  it("defines the stored transition evidence and sequence columns (0013)", () => {
+    for (const table of ["proof_edges", "proof_events"]) {
+      const columns = schema.get(table)?.columns;
+      expect(columns, table).toContain("evidence");
+      expect(columns, table).toContain("transition_sequence");
+    }
+    const sql = migrations.find((m) => m.name.startsWith("0013_"))?.sql ?? "";
+    // Per-session uniqueness of the sequence, the event-to-edge link, and the record mirror.
+    expect(sql).toContain("UNIQUE (session_id, transition_sequence)");
+    expect(sql).toContain("proof_events_edge_evidence_key_fk");
+    expect(sql).toContain(
+      "(record -> 'sequence') IS NOT DISTINCT FROM to_jsonb(transition_sequence)",
+    );
+    expect(sql).toContain("(record ->> 'evidence') IS NOT DISTINCT FROM evidence");
+    // It adds columns only: existing rows are neither inferred nor rewritten.
+    expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
+  });
+
   it("keeps the event provenance constraint (0003) and the discarding client release", () => {
     const provenance = migrations.find((m) => m.name.startsWith("0003_"))?.sql ?? "";
     expect(provenance).toContain("proof_events_edge_provenance_key_fk");

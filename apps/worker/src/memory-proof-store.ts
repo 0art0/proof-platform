@@ -674,10 +674,19 @@ class MemoryTransactionContext {
       insertEdge: async (sessionId, edge) =>
         this.insert("edges", sessionId, memoryProofRecordKey(sessionId, edge.id), edge, (row) => {
           this.checkTransitionLinks(sessionId, row);
+          checkEvidenceColumns("proof_edges", row);
           const duplicateChild = this.sessionRows("edges", sessionId).some(
             (existing) => existing.childNodeId === row.childNodeId,
           );
           if (duplicateChild) violation(`proof_edges unique child: ${row.childNodeId} exists.`);
+          if (
+            row.sequence !== undefined &&
+            this.sessionRows("edges", sessionId).some(
+              (existing) => existing.sequence === row.sequence,
+            )
+          ) {
+            violation(`proof_edges unique transition sequence: ${row.sequence} exists.`);
+          }
         }),
       insertEvent: async (sessionId, event) =>
         this.insert(
@@ -687,6 +696,15 @@ class MemoryTransactionContext {
           event,
           (row) => {
             this.checkTransitionLinks(sessionId, row);
+            checkEvidenceColumns("proof_events", row);
+            if (
+              row.sequence !== undefined &&
+              this.sessionRows("events", sessionId).some(
+                (existing) => existing.sequence === row.sequence,
+              )
+            ) {
+              violation(`proof_events unique transition sequence: ${row.sequence} exists.`);
+            }
             const edge = this.row("edges", memoryProofRecordKey(sessionId, row.edgeId));
             if (
               edge === undefined ||
@@ -695,6 +713,14 @@ class MemoryTransactionContext {
               edge.commandId !== row.commandId
             ) {
               violation(`proof_events edge foreign key: ${row.edgeId} does not match.`);
+            }
+            if (
+              row.evidence !== undefined &&
+              (edge.evidence !== row.evidence || edge.sequence !== row.sequence)
+            ) {
+              violation(
+                `proof_events edge evidence foreign key: ${row.edgeId} stores other evidence.`,
+              );
             }
             const fullyLinked =
               row.suggestionSetId !== undefined &&
@@ -782,6 +808,13 @@ class MemoryTransactionContext {
         return Math.max(
           0,
           ...this.sessionRows("interactionEvents", sessionId).map(({ sequence }) => sequence),
+        );
+      },
+      lastTransitionSequence: async (sessionId) => {
+        await this.lock(sessionId);
+        return Math.max(
+          0,
+          ...this.sessionRows("edges", sessionId).map(({ sequence }) => sequence ?? 0),
         );
       },
       insertInteractionEvent: async (sessionId, event) =>
@@ -985,6 +1018,21 @@ class MemoryTransactionContext {
         violation(`preview foreign key: ${row.previewId} does not match the transition.`);
       }
     }
+  }
+}
+
+/** The evidence and sequence checks that `0013_transition_evidence.sql` puts on edges and events. */
+function checkEvidenceColumns(
+  table: "proof_edges" | "proof_events",
+  row: Readonly<{ evidence?: string | undefined; sequence?: number | undefined }>,
+): void {
+  if ((row.evidence === undefined) !== (row.sequence === undefined)) {
+    violation(
+      `${table}_evidence_sequence_together: a row has both evidence and sequence or neither.`,
+    );
+  }
+  if (row.sequence !== undefined && (!Number.isInteger(row.sequence) || row.sequence < 1)) {
+    violation(`${table} check: transition_sequence must be positive.`);
   }
 }
 

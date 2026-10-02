@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { mergeLibraryOperators } from "@proof/library";
 import {
+  LEGACY_ARTIFACT_VERSION,
   PROOF_ARTIFACT_KIND,
   PROOF_ARTIFACT_VERSION,
   canonicalArtifactJson,
@@ -28,7 +29,10 @@ import {
   parseProofArtifact,
   proofArtifactImportRecordSchema,
   proofDeletionRecordSchema,
+  previewWithoutStoredEvidence,
   semanticReplayStepRecordSchema,
+  withoutEvidenceFields,
+  withoutStoredTransitionEvidence,
   type JsonValue,
   type ProofArtifact,
   type ProofArtifactContent,
@@ -110,9 +114,14 @@ export async function exportProofArtifact(
   const library = await librarySection(rows, options.library);
   if ("diagnostics" in library) return library;
 
-  const { session, nodes, edges } = rows;
+  const { session, nodes } = rows;
+  // Version 2 stores every transition's evidence and sequence. A session with older rows (written
+  // before migration 0013, or imported from a version-1 artifact) cannot: its rows are copied as
+  // they are stored, which is the version-1 shape, and are never given derived evidence.
+  const current = storesTransitionEvidence(rows);
+  const { edges, tree } = current ? rows : legacyShape(rows);
   const content: ProofArtifactContent = {
-    artifactVersion: PROOF_ARTIFACT_VERSION,
+    artifactVersion: current ? PROOF_ARTIFACT_VERSION : LEGACY_ARTIFACT_VERSION,
     kind: PROOF_ARTIFACT_KIND,
     sessionId: session.id,
     provenance:
@@ -131,7 +140,7 @@ export async function exportProofArtifact(
       currentNodeId: session.currentNodeId,
       nodes,
       edges,
-      ...rows.tree,
+      ...tree,
     },
     interactionEvents: rows.interactionEvents,
     inquiryRecords: rows.inquiryRecords,
@@ -150,6 +159,38 @@ export async function exportProofArtifact(
     );
   }
   return { status: "exported", artifact: candidate as unknown as ProofArtifact };
+}
+
+/** Whether every stored transition and preview carries its evidence, and every transition a sequence. */
+function storesTransitionEvidence(rows: StoredRows): boolean {
+  const { edges, tree } = rows;
+  const stored = (value: Readonly<{ evidence?: unknown; sequence?: unknown }>) =>
+    value.evidence !== undefined && value.sequence !== undefined;
+  return (
+    edges.every(stored) &&
+    tree.events.every(stored) &&
+    tree.commands.every(
+      ({ prepared, receipt }) => stored(prepared.edge) && stored(prepared.event) && stored(receipt),
+    ) &&
+    tree.previews.every(
+      (preview) =>
+        preview.evidence !== undefined &&
+        (preview.macro?.steps ?? []).every((step) => step.evidence !== undefined),
+    )
+  );
+}
+
+/** The rows without any stored evidence or sequence: a version-1 artifact's shape. */
+function legacyShape(rows: StoredRows): Pick<StoredRows, "edges" | "tree"> {
+  return {
+    edges: rows.edges.map((edge) => withoutEvidenceFields(edge)),
+    tree: {
+      ...rows.tree,
+      events: rows.tree.events.map((event) => withoutEvidenceFields(event)),
+      commands: rows.tree.commands.map(withoutStoredTransitionEvidence),
+      previews: rows.tree.previews.map(previewWithoutStoredEvidence),
+    },
+  };
 }
 
 /** `sha256:` of the canonical JSON of an artifact's content (everything except `digest`). */

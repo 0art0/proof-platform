@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { parseProofArtifact, withArtifactSessionId, type ProofArtifact } from "@proof/protocol";
+import {
+  deriveArtifactFinalMaterial,
+  parseProofArtifact,
+  previewWithoutStoredEvidence,
+  withArtifactSessionId,
+  withoutEvidenceFields,
+  withoutStoredTransitionEvidence,
+  type ProofArtifact,
+} from "@proof/protocol";
 import { artifactDigest, exportProofArtifact } from "./artifact-export";
 import { importProofArtifact, importedSessionId, validateProofArtifact } from "./artifact-import";
 import {
@@ -62,6 +70,7 @@ describe("artifact export", () => {
     const { scenario, artifact } = await source();
     expect(parseProofArtifact(artifact).ok).toBe(true);
     expect(artifact.digest).toBe(artifactDigest(artifact));
+    expect(artifact.artifactVersion).toBe(2);
     expect(artifact.provenance).toEqual({ kind: "session" });
     expect(artifact.problemSetup.metadata?.problem.title).toBe("Contraposition");
     expect(artifact.tree.deletions).toHaveLength(1);
@@ -96,6 +105,96 @@ describe("artifact export", () => {
       library: scenario.store,
     });
     expect(again).toEqual({ status: "exported", artifact });
+  });
+});
+
+describe("stored transition evidence and sequence (version 2)", () => {
+  it("stores the kernel's evidence and a chronological sequence on every transition", async () => {
+    const { artifact } = await source();
+    const { edges, events, commands, previews } = artifact.tree;
+    expect(edges.length).toBeGreaterThan(5);
+    for (const edge of edges) {
+      expect(edge.evidence, edge.id).toBeDefined();
+      expect(edge.sequence, edge.id).toBeGreaterThanOrEqual(1);
+    }
+    expect(new Set(edges.map(({ sequence }) => sequence)).size).toBe(edges.length);
+    for (const event of events) {
+      const edge = edges.find(({ id }) => id === event.edgeId);
+      expect([event.evidence, event.sequence]).toEqual([edge?.evidence, edge?.sequence]);
+    }
+    for (const { prepared, receipt } of commands) {
+      expect([receipt.evidence, receipt.sequence]).toEqual([
+        prepared.edge.evidence,
+        prepared.edge.sequence,
+      ]);
+    }
+    for (const preview of previews) expect(preview.evidence).toBeDefined();
+    // A transition follows the one that produced its parent.
+    const incoming = new Map(edges.map((edge) => [edge.childNodeId, edge.sequence as number]));
+    for (const edge of edges) {
+      const parent = incoming.get(edge.parentNodeId);
+      if (parent !== undefined) expect(edge.sequence as number).toBeGreaterThan(parent);
+    }
+    // The sorry the scenario keeps is recorded as sorry evidence, not derived later.
+    expect(edges.map(({ evidence }) => evidence)).toEqual(
+      expect.arrayContaining(["structural", "sorry"]),
+    );
+  });
+});
+
+describe("version-1 artifacts", () => {
+  /** What an exporter before N40 wrote: no evidence or sequence anywhere. */
+  function legacy(artifact: ProofArtifact): Json {
+    const tree = {
+      ...artifact.tree,
+      edges: artifact.tree.edges.map((edge) => withoutEvidenceFields(edge)),
+      events: artifact.tree.events.map((event) => withoutEvidenceFields(event)),
+      commands: artifact.tree.commands.map(withoutStoredTransitionEvidence),
+      previews: artifact.tree.previews.map(previewWithoutStoredEvidence),
+    };
+    return redigest({
+      ...(structuredClone(artifact) as Json),
+      artifactVersion: 1,
+      tree: structuredClone(tree),
+      final: structuredClone(deriveArtifactFinalMaterial(tree)),
+    });
+  }
+
+  it("are still accepted, imported unchanged, and re-exported as version 1", async () => {
+    const { artifact } = await source();
+    const v1 = legacy(artifact);
+    expect(validateProofArtifact(v1)).toMatchObject({ ok: true });
+    const target = new MemoryLibraryStore();
+    const imported = await importProofArtifact(target, v1, { now: FIXED_NOW });
+    expect(imported).toMatchObject({ status: "imported", replayed: false });
+    if (imported.status !== "imported") throw new Error("not imported");
+    const reexported = await exportProofArtifact(target, imported.sessionId, { library: target });
+    if (reexported.status !== "exported") throw new Error(JSON.stringify(reexported));
+    // Nothing is derived into the stored rows: the import keeps what the artifact stored.
+    expect(reexported.artifact.artifactVersion).toBe(1);
+    for (const edge of reexported.artifact.tree.edges) {
+      expect(edge).not.toHaveProperty("evidence");
+      expect(edge).not.toHaveProperty("sequence");
+    }
+    expect(
+      comparableContent(withArtifactSessionId(reexported.artifact, ARTIFACT_SESSION_ID)),
+    ).toEqual(comparableContent(v1 as unknown as ProofArtifact));
+  });
+
+  it("must not carry stored evidence or a sequence", async () => {
+    const { artifact } = await source();
+    const forged = legacy(artifact);
+    forged.tree.edges[0].evidence = "structural";
+    expect(validateProofArtifact(redigest(forged))).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "invalid-artifact", path: ["tree", "edges", 0] }],
+    });
+    const preview = legacy(artifact);
+    preview.tree.previews[0].evidence = "structural";
+    expect(validateProofArtifact(redigest(preview))).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "invalid-artifact", path: ["tree", "previews", 0] }],
+    });
   });
 });
 
@@ -291,6 +390,82 @@ const tampering: readonly TamperCase[] = [
     "deletion-invalid",
   ],
   [
+    "evidence altered consistently in the edge, event and command record",
+    (artifact) => {
+      const edge = artifact.tree.edges.find(
+        (candidate: Json) => candidate.commandId === "command:contraposition-1",
+      );
+      const forged = edge.evidence === "sorry" ? "structural" : "sorry";
+      edge.evidence = forged;
+      artifact.tree.events.find((event: Json) => event.edgeId === edge.id).evidence = forged;
+      const command = artifact.tree.commands.find(
+        (record: Json) => record.prepared.command.commandId === "command:contraposition-1",
+      );
+      command.prepared.edge.evidence = forged;
+      command.prepared.event.evidence = forged;
+      command.receipt.evidence = forged;
+    },
+    "transition-not-reproduced",
+  ],
+  [
+    "a transition sequence altered consistently in the edge, event and command record",
+    (artifact) => {
+      const edge = artifact.tree.edges.find(
+        (candidate: Json) => candidate.commandId === "command:contraposition-1",
+      );
+      // Later than every transition, so it stays distinct and causally ordered for its own
+      // children only if they were reordered too; the schema checks catch the rest.
+      const forged = 9999;
+      edge.sequence = forged;
+      artifact.tree.events.find((event: Json) => event.edgeId === edge.id).sequence = forged;
+      const command = artifact.tree.commands.find(
+        (record: Json) => record.prepared.command.commandId === "command:contraposition-1",
+      );
+      command.prepared.edge.sequence = forged;
+      command.prepared.event.sequence = forged;
+      command.receipt.sequence = forged;
+    },
+    "invalid-artifact",
+  ],
+  [
+    "an edge sequence that differs from its event's",
+    (artifact) => {
+      artifact.tree.edges[0].sequence += 1000;
+    },
+    "invalid-artifact",
+  ],
+  [
+    "two transitions with the same sequence",
+    (artifact) => {
+      artifact.tree.edges[1].sequence = artifact.tree.edges[0].sequence;
+    },
+    "invalid-artifact",
+  ],
+  [
+    "a missing stored evidence on a version-2 edge",
+    (artifact) => {
+      delete artifact.tree.edges[0].evidence;
+    },
+    "invalid-artifact",
+    ["tree", "edges", 0],
+  ],
+  [
+    "a missing stored sequence on a version-2 event",
+    (artifact) => {
+      delete artifact.tree.events[0].sequence;
+    },
+    "invalid-artifact",
+    ["tree", "events", 0],
+  ],
+  [
+    "a forged preview evidence",
+    (artifact) => {
+      const preview = artifact.tree.previews[0];
+      preview.evidence = preview.evidence === "sorry" ? "structural" : "sorry";
+    },
+    "preview-not-reproduced",
+  ],
+  [
     "a forged translation dictionary",
     (artifact) => {
       artifact.translationDictionary.activePackIds = ["pack:forged"];
@@ -329,6 +504,42 @@ describe("tampered artifacts", () => {
     },
   );
 
+  it("rejects a transition sequenced before the transition that produced its parent", async () => {
+    const { artifact } = await source();
+    const forged = clone(artifact);
+    const edges = forged.tree.edges as Json[];
+    const child = edges.find((edge) =>
+      edges.some((other) => other.childNodeId === edge.parentNodeId),
+    ) as Json;
+    const parent = edges.find((edge) => edge.childNodeId === child.parentNodeId) as Json;
+    // Swap the two sequences everywhere they are stored, so only the ordering is wrong.
+    const sequenceOf = new Map<string, number>([
+      [child.id, parent.sequence],
+      [parent.id, child.sequence],
+    ]);
+    const restamp = (record: Json, edgeId: string) => {
+      const sequence = sequenceOf.get(edgeId);
+      if (sequence !== undefined) record.sequence = sequence;
+    };
+    for (const edge of edges) restamp(edge, edge.id);
+    for (const event of forged.tree.events as Json[]) restamp(event, event.edgeId);
+    for (const command of forged.tree.commands as Json[]) {
+      const edgeId = command.prepared.edge.id as string;
+      for (const record of [command.prepared.edge, command.prepared.event, command.receipt]) {
+        restamp(record, edgeId);
+      }
+    }
+    expect(validateProofArtifact(redigest(forged))).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: "invalid-artifact",
+          message: "A transition must be sequenced after the transition that produced its parent.",
+        },
+      ],
+    });
+  });
+
   it("rejects an altered digest", async () => {
     const { artifact } = await source();
     const forged = { ...clone(artifact), digest: `sha256:${"0".repeat(64)}` };
@@ -346,12 +557,12 @@ describe("tampered artifacts", () => {
 
   it("rejects another artifact version before reading any section", async () => {
     const { artifact } = await source();
-    const forged = redigest({ ...clone(artifact), artifactVersion: 2 });
+    const forged = redigest({ ...clone(artifact), artifactVersion: 3 });
     expect(validateProofArtifact(forged)).toMatchObject({
       ok: false,
       diagnostics: [{ code: "unsupported-version", path: ["artifactVersion"] }],
     });
-    expect(validateProofArtifact({ artifactVersion: 1 })).toMatchObject({
+    expect(validateProofArtifact({ artifactVersion: 2 })).toMatchObject({
       ok: false,
       diagnostics: [{ code: "invalid-artifact" }],
     });

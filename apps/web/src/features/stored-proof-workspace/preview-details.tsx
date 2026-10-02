@@ -38,7 +38,7 @@ export function PreviewDetails({
         <strong>Review the changes before applying</strong>
         <span className={styles.badgeRow}>
           <TransitionClassBadge transitionClass={preview.transitionClass} />
-          <EvidenceBadge evidence={transitionEvidenceOf(preview.operation)} />
+          <EvidenceBadge evidence={transitionEvidenceOf(preview.operation, preview.evidence)} />
         </span>
       </div>
       <p className={styles.previewMeaning}>{transitionMeaning(preview.transitionClass)}</p>

@@ -180,6 +180,28 @@ Exports are not stored on the server: the artifact is built on demand from store
 `proof_artifact_imports` record; a downloaded file is outside the worker's reach. The global
 library layer and operator registry are not session data and are kept.
 
+`0013_transition_evidence.sql` stores the kernel's transition evidence and a per-session transition
+sequence (roadmap N40). `proof_edges` and `proof_events` gain `evidence` (`structural`,
+`background-inference`, `library-result` or `sorry`) and `transition_sequence`; both also stay in the
+JSONB record, and CHECKs keep the columns identical to it. Previews and command results carry the
+same evidence in their JSONB records only.
+
+- The worker assigns `transition_sequence` in the storing transaction, under the session row lock,
+  as one more than the session's highest retained sequence (`UNIQUE (session_id,
+transition_sequence)`). Replayed (idempotent) commands keep the recorded value. "Delete previous
+  move" removes rows, so a later transition may reuse the numbers of deleted ones; the retained
+  rows stay strictly ordered, and a transition is always sequenced after the one that produced its
+  parent.
+- A row has both columns or neither. Rows written before this migration have neither: the migration
+  adds columns only and never infers or rewrites history. A session with such rows exports as a
+  version-1 artifact (no stored evidence or sequence; viewers derive what they show), and a session
+  imported from a version-1 artifact keeps the artifact's records exactly as uploaded. Version 2
+  artifacts require every transition, command record and preview to store its evidence and every
+  transition its sequence, and the importer rechecks the evidence against the kernel and the
+  sequences against the tree.
+- An event's `(edge_id, evidence, transition_sequence)` must equal its edge's
+  (`proof_events_edge_evidence_key_fk`). `MemoryProofStore` mirrors the checks and uniqueness.
+
 Migration `0003` already carries the generated `provenance_key` columns and the event-to-edge
 foreign key, and `PostgresProofStore.transaction` already discards a connection with
 `release(true)` after a failed rollback or commit, so no migration was added for either.

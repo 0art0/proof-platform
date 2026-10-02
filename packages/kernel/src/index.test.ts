@@ -7,7 +7,13 @@ import {
   type ExecutableProofState,
   type PlainMathJson,
 } from "@proof/mathjson-model";
-import { KERNEL_TRANSITION_CLASSES, applyTransition, kernelOperationSchema } from "./index";
+import {
+  KERNEL_TRANSITION_CLASSES,
+  TRANSITION_EVIDENCE_KINDS,
+  applyTransition,
+  composeTransitionEvidence,
+  kernelOperationSchema,
+} from "./index";
 
 const declarations = ["p", "q", "r"].map((symbol, index) => ({
   id: `declaration:${index}`,
@@ -2110,3 +2116,24 @@ function deepFreeze<T>(value: T): T {
   Object.values(value).forEach(deepFreeze);
   return value;
 }
+
+describe("composed transition evidence", () => {
+  it("is the most caveated evidence of the steps, whatever their order", () => {
+    expect(composeTransitionEvidence([])).toBe("structural");
+    expect(composeTransitionEvidence(["structural", "library-result"])).toBe("library-result");
+    expect(composeTransitionEvidence(["library-result", "background-inference"])).toBe(
+      "background-inference",
+    );
+    expect(composeTransitionEvidence(["sorry", "structural", "library-result"])).toBe("sorry");
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom(...TRANSITION_EVIDENCE_KINDS), { maxLength: 6 }),
+        (steps) => {
+          const composed = composeTransitionEvidence(steps);
+          expect(composeTransitionEvidence([...steps].reverse())).toBe(composed);
+          if (steps.length > 0) expect(steps).toContain(composed);
+        },
+      ),
+    );
+  });
+});

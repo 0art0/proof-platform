@@ -62,7 +62,7 @@ describe("GET /proof-sessions/:id/export", () => {
       'attachment; filename="session-artifact-source.proof-artifact.json"',
     );
     const exported = (await response.json()) as ProofArtifact;
-    expect(exported).toMatchObject({ artifactVersion: 1, sessionId: ARTIFACT_SESSION_ID });
+    expect(exported).toMatchObject({ artifactVersion: 2, sessionId: ARTIFACT_SESSION_ID });
     expect(exported.digest).toBe(artifactDigest(exported));
 
     const missing = await fetch(`${scenario.origin}/proof-sessions/session:missing/export`);

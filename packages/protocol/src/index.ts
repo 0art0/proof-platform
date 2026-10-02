@@ -1,9 +1,12 @@
 import {
+  TRANSITION_EVIDENCE_KINDS,
   applyTransition,
+  composeTransitionEvidence,
   kernelOperationSchema,
   type KernelOperation,
   type KernelResult,
   type TransitionClass,
+  type TransitionEvidence,
 } from "@proof/kernel";
 import {
   createExecutableProofStateSchema,
@@ -642,6 +645,22 @@ export function prepareDisplayedSuggestionSet(
 
 export const transitionClassSchema = z.enum(["equivalence", "strengthening", "weakening"]);
 
+/**
+ * How a transition is supported, as the kernel reported it when the transition was previewed or
+ * applied (structural rule, library result, background inference, or sorry). Stored with the
+ * preview, edge and event so history never re-derives it. Optional in the schema only because
+ * records written before it was stored (and version-1 artifacts) lack it.
+ */
+export const transitionEvidenceSchema = z.enum(TRANSITION_EVIDENCE_KINDS);
+
+/**
+ * The per-session transition sequence: a positive integer assigned, in the transaction that
+ * stores the transition, as one more than the highest sequence the session retains. It orders
+ * transitions chronologically; it is not a timestamp, and deleting the latest moves lets a later
+ * transition reuse their numbers.
+ */
+export const transitionSequenceSchema = z.number().int().min(1);
+
 export const proofEdgeSchema = z
   .object({
     id: proofEdgeIdSchema,
@@ -654,6 +673,10 @@ export const proofEdgeSchema = z
     previewId: movePreviewIdSchema.optional(),
     operation: kernelOperationAdapterSchema,
     transitionClass: transitionClassSchema,
+    /** The kernel's evidence for this transition, stored at apply time. */
+    evidence: transitionEvidenceSchema.optional(),
+    /** The session's transition sequence, assigned when the transition was stored. */
+    sequence: transitionSequenceSchema.optional(),
     /** Static history: the menus displayed for this transition and the item IDs chosen. */
     menuSelection: moveMenuSelectionSchema.optional(),
     /** Present only on a step of a macro application (see `macroLinkSchema`). */
@@ -702,6 +725,7 @@ export const macroPreviewStepSchema = z
     moveId: moveIdSchema,
     operation: kernelOperationAdapterSchema,
     transitionClass: transitionClassSchema,
+    evidence: transitionEvidenceSchema.optional(),
     /** What this step alone changed. */
     delta: proofStateDeltaSchema,
   })
@@ -722,6 +746,8 @@ export type MovePreview = Readonly<{
   moveId: MoveId;
   operation: KernelOperation;
   transitionClass: TransitionClass;
+  /** For a macro, the most caveated evidence among its steps (each step stores its own). */
+  evidence?: TransitionEvidence | undefined;
   beforeState: ExecutableProofState;
   afterState: ExecutableProofState;
   delta: ProofStateDelta;
@@ -746,6 +772,7 @@ export function createMovePreviewSchema(
       moveId: moveIdSchema,
       operation: kernelOperationAdapterSchema,
       transitionClass: transitionClassSchema,
+      evidence: transitionEvidenceSchema.optional(),
       beforeState: stateSchema,
       afterState: stateSchema,
       delta: proofStateDeltaSchema,
@@ -800,6 +827,23 @@ export function createMovePreviewSchema(
           addLinkIssue(
             context,
             "A macro preview's class must be the class composed from its steps.",
+          );
+        }
+        const stepEvidence = steps.map((step) => step.evidence);
+        const stored = [preview.evidence, ...stepEvidence];
+        if (
+          stored.some((evidence) => evidence === undefined) &&
+          stored.some((evidence) => evidence !== undefined)
+        ) {
+          addLinkIssue(context, "A macro preview and all its steps must store evidence together.");
+        } else if (
+          preview.evidence !== undefined &&
+          preview.evidence !==
+            composeTransitionEvidence(stepEvidence as readonly TransitionEvidence[])
+        ) {
+          addLinkIssue(
+            context,
+            "A macro preview's evidence must be the evidence composed from its steps.",
           );
         }
       }
@@ -900,6 +944,7 @@ export function prepareMovePreview(
       moveId: request.moveId,
       operation: planned.operation,
       transitionClass: planned.preview.transitionClass,
+      evidence: planned.preview.evidence,
       beforeState: node.state,
       afterState: planned.preview.state,
       delta: computeDelta(node.state, planned.preview.state),
@@ -965,6 +1010,7 @@ function prepareMacroPreview(
       moveId: step.moveId,
       operation: planned.operation,
       transitionClass: planned.preview.transitionClass,
+      evidence: planned.preview.evidence,
       delta: computeDelta(state, planned.preview.state),
     });
     state = planned.preview.state;
@@ -978,6 +1024,9 @@ function prepareMacroPreview(
     moveId: request.moveId,
     operation: first.operation,
     transitionClass: composeTransitionClasses(steps.map(({ transitionClass }) => transitionClass)),
+    evidence: composeTransitionEvidence(
+      steps.map(({ evidence }) => evidence as TransitionEvidence),
+    ),
     beforeState: node.state,
     afterState: state,
     delta: computeDelta(node.state, state),
@@ -1005,6 +1054,8 @@ export type TransitionEvent = Readonly<{
   previewId?: MovePreviewId | undefined;
   operation: KernelOperation;
   transitionClass: TransitionClass;
+  evidence?: TransitionEvidence | undefined;
+  sequence?: number | undefined;
   beforeState: ExecutableProofState;
   afterState: ExecutableProofState;
   delta: ProofStateDelta;
@@ -1029,6 +1080,8 @@ export function createTransitionEventSchema(
       previewId: movePreviewIdSchema.optional(),
       operation: kernelOperationAdapterSchema,
       transitionClass: transitionClassSchema,
+      evidence: transitionEvidenceSchema.optional(),
+      sequence: transitionSequenceSchema.optional(),
       beforeState: stateSchema,
       afterState: stateSchema,
       delta: proofStateDeltaSchema,
@@ -1083,6 +1136,8 @@ export const proofCommandReceiptSchema = z
     eventId: transitionEventIdSchema,
     resultStateId: proofStateIdSchema,
     transitionClass: transitionClassSchema,
+    evidence: transitionEvidenceSchema.optional(),
+    sequence: transitionSequenceSchema.optional(),
   })
   .strict();
 export type ProofCommandReceipt = z.infer<typeof proofCommandReceiptSchema>;
@@ -1153,7 +1208,9 @@ export function createPrepareProofCommandSuccessSchema(
         receipt.edgeId !== prepared.edge.id ||
         receipt.eventId !== prepared.event.id ||
         receipt.resultStateId !== prepared.node.state.id ||
-        receipt.transitionClass !== prepared.edge.transitionClass
+        receipt.transitionClass !== prepared.edge.transitionClass ||
+        receipt.evidence !== prepared.edge.evidence ||
+        receipt.sequence !== prepared.edge.sequence
       ) {
         addLinkIssue(context, "The receipt does not identify its prepared records exactly.");
       }
@@ -1175,6 +1232,32 @@ export function createPrepareProofCommandResultSchema(
 }
 
 export const prepareProofCommandResultSchema = createPrepareProofCommandResultSchema();
+
+/**
+ * Stamp a prepared command with the session's next transition sequence. The worker calls this in
+ * the transaction that stores the transition, after reading the session's highest sequence under
+ * the session lock; `prepareProofCommand` itself is pure and knows no session. The stamped result
+ * is revalidated against every cross-link invariant. Throws when it does not validate.
+ */
+export function assignTransitionSequence(
+  prepared: PrepareProofCommandSuccess,
+  sequence: number,
+  environment: ProtocolEnvironment = {},
+): PrepareProofCommandSuccess {
+  const candidate: PrepareProofCommandSuccess = {
+    ...prepared,
+    prepared: {
+      ...prepared.prepared,
+      edge: { ...prepared.prepared.edge, sequence },
+      event: { ...prepared.prepared.event, sequence },
+    },
+    receipt: { ...prepared.receipt, sequence },
+  };
+  const parsed = createPrepareProofCommandSuccessSchema(environment).parse(candidate);
+  const stamped = freezeDetached(parsed);
+  if (stamped === undefined) throw new Error("The sequenced command could not be detached.");
+  return stamped;
+}
 
 export type PrepareProofCommandContext = Readonly<{
   /** Trusted request provenance. It is recorded, but grants no mathematical authority. */
@@ -1384,6 +1467,7 @@ function prepareProofCommandInternal(
     ...(command.previewId === undefined ? {} : { previewId: command.previewId }),
     operation: command.operation,
     transitionClass: transition.transitionClass,
+    evidence: transition.evidence,
     ...(command.menuSelection === undefined ? {} : { menuSelection: command.menuSelection }),
     ...(command.macro === undefined ? {} : { macro: command.macro }),
   };
@@ -1405,6 +1489,7 @@ function prepareProofCommandInternal(
     ...(command.previewId === undefined ? {} : { previewId: command.previewId }),
     operation: command.operation,
     transitionClass: transition.transitionClass,
+    evidence: transition.evidence,
     beforeState: currentNode.state,
     afterState: node.state,
     delta: computeDelta(currentNode.state, node.state),
@@ -1424,6 +1509,7 @@ function prepareProofCommandInternal(
     eventId: event.id,
     resultStateId: node.state.id,
     transitionClass: edge.transitionClass,
+    evidence: transition.evidence,
   };
   const result: PrepareProofCommandSuccess = {
     ok: true,
@@ -1442,6 +1528,7 @@ type AppliedCommandTransition =
       ok: true;
       state: ExecutableProofState;
       transitionClass: TransitionClass;
+      evidence: TransitionEvidence;
     }>
   | PrepareProofCommandFailure;
 
@@ -1466,6 +1553,7 @@ function applyCommandTransition(
       ok: true,
       state: planned.preview.state,
       transitionClass: planned.preview.transitionClass,
+      evidence: planned.preview.evidence,
     };
   }
 
@@ -1474,7 +1562,12 @@ function applyCommandTransition(
     const kernelCode = transition.diagnostics[0]?.code ?? "unknown";
     return protocolFailure("kernel-rejected", `Kernel rejected the operation: ${kernelCode}.`);
   }
-  return transition;
+  return {
+    ok: true,
+    state: transition.state,
+    transitionClass: transition.transitionClass,
+    evidence: transition.evidence,
+  };
 }
 
 function verifiedByKernel(
@@ -1489,6 +1582,9 @@ function verifiedByKernel(
   return (
     transition.ok &&
     transition.transitionClass === previous.prepared.edge.transitionClass &&
+    // Records stored before evidence was kept have none to compare.
+    (previous.prepared.edge.evidence === undefined ||
+      transition.evidence === previous.prepared.edge.evidence) &&
     jsonEquals(transition.state, previous.prepared.node.state)
   );
 }
@@ -1526,6 +1622,8 @@ function addPreparedLinkIssues(prepared: PreparedProofCommand, context: z.Refine
     node.id !== event.childNodeId ||
     edge.id !== event.edgeId ||
     edge.transitionClass !== event.transitionClass ||
+    edge.evidence !== event.evidence ||
+    edge.sequence !== event.sequence ||
     !jsonEquals(command.actor, event.actor) ||
     command.operation.resultStateId !== node.state.id ||
     command.operation.expectedStateId !== parent.state.id ||
@@ -1717,6 +1815,7 @@ function previewEvidenceMatchesCommand(
   return (
     planned.ok &&
     planned.preview.transitionClass === preview.transitionClass &&
+    (preview.evidence === undefined || planned.preview.evidence === preview.evidence) &&
     jsonEquals(planned.preview.state, preview.afterState)
   );
 }

@@ -20,6 +20,7 @@ import {
   planPreviousMoveDeletion,
   prepareDisplayedSuggestionSet,
   prepareMovePreview,
+  assignTransitionSequence,
   prepareProofCommand,
   proofSessionMetadataSchema,
   movePreviewIdSchema,
@@ -265,6 +266,8 @@ export interface ProofStoreTransaction {
   /** The highest interaction-event sequence in the session, or 0. Called under the session lock. */
   lastInteractionSequence(sessionId: ProofSessionId): Promise<number>;
   insertInteractionEvent(sessionId: ProofSessionId, event: InteractionEvent): Promise<void>;
+  /** The highest transition sequence among the session's edges, or 0. Called under the session lock. */
+  lastTransitionSequence(sessionId: ProofSessionId): Promise<number>;
   /** Interaction-event records in increasing sequence order, in the read-record shape. */
   listInteractionEvents(
     sessionId: ProofSessionId,
@@ -407,6 +410,7 @@ export function guardReadOnlySessions(inner: ProofStoreTransaction): ProofStoreT
     readDeletion: (sessionId, commandId) => inner.readDeletion(sessionId, commandId),
     readInteractionEvent: (sessionId, eventId) => inner.readInteractionEvent(sessionId, eventId),
     lastInteractionSequence: (sessionId) => inner.lastInteractionSequence(sessionId),
+    lastTransitionSequence: (sessionId) => inner.lastTransitionSequence(sessionId),
     listInteractionEvents: (sessionId, query) => inner.listInteractionEvents(sessionId, query),
     readReplayStep: (sessionId, commandId) => inner.readReplayStep(sessionId, commandId),
     readInquiryRecord: (sessionId, recordId) => inner.readInquiryRecord(sessionId, recordId),
@@ -1328,6 +1332,26 @@ function regeneratedPreviewId(stalePreviewId: MovePreviewId, request: unknown): 
 type InteractionEventFields = Readonly<Record<string, unknown>> &
   Readonly<{ id: string; kind: InteractionEvent["kind"] }>;
 
+/**
+ * Stamp prepared commands, in order, with the session's next transition sequence numbers (one more
+ * than the highest sequence the session retains). Called in the storing transaction under the
+ * session lock, immediately before the records are inserted.
+ */
+async function sequenceCommands(
+  transaction: ProofStoreTransaction,
+  sessionId: ProofSessionId,
+  environment: ProtocolEnvironment,
+  prepared: readonly PrepareProofCommandSuccess[],
+): Promise<readonly PrepareProofCommandSuccess[]> {
+  const last = await transaction.lastTransitionSequence(sessionId);
+  if (!Number.isSafeInteger(last) || last < 0) {
+    throw new Error("The stored transition sequence is invalid.");
+  }
+  return prepared.map((command, index) =>
+    assignTransitionSequence(command, last + index + 1, environment),
+  );
+}
+
 /** Assign the next sequence number and insert one validated event anchored at `node`. */
 async function appendInteractionEvent(
   transaction: ProofStoreTransaction,
@@ -2065,7 +2089,8 @@ export async function backtrackWithInformation(
         );
       }
 
-      for (const step of steps) {
+      const sequencedSteps = await sequenceCommands(transaction, session.id, environment, steps);
+      for (const step of sequencedSteps) {
         await transaction.insertNode(session.id, step.prepared.node);
         await transaction.insertEdge(session.id, step.prepared.edge);
         await transaction.insertEvent(session.id, step.prepared.event);
@@ -2115,7 +2140,7 @@ export async function backtrackWithInformation(
         status: "committed" as const,
         session: updatedSession,
         node: finalNode,
-        receipts: steps.map(({ receipt }) => receipt),
+        receipts: sequencedSteps.map(({ receipt }) => receipt),
         backtrack: event,
         replayed: false,
       };
@@ -2430,12 +2455,19 @@ export async function commitSemanticReplay(
       }
 
       const recordedAt = (options.now?.() ?? new Date()).toISOString();
-      for (const step of result.replayed) {
-        const { prepared } = step.prepared;
+      const sequencedReplay = await sequenceCommands(
+        transaction,
+        session.id,
+        environment,
+        result.replayed.map(({ prepared }) => prepared),
+      );
+      for (const [position, step] of result.replayed.entries()) {
+        const sequenced = sequencedReplay[position] as PrepareProofCommandSuccess;
+        const { prepared } = sequenced;
         await transaction.insertNode(session.id, prepared.node);
         await transaction.insertEdge(session.id, prepared.edge);
         await transaction.insertEvent(session.id, prepared.event);
-        await transaction.insertCommand(session.id, step.prepared);
+        await transaction.insertCommand(session.id, sequenced);
         const record = safeParse(semanticReplayStepRecordSchema, {
           commandId: prepared.command.commandId,
           replayCommandId: commandId,
@@ -2470,7 +2502,7 @@ export async function commitSemanticReplay(
         status: "committed" as const,
         session: updatedSession,
         node: finalNode,
-        receipts: result.replayed.map(({ prepared }) => prepared.receipt),
+        receipts: sequencedReplay.map(({ receipt }) => receipt),
         report: result.report,
         replayed: false,
       };
@@ -2863,19 +2895,21 @@ export async function executeProofCommandWithin(
     return { status: "committed" as const, result: prepared, replayed: true };
   }
 
-  await transaction.insertNode(session.id, prepared.prepared.node);
-  await transaction.insertEdge(session.id, prepared.prepared.edge);
-  await transaction.insertEvent(session.id, prepared.prepared.event);
-  await transaction.insertCommand(session.id, prepared);
+  const [sequenced] = await sequenceCommands(transaction, session.id, environment, [prepared]);
+  if (sequenced === undefined) throw new Error("The command could not be sequenced.");
+  await transaction.insertNode(session.id, sequenced.prepared.node);
+  await transaction.insertEdge(session.id, sequenced.prepared.edge);
+  await transaction.insertEvent(session.id, sequenced.prepared.event);
+  await transaction.insertCommand(session.id, sequenced);
   const advanced = await transaction.advanceCurrentNode(
     session.id,
     currentNode.id,
-    prepared.prepared.node.id,
+    sequenced.prepared.node.id,
   );
   if (!advanced) {
     throw new SerializedStaleCommandError();
   }
-  return { status: "committed" as const, result: prepared, replayed: false };
+  return { status: "committed" as const, result: sequenced, replayed: false };
 }
 
 /** The command ID of one step of a macro application. */
@@ -3066,7 +3100,13 @@ export async function executeMacroPreview(
           "The macro's final state differs from its stored preview.",
         );
       }
-      for (const result of results) {
+      const sequencedResults = await sequenceCommands(
+        transaction,
+        session.id,
+        environment,
+        results,
+      );
+      for (const result of sequencedResults) {
         await transaction.insertNode(session.id, result.prepared.node);
         await transaction.insertEdge(session.id, result.prepared.edge);
         await transaction.insertEvent(session.id, result.prepared.event);
@@ -3075,7 +3115,7 @@ export async function executeMacroPreview(
       if (!(await transaction.repointCurrentNode(session.id, currentNode.id, node.id))) {
         throw new SerializedStaleCommandError();
       }
-      return { status: "committed" as const, results, replayed: false };
+      return { status: "committed" as const, results: sequencedResults, replayed: false };
     });
   } catch (error: unknown) {
     return transactionFailure(error, "The macro could not be applied atomically.");

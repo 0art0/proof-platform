@@ -355,6 +355,8 @@ describe("PostgresProofStore", () => {
       "suggestion-set:one",
       "suggestion:one",
       "preview:one",
+      null,
+      null,
       JSON.stringify(edge),
     ]);
     const eventInsert = client.calls.find(({ text }) => text.includes("INTO proof_events"));
@@ -368,8 +370,42 @@ describe("PostgresProofStore", () => {
       "suggestion-set:one",
       "suggestion:one",
       "preview:one",
+      null,
+      null,
       JSON.stringify(event),
     ]);
+  });
+
+  it("stores the kernel evidence and transition sequence in columns beside the record", async () => {
+    const client = new RecordingClient();
+    const store = new PostgresProofStore(poolFor(client));
+    const edge = {
+      id: "edge:one",
+      commandId: "command:one",
+      parentNodeId: "node:root",
+      childNodeId: "node:child",
+      evidence: "library-result",
+      sequence: 7,
+    } as unknown as ProofEdge;
+    const event = {
+      id: "event:one",
+      commandId: "command:one",
+      parentNodeId: "node:root",
+      childNodeId: "node:child",
+      edgeId: "edge:one",
+      evidence: "library-result",
+      sequence: 7,
+    } as unknown as TransitionEvent;
+    await store.transaction(async (transaction) => {
+      await transaction.insertEdge(sessionId, edge);
+      await transaction.insertEvent(sessionId, event);
+    });
+    const edgeInsert = client.calls.find(({ text }) => text.includes("INTO proof_edges"));
+    expect(edgeInsert?.text).toContain("evidence, transition_sequence, record");
+    expect(edgeInsert?.values?.slice(-3)).toEqual(["library-result", 7, JSON.stringify(edge)]);
+    const eventInsert = client.calls.find(({ text }) => text.includes("INTO proof_events"));
+    expect(eventInsert?.text).toContain("evidence, transition_sequence, record");
+    expect(eventInsert?.values?.slice(-3)).toEqual(["library-result", 7, JSON.stringify(event)]);
   });
 
   it("lists session-scoped edge envelopes and compare-and-swap repoints the cursor", async () => {
@@ -644,7 +680,9 @@ class InteractionEventClient implements SqlClient {
 
   async query(text: string, values?: readonly unknown[]): Promise<SqlQueryResult> {
     this.calls.push({ text, values });
-    if (text.includes("MAX(sequence)")) return { rows: [{ sequence: 4 }], rowCount: 1 };
+    if (text.includes("MAX(sequence)") || text.includes("MAX(transition_sequence)")) {
+      return { rows: [{ sequence: 4 }], rowCount: 1 };
+    }
     if (text.includes("FROM proof_interaction_events")) {
       return { rows: this.rows, rowCount: this.rows.length };
     }
@@ -700,6 +738,18 @@ describe("PostgresProofStore interaction events", () => {
     ]);
     expect(insert?.text).not.toContain("interaction:one");
     expect(client.released).toBe(true);
+  });
+
+  it("reads the highest retained transition sequence from the edges", async () => {
+    const client = new InteractionEventClient();
+    const store = new PostgresProofStore({ connect: async () => client });
+    const last = await store.transaction((transaction) =>
+      transaction.lastTransitionSequence(sessionId),
+    );
+    expect(last).toBe(4);
+    const select = client.calls.find(({ text }) => text.includes("MAX(transition_sequence)"));
+    expect(select?.text).toContain("FROM proof_edges");
+    expect(select?.values).toEqual(["session:one"]);
   });
 
   it("reads and lists events in the repository record shape with parameterized filters", async () => {

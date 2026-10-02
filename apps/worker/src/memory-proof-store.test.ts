@@ -11,6 +11,7 @@ import {
   ProofStoreTransactionError,
   type ProofSession,
 } from "./proof-repository";
+import type { PrepareProofCommandSuccess, ProofEdge } from "@proof/protocol";
 import { selectProofStore } from "./proof-worker-startup";
 
 function session(id = "session:memory"): ProofSession {
@@ -118,6 +119,62 @@ describe("MemoryProofStore transactions", () => {
         await transaction.lockSession(proofSessionIdSchema.parse("session:orphan")),
       ).toBeUndefined();
     });
+  });
+
+  it("mirrors the evidence and transition-sequence constraints of migration 0013", async () => {
+    const store = await seeded();
+    type Work = Parameters<MemoryProofStore["transaction"]>[0];
+    type Transaction = Parameters<Work>[0];
+    /** Insert a child node, a stub command and an edge with the given stored fields. */
+    const addEdge = async (
+      transaction: Transaction,
+      id: string,
+      stored: Record<string, unknown>,
+    ) => {
+      const child = `node:${id}`;
+      await transaction.insertNode(sessionId, {
+        id: child,
+        state: { ...DEVELOPMENT_ROOT_NODE.state, id: `state:${id}` },
+      } as typeof DEVELOPMENT_ROOT_NODE);
+      await transaction.insertCommand(sessionId, {
+        prepared: { command: { commandId: `command:${id}` } },
+      } as unknown as PrepareProofCommandSuccess);
+      await transaction.insertEdge(sessionId, {
+        id: `edge:${id}`,
+        commandId: `command:${id}`,
+        parentNodeId: DEVELOPMENT_ROOT_NODE.id,
+        childNodeId: child,
+        ...stored,
+      } as unknown as ProofEdge);
+    };
+    const rejection = async (work: Work): Promise<string> => {
+      const caught: unknown = await store.transaction(work).catch((error: unknown) => error);
+      expect(caught).toBeInstanceOf(ProofStoreTransactionError);
+      return String((caught as { cause?: { message?: string } }).cause?.message);
+    };
+    const last = () =>
+      store.transaction((transaction) => transaction.lastTransitionSequence(sessionId));
+
+    expect(await last()).toBe(0);
+    // Both columns or neither, and a positive sequence.
+    expect(await rejection((t) => addEdge(t, "a", { evidence: "structural" }))).toContain(
+      "evidence_sequence_together",
+    );
+    expect(await rejection((t) => addEdge(t, "a", { sequence: 1 }))).toContain(
+      "evidence_sequence_together",
+    );
+    expect(
+      await rejection((t) => addEdge(t, "a", { evidence: "structural", sequence: 0 })),
+    ).toContain("must be positive");
+    await store.transaction((t) => addEdge(t, "a", { evidence: "structural", sequence: 3 }));
+    expect(await last()).toBe(3);
+    // A sequence is unique within the session.
+    expect(await rejection((t) => addEdge(t, "b", { evidence: "sorry", sequence: 3 }))).toContain(
+      "unique transition sequence",
+    );
+    // Rows written before the migration carry neither and do not count towards the maximum.
+    await store.transaction((t) => addEdge(t, "b", {}));
+    expect(await last()).toBe(3);
   });
 
   it("round-trips optional session metadata and enforces the object check", async () => {

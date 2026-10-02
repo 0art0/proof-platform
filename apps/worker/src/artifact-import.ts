@@ -41,7 +41,9 @@ import {
   type LibraryArtifact,
 } from "@proof/library";
 import {
-  PROOF_ARTIFACT_VERSION,
+  LEGACY_ARTIFACT_VERSION,
+  SUPPORTED_ARTIFACT_VERSIONS,
+  assignTransitionSequence,
   canonicalArtifactJson,
   deriveArtifactFinalMaterial,
   deriveTranslationDictionary,
@@ -50,15 +52,18 @@ import {
   prepareInquiryCommand,
   prepareMovePreview,
   prepareProofCommand,
+  previewWithoutStoredEvidence,
   proofArtifactDigestSchema,
   suggestionSetMatchesNode,
   withArtifactSessionId,
+  withoutStoredTransitionEvidence,
   type DisplayedSuggestionSet,
   type InquiryContextEdge,
   type InquiryRecord,
   type JsonObject,
   type JsonValue,
   type MovePreview,
+  type PrepareProofCommandSuccess,
   type ProofArtifact,
   type ProofEdge,
   type ProofArtifactDiagnostic,
@@ -136,7 +141,7 @@ export function validateProofArtifact(
       typeof input === "object" &&
       input !== null &&
       !Array.isArray(input) &&
-      header.artifactVersion === PROOF_ARTIFACT_VERSION &&
+      SUPPORTED_ARTIFACT_VERSIONS.some((version) => version === header.artifactVersion) &&
       proofArtifactDigestSchema.safeParse(header.digest).success &&
       artifactDigest(input) !== header.digest
     ) {
@@ -514,7 +519,14 @@ class ArtifactValidator {
         },
         this.environment,
       );
-      if (!prepared.ok || !sameJson(prepared.preview, preview)) {
+      // Version 1 stored no evidence, so its previews are compared without it; version 2 must
+      // store exactly the evidence the kernel reports.
+      const expected = !prepared.ok
+        ? undefined
+        : this.artifact.artifactVersion === LEGACY_ARTIFACT_VERSION
+          ? previewWithoutStoredEvidence(prepared.preview)
+          : prepared.preview;
+      if (!prepared.ok || !sameJson(expected, preview)) {
         fail(
           "preview-not-reproduced",
           `The preview ${preview.id} is not reproduced from its snapshot: ${
@@ -579,11 +591,14 @@ class ArtifactValidator {
           path,
         );
       }
+      // Version 1 stored no evidence or sequence; version 2 stores both, so the replay must
+      // reproduce the stored evidence and carry the stored sequence.
+      const expected = this.expectedTransition(replayed, edge, path);
       if (
-        !sameJson(replayed, command) ||
-        !sameJson(replayed.prepared.edge, edge) ||
-        !sameJson(replayed.prepared.event, event) ||
-        !sameJson(replayed.prepared.node, child)
+        !sameJson(expected, command) ||
+        !sameJson(expected.prepared.edge, edge) ||
+        !sameJson(expected.prepared.event, event) ||
+        !sameJson(expected.prepared.node, child)
       ) {
         fail(
           "transition-not-reproduced",
@@ -592,6 +607,29 @@ class ArtifactValidator {
         );
       }
     });
+  }
+
+  /** The replayed transition in the shape this artifact's version stores. */
+  private expectedTransition(
+    replayed: PrepareProofCommandSuccess,
+    edge: ProofEdge,
+    path: Path,
+  ): PrepareProofCommandSuccess {
+    if (this.artifact.artifactVersion === LEGACY_ARTIFACT_VERSION) {
+      return withoutStoredTransitionEvidence(replayed);
+    }
+    if (edge.sequence === undefined) {
+      fail("transition-not-reproduced", `The edge ${edge.id} stores no transition sequence.`, path);
+    }
+    try {
+      return assignTransitionSequence(replayed, edge.sequence, this.environment);
+    } catch {
+      fail(
+        "transition-not-reproduced",
+        `The stored transition sequence of edge ${edge.id} is not valid.`,
+        path,
+      );
+    }
   }
 
   /**

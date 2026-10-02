@@ -129,6 +129,27 @@ export const TRANSITION_EVIDENCE_KINDS = [
 ] as const;
 export type TransitionEvidence = (typeof TRANSITION_EVIDENCE_KINDS)[number];
 
+const EVIDENCE_CAVEAT: Readonly<Record<TransitionEvidence, number>> = {
+  structural: 0,
+  "library-result": 1,
+  "background-inference": 2,
+  sorry: 3,
+};
+
+/**
+ * The evidence of a composed transition: the most caveated among its steps (an unproved sorry,
+ * then an accepted background inference, then a cited library result, then a structural rule).
+ * An empty sequence is structural.
+ */
+export function composeTransitionEvidence(
+  evidence: readonly TransitionEvidence[],
+): TransitionEvidence {
+  return evidence.reduce<TransitionEvidence>(
+    (most, next) => (EVIDENCE_CAVEAT[next] > EVIDENCE_CAVEAT[most] ? next : most),
+    "structural",
+  );
+}
+
 export { attestationIdSchema, type AttestationId } from "@proof/mathjson-model";
 export {
   CONSTRUCTION_OPERATION_KINDS,
