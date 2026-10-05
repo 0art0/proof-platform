@@ -36,7 +36,7 @@ import {
   recordInquiryCommand,
 } from "../inquiry-repository";
 import type { LibraryStore } from "../library-repository";
-import { createAiRuntime, type AiRuntime } from "../ai-runtime";
+import type { AiRuntime } from "../ai-runtime";
 import type { LlmCallStore } from "../llm-call-repository";
 import { postgresProofStore } from "../postgres-proof-store";
 import { handleAiRoute } from "./ai-routes";
@@ -274,7 +274,9 @@ export type ProofHttpServiceOptions = Readonly<{
   /** The session library store; library commands of the envelope need it. */
   library?: LibraryStore;
   llmCalls?: LlmCallStore;
+  /** AI is enabled only by passing a runtime explicitly; the ambient environment is never read. */
   ai?: AiRuntime;
+  /** @deprecated Ignored. Kept only so existing callers type-check; pass `ai` instead. */
   env?: Readonly<Record<string, string | undefined>>;
 }>;
 
@@ -291,7 +293,7 @@ export function createProofHttpService(
     now: options.now,
     library: options.library,
     llmCalls: options.llmCalls,
-    ai: options.ai ?? createAiRuntime(options.env ?? process.env),
+    ai: options.ai,
   };
   const server = createServer((request, response) => {
     void handleRequest(context, request, response).catch(() => {

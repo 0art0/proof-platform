@@ -21,7 +21,9 @@ Defaults are `openai/gpt-6-luna` with high reasoning effort and a 32,000 token o
 formalizer, and `typesafe-ai/jev` for shortlisting. Configuration can be overridden with
 `PROOF_AI_FORMALIZER_MODEL`, `PROOF_AI_FORMALIZER_REASONING_EFFORT`,
 `PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`, `PROOF_AI_SHORTLISTER_MODEL`,
-`PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, and `PROOF_AI_TIMEOUT_MS`. The confidence threshold defaults
+`PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, `PROOF_AI_TIMEOUT_MS`, and `PROOF_AI_FORMALIZER_TIMEOUT_MS`
+(the formalizer's total budget; defaults to `PROOF_AI_TIMEOUT_MS`, itself 120000 ms; raise it for
+long high-effort generations). The confidence threshold defaults
 to `0.55`; Jev's native confidence and candidate probabilities are included in the stored structured
 evidence. Missing credentials disable these routes. No model fallback is silently selected.
 
@@ -102,6 +104,39 @@ agent actions still go through the existing proof command protocol.
 Shortlist evidence is session-owned and included in exported session artifacts under `llmCalls`.
 Construction-owned formalizer evidence is available through its construction evidence route; it is
 not implicitly attached to a later proof-session artifact.
+
+## Transport behaviour
+
+The formalizer uses a non-streaming `stream: false` chat-completions call with a strict JSON
+schema. Streaming is not used: the Gateway contract the code relies on documents only the
+non-streaming response, so long calls are bounded by the configurable budget above instead.
+
+Each call has one total wall-clock budget (the timeout). Retryable failures are retried up to 3
+attempts with exponential backoff plus jitter, honouring `Retry-After`; a wait that would not fit
+in the remaining budget is skipped and the failure is reported. A failed call is stored as
+`transport-failed` with a safe `subcode` on its diagnostic. Provider text, headers and keys are
+never stored or logged.
+
+| Situation                                     | Result                      | Retried |
+| --------------------------------------------- | --------------------------- | ------- |
+| 200, `stop`, JSON content                     | parsed, then validated      |         |
+| 200, `stop`, `refusal` set                    | `declined` output           |         |
+| 200, `length`/other finish reason, no content | rejected (`invalid-output`) |         |
+| 200, `stop`, empty or non-JSON content        | rejected (`invalid-output`) |         |
+| 200, body not JSON                            | `invalid-response`          | no      |
+| 429                                           | `rate-limited`              | yes     |
+| 408, 5xx                                      | `server-error`              | yes     |
+| 401, 403                                      | `auth`                      | no      |
+| other non-ok status                           | `bad-request`               | no      |
+| fetch rejects without abort                   | `network`                   | yes     |
+| total budget exhausted                        | `timeout`                   | no      |
+| Jev answer without any confidence             | `missing-confidence`        | no      |
+
+Jev confidence is read from the answer, then `providerMetadata.typesafe.confidence.shortlist`, then
+a scalar `providerMetadata.typesafe.confidence`. The stored Jev `rawResponse` still embeds the
+request envelope (`providerRequest.state`) because output validation compares it with the prepared
+call to detect forged state; replacing it with a digest would change that validation and the stored
+shape, so it is left as is.
 
 ## Read evidence
 

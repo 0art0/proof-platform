@@ -1139,3 +1139,11 @@ migrate -- --status` reported up to date.
   evaluation harness through the Vercel AI Gateway, kept by the user's choice) merged into this branch.
   The AI evaluation's corpus counts now derive from `BENCHMARK_CORPUS`. Verify, and the workspace e2e
   suite on the memory and PostgreSQL stores (32/32 each, migrations 0001–0014 applied fresh), pass.
+- 2026-10-05 — AI polish A (transport and runtime) — The Gateway transports now classify failures with a
+  closed `subcode` on the stored `transport-failed` diagnostic (rate-limited, server-error, timeout,
+  network, auth, bad-request, invalid-response, missing-confidence) and retry only retryable classes with
+  jittered backoff and `Retry-After`, bounded by one total time budget with injectable clock and sleep.
+  Streaming was not adopted (the Gateway contract used documents only the non-streaming response), so the
+  formalizer budget is configurable via `PROOF_AI_FORMALIZER_TIMEOUT_MS`. `createProofHttpService` no
+  longer reads the environment: AI needs an explicit `ai` option. The Jev raw response still embeds its
+  request envelope because validation compares it with the prepared call. Models and endpoints unchanged.

@@ -229,9 +229,36 @@ export type LlmBoundaryDiagnosticCode =
   | "candidate-not-found"
   | "invalid-output"
   | "transport-failed";
+/**
+ * Safe, closed classification of a transport failure. It is derived from HTTP status and local
+ * conditions only; provider text, headers and credentials are never part of it.
+ */
+export const LLM_TRANSPORT_FAILURE_SUBCODES = [
+  "rate-limited",
+  "server-error",
+  "timeout",
+  "network",
+  "auth",
+  "bad-request",
+  "invalid-response",
+  "missing-confidence",
+] as const;
+export type LlmTransportFailureSubcode = (typeof LLM_TRANSPORT_FAILURE_SUBCODES)[number];
+
+/** Thrown by transports; only its `subcode` is retained in call evidence. */
+export class LlmTransportError extends Error {
+  readonly subcode: LlmTransportFailureSubcode;
+  constructor(subcode: LlmTransportFailureSubcode) {
+    super(`LLM transport failure: ${subcode}`);
+    this.name = "LlmTransportError";
+    this.subcode = subcode;
+  }
+}
+
 export type LlmBoundaryDiagnostic = Readonly<{
   code: LlmBoundaryDiagnosticCode;
   message: string;
+  subcode?: LlmTransportFailureSubcode | undefined;
 }>;
 export const llmBoundaryDiagnosticSchema: z.ZodType<LlmBoundaryDiagnostic> = z
   .object({
@@ -244,6 +271,7 @@ export const llmBoundaryDiagnosticSchema: z.ZodType<LlmBoundaryDiagnostic> = z
       "transport-failed",
     ]),
     message: z.string().min(1),
+    subcode: z.enum(LLM_TRANSPORT_FAILURE_SUBCODES).optional(),
   })
   .strict();
 type LlmBoundaryFailure = Readonly<{
@@ -884,14 +912,21 @@ export async function executePreparedLlmCall(
   let rawResponse: unknown;
   try {
     rawResponse = await transport(preparedCall);
-  } catch {
+  } catch (error: unknown) {
+    const subcode = error instanceof LlmTransportError ? error.subcode : undefined;
     return freezeDetached({
       id: preparedCall.id,
       role: preparedCall.role,
       preparedCall,
       status: "transport-failed" as const,
       rawResponse: null,
-      diagnostics: [{ code: "transport-failed" as const, message: "The LLM transport failed." }],
+      diagnostics: [
+        {
+          code: "transport-failed" as const,
+          message: "The LLM transport failed.",
+          ...(subcode === undefined ? {} : { subcode }),
+        },
+      ],
     });
   }
   const detachedRaw = clonePlainData(rawResponse);

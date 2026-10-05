@@ -23,6 +23,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
   const key = configuredVercelApiKey(env);
   if (!key.ok) return Object.freeze({});
   const timeoutMs = positiveInteger(env.PROOF_AI_TIMEOUT_MS, DEFAULT_LLM_TIMEOUT_MS);
+  const formalizerTimeoutMs = positiveInteger(env.PROOF_AI_FORMALIZER_TIMEOUT_MS, timeoutMs);
   const formalizerModel = nonEmpty(env.PROOF_AI_FORMALIZER_MODEL) ?? DEFAULT_FORMALIZER_MODEL;
   const formalizerTokens = positiveInteger(
     env.PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS,
@@ -42,7 +43,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         model: formalizerModel,
         reasoningEffort,
         maxOutputTokens: formalizerTokens,
-        timeoutMs,
+        timeoutMs: formalizerTimeoutMs,
       }),
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
