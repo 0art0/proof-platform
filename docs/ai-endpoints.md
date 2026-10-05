@@ -27,6 +27,29 @@ long high-effort generations). The confidence threshold defaults
 to `0.55`; Jev's native confidence and candidate probabilities are included in the stored structured
 evidence. Missing credentials disable these routes. No model fallback is silently selected.
 
+## Cost guard and status codes
+
+Both AI routes can trigger paid provider calls, so they share an in-process limiter: a global cap on
+concurrent provider calls (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token bucket
+(`PROOF_AI_RATE_PER_MINUTE`, default 20; it is also the burst size). A request over budget gets
+`429` with a `Retry-After` header (seconds) and a stable diagnostic code: `ai-rate-limited` or
+`ai-concurrency-limited`. A shortlist `429` still carries the deterministic `fallbackCandidateIds`.
+Budget is spent only when a provider call is really dispatched: invalid requests, stale or read-only
+sessions, a single candidate, a disabled runtime, and replays of a stored call cost nothing. The
+limits are per worker process and are a cost guard, not authentication: anyone who can reach the
+worker is still trusted.
+
+| Status | Meaning on the AI routes                                                         |
+| ------ | -------------------------------------------------------------------------------- |
+| 400    | invalid JSON or request, unknown pack, candidate not in the displayed set        |
+| 413    | request body over 256 KiB                                                        |
+| 415    | `Content-Type` is not `application/json`                                         |
+| 422    | the model output was rejected or the draft failed admission; nothing was created |
+| 429    | cost guard (`Retry-After`)                                                       |
+| 503    | `ai-disabled` (no provider configured), transport failure, or uncertain call     |
+
+Unknown `/ai/*` paths are ordinary unknown routes.
+
 ## Formalize a problem
 
 `POST /ai/formalize` accepts a problem-construction ID, a stable call ID, problem text, background,

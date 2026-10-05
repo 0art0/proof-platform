@@ -12,6 +12,12 @@ import {
   type SupportedLlmRole,
 } from "@proof/llm";
 import type { LlmDispatchConfiguration } from "./llm-call-repository";
+import {
+  createAiLimiter,
+  DEFAULT_AI_MAX_CONCURRENT,
+  DEFAULT_AI_RATE_PER_MINUTE,
+  type AiLimiter,
+} from "./proof-http/ai-rate-limit";
 
 export type AiRoleRuntime = Readonly<{
   transport: LlmTransport;
@@ -67,6 +73,16 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         minimumConfidence,
       }),
     },
+  });
+}
+
+/** Build the AI cost guard from `PROOF_AI_MAX_CONCURRENT` and `PROOF_AI_RATE_PER_MINUTE`. */
+export function createAiLimiterFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): AiLimiter {
+  return createAiLimiter({
+    maxConcurrent: positiveInteger(env.PROOF_AI_MAX_CONCURRENT, DEFAULT_AI_MAX_CONCURRENT),
+    ratePerMinute: positiveInteger(env.PROOF_AI_RATE_PER_MINUTE, DEFAULT_AI_RATE_PER_MINUTE),
   });
 }
 

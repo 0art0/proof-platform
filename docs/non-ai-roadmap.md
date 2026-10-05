@@ -1147,3 +1147,14 @@ migrate -- --status` reported up to date.
   formalizer budget is configurable via `PROOF_AI_FORMALIZER_TIMEOUT_MS`. `createProofHttpService` no
   longer reads the environment: AI needs an explicit `ai` option. The Jev raw response still embeds its
   request envelope because validation compares it with the prepared call. Models and endpoints unchanged.
+- 2026-10-05 — AI polish B (routes and boundary tests) — AI routes now share an in-process cost guard
+  (`proof-http/ai-rate-limit.ts`): a concurrency cap (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token
+  bucket (`PROOF_AI_RATE_PER_MINUTE`, default 20) with an injectable clock; over budget answers 429 with
+  `Retry-After` and `ai-rate-limited` / `ai-concurrency-limited`. Budget is spent only when a provider call
+  is dispatched (fallbacks, validation failures and replays are free). This is a cost guard, not
+  authentication. New boundary tests cover the formalizer 503 `ai-disabled`, 413/415 on both routes,
+  adversarial Jev output (choice outside the candidate set, undisplayed candidate, non-distribution
+  probabilities: rejected, recorded, proof state untouched), adversarial formalizer drafts (injection text,
+  smuggled operators/sorts, unapproved or undeclared hypotheses: nothing created) and the design 21.3
+  absence test over a corpus problem. `POST /ai` is now an ordinary unknown route and the ignored `env`
+  option of `createProofHttpService` is removed. Models and the Gateway transport are unchanged.

@@ -10,7 +10,7 @@ import {
   prepareLlmCall,
   type PreparedLlmCall,
 } from "@proof/llm";
-import { createAiRuntime } from "./ai-runtime";
+import { createAiLimiterFromEnv, createAiRuntime } from "./ai-runtime";
 
 describe("createAiRuntime", () => {
   it("leaves AI disabled when neither supported key is configured", () => {
@@ -68,6 +68,18 @@ describe("createAiRuntime", () => {
     ["minimum confidence", { PROOF_AI_SHORTLISTER_MIN_CONFIDENCE: "1.1" }],
   ])("rejects an invalid %s override", (_name, config) => {
     expect(() => createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential", ...config })).toThrow();
+  });
+
+  it("parses the cost-guard limits and rejects invalid ones", () => {
+    expect(() => createAiLimiterFromEnv({})).not.toThrow();
+    const limiter = createAiLimiterFromEnv({
+      PROOF_AI_MAX_CONCURRENT: "1",
+      PROOF_AI_RATE_PER_MINUTE: "5",
+    });
+    expect(limiter.tryAcquire().ok).toBe(true);
+    expect(limiter.tryAcquire()).toMatchObject({ ok: false, code: "ai-concurrency-limited" });
+    expect(() => createAiLimiterFromEnv({ PROOF_AI_MAX_CONCURRENT: "0" })).toThrow();
+    expect(() => createAiLimiterFromEnv({ PROOF_AI_RATE_PER_MINUTE: "x" })).toThrow();
   });
 
   it("does not contact a provider while constructing configured transports", () => {
