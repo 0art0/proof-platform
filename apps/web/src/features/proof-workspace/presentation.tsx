@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createPresentation, type Presentation } from "@proof/language";
+import { constructionPlaceholderOperators, type ProofState } from "@proof/mathjson-model";
 import type { OperatorDeclaration } from "@proof/protocol";
 
 /**
@@ -15,8 +16,25 @@ import type { OperatorDeclaration } from "@proof/protocol";
  */
 export type WorkspaceView = "formal" | "natural-language";
 
-export function usePresentation(operators: readonly OperatorDeclaration[]): Presentation {
-  return useMemo(() => createPresentation({ operators }), [operators]);
+/**
+ * `state` registers the placeholders of its construction tasks, so a placeholder reads as its
+ * task's display name instead of an unknown application.
+ */
+export function usePresentation(
+  operators: readonly OperatorDeclaration[],
+  state?: Pick<ProofState, "constructions">,
+): Presentation {
+  const constructions = state?.constructions;
+  return useMemo(
+    () =>
+      createPresentation({
+        operators: [
+          ...operators,
+          ...constructionPlaceholderOperators({ constructions }, { includeClosed: true }),
+        ],
+      }),
+    [operators, constructions],
+  );
 }
 
 type MarkupRenderer = (latex: string) => string;

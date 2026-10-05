@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mathJsonEquals, type PlainMathJson } from "@proof/mathjson-model";
+import {
+  mathJsonEquals,
+  operatorDeclarationSchema,
+  type PlainMathJson,
+} from "@proof/mathjson-model";
 import { createLatexRenderer, parseLatex } from "./latex";
 import { OPERATORS } from "./test-fixtures";
 
@@ -139,6 +143,35 @@ describe("LaTeX serialization goldens", () => {
     expect(() =>
       createLatexRenderer({ operators: [OPERATORS[0], OPERATORS[0]] as never }),
     ).toThrow();
+  });
+});
+
+describe("construction placeholders", () => {
+  const real = { kind: "named", id: "sort:real" } as const;
+  const placeholder = (symbol: string, displayName: string, parameters: number) =>
+    operatorDeclarationSchema.parse({
+      id: `construction-placeholder:task:${symbol}`,
+      symbol,
+      signature: { parameters: Array.from({ length: parameters }, () => real), result: real },
+      presentation: { displayName },
+    });
+  const placeholders = createLatexRenderer({
+    operators: [
+      ...OPERATORS,
+      placeholder("m", "δ", 1),
+      placeholder("w", "witness x", 0),
+      placeholder("u", "a{b}\\", 2),
+    ],
+  });
+
+  it.each<[string, PlainMathJson, string]>([
+    ["a single-letter name", ["m", "eps"], "\\boxed{δ}"],
+    ["a closed choice", ["w"], "\\boxed{\\mathrm{witness\\ x}}"],
+    ["a name with markup characters", ["u", "a", "b"], "\\boxed{\\mathrm{ab}}"],
+    ["inside a relation", ["Less", ["m", "eps"], "eps"], "\\boxed{δ} < \\mathrm{eps}"],
+    ["inside a sum", ["Add", ["m", "eps"], 1], "\\boxed{δ}+1"],
+  ])("renders %s by its display name", (_label, expression, latex) => {
+    expect(placeholders.serialize(expression)).toBe(latex);
   });
 });
 

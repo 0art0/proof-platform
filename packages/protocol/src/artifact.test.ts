@@ -80,7 +80,10 @@ describe("parseProofArtifact", () => {
       ok: false,
       diagnostics: [{ code: "invalid-artifact" }],
     });
-    expect(parseProofArtifact(minimalArtifact({ artifactVersion: 2 }))).toMatchObject({
+    // Version 1 (no stored evidence or sequence) is still accepted; version 2 is current.
+    expect(parseProofArtifact(minimalArtifact({ artifactVersion: 1 }))).toMatchObject({ ok: true });
+    expect(PROOF_ARTIFACT_VERSION).toBe(2);
+    expect(parseProofArtifact(minimalArtifact({ artifactVersion: 3 }))).toMatchObject({
       ok: false,
       diagnostics: [{ code: "unsupported-version", path: ["artifactVersion"] }],
     });

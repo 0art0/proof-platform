@@ -34,6 +34,7 @@ import {
 } from "@proof/moves/authoring";
 import type { MoveDefinition } from "@proof/moves";
 import { definitionHash, type DefinitionCatalog, type MacroDefinition } from "./approved-catalog";
+import { approvedDerivedResults, withApprovedLemmas } from "./conditional-lemmas";
 import {
   addLibraryArtifact,
   listLibrary,
@@ -210,7 +211,8 @@ export function approvedAuthoredMacros(
 
 /**
  * The definitions a session retrieves and applies with: the base catalog plus the session's
- * approved authored moves. Drafts, rejections and change requests contribute nothing.
+ * approved authored moves and approved conditional lemmas. Drafts, rejections and change requests
+ * contribute nothing.
  */
 export async function sessionDefinitions(
   base: DefinitionCatalog,
@@ -218,16 +220,21 @@ export async function sessionDefinitions(
   sessionId: string,
 ): Promise<DefinitionCatalog> {
   if (library === undefined) return base;
-  const listed = await listLibrary(library, { sessionId, layers: ["move-discovery-draft"] });
+  const listed = await listLibrary(library, {
+    sessionId,
+    layers: ["move-discovery-draft", "derived"],
+  });
   if (listed.status !== "found") return base;
   const taken = (id: string) => base.moves.some((move) => move.id === id);
   const authored = approvedAuthoredMoves(listed.artifacts).filter((move) => !taken(move.id));
   const macros = approvedAuthoredMacros(listed.artifacts).filter(({ move }) => !taken(move.id));
-  if (authored.length === 0 && macros.length === 0) return base;
+  // Approved conditional lemmas (N44) join the result catalog; drafts and rejections do not.
+  const withLemmas = withApprovedLemmas(base, approvedDerivedResults(listed.artifacts));
+  if (authored.length === 0 && macros.length === 0) return withLemmas;
   return Object.freeze({
     moves: [...base.moves, ...authored],
     ...(macros.length === 0 ? {} : { macros: [...(base.macros ?? []), ...macros] }),
-    catalog: base.catalog,
+    catalog: withLemmas.catalog,
   });
 }
 

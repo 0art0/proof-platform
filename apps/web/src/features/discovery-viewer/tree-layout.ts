@@ -17,7 +17,7 @@ export type TreeEdgeView = Readonly<{
   /** Set on a step of a multi-step macro application. */
   macro?: MacroLink | undefined;
   transitionClass: ProofEdge["transitionClass"];
-  /** Stored evidence kind; only edges of the stored route carry it. */
+  /** Stored evidence kind (every edge of a version-2 artifact; the route only for version 1). */
   evidence?: DiscoveryEvidence | undefined;
 }>;
 
@@ -61,7 +61,8 @@ export function treeEdgeView(index: ArtifactIndex, edge: ProofEdge): TreeEdgeVie
     moveId: edge.moveId,
     macro: edge.macro,
     transitionClass: edge.transitionClass,
-    evidence: index.evidenceByEdge.get(edge.id),
+    // The kernel's stored evidence; the route's derived evidence is the version-1 fallback.
+    evidence: edge.evidence ?? index.evidenceByEdge.get(edge.id),
   };
 }
 

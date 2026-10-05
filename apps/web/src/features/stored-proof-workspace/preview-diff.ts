@@ -109,12 +109,17 @@ function sameJson(left: unknown, right: unknown): boolean {
 export type TransitionEvidence = "structural" | "background-inference" | "library-result" | "sorry";
 
 /**
- * The evidence the recorded operation carries. This reads the stored operation only: a sorry
- * and an accepted background inference are named by their operation kinds, and a library result
- * by the result the operation (or its rewrite source) cites. Every other kernel rule is
- * structural. The protocol does not yet store the kernel's evidence on previews or edges.
+ * The evidence of a transition. The kernel's evidence is stored with the preview and the edge, so
+ * a `stored` value is returned as it is. A record written before evidence was stored (and a
+ * version-1 artifact) has none; only then is it derived from the stored operation: a sorry and an
+ * accepted background inference are named by their operation kinds, and a library result by the
+ * result the operation (or its rewrite source) cites. Every other kernel rule is structural.
  */
-export function transitionEvidenceOf(operation: MovePreview["operation"]): TransitionEvidence {
+export function transitionEvidenceOf(
+  operation: MovePreview["operation"],
+  stored?: TransitionEvidence | undefined,
+): TransitionEvidence {
+  if (stored !== undefined) return stored;
   if (operation.kind === "mark-sorry") return "sorry";
   if (operation.kind === "close-by-accepted-inference") return "background-inference";
   const record = operation as Readonly<Record<string, unknown>>;

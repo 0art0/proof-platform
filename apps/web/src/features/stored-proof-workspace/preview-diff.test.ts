@@ -90,6 +90,19 @@ describe("transitionEvidenceOf", () => {
     ).toBe("structural");
     expect(transitionEvidenceOf(operation({ kind: "split-goal-conjunction" }))).toBe("structural");
   });
+
+  it("returns the stored kernel evidence when present instead of deriving it", () => {
+    // The operation is consulted only for records without stored evidence.
+    expect(transitionEvidenceOf(operation({ kind: "split-goal-conjunction" }), "sorry")).toBe(
+      "sorry",
+    );
+    expect(
+      transitionEvidenceOf(operation({ kind: "mark-sorry", assumptionId: "a" }), "structural"),
+    ).toBe("structural");
+    expect(transitionEvidenceOf(operation({ kind: "split-goal-conjunction" }), undefined)).toBe(
+      "structural",
+    );
+  });
 });
 
 type Suggestion = DisplayedSuggestionSet["suggestions"][number];

@@ -342,6 +342,56 @@ otherwise automate — the substrate is in scope.
       solve a corpus problem mouse-only, delete an accidental move, backtrack with information, export,
       reimport, and view the pruned proof.
 
+## Phase 10 — Closing recorded gaps
+
+Collected on 2026-10-02 from the "Gaps" notes in the progress log below; items already closed by later
+entries are omitted. Authentication and polymorphic sorts (needed for new domain packs) are design
+decisions for the user and are not scheduled here.
+
+- [x] **N39 Transition classes with obligations (N06(a)).** `apply-result-forward` (and any primitive)
+      that creates obligations must be classified as strengthening, not equivalence. Kernel returns the
+      class from the actual outcome; `PRIMITIVE_TRANSITION_CLASSES` becomes a per-kind allowed set. Update
+      authoring class composition, badges and the N37 golden accordingly. _Accept:_ invariant/property
+      tests that a transition creating obligations is never an equivalence.
+- [x] **N40 Stored transition evidence and sequence.** Store `TransitionEvidence` on previews, commands and
+      edges at apply time (the web currently derives it), and a per-session transition sequence so
+      playback is chronological. Migration, memory mirror, artifact schema version bump with import of
+      version 1. _Accept:_ static-history tests; playback order test.
+- [ ] **N41 Retrieval quality.** Backward result applications that need an instantiation menu must be
+      reachable within the displayed limit; `close-by-hypothesis` matches up to alpha-equivalence.
+      _Accept:_ corpus problems solved backward without forward scripting; ranking tests.
+- [x] **N42 Construction moves and UI.** Moves and menus for the N11 construction operations (introduce
+      placeholder, add requirement, add candidate, resolve, abandon); placeholders render by display name
+      and are registered in selections and retrieval; add-requirement / add-candidate actions in the
+      construction view. _Accept:_ an e2e that constructs a witness and resolves it.
+- [-] **N43 Keyboard sub-expression selection.** _Deferred 2026-10-02 at the user's request; an interrupted
+  attempt is not in the repository._ A keyboard way to select, widen and narrow an occurrence
+  inside a formula, equivalent to the pointer gestures. _Accept:_ component and e2e keyboard-only
+  selection.
+- [x] **N44 Conditional lemmas over HTTP and in the UI.** Route and envelope for `extractConditionalLemma`
+      (library store is now wired), keeping only the hypotheses used, and a UI action. _Accept:_ HTTP and
+      e2e tests.
+- [x] **N45 Replay coverage.** Semantic plans for steps applied without a displayed suggestion (backtrack
+      splits, auto-closes, macro steps), so every stored step can be replayed. _Accept:_ replay of a
+      branch containing a backtrack split and a macro application.
+- [x] **N46 Typed binders in quantifier operations (N01).** Kernel quantifier operations accept
+      `["Element", x, S]` binders with a membership hypothesis or obligation; `moves/context-terms` and
+      retrieval binder keys use `binderShape`. _Accept:_ property tests over typed and untyped binders.
+
+- [-] **N47 Polymorphic sorts (user request 2026-10-02).** _Deferred 2026-10-02 by the user after
+  reviewing the design (`docs/polymorphic-sorts.md`, `70cc65a`); not needed for the current packs._ Sort variables and parametric operators and
+  results, so packs can be stated once for any suitable sort (e.g. order over any ordered sort, sets of
+  any element sort), unlocking analysis, linear algebra and combinatorics packs. Design first
+  (`docs/polymorphic-sorts.md`, approved by the user), then staged implementation across
+  mathjson-model, kernel, library, retrieval, selections, problem setup and artifacts, with existing
+  monomorphic data staying valid. _Accept:_ soundness properties (instantiation preserves
+  well-sortedness; no ill-sorted transition is accepted), migrated packs, and at least one new pack.
+
+- [-] **N48 Tighten built-in sort rules.** _Deferred 2026-10-02 at the user's request._ Found by the N47 design (§1.2): the checker accepts `Divide`
+  on ℕ/ℤ (so `n/m = n` validates), `Subtract` on ℕ, and order/`Abs` on ℂ. First a script reports any
+  stored session (memory/PostgreSQL) or artifact that would stop validating; then the rules are
+  tightened. _Accept:_ rejection tests per rule; corpus and coverage golden unchanged.
+
 ## Progress log
 
 Entries are appended as tasks complete: `date — task — commit — notes`.
@@ -1021,3 +1071,71 @@ next start`; shared `playwright.shared.ts` with `WORKER_BACKED_SPECS` and `produ
   against a real database (throwaway PostgreSQL 18 from `embedded-postgres`): all 12 migrations applied
   from scratch, 29/29 passed; a second run on the populated database also passed 29/29, and `npm run
 migrate -- --status` reported up to date.
+- 2026-10-02 — N39 — `4ecae67` — a transition's class comes from its actual outcome. The kernel exports
+  `KERNEL_TRANSITION_CLASSES` (an allowed set per primitive; moves' `PRIMITIVE_TRANSITION_CLASSES` is that
+  table), `composeTransitionClasses` and `declaredTransitionClass` (the weakest allowed class).
+  `apply-result-forward` is an equivalence only when every premise is matched by a hypothesis and a
+  strengthening when unmet premises become obligations. `applyTransition` fails when a class is outside the
+  allowed set or when an equivalence adds a `premise-of-result` or `suffices` obligation. Moves and
+  authored plans declare `declaredTransitionClass`; examples may run as the declared class or stronger.
+  fast-check covers forward premise subsets and the no-obligation-adding-equivalence invariant. The N37
+  golden is unchanged (all corpus forward steps match every premise).
+  - Gap: before a preview, retrieval and the web show a forward move's declared (worst-case) class.
+- 2026-10-02 — N40 — `02190c2` — evidence and a per-session transition sequence are stored at apply time
+  on previews, macro-preview steps, edges, events, receipts and command results (`assignTransitionSequence`
+  under the session lock at apply, macro, backtrack and replay; retries keep the stored value). Migration
+  `0014_transition_evidence.sql` (numbered 0013 on the branch, renumbered when main's AI migration took 0013) adds `evidence` and `transition_sequence` to `proof_edges` and `proof_events` with mirror CHECKs,
+  per-session uniqueness and an event-to-edge foreign key; old rows are never rewritten. Artifacts are
+  version 2 (strict evidence and sequence revalidation; version 1 still imports; sessions with older rows
+  export as version 1). The web reads stored evidence with a derived fallback, and playback orders by
+  sequence.
+  - Gaps: sequence numbers freed by "Delete previous move" can be reused; interaction events and inquiry
+    records keep their own logs.
+- 2026-10-02 — N44 — `17e7386`, fix `1e64223` — conditional lemmas over HTTP and in the UI.
+  `lemma-hypotheses.ts` (`usedHypotheses`) derives the hypotheses a closed subtree used from the stored
+  route steps, tracing produced hypotheses (including typed-binder membership hypotheses) to context
+  hypotheses; any needed hypothesis of untraceable origin, an unchecked step kind, or a possibly
+  discharged instantiation keeps every hypothesis and records why. The worker builds the lemma
+  server-side (renderings from `@proof/language`, id from the command id; the envelope's `lemma` is now
+  `{ name? }`), saves it idempotently as a draft in the derived layer, and `review-conditional-lemma`
+  (human only) records an approval or rejection; the admission gate refuses an approved derived result
+  without an approved review. Only approved lemmas join the session catalog. Routes `GET
+/proof-sessions/:id/conditional-lemmas` and `POST …/preview` with web proxies; the "Save a finished step
+  as a lemma" panel shows kept and unused hypotheses with reasons when saving is unavailable, and the
+  library drawer reviews drafts. E2E saves, approves and reuses a lemma.
+  - Gaps: no per-history-row button, no lemma edit or withdraw, the suggestion list is not refreshed on
+    approval, and a needed instantiated universal keeps all hypotheses (the kernel does not record which
+    hypothesis discharged its membership).
+- 2026-10-02 — N46 — `a895fe4` — typed binders in the kernel quantifier operations: `introduce-universal`
+  on `∀x∈S` declares a fresh parameter and adds `x ∈ S`; `unpack-existential-hypothesis` on `∃x∈S`
+  introduces a fresh witness with `w ∈ S`; `choose-existential-witness` rewrites the goal to
+  `t ∈ S ∧ body[t/x]`; `instantiate-universal-hypothesis` discharges `t ∈ S` from an alpha-equivalent
+  hypothesis (equivalence) or adds a `binder-membership` obligation (strengthening). Materialization
+  generates the new ids; `moves/context-terms` and retrieval binder keys use `binderShape`, so Function,
+  Sum, Product and Integrate binders work there too. Two typed-binder corpus problems join the benchmark
+  (39 problems, 130 steps; existing golden entries unchanged).
+  - Gaps: packages/llm and the protocol `index.ts` export still use `BUILTIN_BINDER_SPECIFICATIONS`.
+- 2026-10-02 — N45 — `6479b75` — every stored step is replayable. `deriveOperationStep` plans steps with
+  no displayed suggestion (backtracking case splits and auto-closes, raw kernel operations) from the
+  stored operation alone, re-matching the target and named hypotheses as patterns and making generated
+  ids fresh; `deriveMacroStep` replays a whole macro application as one step through the approved macro
+  (failing with `move-unavailable` and a repair hint when it is not approved in the target session).
+  Reports gain an optional `source` (`suggestion`, `backtrack`, `raw-operation`, `macro`). The replay
+  dialog names each step's source in plain words.
+  - Gaps: replayed macro commands carry no macro link, so re-replaying them goes step by step; a split
+    proposition's free symbols that do not occur in the target conclusion map by identity.
+- 2026-10-02 — N42 — `109e52b` — construction moves (`CONSTRUCTION_MOVES`, kept out of the retrieved
+  catalog so the N37 golden is unchanged) with menu-sourced parameters for introduce, add requirement, add
+  candidate, resolve and abandon; `introduce-placeholder` accepts typed `∃x∈S`; a
+  `CONSTRUCTION_TRANSITION_CLASSES` table is enforced like N39's. Selections, retrieval and move menus
+  register open placeholder operators; LaTeX and natural language render placeholders as `\boxed{name}`.
+  Replay generates a fresh placeholder symbol per replayed command. The inquiry panel's task view has Add
+  requirement, Add candidate, Use this candidate and Abandon, with reasons when unavailable. E2E constructs
+  and resolves a witness.
+  - Gaps: no placeholder-to-placeholder dependencies from the UI; the web supplies no attestations, so
+    only target-backed sufficient and heuristic requirements are offered; candidates come only from allowed
+    variables and goal subterms; retrieval's placeholder registration has only a smoke test.
+- 2026-10-05 — merge of main's AI work — `03f358c` — main's `7227a59` (formalizer, Jev shortlisting,
+  evaluation harness through the Vercel AI Gateway, kept by the user's choice) merged into this branch.
+  The AI evaluation's corpus counts now derive from `BENCHMARK_CORPUS`. Verify, and the workspace e2e
+  suite on the memory and PostgreSQL stores (32/32 each, migrations 0001–0014 applied fresh), pass.

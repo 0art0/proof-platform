@@ -6,11 +6,7 @@
  * snapshots with the selections captured in them. No mathematics is typed and none is computed
  * here; the proof service validates the finished template by running its examples.
  */
-import {
-  HAND_AUTHORED_MOVES,
-  PRIMITIVE_TRANSITION_CLASSES,
-  type MoveDefinition,
-} from "@proof/moves";
+import { HAND_AUTHORED_MOVES, declaredTransitionClass, type MoveDefinition } from "@proof/moves";
 import {
   authoredExampleSchema,
   authoredMoveTemplateSchema,
@@ -145,7 +141,12 @@ function primitiveBody(
   examples: readonly AuthoredExample[],
 ): TemplateBody {
   const steps: AuthoredPlanStep[] = [
-    { id: "step-1", moveId: primitive.id, operationKind: primitive.implementation.operationKind },
+    {
+      id: "step-1",
+      moveId: primitive.id,
+      // The catalog this builder draws from holds kernel primitives only.
+      operationKind: primitive.implementation.operationKind as AuthoredPlanStep["operationKind"],
+    },
     ...rest,
   ];
   const plan = { kind: "deterministic-plan" as const, steps };
@@ -231,7 +232,7 @@ export function planView(draft: TemplateDraft): readonly PlanStepView[] {
       moveName: primitive?.name ?? step.moveId,
       moveId: step.moveId,
       operationKind: step.operationKind,
-      transitionClass: PRIMITIVE_TRANSITION_CLASSES[step.operationKind],
+      transitionClass: declaredTransitionClass(step.operationKind),
       recorded: step.operation !== undefined,
     };
   });

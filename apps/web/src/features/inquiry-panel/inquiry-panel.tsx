@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { Presentation } from "@proof/language";
+import { constructionPlaceholderOperators } from "@proof/mathjson-model";
 import type { OperatorDeclaration, ProofNode, ProtocolCommandEnvelope } from "@proof/protocol";
 import type { AnchoredProofSelection } from "@proof/selections";
 import type { WorkspaceView } from "../proof-workspace";
@@ -16,6 +17,7 @@ import {
   describeCommandFailure,
   postProtocolCommand,
 } from "../stored-proof-workspace/toolbar-requests";
+import { ConstructionTaskActions } from "./construction-task-actions";
 import { ConstructionTaskView } from "./construction-task-view";
 import { constructionTaskModel } from "./construction-view";
 import {
@@ -106,7 +108,15 @@ export function InquiryPanel(props: InquiryPanelProps) {
         : summarizeInquiry({ records: loaded, state: node.state }),
     [records, node.state],
   );
-  const explainer = useMemo(() => createSummaryExplainer(operators), [operators]);
+  const constructions = node.state.constructions;
+  const explainer = useMemo(
+    () =>
+      createSummaryExplainer([
+        ...operators,
+        ...constructionPlaceholderOperators({ constructions }, { includeClosed: true }),
+      ]),
+    [operators, constructions],
+  );
   const description = useMemo(() => {
     if (summary === undefined) return undefined;
     const nodes = new Map<string, ProofNode["state"]>([[node.id, node.state]]);
@@ -187,7 +197,7 @@ export function InquiryPanel(props: InquiryPanelProps) {
 
   const investigate = investigateAvailability(node, selections);
   const tryMethod = tryMethodAvailability(suggestions, move);
-  const construct = constructAvailability(node, selections);
+  const construct = constructAvailability(node, selections, operators);
   const findConditions = findConditionsAvailability(node, selections);
   const useThis = useThisAvailability(node, selections, summary);
 
@@ -315,6 +325,15 @@ export function InquiryPanel(props: InquiryPanelProps) {
                       presentation={presentation}
                       view={view}
                     />
+                    <ConstructionTaskActions
+                      node={node}
+                      operators={operators}
+                      task={task}
+                      presentation={presentation}
+                      view={view}
+                      busy={busy}
+                      onSend={(action, envelope) => void advance(action, envelope)}
+                    />
                   </details>
                 </li>
               ))}
@@ -362,10 +381,12 @@ export function InquiryPanel(props: InquiryPanelProps) {
             busy={busy}
             onClick={() => {
               if (!construct.ok) return;
-              void advance(
-                "Construct an object",
-                constructEnvelope({ nodeId: node.id, plan: construct.value }),
-              );
+              const envelope = constructEnvelope({ node, operators, plan: construct.value });
+              if (!envelope.ok) {
+                setFeedback({ state: "rejected", text: envelope.reason });
+                return;
+              }
+              void advance("Construct an object", envelope.value);
             }}
           />
           <ActionButton

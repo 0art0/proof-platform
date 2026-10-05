@@ -41,6 +41,7 @@ import type { LlmCallStore } from "../llm-call-repository";
 import { postgresProofStore } from "../postgres-proof-store";
 import { handleAiRoute } from "./ai-routes";
 import { handleArtifactRoute } from "./artifact-routes";
+import { handleConditionalLemmaRoute } from "./conditional-lemma-routes";
 import { handleAuthoredMoveRoute, requestSessionId, scopedContext } from "./authored-move-routes";
 import { handleLibraryRoute } from "./library-routes";
 import { handleSessionAdminRoute } from "./session-admin-routes";
@@ -339,6 +340,7 @@ async function handleRequest(
   const context = await scopedContext(baseContext, requestSessionId(request.url));
   if (await handleAiRoute(context, request, response)) return;
   if (await handleAuthoredMoveRoute(context, request, response)) return;
+  if (await handleConditionalLemmaRoute(context, request, response)) return;
   if (await handleProblemSetupRoute(context, request, response)) return;
   if (await handleArtifactRoute(context, request, response)) return;
   if (await handleLibraryRoute(context, request, response)) return;

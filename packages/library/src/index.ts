@@ -151,6 +151,8 @@ export type LibraryResult = LibraryArtifactCommon &
     applicationDirections: readonly ApplicationDirection[];
     patterns: readonly ResultPattern[];
     variantFamilyId?: VariantFamilyId | undefined;
+    /** Present on the artifact that records a human review of a derived draft (N44). */
+    review?: LibraryResultReview | undefined;
   }>;
 
 export type LibraryDefinition = LibraryArtifactCommon &
@@ -167,6 +169,7 @@ export type LibraryTechnique = LibraryArtifactCommon &
   }>;
 
 export type LibraryMoveReview = z.infer<typeof libraryMoveReviewSchema>;
+export type LibraryResultReview = z.infer<typeof libraryResultReviewSchema>;
 
 /**
  * A deterministic move template authored without AI (roadmap N35). The template is opaque JSON here:
@@ -203,6 +206,22 @@ const commonShape = {
   priority: z.number().int().nonnegative(),
 };
 
+const resultReviewDecisionSchema = z.enum(["approved", "rejected", "changes-requested"]);
+
+/**
+ * A human review of a derived draft (roadmap N44). Like a move review it is recorded as a new
+ * artifact that restates the reviewed result; `reviewOf` names the draft it decides.
+ */
+export const libraryResultReviewSchema = z
+  .object({
+    decision: resultReviewDecisionSchema,
+    reviewerId: stableIdentifierSchema,
+    reviewedAt: z.string().datetime({ offset: true }),
+    notes: z.string().max(4_000),
+    reviewOf: libraryArtifactIdSchema,
+  })
+  .strict();
+
 const rawResultSchema = z
   .object({
     ...commonShape,
@@ -214,6 +233,7 @@ const rawResultSchema = z
     applicationDirections: z.array(applicationDirectionSchema).min(1),
     patterns: z.array(resultPatternSchema).min(1),
     variantFamilyId: variantFamilyIdSchema.optional(),
+    review: libraryResultReviewSchema.optional(),
   })
   .strict();
 
@@ -320,6 +340,7 @@ export function createLibraryResultSchema(
         }
       });
       addMathematicalIssues(result, operators, context);
+      addResultReviewIssues(result, context);
     }),
   );
 }
@@ -367,6 +388,25 @@ export const variantFamilySchema = guardedSchema(
     }),
 );
 export type VariantFamily = z.infer<typeof variantFamilySchema>;
+
+function addResultReviewIssues(
+  result: z.infer<typeof rawResultSchema>,
+  context: z.RefinementCtx,
+): void {
+  const { review, approval } = result;
+  if (review === undefined) return;
+  const issue = (message: string, path: PropertyKey[]) =>
+    context.addIssue({ code: "custom", message, path });
+  if (result.layer !== "derived") issue("Only a derived result carries a review.", ["review"]);
+  if (review.decision !== "approved" && review.notes.trim().length === 0) {
+    issue("A rejection or change request must carry notes.", ["review", "notes"]);
+  }
+  const consistent =
+    review.decision === "approved"
+      ? approval.status === "approved" && approval.reviewerId === review.reviewerId
+      : approval.status === "draft";
+  if (!consistent) issue("The approval must restate the review decision.", ["approval"]);
+}
 
 function addMathematicalIssues(
   result: z.infer<typeof rawResultSchema>,

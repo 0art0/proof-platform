@@ -475,7 +475,8 @@ describe("commitSemanticReplay", () => {
     ]);
     expect(goals[0]?.sequent.context.hypotheses[0]?.statement.expression).toBe("r");
 
-    // The case split has no displayed selections; a replay over it reports that step.
+    // The case split has no displayed selections (N45): it replays from its operation, as a
+    // backtracking step.
     const overSplit = await previewSemanticReplay(
       store,
       SESSION,
@@ -484,10 +485,110 @@ describe("commitSemanticReplay", () => {
     );
     expect(overSplit).toMatchObject({
       status: "loaded",
+      report: { complete: true, steps: [{ index: 1, source: "backtrack" }] },
+    });
+  });
+});
+
+describe("replaying backtracking steps (N45)", () => {
+  it("replays a split and its auto-close onto a renamed goal, previewing without writing", async () => {
+    const store = await session([
+      { id: "goal:main", conclusion: swap("p", "q") },
+      { id: "goal:second", conclusion: swap("r", "s") },
+    ]);
+    await swapProof(store, "goal:main", "main");
+    // Split the root goal on its own conclusion: the positive case is closed by its hypothesis.
+    const backtracked = await backtrackWithInformation(
+      store,
+      SESSION,
+      {
+        commandId: "command:bt",
+        actor: human,
+        expectedCurrentNodeId: ids("main:4").resultNodeId,
+        sourceNodeId: ids("main:4").resultNodeId,
+        proposition: swap("p", "q"),
+        ancestorNodeId: "node:root",
+      },
+      human,
+    );
+    expect(backtracked).toMatchObject({ status: "committed" });
+    if (backtracked.status !== "committed") return;
+    expect(backtracked.backtrack.autoClosedTarget).toBeDefined();
+    const source = { fromNodeId: "node:root", toNodeId: backtracked.node.id };
+    // Replay onto the branch before the backtracking: only `goal:second` still has the shape.
+    const request = { source, targetNodeId: ids("main:4").resultNodeId };
+
+    const before = snapshot(store);
+    const previewed = await previewSemanticReplay(store, SESSION, request, human);
+    expect(snapshot(store)).toBe(before);
+    expect(previewed).toMatchObject({
+      status: "loaded",
       report: {
-        complete: false,
-        firstFailure: { index: 1, diagnostic: { code: "step-not-replayable" } },
+        complete: true,
+        substitutions: [
+          { symbol: "p", expression: "r" },
+          { symbol: "q", expression: "s" },
+        ],
       },
     });
+    if (previewed.status !== "loaded") return;
+    expect(previewed.report.steps.map(({ source: kind, status }) => [kind, status])).toEqual([
+      ["backtrack", "adapted"],
+      ["backtrack", "exact"],
+    ]);
+
+    const committed = await commitSemanticReplay(
+      store,
+      SESSION,
+      {
+        commandId: "command:replay-bt",
+        actor: human,
+        expectedCurrentNodeId: backtracked.node.id,
+        ...request,
+      },
+      human,
+      { now: () => FIXED_TIME },
+    );
+    expect(committed).toMatchObject({ status: "committed", replayed: false });
+    if (committed.status !== "committed") return;
+    // The second goal's positive case is closed; its negative case remains, assuming ¬P.
+    expect(conclusions(committed.node)).toEqual(["p", swap("r", "s")]);
+    expect(
+      committed.node.state.goals[1]?.sequent.context.hypotheses.map(
+        ({ statement }) => statement.expression,
+      ),
+    ).toEqual([["Not", swap("r", "s")]]);
+
+    // Ordinary validated commands: no move, no suggestion, evidence and a fresh sequence.
+    const edges = committed.receipts.map(({ commandId }) => {
+      const command = store.commands.get(key(SESSION, commandId));
+      return store.edges.get(
+        key(SESSION, (command as { prepared: { edge: { id: string } } }).prepared.edge.id),
+      );
+    });
+    expect(edges.map((edge) => edge?.moveId)).toEqual([undefined, undefined]);
+    expect(edges.map((edge) => edge?.suggestionSetId)).toEqual([undefined, undefined]);
+    const sequences = edges.map((edge) => edge?.sequence);
+    expect(sequences.every((sequence) => typeof sequence === "number")).toBe(true);
+    expect(sequences[1]).toBe((sequences[0] as number) + 1);
+    expect(store.replaySteps.get(key(SESSION, "command:replay-bt:replay:1"))).toMatchObject({
+      plan: { source: "operation", origin: "backtrack" },
+      report: { source: "backtrack" },
+    });
+
+    // A retry replays the recorded commits.
+    const retried = await commitSemanticReplay(
+      store,
+      SESSION,
+      {
+        commandId: "command:replay-bt",
+        actor: human,
+        expectedCurrentNodeId: backtracked.node.id,
+        ...request,
+      },
+      human,
+    );
+    expect(retried).toMatchObject({ status: "committed", replayed: true });
+    if (retried.status === "committed") expect(retried.receipts).toEqual(committed.receipts);
   });
 });

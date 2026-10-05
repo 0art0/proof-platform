@@ -1,6 +1,7 @@
 import {
   binderShape,
   builtinBinderSorts,
+  constructionPlaceholderOperators,
   createProofStateSchema,
   mathJsonEquals,
   readBinderDeclaration,
@@ -680,7 +681,11 @@ export function resolveProofSelection(
   try {
     operators = operatorDeclarationsSchema.parse(environment.operators ?? []);
     const result = createProofStateSchema({ operators }).safeParse(state);
-    if (result.success) parsedState = result.data;
+    if (result.success) {
+      parsedState = result.data;
+      // Open placeholders are registered operators wherever the state's statements are read.
+      operators = [...operators, ...constructionPlaceholderOperators(parsedState)];
+    }
   } catch {
     parsedState = undefined;
   }

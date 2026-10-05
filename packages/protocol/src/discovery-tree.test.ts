@@ -220,6 +220,51 @@ describe("analyzeDiscoveryTree", () => {
     expect(Object.isFrozen(analysis.route.steps[0]?.operation)).toBe(true);
   });
 
+  it("reports construction operations by their kernel class, with structural evidence", () => {
+    const tree = new Tree(rootNode([{ id: "goal:main", conclusion: ["Exists", "p", "p"] }]))
+      .apply("node:root", "node:intro", {
+        kind: "introduce-placeholder",
+        target: goal("goal:main"),
+        taskId: "task:p",
+        symbol: "ph",
+        displayName: "p",
+        origin: { kind: "existential-goal" },
+        dependencies: [],
+        allowedTasks: [],
+      })
+      .apply("node:intro", "node:candidate", {
+        kind: "add-candidate",
+        target: goal("goal:main"),
+        taskId: "task:p",
+        candidateId: "candidate:true",
+        value: "True",
+        attemptId: "attempt:1",
+      })
+      .apply("node:candidate", "node:resolved", {
+        kind: "resolve-placeholder",
+        target: goal("goal:main"),
+        taskId: "task:p",
+        candidateId: "candidate:true",
+        obligationIds: [],
+        attemptId: "attempt:2",
+      })
+      .apply("node:resolved", "node:done", { kind: "close-true", target: goal("goal:main") });
+    const analysis = analyze(tree.input());
+    expect(
+      analysis.route?.steps.map(({ operation, transitionClass, evidence }) => [
+        operation.kind,
+        transitionClass,
+        evidence,
+      ]),
+    ).toEqual([
+      ["introduce-placeholder", "equivalence", "structural"],
+      ["add-candidate", "equivalence", "structural"],
+      ["resolve-placeholder", "strengthening", "structural"],
+      ["close-true", "equivalence", "structural"],
+    ]);
+    expect(analysis.solved).toBe(true);
+  });
+
   it("accepts the worker's history-edge records", () => {
     const tree = linearTree();
     const analysis = analyze({

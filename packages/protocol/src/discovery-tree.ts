@@ -40,15 +40,12 @@ export const DISCOVERY_EVIDENCE_KINDS = [
 export type DiscoveryEvidence = (typeof DISCOVERY_EVIDENCE_KINDS)[number];
 
 /**
- * A stored edge, optionally carrying its recorded evidence and event sequence. When `evidence` is
- * absent it is derived: `sorry` if the child gained a sorry assumption whose source is the edge's
- * target, otherwise the primitive's evidence from `PRIMITIVE_TRANSITION_EVIDENCE`.
+ * A stored edge. It carries its recorded `evidence` and transition `sequence` when it was stored
+ * with them; when `evidence` is absent (a record or version-1 artifact from before it was stored)
+ * it is derived: `sorry` if the child gained a sorry assumption whose source is the edge's target,
+ * otherwise the primitive's evidence from `PRIMITIVE_TRANSITION_EVIDENCE`.
  */
-export type DiscoveryTreeEdge = ProofEdge &
-  Readonly<{
-    evidence?: DiscoveryEvidence;
-    sequence?: number;
-  }>;
+export type DiscoveryTreeEdge = ProofEdge;
 
 /** Accepts bare edges or the worker's `{ edge, name }` history records. */
 export type DiscoveryTreeEdgeInput = DiscoveryTreeEdge | Readonly<{ edge: DiscoveryTreeEdge }>;

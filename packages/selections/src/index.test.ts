@@ -909,3 +909,55 @@ describe("snapshot-anchored exact selections", () => {
     });
   });
 });
+
+describe("construction placeholders", () => {
+  /** `m` is an open placeholder applied, Skolem style, to the proposition-sorted declaration P. */
+  function withPlaceholder(): ProofState {
+    const base = proofState(["Less", ["m", "P"], 3]);
+    return {
+      ...base,
+      constructions: [
+        {
+          id: "task:m",
+          symbol: "m",
+          displayName: "bound",
+          sort: realSort,
+          origin: {
+            kind: "existential-goal",
+            target: { kind: "goal", id: "goal:main" },
+            statement: { expression: ["Exists", "x", ["Less", "x", 3]] },
+          },
+          scope: base.goals[0]!.sequent.context,
+          allowedDependencies: { declarations: ["P"], tasks: [] },
+          requirements: [],
+          candidates: [],
+          status: "unresolved",
+        },
+      ],
+    } as unknown as ProofState;
+  }
+
+  it("selects a placeholder application and reads its argument role from its signature", () => {
+    const state = withPlaceholder();
+    expect(resolveProofSelection(state, anchored([0]))).toMatchObject({
+      ok: true,
+      selection: { fragment: ["m", "P"], position: { polarity: "neutral", role: "term" } },
+    });
+    // The placeholder's parameter is proposition-sorted, which only the registered operator says.
+    expect(resolveProofSelection(state, anchored([0, 0]))).toMatchObject({
+      ok: true,
+      selection: { fragment: "P", position: { polarity: "neutral", role: "proposition" } },
+    });
+  });
+
+  it("resolves a selection query over a placeholder occurrence", () => {
+    const query = {
+      kind: "selection-query",
+      selections: [{ id: "selection:placeholder", selection: anchored([0]) }],
+    };
+    expect(resolveProofSelectionQuery(withPlaceholder(), query)).toMatchObject({
+      ok: true,
+      query: { selections: [{ selection: { fragment: ["m", "P"] } }] },
+    });
+  });
+});

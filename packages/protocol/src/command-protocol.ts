@@ -34,11 +34,7 @@ import {
   stableIdentifierSchema,
   type PlainMathJson,
 } from "@proof/mathjson-model";
-import {
-  backgroundClassificationSchema,
-  deterministicRenderingsSchema,
-  libraryLayerSchema,
-} from "@proof/library";
+import { libraryLayerSchema } from "@proof/library";
 import { z } from "zod";
 import { expressionAtPath } from "@proof/selections";
 import { INQUIRY_RECORD_KINDS, inquiryRecordInputSchema } from "./inquiry";
@@ -570,14 +566,11 @@ const moveChoiceShape = {
   menuChoices: menuChoiceReferencesSchema.optional(),
 } as const;
 
-const conditionalLemmaShape = z
-  .object({
-    id: stableIdentifierSchema,
-    name: z.string().min(1).max(200),
-    classification: backgroundClassificationSchema,
-    renderings: deterministicRenderingsSchema,
-  })
-  .strict();
+/**
+ * The lemma's ID, classification and LaTeX/natural-language renderings are derived by the worker
+ * from the proof state; a caller may only suggest a display name (N44).
+ */
+const conditionalLemmaShape = z.object({ name: z.string().min(1).max(200).optional() }).strict();
 
 const commandSchemas = [
   z
@@ -666,7 +659,16 @@ const commandSchemas = [
       kind: z.literal("extract-conditional-lemma"),
       nodeId: proofNodeIdSchema.optional(),
       target: targetReferenceSchema,
-      lemma: conditionalLemmaShape,
+      lemma: conditionalLemmaShape.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      /** Decide a saved conditional-lemma draft: the acting human is the reviewer (N44). */
+      kind: z.literal("review-conditional-lemma"),
+      draftArtifactId: stableIdentifierSchema,
+      decision: z.enum(["approved", "rejected"]),
+      notes: z.string().max(4_000),
     })
     .strict(),
   z

@@ -16,6 +16,7 @@ import {
   HAND_AUTHORED_MOVES,
   PRIMITIVE_PATTERN_SLOTS,
   PRIMITIVE_TRANSITION_CLASSES,
+  declaredTransitionClass,
   PRIMITIVE_TRANSITION_EVIDENCE,
   moveDefinitionSchema,
   planMove,
@@ -78,8 +79,9 @@ describe("hand-authored move catalog", () => {
       expect(move.examples.positive).toHaveLength(2);
       expect(move.examples.negative).toHaveLength(1);
       expect(Object.isFrozen(move)).toBe(true);
-      expect(move.transitionClass).toBe(
-        PRIMITIVE_TRANSITION_CLASSES[move.implementation.operationKind],
+      expect(move.transitionClass).toBe(declaredTransitionClass(move.implementation.operationKind));
+      expect(PRIMITIVE_TRANSITION_CLASSES[move.implementation.operationKind]).toContain(
+        move.transitionClass,
       );
       expect(move.selectionContract.slots.map(({ id }) => id)).toContain(
         PRIMITIVE_PATTERN_SLOTS[move.implementation.operationKind],
@@ -206,15 +208,19 @@ describe("deterministic move planning", () => {
       expect(result).toMatchObject({
         ok: true,
         preview: {
-          transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind],
+          transitionClass: declaredTransitionClass(kind),
           evidence: PRIMITIVE_TRANSITION_EVIDENCE[kind][0],
         },
       });
     }
-    expect(PRIMITIVE_TRANSITION_CLASSES["assume-hypothesis"]).toBe("weakening");
-    expect(PRIMITIVE_TRANSITION_CLASSES["replace-goal"]).toBe("weakening");
-    expect(PRIMITIVE_TRANSITION_CLASSES.suffices).toBe("strengthening");
-    expect(PRIMITIVE_TRANSITION_CLASSES["drop-hypothesis"]).toBe("strengthening");
+    expect(PRIMITIVE_TRANSITION_CLASSES["assume-hypothesis"]).toEqual(["weakening"]);
+    expect(PRIMITIVE_TRANSITION_CLASSES["replace-goal"]).toEqual(["weakening"]);
+    expect(PRIMITIVE_TRANSITION_CLASSES.suffices).toEqual(["strengthening"]);
+    expect(PRIMITIVE_TRANSITION_CLASSES["drop-hypothesis"]).toEqual(["strengthening"]);
+    expect(PRIMITIVE_TRANSITION_CLASSES["apply-result-forward"]).toEqual([
+      "equivalence",
+      "strengthening",
+    ]);
     expect(PRIMITIVE_TRANSITION_EVIDENCE["close-by-accepted-inference"]).toEqual([
       "background-inference",
     ]);
@@ -342,11 +348,31 @@ describe("deterministic move planning", () => {
       ).toMatchObject({
         ok: true,
         preview: {
-          transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind],
+          transitionClass: declaredTransitionClass(kind),
           evidence: "library-result",
         },
       });
     }
+    // Every premise matched by a hypothesis: no obligation, so the same primitive is an equivalence.
+    expect(
+      planMove(
+        state("q", [
+          { id: "hypothesis:implication", expression: ["Implies", "p", "q"] },
+          { id: "hypothesis:p", expression: "p" },
+        ]),
+        {
+          moveId: "move:apply-result-forward",
+          operation: operation("apply-result-forward", {
+            resultId: "result:modus-ponens",
+            instantiation: { a: "p", b: "q" },
+            premiseHypothesisIds: ["hypothesis:implication", "hypothesis:p"],
+            resultHypothesisId: "hypothesis:q",
+            obligationIds: [],
+          }),
+        },
+        environment,
+      ),
+    ).toMatchObject({ ok: true, preview: { transitionClass: "equivalence" } });
     expect(
       planMove(
         state(["And", "p", "q"]),
@@ -427,10 +453,10 @@ describe("deterministic move planning", () => {
         ),
       ).toMatchObject({
         ok: true,
-        preview: { transitionClass: PRIMITIVE_TRANSITION_CLASSES[kind], evidence },
+        preview: { transitionClass: declaredTransitionClass(kind), evidence },
       });
     }
-    expect(PRIMITIVE_TRANSITION_CLASSES["rewrite-with-implication"]).toBe("strengthening");
+    expect(PRIMITIVE_TRANSITION_CLASSES["rewrite-with-implication"]).toEqual(["strengthening"]);
     expect(
       planMove(
         state(

@@ -68,6 +68,17 @@ export const libraryArtifactViewSchema = z
     applicationDirections: z.array(z.enum(["forward", "backward"])).optional(),
     variantFamilyId: z.string().optional(),
     steps: z.array(z.string()).optional(),
+    /** The recorded human review of a derived lemma draft (roadmap N44). */
+    review: z
+      .object({
+        decision: z.enum(["approved", "rejected", "changes-requested"]),
+        reviewerId: z.string(),
+        reviewedAt: z.string(),
+        notes: z.string(),
+        reviewOf: z.string(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 export type LibraryArtifactView = z.infer<typeof libraryArtifactViewSchema>;

@@ -13,8 +13,17 @@ import {
   type SessionLibrary,
   type SessionLibraryEvents,
 } from "./api-contract";
+import {
+  newLemmaCommandId,
+  reviewLemmaEnvelope,
+  type LemmaReviewHandler,
+} from "../conditional-lemma";
 import { DragHandle } from "../gestures/gesture-ui";
 import type { GestureBindings } from "../gestures/use-drag-gestures";
+import {
+  describeCommandFailure,
+  postProtocolCommand,
+} from "../stored-proof-workspace/toolbar-requests";
 import { LibraryDetail } from "./library-detail";
 import { LibraryEvents } from "./library-events";
 import {
@@ -105,6 +114,8 @@ function DrawerPanel({
   const [filter, setFilter] = useState<LibraryFilter>(EMPTY_FILTER);
   const [selectedKey, setSelectedKey] = useState<string>();
   const [returnKey, setReturnKey] = useState<string>();
+  const [reload, setReload] = useState(0);
+  const reviewIds = useRef(new Map<string, string>());
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -116,7 +127,27 @@ function DrawerPanel({
       if (!controller.signal.aborted) setState(next);
     });
     return () => controller.abort();
-  }, [sessionId]);
+  }, [sessionId, reload]);
+
+  // Reviewing a saved lemma draft (N44): one command envelope, then the library is read again.
+  const onReview = useCallback<LemmaReviewHandler>(
+    async (draftArtifactId, decision, notes) => {
+      const key = `${draftArtifactId}|${decision}`;
+      const commandId = reviewIds.current.get(key) ?? newLemmaCommandId("review");
+      reviewIds.current.set(key, commandId);
+      const outcome = await postProtocolCommand(
+        sessionId,
+        reviewLemmaEnvelope(commandId, draftArtifactId, decision, notes),
+      );
+      if (!outcome.ok) {
+        return { ok: false as const, message: describeCommandFailure("The review", outcome) };
+      }
+      reviewIds.current.delete(key);
+      setReload((count) => count + 1);
+      return { ok: true as const };
+    },
+    [sessionId],
+  );
 
   // Focus enters the drawer: the search field once loaded, else the heading.
   const ready = state.kind === "ready";
@@ -225,6 +256,7 @@ function DrawerPanel({
                 presentation={presentation}
                 view={view}
                 onSelect={select}
+                lemmaReview={{ readOnly: state.library.readOnly, onReview }}
               />
             </div>
           ) : (

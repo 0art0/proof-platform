@@ -792,6 +792,36 @@ describe("deterministic structural retrieval", () => {
     ).toMatchObject({ ok: true, suggestions: [] });
   });
 
+  it("does not share artifact bindings across a typed binder scope", () => {
+    const source = structuredClone(HAND_AUTHORED_MOVES.find(({ id }) => id === "move:close-true")!);
+    const scoped = moveDefinitionSchema.parse({
+      ...source,
+      id: "move:typed-scoped-pair",
+      selectionContract: {
+        slots: [
+          { id: "left", role: "rewrite-occurrence", semanticRole: "proposition", required: true },
+          { id: "right", role: "rewrite-occurrence", semanticRole: "proposition", required: true },
+        ],
+        allowAdditional: false,
+      },
+      patterns: [
+        { id: "move-pattern:typed-left", selectionSlotId: "left", expression: "u" },
+        { id: "move-pattern:typed-right", selectionSlotId: "right", expression: "u" },
+      ],
+      parameters: [],
+    });
+    const proofState = state(["And", ["ForAll", ["Element", "x", "RealNumbers"], "p"], "p"]);
+    const result = indexFor({ results: [], moves: [scoped] }).query(
+      proofState,
+      selectionQuery([
+        { id: "selection:bound", selection: selection({ kind: "conclusion" }, [0, 1]) },
+        { id: "selection:free", selection: selection({ kind: "conclusion" }, [1]) },
+      ]),
+      { limit: 100 },
+    );
+    expect(result).toMatchObject({ ok: true, suggestions: [] });
+  });
+
   it("returns the same stable order when catalog insertion order changes", () => {
     const proofState = state(["And", "p", "q"]);
     const forward = suggestionIds(indexFor(), proofState);
@@ -1280,6 +1310,73 @@ describe("starter domain packs", () => {
     // the packs.
     expect(createRetrievalIndex(catalog).ok).toBe(false);
     expect(createRetrievalIndex(catalog, { operators: SET_OPERATOR_DECLARATIONS }).ok).toBe(false);
+  });
+
+  it("matches a result on a term headed by an open construction placeholder", () => {
+    const orderPack = packs.find((pack) => pack.id === "pack:order")!;
+    const index = createRetrievalIndex({
+      results: orderPack.results,
+      moves: [],
+      variantFamilies: orderPack.variantFamilies,
+    });
+    if (!index.ok) throw new Error(index.diagnostics[0].message);
+    const real = { kind: "named", id: "sort:real" } as const;
+    const context = {
+      declarations: ["a", "c"].map((symbol) => ({
+        id: `declaration:${symbol}`,
+        symbol,
+        sort: real,
+        role: "universal-parameter",
+      })),
+      hypotheses: [] as unknown[],
+    };
+    const conclusion = ["Equal", ["m", "a"], "c"];
+    const hypotheses = [
+      ["LessEqual", ["m", "a"], "c"],
+      ["LessEqual", "c", ["m", "a"]],
+    ].map((expression, index) => ({
+      id: `hypothesis:${index}`,
+      statement: { expression },
+    }));
+    const proofState = proofStateSchema.parse({
+      id: "state:query",
+      goals: [
+        {
+          id: "goal:main",
+          sequent: {
+            context: { ...context, hypotheses },
+            conclusion: { expression: conclusion },
+          },
+        },
+      ],
+      obligations: [],
+      constructions: [
+        {
+          id: "task:m",
+          symbol: "m",
+          displayName: "δ",
+          sort: real,
+          origin: {
+            kind: "existential-goal",
+            target: { kind: "goal", id: "goal:main" },
+            statement: { expression: ["Exists", "d", ["Less", "d", "c"]] },
+          },
+          scope: context,
+          allowedDependencies: { declarations: ["a"], tasks: [] },
+          requirements: [],
+          candidates: [],
+          status: "unresolved",
+        },
+      ],
+    });
+    const result = index.index.query(proofState, selection(), { limit: 100 });
+    if (!result.ok) throw new Error(result.diagnostics[0].message);
+    // Both premises are already hypotheses, so applying antisymmetry predicts no new obligation.
+    const suggestion = result.suggestions.find(
+      ({ artifactId }) => artifactId === "result:less-equal-antisymmetry",
+    );
+    expect(suggestion).toBeDefined();
+    expect(suggestion).not.toHaveProperty("predictedObligations");
   });
 
   it("groups a transitivity law with its variants for an order goal", () => {

@@ -281,3 +281,41 @@ test("the tree link opens the static viewers, which read the stored session", as
   await expect(page.getByRole("heading", { name: "No pruned proof" })).toBeVisible(COMMAND);
   await expect(page.getByTestId("solved-status")).toHaveText(/Not solved/);
 });
+
+test("a branch made by backtracking with information is replayed as a backtracking step", async ({
+  page,
+}) => {
+  await openFreshSession(page);
+  const rootId = await currentNodeId(page);
+  await applySplitAtRoot(page);
+  await selectExpression(page.getByLabel("Goal 1 hypothesis 1"), ["And", "p", "q"]);
+  await page.getByRole("button", { name: "Backtrack with information…" }).click();
+  const backtrack = page.getByRole("dialog", { name: "Backtrack with information" });
+  await expect(backtrack.getByRole("radio")).toHaveCount(1, COMMAND);
+  await backtrack.getByRole("button", { name: "Split here" }).click();
+  await expect(page.getByText(/Backtrack with information committed; now at node:/)).toBeVisible(
+    COMMAND,
+  );
+  const splitId = await currentNodeId(page);
+
+  // Back at the root, replay the case split the backtracking made: it has no displayed suggestion.
+  await page.locator(`[data-history-node-id="${rootId}"]`).click();
+  await expect(page.getByText(`Backtracked to ${rootId}.`, { exact: true })).toBeVisible(COMMAND);
+  await page.getByRole("button", { name: "Replay a sequence here…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Replay a sequence here" });
+  await dialog.getByLabel("Replay the path ending at").selectOption(splitId);
+  await expect(dialog.getByLabel("Starting after")).toHaveValue(rootId);
+  await expect(dialog.getByRole("region", { name: "Replay report" })).toContainText(
+    "1 exact, 0 adapted; every step matches here.",
+    COMMAND,
+  );
+  await expect(dialog.getByRole("region", { name: "Steps to replay" })).toContainText(
+    "case split by backtracking",
+  );
+  await dialog.getByRole("button", { name: "Replay 1 step here" }).click();
+  await expect(page.getByText(/Replayed 1 step \(1 exact, 0 adapted\); now at node:/)).toBeVisible(
+    COMMAND,
+  );
+  await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 2 goals/, COMMAND);
+  expect(await currentNodeId(page)).not.toBe(splitId);
+});

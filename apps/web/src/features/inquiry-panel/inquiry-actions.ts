@@ -3,7 +3,8 @@
  * displayed suggestion, and the N25 command envelope each sends. Every action is one envelope
  * through the single command path as the human web actor, based on the current node. No action
  * sends free-typed mathematics: targets, hypotheses and occurrences are named by stored identity,
- * and a construction placeholder is introduced from the selected existential goal alone.
+ * and a construction placeholder is introduced from the selected existential goal alone (the
+ * construction actions on a task live in `construction-actions.ts`).
  *
  * Reasons stay honest. Only "Try this method" and "Investigate this hypothesis" are methods with
  * stated semantics, so only they create method-encoded records (on the worker). The other
@@ -13,6 +14,7 @@
 import {
   protocolCommandEnvelopeSchema,
   type InteractionSelection,
+  type OperatorDeclaration,
   type MenuChoices,
   type ProofNode,
   type ProtocolCommandEnvelope,
@@ -27,6 +29,7 @@ import {
 } from "../stored-proof-workspace/toolbar-actions";
 import type { MoveState } from "../stored-proof-workspace/suggestion-card";
 import type { SuggestionState } from "../stored-proof-workspace/suggestion-panel";
+import { constructPlan, type ConstructPlan } from "./construction-actions";
 import type { InquirySummary } from "./inquiry-summary";
 
 export { WEB_ACTOR };
@@ -162,87 +165,21 @@ export function tryMethodEnvelope(
 // Construct an object
 // ---------------------------------------------------------------------------------------------
 
-export type ConstructPlan = Readonly<{
-  target: ToolbarTarget;
-  /** The existential variable the placeholder replaces. */
-  boundSymbol: string;
-  /** Declared symbols of the target's context the construction may depend on, in order. */
-  dependencies: readonly string[];
-}>;
+export { constructEnvelope, existentialBinder, type ConstructPlan } from "./construction-actions";
 
-/** `["Exists", x, body]` with a symbol binder: the only shape N11 introduces a placeholder for. */
-export function existentialBinder(expression: unknown): string | undefined {
-  if (!Array.isArray(expression) || expression.length !== 3 || expression[0] !== "Exists") {
-    return undefined;
-  }
-  const binder: unknown = expression[1];
-  return typeof binder === "string" ? binder : undefined;
-}
-
-/** Every symbol name mentioned in a plain MathJSON expression (heads included). */
-function mentionedSymbols(expression: unknown, into: Set<string>): void {
-  if (typeof expression === "string") into.add(expression);
-  else if (Array.isArray(expression)) expression.forEach((part) => mentionedSymbols(part, into));
-  else if (typeof expression === "object" && expression !== null) {
-    const record = expression as Record<string, unknown>;
-    if (typeof record.sym === "string") into.add(record.sym);
-    if (Array.isArray(record.fn)) mentionedSymbols(record.fn, into);
-  }
-}
-
-/** A placeholder can be introduced for the existential goal or obligation that is selected. */
+/**
+ * A placeholder can be introduced for the existential goal or obligation that is selected. The
+ * move, not this action, reads the goal: it handles bare and typed binders alike and says why it
+ * cannot apply.
+ */
 export function constructAvailability(
   node: ProofNode,
   selections: readonly AnchoredProofSelection[],
+  operators: readonly OperatorDeclaration[],
 ): Availability<ConstructPlan> {
   const target = selectedTarget(node, selections);
   if (!target.ok) return target;
-  const entry = (target.value.kind === "goal" ? node.state.goals : node.state.obligations).find(
-    ({ id }) => id === target.value.id,
-  );
-  if (entry === undefined) return unavailable("The selected target is not open in this snapshot.");
-  const bound = existentialBinder(entry.sequent.conclusion.expression);
-  if (bound === undefined) {
-    return unavailable("The selected target does not conclude with an existential statement.");
-  }
-  const declarations = entry.sequent.context.declarations;
-  if (!declarations.some(({ symbol }) => symbol === bound)) {
-    return unavailable(`The variable ${bound} has no declared sort in this target's context.`);
-  }
-  const mentioned = new Set<string>();
-  mentionedSymbols(entry.sequent.conclusion.expression, mentioned);
-  entry.sequent.context.hypotheses.forEach(({ statement }) =>
-    mentionedSymbols(statement.expression, mentioned),
-  );
-  const dependencies = declarations
-    .filter(
-      (declaration) =>
-        declaration.symbol !== bound &&
-        (declaration.role === "universal-parameter" || declaration.role === "local-witness") &&
-        mentioned.has(declaration.symbol),
-    )
-    .map(({ symbol }) => symbol);
-  return { ok: true, value: { target: target.value, boundSymbol: bound, dependencies } };
-}
-
-export function constructEnvelope(
-  input: Readonly<{ nodeId: string; plan: ConstructPlan; nonce?: string }>,
-): ProtocolCommandEnvelope {
-  const nonce = input.nonce ?? crypto.randomUUID();
-  const { plan } = input;
-  return envelope(`command:web-construct-${nonce}`, input.nodeId, {
-    kind: "kernel-operation",
-    operation: {
-      kind: "introduce-placeholder",
-      target: { ...plan.target },
-      taskId: `construction-task:web-${nonce}`,
-      symbol: `m_${plan.boundSymbol}_${nonce.replaceAll("-", "").slice(0, 8)}`,
-      displayName: plan.boundSymbol,
-      origin: { kind: "existential-goal" },
-      dependencies: [...plan.dependencies],
-      allowedTasks: [],
-    },
-  });
+  return constructPlan(node, operators, target.value);
 }
 
 // ---------------------------------------------------------------------------------------------

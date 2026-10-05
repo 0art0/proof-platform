@@ -17,6 +17,7 @@ import {
   type KernelResultId,
   type TransitionClass,
   type TransitionEvidence,
+  composeTransitionClasses,
 } from "@proof/kernel";
 import { stableIdentifierSchema, type ExecutableProofState } from "@proof/mathjson-model";
 import { z } from "zod";
@@ -55,22 +56,7 @@ export const movePlanImplementationSchema = z
   });
 export type MovePlanImplementation = z.infer<typeof movePlanImplementationSchema>;
 
-const CLASS_STRENGTH: Readonly<Record<TransitionClass, number>> = {
-  equivalence: 0,
-  strengthening: 1,
-  weakening: 2,
-};
-
-/**
- * The class of a composed transition is the weakest guarantee among its steps. Weakening
- * dominates strengthening, which dominates equivalence. An empty sequence is an equivalence.
- */
-export function composeTransitionClasses(classes: readonly TransitionClass[]): TransitionClass {
-  return classes.reduce<TransitionClass>(
-    (weakest, next) => (CLASS_STRENGTH[next] > CLASS_STRENGTH[weakest] ? next : weakest),
-    "equivalence",
-  );
-}
+export { composeTransitionClasses };
 
 export type MoveSequenceDiagnosticCode =
   "invalid-request" | "plan-mismatch" | "kernel-rejected" | "invalid-move-definition";
@@ -162,7 +148,7 @@ export function planMoveSequence(
       const kind = operation.data.kind;
       if (
         !isPrimitiveKind(kind) ||
-        transition.transitionClass !== PRIMITIVE_TRANSITION_CLASSES[kind] ||
+        !PRIMITIVE_TRANSITION_CLASSES[kind].includes(transition.transitionClass) ||
         !PRIMITIVE_TRANSITION_EVIDENCE[kind].includes(transition.evidence)
       ) {
         return sequenceFailure(

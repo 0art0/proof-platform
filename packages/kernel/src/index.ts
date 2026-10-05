@@ -3,12 +3,15 @@ import {
   attestationIdSchema,
   constructionPlaceholderOperators,
   createExecutableProofStateSchema,
+  builtinBinderSorts,
   createStatementViewSchema,
   freeSymbolNames,
+  freshSymbolName,
   mathJsonEquals,
   operatorDeclarationsSchema,
   plainMathJsonSchema,
   proofStateIdSchema,
+  declarationIdSchema,
   stableIdentifierSchema,
   statementIdSchema,
   substituteMathJson,
@@ -17,6 +20,7 @@ import {
   type AttestationId,
   type ContextualSequent,
   type Declaration,
+  type DeclarationId,
   type ExecutableProofState,
   type Goal,
   type Hypothesis,
@@ -26,6 +30,7 @@ import {
   type PlainMathJson,
   type ProofState,
   type ProofStateId,
+  type Sort,
   type StatementId,
 } from "@proof/mathjson-model";
 import { alphaEquivalentWithOperators } from "./alpha-equivalence";
@@ -48,8 +53,9 @@ import {
   parseConstructionOperation,
   resolvePlaceholder,
   type ConstructionOperation,
+  type ConstructionOperationKind,
 } from "./constructions";
-import { operatorOperands, readBuiltinQuantifier } from "./expression";
+import { operatorOperands, readQuantifier, type ReadQuantifier } from "./expression";
 import { closesByAssumption, sorryClosure } from "./obligations";
 import {
   instantiateResultInContext,
@@ -91,6 +97,24 @@ export {
  */
 export type TransitionClass = "equivalence" | "strengthening" | "weakening";
 
+const TRANSITION_CLASS_ORDER: Readonly<Record<TransitionClass, number>> = {
+  equivalence: 0,
+  strengthening: 1,
+  weakening: 2,
+};
+
+/**
+ * The class of a composed transition is the weakest guarantee among its steps. Weakening
+ * dominates strengthening, which dominates equivalence. An empty sequence is an equivalence.
+ */
+export function composeTransitionClasses(classes: readonly TransitionClass[]): TransitionClass {
+  return classes.reduce<TransitionClass>(
+    (weakest, next) =>
+      TRANSITION_CLASS_ORDER[next] > TRANSITION_CLASS_ORDER[weakest] ? next : weakest,
+    "equivalence",
+  );
+}
+
 /**
  * How a transition's logical direction is supported (refinement §9). This is
  * orthogonal to the transition class. `structural` means the kernel checked
@@ -110,6 +134,27 @@ export const TRANSITION_EVIDENCE_KINDS = [
   "sorry",
 ] as const;
 export type TransitionEvidence = (typeof TRANSITION_EVIDENCE_KINDS)[number];
+
+const EVIDENCE_CAVEAT: Readonly<Record<TransitionEvidence, number>> = {
+  structural: 0,
+  "library-result": 1,
+  "background-inference": 2,
+  sorry: 3,
+};
+
+/**
+ * The evidence of a composed transition: the most caveated among its steps (an unproved sorry,
+ * then an accepted background inference, then a cited library result, then a structural rule).
+ * An empty sequence is structural.
+ */
+export function composeTransitionEvidence(
+  evidence: readonly TransitionEvidence[],
+): TransitionEvidence {
+  return evidence.reduce<TransitionEvidence>(
+    (most, next) => (EVIDENCE_CAVEAT[next] > EVIDENCE_CAVEAT[most] ? next : most),
+    "structural",
+  );
+}
 
 export { attestationIdSchema, type AttestationId } from "@proof/mathjson-model";
 export {
@@ -194,6 +239,86 @@ export const KERNEL_OPERATION_KINDS = [
 ] as const;
 export type KernelOperationKind = (typeof KERNEL_OPERATION_KINDS)[number];
 
+const classes = (...allowed: TransitionClass[]): readonly TransitionClass[] =>
+  Object.freeze(allowed);
+
+/**
+ * The classes each primitive may report. The kernel classifies a transition from its actual
+ * outcome and refuses to report a class outside this set. Most primitives have one class;
+ * `apply-result-forward` is an equivalence only when every premise is matched by a hypothesis, and
+ * a strengthening when unmet premises become obligations; `instantiate-universal-hypothesis` is
+ * likewise an equivalence unless a typed binder's membership `t ∈ S` becomes an obligation. The record is exhaustive so a new
+ * primitive must choose its classes explicitly.
+ */
+export const KERNEL_TRANSITION_CLASSES: Readonly<
+  Record<KernelOperationKind, readonly TransitionClass[]>
+> = Object.freeze({
+  "close-by-hypothesis": classes("equivalence"),
+  "close-true": classes("equivalence"),
+  "close-false-hypothesis": classes("equivalence"),
+  "close-reflexive-equality": classes("equivalence"),
+  "close-by-contradiction": classes("equivalence"),
+  "close-by-accepted-inference": classes("equivalence"),
+  "introduce-implication": classes("equivalence"),
+  "introduce-negation": classes("equivalence"),
+  "split-goal-conjunction": classes("equivalence"),
+  "choose-goal-disjunct": classes("strengthening"),
+  "expand-hypothesis-conjunction": classes("equivalence"),
+  "split-hypothesis-disjunction": classes("equivalence"),
+  "split-classical-cases": classes("equivalence"),
+  "assume-hypothesis": classes("weakening"),
+  "replace-goal": classes("weakening"),
+  suffices: classes("strengthening"),
+  "drop-hypothesis": classes("strengthening"),
+  "apply-implication-hypothesis": classes("equivalence"),
+  "introduce-universal": classes("equivalence"),
+  "instantiate-universal-hypothesis": classes("equivalence", "strengthening"),
+  "choose-existential-witness": classes("strengthening"),
+  "unpack-existential-hypothesis": classes("equivalence"),
+  "rewrite-with-equality": classes("equivalence"),
+  "rewrite-with-equivalence": classes("equivalence"),
+  "rewrite-with-implication": classes("strengthening"),
+  "apply-result-backward": classes("strengthening"),
+  "apply-result-forward": classes("equivalence", "strengthening"),
+  "mark-sorry": classes("equivalence"),
+  "close-by-assumption": classes("equivalence"),
+});
+
+/**
+ * The classes each construction-task operation may report (N11, N42). Introducing a placeholder is
+ * an equivalence when its dependencies cover the sequent and a strengthening otherwise; resolving
+ * is a strengthening; recording a requirement or candidate and abandoning an unused task leave
+ * the proof content unchanged.
+ */
+export const CONSTRUCTION_TRANSITION_CLASSES: Readonly<
+  Record<ConstructionOperationKind, readonly TransitionClass[]>
+> = Object.freeze({
+  "introduce-placeholder": classes("equivalence", "strengthening"),
+  "add-requirement": classes("equivalence"),
+  "add-candidate": classes("equivalence"),
+  "resolve-placeholder": classes("strengthening"),
+  "abandon-placeholder": classes("equivalence"),
+});
+
+const ALLOWED_TRANSITION_CLASSES = {
+  ...KERNEL_TRANSITION_CLASSES,
+  ...CONSTRUCTION_TRANSITION_CLASSES,
+} as Readonly<Record<string, readonly TransitionClass[] | undefined>>;
+
+/**
+ * The class a move over this primitive declares before any outcome is known: the weakest of the
+ * classes the primitive may report. The stored preview and edge carry the actual class.
+ */
+export function declaredTransitionClass(
+  kind: KernelOperationKind | ConstructionOperationKind,
+): TransitionClass {
+  const allowed: readonly TransitionClass[] =
+    kind in CONSTRUCTION_TRANSITION_CLASSES
+      ? CONSTRUCTION_TRANSITION_CLASSES[kind as ConstructionOperationKind]
+      : KERNEL_TRANSITION_CLASSES[kind as KernelOperationKind];
+  return composeTransitionClasses(allowed);
+}
+
 /**
  * The shared shape of every kernel operation. The target is the goal or
  * obligation the operation acts on; for a construction-task operation other
@@ -260,13 +385,21 @@ export type KernelOperation =
         antecedentHypothesisId: StatementId;
         resultHypothesisId: StatementId;
       }>)
-  | (OperationBase & Readonly<{ kind: "introduce-universal" }>)
+  | (OperationBase &
+      Readonly<{
+        kind: "introduce-universal";
+        /** Typed binder `∀x∈S` only: the fresh universal-parameter declaration and its `x ∈ S`. */
+        parameterDeclarationId?: DeclarationId;
+        membershipHypothesisId?: StatementId;
+      }>)
   | (OperationBase &
       Readonly<{
         kind: "instantiate-universal-hypothesis";
         hypothesisId: StatementId;
         term: PlainMathJson;
         resultHypothesisId: StatementId;
+        /** Typed binder `∀x∈S` only: the obligation `t ∈ S`, used when no hypothesis states it. */
+        membershipObligationId?: StatementId;
       }>)
   | (OperationBase & Readonly<{ kind: "choose-existential-witness"; witness: PlainMathJson }>)
   | (OperationBase &
@@ -274,6 +407,9 @@ export type KernelOperation =
         kind: "unpack-existential-hypothesis";
         hypothesisId: StatementId;
         resultHypothesisId: StatementId;
+        /** Typed binder `∃x∈S` only: the fresh local-witness declaration and its `x ∈ S`. */
+        witnessDeclarationId?: DeclarationId;
+        membershipHypothesisId?: StatementId;
       }>)
   | (OperationBase &
       Readonly<{
@@ -510,6 +646,25 @@ export function applyTransition(
   );
   if (!transition.ok) return { ...transition, state };
 
+  const allowed = ALLOWED_TRANSITION_CLASSES[operation.kind];
+  if (allowed !== undefined && !allowed.includes(transition.transitionClass)) {
+    return failure(
+      state,
+      "invalid-result-state",
+      `The ${operation.kind} transition reported ${transition.transitionClass}, which is outside its allowed classes.`,
+    );
+  }
+  if (
+    transition.transitionClass === "equivalence" &&
+    addsRequiredObligation(inputState.data, transition.state)
+  ) {
+    return failure(
+      state,
+      "invalid-result-state",
+      "A transition that creates required obligations cannot be an equivalence.",
+    );
+  }
+
   const candidate: ProofState = { ...transition.state, id: operation.resultStateId };
   const outputState = stateSchema.safeParse(candidate);
   if (!outputState.success) {
@@ -529,6 +684,18 @@ export function applyTransition(
     ...(transition.resultId === undefined ? {} : { resultId: transition.resultId }),
     diagnostics: [],
   };
+}
+
+/** Whether the transition appended an obligation a later proof must discharge (premise, sufficiency or binder membership). */
+function addsRequiredObligation(before: ProofState, after: ProofState): boolean {
+  const existing = new Set(before.obligations.map((entry) => entry.id));
+  return after.obligations.some(
+    (entry) =>
+      !existing.has(entry.id) &&
+      (entry.provenance?.kind === "premise-of-result" ||
+        entry.provenance?.kind === "suffices" ||
+        entry.provenance?.kind === "binder-membership"),
+  );
 }
 
 type InternalResult =
@@ -915,12 +1082,12 @@ function applyValidatedOperation(
       );
     }
     case "introduce-universal": {
-      const quantifier = readBuiltinQuantifier(
-        target.entry.sequent.conclusion.expression,
-        "ForAll",
-      );
+      const quantifier = readQuantifier(target.entry.sequent.conclusion.expression, "ForAll");
       if (quantifier === undefined) {
         return notApplicable(state, "The target conclusion is not a universal statement.");
+      }
+      if (quantifier.domain !== undefined) {
+        return introduceTypedUniversal(state, target, operation, quantifier, operators);
       }
       const declaration = findDeclaration(target.entry.sequent, quantifier.symbol);
       if (declaration?.role !== "universal-parameter") {
@@ -935,22 +1102,17 @@ function applyValidatedOperation(
           "The universal parameter occurs freely in a local hypothesis or construction.",
         );
       }
-      const replacement: TargetEntry = {
-        ...target.entry,
-        sequent: {
-          ...target.entry.sequent,
-          conclusion: { expression: structuredClone(quantifier.body) },
-        },
-      };
       return success(
-        replaceTarget(state, operation.target, target.index, [replacement]),
+        replaceTarget(state, operation.target, target.index, [
+          withConclusion(target.entry, quantifier.body),
+        ]),
         "equivalence",
       );
     }
     case "instantiate-universal-hypothesis": {
       const selected = findHypothesis(target.entry.sequent, operation.hypothesisId);
       if (selected === undefined) return missingHypothesis(state);
-      const quantifier = readBuiltinQuantifier(selected.statement.expression, "ForAll");
+      const quantifier = readQuantifier(selected.statement.expression, "ForAll");
       if (quantifier === undefined) {
         return notApplicable(state, "The selected hypothesis is not universal.");
       }
@@ -963,20 +1125,56 @@ function applyValidatedOperation(
         operators,
       );
       if (instantiated === undefined) return replacementFailed(state);
-      const replacement = appendHypothesis(
+      const derived = appendHypothesis(
         target.entry,
         hypothesis(operation.resultHypothesisId, instantiated),
       );
-      return success(
-        replaceTarget(state, operation.target, target.index, [replacement]),
-        "equivalence",
+      if (quantifier.domain === undefined) {
+        return success(
+          replaceTarget(state, operation.target, target.index, [derived]),
+          "equivalence",
+        );
+      }
+      // A typed binder `∀x∈S` needs `t ∈ S`: a matching hypothesis discharges it, otherwise it
+      // becomes an obligation and the transition is a strengthening.
+      const membership: PlainMathJson = ["Element", operation.term, quantifier.domain];
+      const discharged = target.entry.sequent.context.hypotheses.some((candidate) =>
+        alphaEquivalentWithOperators(candidate.statement.expression, membership, operators),
       );
+      if (discharged) {
+        return success(
+          replaceTarget(state, operation.target, target.index, [derived]),
+          "equivalence",
+        );
+      }
+      if (operation.membershipObligationId === undefined) {
+        return internalFailure(
+          state,
+          "arity-mismatch",
+          "Instantiating a typed universal at an unproven member needs a membership obligation ID.",
+        );
+      }
+      const obligationCollision = targetIdCollision(state, [operation.membershipObligationId]);
+      if (obligationCollision !== undefined) return idCollision(state, obligationCollision);
+      const obligation: Obligation = {
+        id: operation.membershipObligationId,
+        provenance: { kind: "binder-membership", hypothesisId: operation.hypothesisId },
+        sequent: {
+          context: structuredClone(target.entry.sequent.context),
+          conclusion: { expression: structuredClone(membership) },
+        },
+      };
+      const next =
+        operation.target.kind === "obligation"
+          ? replaceTarget(state, operation.target, target.index, [derived, obligation])
+          : {
+              ...replaceTarget(state, operation.target, target.index, [derived]),
+              obligations: [...state.obligations, obligation],
+            };
+      return success(next, "strengthening");
     }
     case "choose-existential-witness": {
-      const quantifier = readBuiltinQuantifier(
-        target.entry.sequent.conclusion.expression,
-        "Exists",
-      );
+      const quantifier = readQuantifier(target.entry.sequent.conclusion.expression, "Exists");
       if (quantifier === undefined) {
         return notApplicable(state, "The target conclusion is not existential.");
       }
@@ -987,15 +1185,16 @@ function applyValidatedOperation(
         operators,
       );
       if (instantiated === undefined) return replacementFailed(state);
-      const replacement: TargetEntry = {
-        ...target.entry,
-        sequent: {
-          ...target.entry.sequent,
-          conclusion: { expression: instantiated },
-        },
-      };
+      // A typed binder `∃x∈S` is witnessed by `t ∈ S ∧ body[t/x]`: the membership stays part of
+      // the goal rather than a separate obligation, so it cannot be dropped.
+      const conclusion: PlainMathJson =
+        quantifier.domain === undefined
+          ? instantiated
+          : ["And", ["Element", operation.witness, quantifier.domain], instantiated];
       return success(
-        replaceTarget(state, operation.target, target.index, [replacement]),
+        replaceTarget(state, operation.target, target.index, [
+          withConclusion(target.entry, conclusion),
+        ]),
         "strengthening",
       );
     }
@@ -1003,9 +1202,19 @@ function applyValidatedOperation(
       const hypothesisIndex = findHypothesisIndex(target.entry.sequent, operation.hypothesisId);
       if (hypothesisIndex < 0) return missingHypothesis(state);
       const selected = target.entry.sequent.context.hypotheses[hypothesisIndex] as Hypothesis;
-      const quantifier = readBuiltinQuantifier(selected.statement.expression, "Exists");
+      const quantifier = readQuantifier(selected.statement.expression, "Exists");
       if (quantifier === undefined) {
         return notApplicable(state, "The selected hypothesis is not existential.");
+      }
+      if (quantifier.domain !== undefined) {
+        return unpackTypedExistential(
+          state,
+          target,
+          operation,
+          hypothesisIndex,
+          quantifier,
+          operators,
+        );
       }
       const declaration = findDeclaration(target.entry.sequent, quantifier.symbol);
       if (declaration?.role !== "local-witness") {
@@ -1218,8 +1427,9 @@ function applyResultBackward(
  * alpha-equivalence by the named local hypothesis or, for a null entry,
  * becomes an obligation in the target's local context. The instantiated
  * conclusion is appended to the target as a derived hypothesis. The kernel
- * classifies this as equivalence: the derived fact adds nothing unprovable,
- * and unmet premises remain as required obligations. Obligations follow an
+ * classifies this from the outcome: equivalence when every premise is matched
+ * (the derived fact adds nothing unprovable), strengthening when unmet premises
+ * remain as required obligations. Obligations follow an
  * obligation target directly and are appended after existing obligations for
  * a goal target, as with `suffices`.
  */
@@ -1296,7 +1506,14 @@ function applyResultForward(
           ...replaceTarget(state, operation.target, target.index, [derived]),
           obligations: [...state.obligations, ...obligations],
         };
-  return success(next, "equivalence", "library-result", operation.resultId);
+  // Unmet premises are required obligations, so the new state is stronger than the old one: it
+  // proves the original goal, but it is not interchangeable with it.
+  return success(
+    next,
+    unmet.length === 0 ? "equivalence" : "strengthening",
+    "library-result",
+    operation.resultId,
+  );
 }
 
 function locateTarget(state: ProofState, target: TransitionTarget): LocatedTarget | undefined {
@@ -1334,6 +1551,181 @@ function replaceHypothesis(
     sequent: {
       ...target.sequent,
       context: { ...target.sequent.context, hypotheses },
+    },
+  };
+}
+
+/**
+ * Open a typed `∀x∈S` goal. The binder is self-contained, so x is not declared beforehand: the
+ * context gains a fresh universal parameter (named x, or x with a numeric suffix when x is taken)
+ * and the hypothesis `x ∈ S`, and the goal becomes the body at that parameter.
+ */
+function introduceTypedUniversal(
+  state: ProofState,
+  target: LocatedTarget,
+  operation: Extract<KernelOperation, { kind: "introduce-universal" }>,
+  quantifier: ReadQuantifier,
+  operators: readonly OperatorDeclaration[],
+): InternalResult {
+  const { parameterDeclarationId, membershipHypothesisId } = operation;
+  if (parameterDeclarationId === undefined || membershipHypothesisId === undefined) {
+    return internalFailure(
+      state,
+      "arity-mismatch",
+      "Introducing a typed universal needs a parameter declaration ID and a membership hypothesis ID.",
+    );
+  }
+  const fresh = freshBinderParameter(target.entry.sequent, quantifier, "ForAll", operators);
+  if (fresh === undefined) {
+    return notApplicable(state, "The typed binder's domain is not a well-sorted set.");
+  }
+  const idFailure = parameterIdFailure(
+    state,
+    target.entry.sequent,
+    parameterDeclarationId,
+    membershipHypothesisId,
+    [],
+  );
+  if (idFailure !== undefined) return idFailure;
+  const body = renameBoundSymbol(quantifier.body, quantifier.symbol, fresh.symbol, operators);
+  if (body === undefined) return replacementFailed(state);
+  const replacement = withParameter(
+    withConclusion(target.entry, body),
+    {
+      id: parameterDeclarationId,
+      symbol: fresh.symbol,
+      sort: fresh.sort,
+      role: "universal-parameter",
+    },
+    [
+      hypothesis(membershipHypothesisId, [
+        "Element",
+        fresh.symbol,
+        quantifier.domain as PlainMathJson,
+      ]),
+    ],
+  );
+  return success(
+    replaceTarget(state, operation.target, target.index, [replacement]),
+    "equivalence",
+  );
+}
+
+/**
+ * Unpack a typed `∃x∈S` hypothesis into a fresh local witness w, replacing it by `w ∈ S`
+ * followed by the body at w.
+ */
+function unpackTypedExistential(
+  state: ProofState,
+  target: LocatedTarget,
+  operation: Extract<KernelOperation, { kind: "unpack-existential-hypothesis" }>,
+  hypothesisIndex: number,
+  quantifier: ReadQuantifier,
+  operators: readonly OperatorDeclaration[],
+): InternalResult {
+  const { witnessDeclarationId, membershipHypothesisId } = operation;
+  if (witnessDeclarationId === undefined || membershipHypothesisId === undefined) {
+    return internalFailure(
+      state,
+      "arity-mismatch",
+      "Unpacking a typed existential needs a witness declaration ID and a membership hypothesis ID.",
+    );
+  }
+  const fresh = freshBinderParameter(target.entry.sequent, quantifier, "Exists", operators);
+  if (fresh === undefined) {
+    return notApplicable(state, "The typed binder's domain is not a well-sorted set.");
+  }
+  const idFailure = parameterIdFailure(
+    state,
+    target.entry.sequent,
+    witnessDeclarationId,
+    membershipHypothesisId,
+    [operation.resultHypothesisId],
+  );
+  if (idFailure !== undefined) return idFailure;
+  const body = renameBoundSymbol(quantifier.body, quantifier.symbol, fresh.symbol, operators);
+  if (body === undefined) return replacementFailed(state);
+  const replaced = replaceHypothesis(target.entry, hypothesisIndex, [
+    hypothesis(membershipHypothesisId, [
+      "Element",
+      fresh.symbol,
+      quantifier.domain as PlainMathJson,
+    ]),
+    hypothesis(operation.resultHypothesisId, body),
+  ]);
+  const replacement = withParameter(
+    replaced,
+    { id: witnessDeclarationId, symbol: fresh.symbol, sort: fresh.sort, role: "local-witness" },
+    [],
+  );
+  return success(
+    replaceTarget(state, operation.target, target.index, [replacement]),
+    "equivalence",
+  );
+}
+
+/** The name and sort a typed binder's variable takes when it enters the local context. */
+function freshBinderParameter(
+  sequent: ContextualSequent,
+  quantifier: ReadQuantifier,
+  operator: "ForAll" | "Exists",
+  operators: readonly OperatorDeclaration[],
+): Readonly<{ symbol: string; sort: Sort }> | undefined {
+  const bindings = new Map(
+    sequent.context.declarations.map((declaration) => [declaration.symbol, declaration.sort]),
+  );
+  const sort = builtinBinderSorts(
+    operator,
+    [["Element", quantifier.symbol, quantifier.domain as PlainMathJson], quantifier.body],
+    bindings,
+    operators,
+  )?.get(quantifier.symbol);
+  if (sort === undefined) return undefined;
+  const taken = new Set<string>([
+    ...sequent.context.declarations.map((declaration) => declaration.symbol),
+    ...operators.map((candidate) => candidate.symbol),
+    ...freeSymbolNames(quantifier.domain as PlainMathJson, { operators }),
+  ]);
+  return { symbol: freshSymbolName(quantifier.symbol, taken), sort };
+}
+
+function parameterIdFailure(
+  state: ProofState,
+  sequent: ContextualSequent,
+  declarationId: DeclarationId,
+  membershipHypothesisId: StatementId,
+  otherHypothesisIds: readonly StatementId[],
+): Extract<InternalResult, { ok: false }> | undefined {
+  if (sequent.context.declarations.some((declaration) => declaration.id === declarationId)) {
+    return idCollision(state, declarationId);
+  }
+  const collision = hypothesisIdCollision(sequent, [membershipHypothesisId, ...otherHypothesisIds]);
+  return collision === undefined ? undefined : idCollision(state, collision);
+}
+
+function renameBoundSymbol(
+  body: PlainMathJson,
+  symbol: string,
+  renamed: string,
+  operators: readonly OperatorDeclaration[],
+): PlainMathJson | undefined {
+  return symbol === renamed ? body : substituteBoundSymbol(body, symbol, renamed, operators);
+}
+
+function withParameter(
+  entry: TargetEntry,
+  declaration: Declaration,
+  appended: readonly Hypothesis[],
+): TargetEntry {
+  return {
+    ...entry,
+    sequent: {
+      ...entry.sequent,
+      context: {
+        ...entry.sequent.context,
+        declarations: [...entry.sequent.context.declarations, declaration],
+        hypotheses: [...entry.sequent.context.hypotheses, ...appended],
+      },
     },
   };
 }
@@ -1823,6 +2215,12 @@ const LENS_OPERATION_KINDS: ReadonlySet<string> = new Set<KernelOperationKind>([
   "rewrite-with-implication",
 ]);
 
+const TYPED_BINDER_FIELDS: Readonly<Partial<Record<KernelOperationKind, readonly string[]>>> = {
+  "introduce-universal": ["parameterDeclarationId", "membershipHypothesisId"],
+  "instantiate-universal-hypothesis": ["membershipObligationId"],
+  "unpack-existential-hypothesis": ["witnessDeclarationId", "membershipHypothesisId"],
+};
+
 function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperation> {
   if (!isStrictRecord(value) || typeof value.kind !== "string") {
     return runtimeFailure("A kernel operation must be a strict discriminated object.", []);
@@ -1885,6 +2283,10 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
   const hasLens = LENS_OPERATION_KINDS.has(value.kind) && Object.hasOwn(value, "lens");
   // A sorry accepts one optional field: an external sorry reference.
   const hasSorryId = value.kind === "mark-sorry" && Object.hasOwn(value, "sorryId");
+  // Typed quantifier binders add optional IDs for the declaration, hypothesis or obligation they create.
+  const typedBinderKeys = (TYPED_BINDER_FIELDS[value.kind as KernelOperationKind] ?? []).filter(
+    (key) => Object.hasOwn(value, key),
+  );
   if (
     !hasExactKeys(value, [
       "kind",
@@ -1894,6 +2296,7 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
       ...extras,
       ...(hasLens ? ["lens"] : []),
       ...(hasSorryId ? ["sorryId"] : []),
+      ...typedBinderKeys,
     ])
   ) {
     return runtimeFailure("The kernel operation contains missing or unknown fields.", []);
@@ -2015,8 +2418,17 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
       };
     case "close-true":
     case "close-reflexive-equality":
-    case "introduce-universal":
       return { success: true, data: { ...common, kind: value.kind } };
+    case "introduce-universal":
+      return {
+        success: true,
+        data: {
+          ...common,
+          kind: value.kind,
+          ...optionalDeclarationId(value, "parameterDeclarationId"),
+          ...optionalStatementId(value, "membershipHypothesisId"),
+        },
+      };
     case "close-by-contradiction":
       return {
         success: true,
@@ -2123,6 +2535,7 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
           hypothesisId: statementIdSchema.parse(value.hypothesisId),
           term: copyPlainMathJson(value.term),
           resultHypothesisId: statementIdSchema.parse(value.resultHypothesisId),
+          ...optionalStatementId(value, "membershipObligationId"),
         },
       };
     case "choose-existential-witness":
@@ -2138,6 +2551,8 @@ function parseKernelOperation(value: unknown): RuntimeParseResult<KernelOperatio
           kind: value.kind,
           hypothesisId: statementIdSchema.parse(value.hypothesisId),
           resultHypothesisId: statementIdSchema.parse(value.resultHypothesisId),
+          ...optionalDeclarationId(value, "witnessDeclarationId"),
+          ...optionalStatementId(value, "membershipHypothesisId"),
         },
       };
     case "rewrite-with-equality":
@@ -2297,6 +2712,20 @@ function isOperandPath(value: unknown): value is readonly number[] {
     }
   }
   return true;
+}
+
+function optionalStatementId(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): Readonly<Record<string, StatementId>> {
+  return value[key] === undefined ? {} : { [key]: statementIdSchema.parse(value[key]) };
+}
+
+function optionalDeclarationId(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): Readonly<Record<string, DeclarationId>> {
+  return value[key] === undefined ? {} : { [key]: declarationIdSchema.parse(value[key]) };
 }
 
 function copyStatementIds(value: unknown): readonly StatementId[] {

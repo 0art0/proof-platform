@@ -952,6 +952,93 @@ describe("proof repository workflow", () => {
     expect(store.log.indexOf("lockSession")).toBeLessThan(store.log.indexOf("readCommand"));
   });
 
+  it("stores the kernel's evidence and the next transition sequence with every transition", async () => {
+    const store = await initializedStore(rawNode(["And", "True", "True"]));
+    const split = await executeProofCommand(
+      store,
+      "session:one",
+      command({
+        operation: {
+          kind: "split-goal-conjunction",
+          expectedStateId: "state:root",
+          resultStateId: "state:child",
+          target: { kind: "goal", id: "goal:main" },
+          childIds: ["goal:left", "goal:right"],
+        },
+      }),
+      human,
+    );
+    expect(split).toMatchObject({
+      status: "committed",
+      result: { receipt: { evidence: "structural", sequence: 1 } },
+    });
+    const close = await executeProofCommand(
+      store,
+      "session:one",
+      command({
+        commandId: "command:two",
+        parentNodeId: "node:child",
+        resultNodeId: "node:grandchild",
+        edgeId: "edge:two",
+        eventId: "event:two",
+        operation: {
+          kind: "close-true",
+          expectedStateId: "state:child",
+          resultStateId: "state:grandchild",
+          target: { kind: "goal", id: "goal:left" },
+        },
+      }),
+      human,
+    );
+    expect(close).toMatchObject({
+      status: "committed",
+      result: { receipt: { evidence: "structural", sequence: 2 } },
+    });
+    // The edge, the event and the stored command result all carry the same values.
+    for (const [edgeId, eventId, commandId, sequence] of [
+      ["edge:one", "event:one", "command:one", 1],
+      ["edge:two", "event:two", "command:two", 2],
+    ] as const) {
+      expect(store.edges.get(key("session:one", edgeId))).toMatchObject({
+        evidence: "structural",
+        sequence,
+      });
+      expect(store.events.get(key("session:one", eventId))).toMatchObject({
+        evidence: "structural",
+        sequence,
+      });
+      expect(store.commands.get(key("session:one", commandId))?.receipt).toMatchObject({
+        evidence: "structural",
+        sequence,
+      });
+    }
+    // A retry of the latest command replays the recorded sequence instead of taking a new one.
+    const retry = await executeProofCommand(
+      store,
+      "session:one",
+      command({
+        commandId: "command:two",
+        parentNodeId: "node:child",
+        resultNodeId: "node:grandchild",
+        edgeId: "edge:two",
+        eventId: "event:two",
+        operation: {
+          kind: "close-true",
+          expectedStateId: "state:child",
+          resultStateId: "state:grandchild",
+          target: { kind: "goal", id: "goal:left" },
+        },
+      }),
+      human,
+    );
+    expect(retry).toMatchObject({
+      status: "committed",
+      replayed: true,
+      result: { receipt: { evidence: "structural", sequence: 2 } },
+    });
+    expect(store.edges.size).toBe(2);
+  });
+
   it("rejects an idempotent command replay after navigation supersedes its result node", async () => {
     const store = await initializedStore();
     expect(await executeProofCommand(store, "session:one", command(), human)).toMatchObject({

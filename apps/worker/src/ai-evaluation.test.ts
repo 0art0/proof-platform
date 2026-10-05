@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 describe("offline AI evaluation contracts", () => {
-  it("scores the checked-in 37-problem, 124-step benchmark corpus", () => {
+  it("scores the checked-in benchmark corpus against its coverage golden", () => {
     expect(BENCHMARK_CORPUS).toHaveLength(coverageGolden.totals.problems);
     expect(BENCHMARK_CORPUS.reduce((count, item) => count + item.steps.length, 0)).toBe(
       coverageGolden.totals.steps,
@@ -70,8 +70,11 @@ describe("offline AI evaluation contracts", () => {
         return { kind: "formalization", draft: corpusReferenceDraft(reference) };
       },
     });
-    expect(seen).toHaveLength(37);
-    expect(result).toMatchObject({ valid: 37, referenceMatches: 37 });
+    expect(seen).toHaveLength(BENCHMARK_CORPUS.length);
+    expect(result).toMatchObject({
+      valid: BENCHMARK_CORPUS.length,
+      referenceMatches: BENCHMARK_CORPUS.length,
+    });
   });
 
   it("scores a valid formalizer draft against the handwritten initial state", () => {

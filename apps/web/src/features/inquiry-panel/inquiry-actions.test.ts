@@ -74,21 +74,23 @@ describe("Investigate this hypothesis", () => {
 });
 
 describe("Construct an object", () => {
-  it("is offered for an existential goal with the dependencies its sequent mentions", () => {
-    const available = constructAvailability(node, [selection(node, conclusion, [])]);
+  it("is offered for an existential goal", () => {
+    const available = constructAvailability(node, [selection(node, conclusion, [])], []);
     expect(available).toEqual({
       ok: true,
-      value: { target: MAIN_TARGET, boundSymbol: "delta", dependencies: ["eps"] },
+      value: { target: MAIN_TARGET, boundSymbol: "delta" },
     });
   });
 
   it("names why it is unavailable", () => {
-    expect(constructAvailability(node, [])).toMatchObject({ ok: false });
-    expect(constructAvailability(node, [selection(node, conclusion, [], "goal:premise")])).toEqual({
+    expect(constructAvailability(node, [], [])).toMatchObject({ ok: false });
+    expect(
+      constructAvailability(node, [selection(node, conclusion, [], "goal:premise")], []),
+    ).toEqual({
       ok: false,
       reason: "The selected target does not conclude with an existential statement.",
     });
-    // A target whose binder has no declared sort in its context.
+    // A snapshot whose binder has no declared sort is not an executable state at all.
     const [main, ...others] = node.state.goals;
     const undeclared = {
       ...node,
@@ -111,48 +113,52 @@ describe("Construct an object", () => {
         ],
       },
     } as ProofNode;
-    expect(constructAvailability(undeclared, [selection(undeclared, conclusion, [])])).toEqual({
-      ok: false,
-      reason: "The variable delta has no declared sort in this target's context.",
-    });
+    expect(
+      constructAvailability(undeclared, [selection(undeclared, conclusion, [])], []),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining("executable proof state") });
   });
 
-  it("recognizes only a built-in existential over a symbol", () => {
+  it("recognizes a built-in existential over a symbol or a typed symbol", () => {
     expect(existentialBinder(["Exists", "x", ["P", "x"]])).toBe("x");
+    expect(existentialBinder(["Exists", ["Element", "x", "S"], ["P", "x"]])).toBe("x");
     expect(existentialBinder(["ForAll", "x", ["P", "x"]])).toBeUndefined();
-    expect(existentialBinder(["Exists", ["Element", "x", "S"], ["P", "x"]])).toBeUndefined();
     expect(existentialBinder("p")).toBeUndefined();
   });
 
-  it("sends introduce-placeholder built from the target alone, with no mathematics", () => {
-    const available = constructAvailability(node, [selection(node, conclusion, [])]);
+  it("sends introduce-placeholder built from a move's menus, with no mathematics", () => {
+    const available = constructAvailability(node, [selection(node, conclusion, [])], []);
     if (!available.ok) throw new Error(available.reason);
-    const envelope = constructEnvelope({
-      nodeId: node.id,
+    const built = constructEnvelope({
+      node,
+      operators: [],
       plan: available.value,
-      nonce: "0123abcd-4567",
+      commandId: "command:web-construct-0123",
     });
+    if (!built.ok) throw new Error(built.reason);
+    const { value: envelope } = built;
     expect(envelope.basis).toEqual({ nodeId: "node:root" });
     expect(envelope.actor).toEqual({ id: "actor:web", kind: "human" });
-    expect(envelope.command).toEqual({
+    expect(envelope.commandId).toBe("command:web-construct-0123");
+    expect(envelope.command).toMatchObject({
       kind: "kernel-operation",
       operation: {
         kind: "introduce-placeholder",
         target: { kind: "goal", id: "goal:main" },
-        taskId: "construction-task:web-0123abcd-4567",
-        symbol: "m_delta_0123abcd",
         displayName: "delta",
         origin: { kind: "existential-goal" },
         dependencies: ["eps"],
         allowedTasks: [],
       },
     });
-    // No field the payload-source rule would inspect.
     const operation = (envelope.command as { operation: Record<string, unknown> }).operation;
+    // Fresh names come from the command ID, as replay needs.
+    expect(operation.taskId).toContain("command:web-construct-0123");
+    expect(operation.symbol).toMatch(/^placeholder_[0-9a-f]{12}$/);
+    // No field the payload-source rule would inspect.
     for (const field of ["proposition", "term", "witness", "value", "instantiation", "source"]) {
       expect(operation).not.toHaveProperty(field);
     }
-    expect(envelope).not.toHaveProperty("command.payloadSource");
+    expect(envelope.command).not.toHaveProperty("payloadSource");
   });
 });
 

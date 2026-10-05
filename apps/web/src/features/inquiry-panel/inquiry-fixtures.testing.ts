@@ -139,3 +139,37 @@ export function makeTask(overrides: Record<string, unknown> = {}): ConstructionT
     ...overrides,
   } as unknown as ConstructionTask;
 }
+
+/**
+ * A valid executable snapshot after "Construct an object": `goal:main` says `m_delta(eps) < eps`
+ * and the open task `construction-task:delta` has no requirement or candidate yet. Unlike
+ * `withConstructions`, this snapshot passes executable-state validation, so the construction
+ * moves can read it.
+ */
+export function makeConstructedNode(
+  taskOverrides: Record<string, unknown> = {},
+  id = "node:constructed",
+): ProofNode {
+  const base = makeNode(id);
+  const [main, ...others] = base.state.goals;
+  return createProofNodeSchema().parse({
+    id,
+    state: {
+      id: id.replace("node:", "state:"),
+      goals: [
+        {
+          ...main!,
+          sequent: {
+            ...main!.sequent,
+            conclusion: { expression: ["Less", ["m_delta", "eps"], "eps"] },
+          },
+        },
+        ...others,
+      ],
+      obligations: [],
+      constructions: [
+        makeTask({ requirements: [], candidates: [], status: "unresolved", ...taskOverrides }),
+      ],
+    },
+  });
+}

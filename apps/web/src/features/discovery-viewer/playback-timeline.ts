@@ -3,13 +3,14 @@
  * transition events, interaction events and inquiry records of an artifact; it reads only stored
  * rows.
  *
- * Order. Interaction events and inquiry records carry a per-log sequence and a recorded time, but a
- * transition event carries neither, so the artifact does not store one global clock. The timeline is
- * therefore ordered deterministically from what is stored: transitions in causal order (every
- * parent before its children; siblings in stored event order), and each interaction event or
- * inquiry record immediately after the transition of its own command (when it names one) or of the
- * transition that created its anchor node (records at the root come first), ordered within that
- * slot by recorded time, then interaction events before inquiry records, then sequence.
+ * Order. A version-2 artifact stores a per-session transition sequence on every edge, so its
+ * transitions are played in that chronological order. A version-1 artifact stores none (and the
+ * artifact has no global clock), so its transitions are ordered deterministically from what is
+ * stored: causal order (every parent before its children; siblings in stored event order). Each
+ * interaction event or inquiry record follows the transition of its own command (when it names
+ * one) or of the transition that created its anchor node (records at the root come first),
+ * ordered within that slot by recorded time, then interaction events before inquiry records,
+ * then sequence.
  */
 import type { InquiryRecord, InteractionEvent, ProofArtifact, ProofEdge } from "@proof/protocol";
 import { humanize, indexArtifact } from "./artifact-data";
@@ -73,6 +74,7 @@ export function buildPlaybackTimeline(artifact: ProofArtifact): PlaybackTimeline
     );
 
   const transitions: PlaybackEntry[] = [];
+  const transitionSequence = new Map<string, number>();
   const slotOfNode = new Map<string, string>([[artifact.tree.rootNodeId, ROOT_SLOT]]);
   const slotOfCommand = new Map<string, string>();
   const visited = new Set<string>();
@@ -89,12 +91,22 @@ export function buildPlaybackTimeline(artifact: ProofArtifact): PlaybackTimeline
         edge: treeEdgeView(index, edge),
         commandId: edge.commandId,
       });
+      if (edge.sequence !== undefined) transitionSequence.set(key, edge.sequence);
       slotOfNode.set(edge.childNodeId, key);
       slotOfCommand.set(edge.commandId, key);
       walk(edge.childNodeId);
     }
   };
   walk(artifact.tree.rootNodeId);
+  // Stored sequences, when every transition has one, replace the derived causal order. A mixed
+  // artifact cannot occur (the schema requires all or none), but is left in causal order.
+  if (transitionSequence.size === transitions.length) {
+    transitions.sort(
+      (left, right) =>
+        (transitionSequence.get(left.key) as number) -
+        (transitionSequence.get(right.key) as number),
+    );
+  }
 
   const slots = new Map<string, Slotted[]>();
   const place = (slot: string, item: Slotted) => {

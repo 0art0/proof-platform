@@ -457,8 +457,8 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     await this.client.query(
       `INSERT INTO proof_edges
           (session_id, id, parent_node_id, child_node_id, command_id,
-          suggestion_set_id, chosen_suggestion_id, preview_id, record)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+          suggestion_set_id, chosen_suggestion_id, preview_id, evidence, transition_sequence, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
       [
         sessionId,
         edge.id,
@@ -468,6 +468,8 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
         edge.suggestionSetId ?? null,
         edge.chosenSuggestionId ?? null,
         edge.previewId ?? null,
+        edge.evidence ?? null,
+        edge.sequence ?? null,
         JSON.stringify(edge),
       ],
     );
@@ -477,8 +479,8 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     await this.client.query(
       `INSERT INTO proof_events
           (session_id, id, parent_node_id, child_node_id, edge_id, command_id,
-          suggestion_set_id, chosen_suggestion_id, preview_id, record)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+          suggestion_set_id, chosen_suggestion_id, preview_id, evidence, transition_sequence, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)`,
       [
         sessionId,
         event.id,
@@ -489,6 +491,8 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
         event.suggestionSetId ?? null,
         event.chosenSuggestionId ?? null,
         event.previewId ?? null,
+        event.evidence ?? null,
+        event.sequence ?? null,
         JSON.stringify(event),
       ],
     );
@@ -726,6 +730,17 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
     const result = await this.client.query(
       `SELECT COALESCE(MAX(sequence), 0) AS sequence
        FROM proof_interaction_events
+       WHERE session_id = $1`,
+      [sessionId],
+    );
+    return Number(result.rows[0]?.sequence ?? 0);
+  }
+
+  async lastTransitionSequence(sessionId: ProofSessionId): Promise<number> {
+    // The caller holds the session row lock, so no concurrent insert can take the next number.
+    const result = await this.client.query(
+      `SELECT COALESCE(MAX(transition_sequence), 0) AS sequence
+       FROM proof_edges
        WHERE session_id = $1`,
       [sessionId],
     );

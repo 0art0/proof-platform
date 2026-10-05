@@ -90,3 +90,31 @@ export function readBuiltinQuantifier(
     ? { symbol, body }
     : undefined;
 }
+
+/**
+ * A built-in `ForAll`/`Exists` whose bound symbol is declared bare (`x`) or typed
+ * (`["Element", x, S]`, giving `domain`). The domain belongs to the enclosing scope.
+ */
+export type ReadQuantifier = Readonly<{
+  symbol: string;
+  domain?: PlainMathJson;
+  body: PlainMathJson;
+}>;
+
+export function readQuantifier(
+  expression: PlainMathJson,
+  operator: "ForAll" | "Exists",
+): ReadQuantifier | undefined {
+  const parts = functionParts(expression);
+  if (parts?.operator !== operator || parts.operands.length !== 2) return undefined;
+  const declaration = readBinderDeclaration(parts.operands[0] as PlainMathJson, [
+    "symbol",
+    "element",
+  ]);
+  const body = parts.operands[1] as PlainMathJson;
+  if (declaration === undefined) return undefined;
+  if (declaration.form === "symbol") return { symbol: declaration.name, body };
+  const domainIndex = declaration.outerOperands[0] as number;
+  const domain = functionParts(parts.operands[0] as PlainMathJson)?.operands[domainIndex];
+  return domain === undefined ? undefined : { symbol: declaration.name, domain, body };
+}

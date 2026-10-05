@@ -11,6 +11,7 @@ import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
 import {
   actorSchema,
   applyKernelCommandSchema,
+  assignTransitionSequence,
   createPreparedProofCommandSchema,
   displayedSuggestionSetSchema,
   movePreviewSchema,
@@ -872,6 +873,117 @@ describe("proof command preparation", () => {
         previous: forgedClass,
       }),
     ).toMatchObject({ ok: false, diagnostics: [{ code: "invalid-prepared-record" }] });
+  });
+
+  it("stores the kernel's evidence on the edge, event, receipt and preview", () => {
+    const structural = prepareProofCommand(node(), command(), { trustedActor: human });
+    expect(structural).toMatchObject({
+      ok: true,
+      prepared: { edge: { evidence: "structural" }, event: { evidence: "structural" } },
+      receipt: { evidence: "structural" },
+    });
+    // A sorry is stored as sorry evidence rather than left for a reader to derive.
+    const sorry = prepareProofCommand(
+      node(state(["Or", "p", "q"])),
+      command(human, {
+        kind: "mark-sorry",
+        expectedStateId: "state:before",
+        resultStateId: "state:after",
+        target: { kind: "goal", id: "goal:main" },
+        assumptionId: "assumption:one",
+      }),
+      { trustedActor: human },
+    );
+    expect(sorry).toMatchObject({
+      ok: true,
+      prepared: { edge: { evidence: "sorry" }, event: { evidence: "sorry" } },
+      receipt: { evidence: "sorry" },
+    });
+  });
+
+  it("stamps a transition sequence on the edge, event and receipt, and rejects a forged retry", () => {
+    const first = prepareProofCommand(node(), command(), { trustedActor: human });
+    if (!first.ok) throw new Error("Expected initial preparation to succeed.");
+    expect(first.prepared.edge.sequence).toBeUndefined();
+    const stamped = assignTransitionSequence(first, 4);
+    expect([
+      stamped.prepared.edge.sequence,
+      stamped.prepared.event.sequence,
+      stamped.receipt.sequence,
+    ]).toEqual([4, 4, 4]);
+    expect(Object.isFrozen(stamped)).toBe(true);
+    expect(() => assignTransitionSequence(first, 0)).toThrow();
+    // The stamped result replays unchanged, sequence included.
+    expect(
+      prepareProofCommand(stamped.prepared.node, command(), {
+        trustedActor: human,
+        previous: stamped,
+      }),
+    ).toBe(stamped);
+
+    // A recorded result whose evidence the kernel does not reproduce is not replayed.
+    const forgedEvidence = {
+      ...stamped,
+      prepared: {
+        ...stamped.prepared,
+        edge: { ...stamped.prepared.edge, evidence: "sorry" as const },
+        event: { ...stamped.prepared.event, evidence: "sorry" as const },
+      },
+      receipt: { ...stamped.receipt, evidence: "sorry" as const },
+    };
+    expect(
+      prepareProofCommand(stamped.prepared.node, command(), {
+        trustedActor: human,
+        previous: forgedEvidence,
+      }),
+    ).toMatchObject({ ok: false, diagnostics: [{ code: "invalid-prepared-record" }] });
+
+    // An edge and its event must agree on the stored sequence.
+    const split = {
+      ...stamped,
+      prepared: {
+        ...stamped.prepared,
+        event: { ...stamped.prepared.event, sequence: 5 },
+      },
+    };
+    expect(createPreparedProofCommandSchema().safeParse(split.prepared).success).toBe(false);
+  });
+
+  it("stores a preview's evidence and rejects a command whose preview contradicts the kernel", () => {
+    const current = node();
+    const suggestions = prepareDisplayedSuggestionSet(retrievalIndex(), current, {
+      id: "suggestion-set:one",
+      selection: exactSelection(),
+      options: { limit: 100 },
+    });
+    if (!suggestions.ok) throw new Error(suggestions.diagnostics[0].message);
+    const chosen = suggestions.suggestionSet.suggestions.find(
+      ({ artifactId }) => artifactId === "move:close-true",
+    );
+    if (chosen === undefined) throw new Error("Expected close-true to be displayed.");
+    const preview = prepareMovePreview(current, suggestions.suggestionSet, {
+      id: "preview:one",
+      suggestionSetId: suggestions.suggestionSet.id,
+      chosenSuggestionId: chosen.id,
+      moveId: "move:close-true",
+      operation: command().operation,
+    });
+    if (!preview.ok) throw new Error(preview.diagnostics[0].message);
+    expect(preview.preview.evidence).toBe("structural");
+    const forged = { ...preview.preview, evidence: "library-result" as const };
+    expect(movePreviewSchema.safeParse(forged).success).toBe(true);
+    expect(
+      prepareProofCommand(
+        current,
+        command(human, undefined, {
+          moveId: "move:close-true",
+          suggestionSetId: suggestions.suggestionSet.id,
+          chosenSuggestionId: chosen.id,
+          previewId: forged.id,
+        }),
+        { trustedActor: human, suggestionSet: suggestions.suggestionSet, preview: forged },
+      ),
+    ).toMatchObject({ ok: false, diagnostics: [{ code: "preview-rejected" }] });
   });
 
   it("rejects current nodes that contradict recorded evidence with the same identity", () => {

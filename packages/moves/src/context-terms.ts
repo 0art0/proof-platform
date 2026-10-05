@@ -1,12 +1,13 @@
 import type { TransitionStatementTarget } from "@proof/kernel";
 import {
-  BUILTIN_BINDER_SPECIFICATIONS,
+  binderShape,
   createStatementViewSchema,
   declarationIdSchema,
   freeSymbolNames,
   freshSymbolName,
   mathJsonEquals,
-  type BinderSpecification,
+  readBinderDeclaration,
+  type BinderShape,
   type Declaration,
   type OperatorDeclaration,
   type PlainMathJson,
@@ -63,12 +64,20 @@ export function symbolValue(expression: PlainMathJson): string | undefined {
 }
 
 function binderFor(
-  operator: string,
+  parts: FunctionParts,
   operators: readonly OperatorDeclaration[],
-): BinderSpecification | undefined {
-  if (operator === "ForAll" || operator === "Exists")
-    return BUILTIN_BINDER_SPECIFICATIONS[operator];
-  return operators.find((candidate) => candidate.symbol === operator)?.binder;
+): BinderShape | undefined {
+  return binderShape(parts.operator, parts.operands.length, operators);
+}
+
+/** The names a binder node declares at its bound operands, whatever their declaration form. */
+function declaredNames(parts: FunctionParts, binder: BinderShape): readonly string[] {
+  return binder.boundOperands.flatMap((index) => {
+    const operand = parts.operands[index];
+    const declaration =
+      operand === undefined ? undefined : readBinderDeclaration(operand, binder.forms);
+    return declaration === undefined ? [] : [declaration.name];
+  });
 }
 
 /** One subexpression of a statement at an operand path. */
@@ -106,13 +115,9 @@ export function statementOccurrences(
     }
     const parts = functionParts(expression);
     if (parts === undefined) return;
-    const binder = binderFor(parts.operator, operators);
+    const binder = binderFor(parts, operators);
     const inner = new Set(bound);
-    binder?.boundOperands.forEach((index) => {
-      const operand = parts.operands[index];
-      const name = operand === undefined ? undefined : symbolValue(operand);
-      if (name !== undefined) inner.add(name);
-    });
+    if (binder !== undefined) declaredNames(parts, binder).forEach((name) => inner.add(name));
     parts.operands.forEach((operand, index) => {
       if (binder?.boundOperands.includes(index)) return;
       visit(
@@ -138,14 +143,10 @@ export function boundSymbolsAtPath(
   for (const index of path) {
     const parts = functionParts(current);
     if (parts === undefined) return undefined;
-    const binder = binderFor(parts.operator, operators);
+    const binder = binderFor(parts, operators);
     if (binder?.boundOperands.includes(index)) return undefined;
     if (binder?.scopedOperands.includes(index)) {
-      binder.boundOperands.forEach((boundIndex) => {
-        const operand = parts.operands[boundIndex];
-        const name = operand === undefined ? undefined : symbolValue(operand);
-        if (name !== undefined) bound.add(name);
-      });
+      declaredNames(parts, binder).forEach((name) => bound.add(name));
     }
     const next = parts.operands[index];
     if (next === undefined) return undefined;

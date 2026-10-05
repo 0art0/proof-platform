@@ -1,6 +1,6 @@
 # Offline AI evaluation
 
-`apps/worker/src/ai-evaluation.ts` defines model-independent runners and scoring for the 37 handwritten
+`apps/worker/src/ai-evaluation.ts` defines model-independent runners and scoring for the handwritten
 benchmark problems. The formalizer runner supplies the problem text, background, selected packs, and
 their approved library contents. Its task omits the handwritten hypotheses, goals, and proof steps.
 The shortlister runner builds a context from the current session and selected occurrences, calls an
@@ -29,6 +29,6 @@ injected adapter contract; it does not implement an agent loop, HTTP agent endpo
 adapter.
 
 The existing corpus coverage golden remains the benchmark's deterministic protocol baseline. It
-records the 37 problems and 124 scripted steps, including deterministic suggestion ranks and applied
+records every corpus problem and scripted step, including deterministic suggestion ranks and applied
 kernel operations. AI adapter results should be recorded separately so changes in model quality do
 not rewrite that baseline.

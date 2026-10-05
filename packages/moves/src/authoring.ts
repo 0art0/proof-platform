@@ -31,11 +31,14 @@ import {
   matchExpressionPattern,
   type KernelEnvironment,
   type KernelOperation,
+  type KernelOperationKind,
   type TransitionClass,
 } from "@proof/kernel";
 import { libraryArtifactReferenceSchema } from "@proof/library";
 import {
+  CONSTRUCTION_REQUIREMENT_ROLES,
   binderShape,
+  constructionRequirementEvidenceSchema,
   createExecutableProofStateSchema,
   plainMathJsonSchema,
   sortSchema,
@@ -50,7 +53,7 @@ import { z } from "zod";
 import { expressionAtPath, functionParts } from "./context-terms";
 import {
   HAND_AUTHORED_MOVES,
-  PRIMITIVE_TRANSITION_CLASSES,
+  declaredTransitionClass,
   moveDefinitionSchema,
   moveIdSchema,
   moveParameterSchema,
@@ -148,6 +151,19 @@ const menuValueSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("assumption"), assumptionId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("attestation"), attestationId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("generated-ids"), ids: z.array(stableIdentifierSchema) }).strict(),
+  z.object({ kind: z.literal("construction-task"), taskId: stableIdentifierSchema }).strict(),
+  z
+    .object({ kind: z.literal("construction-candidate"), candidateId: stableIdentifierSchema })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("construction-requirement"),
+      role: z.enum(CONSTRUCTION_REQUIREMENT_ROLES),
+      expression: plainMathJsonSchema,
+      evidence: constructionRequirementEvidenceSchema,
+    })
+    .strict(),
+  z.object({ kind: z.literal("symbols"), symbols: z.array(z.string().min(1)) }).strict(),
 ]);
 const menuOriginSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("selection"), slotId: stableIdentifierSchema }).strict(),
@@ -166,6 +182,7 @@ const menuOriginSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("attestation") }).strict(),
   z.object({ kind: z.literal("rule") }).strict(),
   z.object({ kind: z.literal("generated") }).strict(),
+  z.object({ kind: z.literal("construction"), taskId: stableIdentifierSchema }).strict(),
 ]);
 
 export const macroParameterSchema = z
@@ -464,7 +481,7 @@ export function primitiveForStep(step: AuthoredPlanStep): MoveDefinition | undef
  * Undefined when a step names no primitive.
  */
 export function plannedTransitionClass(plan: AuthoredPlan): TransitionClass | undefined {
-  const classes = plan.steps.map((step) => PRIMITIVE_TRANSITION_CLASSES[step.operationKind]);
+  const classes = plan.steps.map((step) => declaredTransitionClass(step.operationKind));
   return classes.length === 0 ? undefined : composeTransitionClasses(classes);
 }
 
@@ -493,7 +510,7 @@ function firstStepDefinition(
     requiredArtifacts: template.requiredArtifacts,
     implementation: primitive.implementation,
     // The primitive's own class: the moves schema ties it to the implementation.
-    transitionClass: PRIMITIVE_TRANSITION_CLASSES[first.operationKind],
+    transitionClass: declaredTransitionClass(first.operationKind),
     previewRenderer: "kernel-state-delta",
     examples: {
       positive: template.examples
@@ -1637,10 +1654,15 @@ function runExample(
       ["expected"],
     );
   }
-  if (run.transitionClass !== template.transitionClass) {
+  // The template declares the weakest class its primitives may report; an example may run as that
+  // class or as a stronger one (a forward application with every premise matched), never weaker.
+  if (
+    composeTransitionClasses([run.transitionClass, template.transitionClass]) !==
+    template.transitionClass
+  ) {
     return problem(
       "class-mismatch",
-      `Example ${example.id} ran as ${run.transitionClass}, but the template declares ${template.transitionClass}.`,
+      `Example ${example.id} ran as ${run.transitionClass}, which is weaker than the ${template.transitionClass} the template declares.`,
       ["expected", "transitionClass"],
     );
   }
@@ -1759,7 +1781,9 @@ export function macroFromSemanticSteps(
     steps.push({
       id: `step-${index + 1}`,
       moveId: primitive.id,
-      operationKind: primitive.implementation.operationKind,
+      // The hand-authored primitives are exactly the kernel primitives; construction moves are
+      // not in this catalog.
+      operationKind: primitive.implementation.operationKind as KernelOperationKind,
       selections: recorded.selections.map((selection) => structuredClone(selection)),
       parameters: recorded.parameters.map((parameter) => structuredClone(parameter)),
       operation: structuredClone(recorded.operation),
@@ -1787,7 +1811,7 @@ export function macroFromSemanticSteps(
     requiredArtifacts: [],
     plan: { kind: "deterministic-plan", steps },
     transitionClass: composeTransitionClasses(
-      steps.map((step) => PRIMITIVE_TRANSITION_CLASSES[step.operationKind]),
+      steps.map((step) => declaredTransitionClass(step.operationKind)),
     ),
     examples: metadata.examples ?? [],
     ...(metadata.discoveryContext === undefined

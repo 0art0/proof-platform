@@ -921,3 +921,70 @@ describe("close-by-assumption menus", () => {
     });
   });
 });
+
+describe("materialization over typed binders", () => {
+  const typedUniversal: PlainMathJson = [
+    "ForAll",
+    ["Element", "n", "NonNegativeIntegers"],
+    ["Lt", "n", ["S", "n"]],
+  ];
+  const typedExistential: PlainMathJson = [
+    "Exists",
+    ["Element", "n", "NonNegativeIntegers"],
+    ["Lt", "a", "n"],
+  ];
+  const typedRoundTrips: readonly RoundTrip[] = [
+    {
+      kind: "introduce-universal",
+      input: state(typedUniversal),
+      selections: { target: at("conclusion") },
+    },
+    {
+      kind: "instantiate-universal-hypothesis",
+      input: state(["Lt", "a", ["S", "a"]], [{ id: "h:all", expression: typedUniversal }]),
+      selections: { target: at("conclusion"), universal: at("h:all"), term: at("conclusion", [0]) },
+    },
+    {
+      kind: "choose-existential-witness",
+      input: state(typedExistential),
+      selections: { target: at("conclusion") },
+    },
+    {
+      kind: "unpack-existential-hypothesis",
+      input: state("p", [{ id: "h:ex", expression: typedExistential }]),
+      selections: { target: at("conclusion"), existential: at("h:ex") },
+    },
+  ];
+
+  it.each(typedRoundTrips)(
+    "materializes typed $kind into an operation the kernel accepts",
+    (entry) => {
+      const choices = chooseAll(entry.input, entry.kind, entry.selections, { operators });
+      const materialized = materializeMoveOperation({
+        state: entry.input,
+        move: moveFor(entry.kind),
+        selections: entry.selections,
+        menuChoices: choices,
+        idGenerator: ids,
+        env: { operators },
+        attestationIds: [],
+      });
+      if (!materialized.ok) throw new Error(JSON.stringify(materialized.diagnostics));
+      const transition = applyTransition(entry.input, materialized.operation, { operators });
+      expect(transition.diagnostics).toEqual([]);
+      expect(transition.ok).toBe(true);
+    },
+  );
+
+  it("offers instantiation terms of the binder's sort", () => {
+    const input = state(["Lt", "a", ["S", "a"]], [{ id: "h:all", expression: typedUniversal }]);
+    const terms = menuValues(
+      input,
+      "instantiate-universal-hypothesis",
+      { target: at("conclusion"), universal: at("h:all") },
+      "term",
+    );
+    expect(terms).toContainEqual("a");
+    expect(terms).not.toContainEqual("p");
+  });
+});

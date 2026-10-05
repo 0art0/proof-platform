@@ -28,6 +28,7 @@ import {
   constructionRequirementIdSchema,
   constructionTaskIdSchema,
   createStatementViewSchema,
+  builtinBinderSorts,
   freeSymbolNames,
   isOpenConstructionTask,
   plainMathJsonSchema,
@@ -55,7 +56,7 @@ import {
   type StatementId,
 } from "@proof/mathjson-model";
 import { alphaEquivalentWithOperators } from "./alpha-equivalence";
-import { functionParts, readBuiltinQuantifier } from "./expression";
+import { functionParts, readQuantifier } from "./expression";
 import type { KernelDiagnosticCode, OperationBase, TransitionTarget } from "./index";
 import { collectSymbolNames, termHasSortInContext } from "./results";
 import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
@@ -71,8 +72,8 @@ export type ConstructionOperationKind = (typeof CONSTRUCTION_OPERATION_KINDS)[nu
 
 /**
  * `existential-goal` replaces the witness of the target's existential
- * conclusion; the binder must be an untyped symbol whose sort a context
- * declaration supplies. `auxiliary-request` records a new task of the given
+ * conclusion; an untyped binder needs a context declaration supplying its sort,
+ * a typed binder `∃x∈S` takes it from the domain and keeps `p ∈ S` in the goal. `auxiliary-request` records a new task of the given
  * sort in the target's scope without changing the target; `requestedBy` names
  * an open task that becomes allowed to depend on it.
  */
@@ -437,30 +438,44 @@ export function introducePlaceholder(
   }
 
   let sort: Sort;
-  let quantifier: ReturnType<typeof readBuiltinQuantifier>;
+  let quantifier: ReturnType<typeof readQuantifier>;
   let requester: ConstructionTask | undefined;
   if (operation.origin.kind === "existential-goal") {
-    quantifier = readBuiltinQuantifier(sequent.conclusion.expression, "Exists");
+    quantifier = readQuantifier(sequent.conclusion.expression, "Exists");
     if (quantifier === undefined) {
       return fail("rule-not-applicable", "The target conclusion is not existential.");
     }
     const bound = quantifier.symbol;
-    const declaration = sequent.context.declarations.find(
-      (candidate) => candidate.symbol === bound,
-    );
-    if (declaration === undefined) {
-      return fail(
-        "rule-not-applicable",
-        "The existential binder requires a declaration giving its sort in the local context.",
-      );
-    }
     if (dependencies.has(bound)) {
       return fail(
         "illegal-dependency",
         "A construction cannot depend on the symbol its own existential binds.",
       );
     }
-    sort = declaration.sort;
+    if (quantifier.domain === undefined) {
+      const declaration = sequent.context.declarations.find(
+        (candidate) => candidate.symbol === bound,
+      );
+      if (declaration === undefined) {
+        return fail(
+          "rule-not-applicable",
+          "The existential binder requires a declaration giving its sort in the local context.",
+        );
+      }
+      sort = declaration.sort;
+    } else {
+      // A typed binder `∃x∈S` takes its sort from the membership of the domain.
+      const typed = builtinBinderSorts(
+        "Exists",
+        [["Element", bound, quantifier.domain], quantifier.body],
+        new Map(sequent.context.declarations.map((entry) => [entry.symbol, entry.sort])),
+        [...environmentOperators, ...constructionPlaceholderOperators(state)],
+      )?.get(bound);
+      if (typed === undefined) {
+        return fail("rule-not-applicable", "The typed binder's domain is not a well-sorted set.");
+      }
+      sort = typed;
+    }
   } else {
     sort = operation.origin.sort;
     if (operation.origin.requestedBy !== undefined) {
@@ -537,9 +552,19 @@ export function introducePlaceholder(
   if (!instantiated.ok) {
     return fail("replacement-failed", "The placeholder could not replace the witness safely.");
   }
+  // A typed binder `∃x∈S` keeps `p ∈ S` in the goal, as choosing a witness does, so it cannot be
+  // dropped.
+  const conclusion: PlainMathJson =
+    quantifier.domain === undefined
+      ? instantiated.expression
+      : [
+          "And",
+          ["Element", placeholderOccurrence(task), quantifier.domain],
+          instantiated.expression,
+        ];
   const replaced = {
     ...entry,
-    sequent: { ...sequent, conclusion: { expression: instantiated.expression } },
+    sequent: { ...sequent, conclusion: { expression: conclusion } },
   };
   const collection = operation.target.kind === "goal" ? "goals" : "obligations";
   const next: ProofState = {

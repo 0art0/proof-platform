@@ -453,6 +453,9 @@ export function createLatexRenderer(options: LatexRendererOptions = {}): LatexRe
     operator: OperatorDeclaration,
     operands: readonly PlainMathJson[],
   ): Rendered => {
+    if (isConstructionPlaceholder(operator) && operator.presentation !== undefined) {
+      return atom(placeholderLatex(operator.presentation.displayName));
+    }
     const latex = operator.presentation?.latex;
     const segments =
       latex === undefined || operands.length !== operator.signature.parameters.length
@@ -663,4 +666,23 @@ function normalizeParsed(expression: PlainMathJson, errors: string[]): PlainMath
 /** Parse LaTeX with the standard dictionary plus the operators' parse triggers. */
 export function parseLatex(latex: string, options: LatexRendererOptions = {}): LatexParseResult {
   return createLatexRenderer(options).parse(latex);
+}
+
+const PLACEHOLDER_ID_PREFIX = "construction-placeholder:";
+
+/** A construction placeholder (N11): its operator is derived from a task, never declared. */
+function isConstructionPlaceholder(operator: OperatorDeclaration): boolean {
+  return operator.id.startsWith(PLACEHOLDER_ID_PREFIX);
+}
+
+/**
+ * A placeholder shows its task's display name, boxed so it reads as a choice still to be made
+ * rather than as a variable. The display name is free text, so only letters, digits, spaces,
+ * hyphens and primes are kept.
+ */
+function placeholderLatex(displayName: string): string {
+  const name = displayName.replace(/[^\p{L}\p{N} '-]/gu, "").trim();
+  if (name === "") return "\\boxed{?}";
+  const body = /^\p{L}$/u.test(name) ? name : `\\mathrm{${name.replaceAll(" ", "\\ ")}}`;
+  return `\\boxed{${body}}`;
 }

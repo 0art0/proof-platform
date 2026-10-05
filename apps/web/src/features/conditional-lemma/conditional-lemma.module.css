@@ -1,0 +1,122 @@
+.panel {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  padding: 1rem 1.15rem;
+}
+
+.panel p,
+.panel h2,
+.panel h3,
+.panel h4,
+.panel ul,
+.panel ol {
+  margin: 0;
+}
+
+.heading h2 {
+  font-size: 1.45rem;
+}
+
+.meta,
+.empty,
+.reason {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.collapse summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.status,
+.error {
+  border-left: 4px solid var(--border);
+  background: var(--surface-muted);
+  padding: 0.6rem 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.error {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.list {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.itemHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.action {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: start;
+}
+
+.preview {
+  display: grid;
+  gap: 0.6rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.statement {
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.hypotheses {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.unused {
+  color: var(--text-muted);
+}
+
+.reviewSection {
+  display: grid;
+  gap: 0.5rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.reviewSection textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  box-sizing: border-box;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

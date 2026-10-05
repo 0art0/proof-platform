@@ -1,6 +1,7 @@
 import {
-  BUILTIN_BINDER_SPECIFICATIONS,
   RESERVED_BUILTIN_SYMBOLS,
+  binderShape,
+  constructionPlaceholderOperators,
   createProofStateSchema,
   mathJsonEquals,
   operatorDeclarationsSchema,
@@ -253,6 +254,14 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
     if (options === undefined) {
       return retrievalFailure("invalid-query", "The retrieval query options are invalid.");
     }
+    const stateResult = createProofStateSchema({ operators: this.#operators }).safeParse(
+      stateInput,
+    );
+    if (!stateResult.success) {
+      return retrievalFailure("selection-rejected", "The proof state could not be revalidated.");
+    }
+    // Open construction placeholders are registered operators for everything read from the state.
+    const operators = [...this.#operators, ...constructionPlaceholderOperators(stateResult.data)];
     const resolved = resolveRetrievalSelection(
       stateInput as ProofState,
       selectionInput,
@@ -260,12 +269,6 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
     );
     if (!resolved.ok) {
       return retrievalFailure("selection-rejected", resolved.message);
-    }
-    const stateResult = createProofStateSchema({ operators: this.#operators }).safeParse(
-      stateInput,
-    );
-    if (!stateResult.success) {
-      return retrievalFailure("selection-rejected", "The proof state could not be revalidated.");
     }
 
     const candidateMatches = resolved.subjects.flatMap((subject) =>
@@ -290,7 +293,7 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
             resolved.subjects,
             stateResult.data,
             available,
-            this.#operators,
+            operators,
             sortCache,
           ),
         ),
@@ -944,12 +947,7 @@ function selectionLexicalScopeKey(
     if (expression === undefined) break;
     const parts = functionParts(expression);
     if (parts === undefined) break;
-    const customBinder = operators.find(({ symbol }) => symbol === parts.operator)?.binder;
-    const builtinBinder =
-      parts.operator === "ForAll" || parts.operator === "Exists"
-        ? BUILTIN_BINDER_SPECIFICATIONS[parts.operator]
-        : undefined;
-    const binder = customBinder ?? builtinBinder;
+    const binder = binderShape(parts.operator, parts.operands.length, operators);
     if (binder?.scopedOperands.includes(operandIndex) === true) {
       binderPaths.push(`${traversed.join(".")}:${parts.operator}`);
     }

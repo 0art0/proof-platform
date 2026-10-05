@@ -7,7 +7,13 @@ import {
   type ExecutableProofState,
   type PlainMathJson,
 } from "@proof/mathjson-model";
-import { applyTransition, kernelOperationSchema } from "./index";
+import {
+  KERNEL_TRANSITION_CLASSES,
+  TRANSITION_EVIDENCE_KINDS,
+  applyTransition,
+  composeTransitionEvidence,
+  kernelOperationSchema,
+} from "./index";
 
 const declarations = ["p", "q", "r"].map((symbol, index) => ({
   id: `declaration:${index}`,
@@ -950,6 +956,32 @@ describe("classical case splits and assumed hypotheses", () => {
     for (const operation of propositionOperations(["Equal", "n", "n"])) {
       expect(applyTransition(input, operation)).toMatchObject({ ok: true });
     }
+  });
+
+  it("reports classes within each primitive's allowed set, and never an equivalence with obligations", () => {
+    const proposition: fc.Arbitrary<PlainMathJson> = fc.letrec<{ node: PlainMathJson }>((tie) => ({
+      node: fc.oneof(
+        { depthSize: "small", withCrossShrink: true },
+        fc.constantFrom<PlainMathJson>("p", "q", "r", "True"),
+        fc.tuple(fc.constant("Not"), tie("node")),
+        fc.tuple(fc.constantFrom("And", "Or", "Implies"), tie("node"), tie("node")),
+      ),
+    })).node;
+    fc.assert(
+      fc.property(proposition, proposition, (conclusion, supplied) => {
+        const input = state([conclusion]);
+        for (const operation of propositionOperations(supplied)) {
+          const result = applyTransition(input, operation);
+          if (!result.ok) continue;
+          const kind = operation.kind as keyof typeof KERNEL_TRANSITION_CLASSES;
+          expect(KERNEL_TRANSITION_CLASSES[kind]).toContain(result.transitionClass);
+          if (result.state.obligations.length > input.obligations.length) {
+            expect(result.transitionClass).not.toBe("equivalence");
+          }
+        }
+      }),
+      { numRuns: 200 },
+    );
   });
 
   it("validates supplied propositions against the configured operator environment", () => {
@@ -2084,3 +2116,24 @@ function deepFreeze<T>(value: T): T {
   Object.values(value).forEach(deepFreeze);
   return value;
 }
+
+describe("composed transition evidence", () => {
+  it("is the most caveated evidence of the steps, whatever their order", () => {
+    expect(composeTransitionEvidence([])).toBe("structural");
+    expect(composeTransitionEvidence(["structural", "library-result"])).toBe("library-result");
+    expect(composeTransitionEvidence(["library-result", "background-inference"])).toBe(
+      "background-inference",
+    );
+    expect(composeTransitionEvidence(["sorry", "structural", "library-result"])).toBe("sorry");
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom(...TRANSITION_EVIDENCE_KINDS), { maxLength: 6 }),
+        (steps) => {
+          const composed = composeTransitionEvidence(steps);
+          expect(composeTransitionEvidence([...steps].reverse())).toBe(composed);
+          if (steps.length > 0) expect(steps).toContain(composed);
+        },
+      ),
+    );
+  });
+});

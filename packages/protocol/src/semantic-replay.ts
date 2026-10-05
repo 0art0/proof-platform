@@ -27,6 +27,7 @@
  */
 import {
   alphaEquivalent,
+  composeTransitionClasses,
   kernelOperationSchema,
   matchExpressionPattern,
   type KernelOperation,
@@ -45,6 +46,7 @@ import {
   type OperatorDeclaration,
   type PlainMathJson,
 } from "@proof/mathjson-model";
+import { runMovePlan, type AuthoredMoveTemplate } from "@proof/moves/authoring";
 import {
   commandIdGenerator,
   materializeMoveOperation,
@@ -177,9 +179,34 @@ export const semanticStepSchema = z
     transitionClass: z.enum(["equivalence", "strengthening", "weakening"]),
     /** Conclusions of the obligations the step created. */
     obligations: z.array(plainMathJsonSchema).max(64),
+    /**
+     * Present exactly for the application of an approved multi-step macro (N45): `moveId` is the
+     * macro's authored move, `selections` and `parameters` are its first step's, and every step
+     * is recorded so later identities correspond. The macro is applied again, as one step.
+     */
+    macro: z
+      .object({
+        steps: z
+          .array(
+            z
+              .object({
+                id: stableIdentifierSchema,
+                moveId: moveIdSchema,
+                operation: operationSchema,
+              })
+              .strict(),
+          )
+          .min(2)
+          .max(16),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((step, context) => {
+    if (step.macro !== undefined && step.source !== "move") {
+      context.addIssue({ code: "custom", message: "Only a move step can be a macro application." });
+    }
     if ((step.source === "result") !== (step.result !== undefined)) {
       context.addIssue({
         code: "custom",
@@ -198,6 +225,62 @@ export const semanticStepSchema = z
     }
   });
 export type SemanticStep = z.infer<typeof semanticStepSchema>;
+
+/** Where a step with no displayed suggestion came from. */
+export const operationStepOriginSchema = z.enum(["backtrack", "raw-operation"]);
+export type OperationStepOrigin = z.infer<typeof operationStepOriginSchema>;
+
+/**
+ * The plan of a step applied without a displayed suggestion (N45): a backtracking case split or
+ * auto-close, or a raw kernel-operation command. It is derived from the stored operation alone.
+ * The first selection (`target`) is the pattern the operation's target is re-matched by: the
+ * whole conclusion of the target, or the rewritten occurrence for a rewrite operation. Every
+ * hypothesis the operation names is a further selection (`ref:<n>`). Free symbols of those
+ * fragments are pattern variables; other expressions of the operation are mapped through the
+ * resulting correspondence. Identifiers the operation names that already existed are listed in
+ * `referenced`; every other identifier is generated afresh.
+ */
+export const semanticOperationStepSchema = z
+  .object({
+    source: z.literal("operation"),
+    origin: operationStepOriginSchema,
+    /** The primitive move the stored edge names, if any (a step of a replayed macro). */
+    moveId: moveIdSchema.optional(),
+    selections: z.array(semanticSelectionSchema).min(1).max(16),
+    referenced: z.array(z.string().min(1)).max(256),
+    operation: operationSchema,
+    transitionClass: z.enum(["equivalence", "strengthening", "weakening"]),
+    obligations: z.array(plainMathJsonSchema).max(64),
+  })
+  .strict()
+  .superRefine((step, context) => {
+    const slots = step.selections.map(({ slotId }) => slotId);
+    if (
+      new Set(slots).size !== slots.length ||
+      step.selections[0]?.slotId !== "target" ||
+      new Set(step.selections.map(({ target }) => `${target.kind}\u0000${target.id}`)).size !== 1
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "An operation step starts with its target and shares one target.",
+      });
+    }
+  });
+export type SemanticOperationStep = z.infer<typeof semanticOperationStepSchema>;
+
+/** Any step plan the replay can re-match. */
+export const semanticPlanSchema = z.union([semanticStepSchema, semanticOperationStepSchema]);
+export type SemanticPlan = z.infer<typeof semanticPlanSchema>;
+
+export const replayStepSourceSchema = z.enum(["suggestion", "backtrack", "raw-operation", "macro"]);
+export type ReplayStepSource = z.infer<typeof replayStepSourceSchema>;
+
+/** How a plan's step was originally applied. */
+export function replayStepSource(plan: SemanticPlan | undefined): ReplayStepSource {
+  if (plan === undefined) return "suggestion";
+  if (plan.source === "operation") return plan.origin;
+  return plan.macro === undefined ? "suggestion" : "macro";
+}
 
 /** Force one listed candidate for a slot of a step (1-based step index). */
 export const replayOverrideSchema = z
@@ -299,9 +382,17 @@ export const replayStepReportSchema = z
     index: z.number().int().min(1),
     sourceEdgeId: proofEdgeIdSchema,
     moveId: moveIdSchema.optional(),
+    /**
+     * How the source step was applied: from a displayed suggestion, by backtracking with
+     * information, as a raw kernel operation, or as one macro application (N45). Absent in
+     * reports recorded earlier, which were all from displayed suggestions.
+     */
+    source: replayStepSourceSchema.optional(),
     status: z.enum(["exact", "adapted", "failed", "not-attempted"]),
-    /** The replayed command, for an exact or adapted step. */
+    /** The replayed command, for an exact or adapted step; a macro's last command. */
     commandId: commandIdSchema.optional(),
+    /** Every command a macro step applied, in order; absent for a single-command step. */
+    commandIds: z.array(commandIdSchema).min(2).max(16).optional(),
     resultNodeId: proofNodeIdSchema.optional(),
     transitionClass: z.enum(["equivalence", "strengthening", "weakening"]).optional(),
     /** The chosen occurrence per slot. */
@@ -408,7 +499,7 @@ export const semanticReplayStepRecordSchema = z
       .strict(),
     /** The node the replay started from. */
     targetNodeId: proofNodeIdSchema,
-    plan: semanticStepSchema,
+    plan: semanticPlanSchema,
     report: replayStepReportSchema,
     recordedAt: z.string().datetime({ offset: true }),
   })
@@ -632,13 +723,343 @@ function semanticSelection(
 }
 
 // --------------------------------------------------------------------------------------------
+// Deriving plans without a displayed suggestion (N45)
+// --------------------------------------------------------------------------------------------
+
+export type OperationStepDerivationInput = Readonly<{
+  parent: ProofNode;
+  child: ProofNode;
+  edge: Pick<
+    ProofEdge,
+    "id" | "parentNodeId" | "childNodeId" | "moveId" | "operation" | "transitionClass"
+  >;
+  /** `backtrack` for the case split and auto-close of backtracking with information. */
+  origin?: OperationStepOrigin;
+  operators?: readonly OperatorDeclaration[];
+}>;
+
+export type OperationStepDerivationResult =
+  | Readonly<{ ok: true; step: SemanticOperationStep; diagnostics: readonly [] }>
+  | Readonly<{ ok: false; diagnostics: readonly [SemanticReplayDiagnostic] }>;
+
+const REWRITE_OPERATIONS = new Set([
+  "rewrite-with-equality",
+  "rewrite-with-equivalence",
+  "rewrite-with-implication",
+]);
+
+/** Keys whose values are mathematics, mapped through the symbol correspondence. */
+const EXPRESSION_KEYS = new Set(["proposition", "term", "witness", "value"]);
+
+/** Keys of the operation's own addressing, rebuilt from the re-matched occurrence. */
+const ADDRESS_KEYS = new Set(["target", "statement", "path", "lens"]);
+
+function isIdentifierKey(key: string): boolean {
+  return (key === "id" || /Ids?$/.test(key)) && !STATE_ID_KEYS.has(key);
+}
+
+/**
+ * The plan of one step applied without a displayed suggestion, from the stored operation and the
+ * parent and child snapshots: the target as a pattern, the hypotheses it names as further
+ * patterns, and the operation itself as the template to rebuild.
+ */
+export function deriveOperationStep(
+  input: OperationStepDerivationInput,
+): OperationStepDerivationResult {
+  try {
+    return deriveOperation(input);
+  } catch {
+    return operationFailure("The stored step could not be inspected safely.");
+  }
+}
+
+function deriveOperation(input: OperationStepDerivationInput): OperationStepDerivationResult {
+  const { parent, child, edge } = input;
+  const operators = input.operators ?? [];
+  if (edge.parentNodeId !== parent.id || edge.childNodeId !== child.id) {
+    return operationFailure("The step's snapshots do not belong to its edge.");
+  }
+  const operation = edge.operation as unknown as Readonly<Record<string, unknown>>;
+  const target = operation.target as ReplayTarget | undefined;
+  const entry = target === undefined ? undefined : findEntry(parent, target.id);
+  if (target === undefined || entry === undefined) {
+    return operationFailure("The operation's target is not in the parent snapshot.");
+  }
+  const selectionTarget: ReplayTarget = { kind: target.kind, id: target.id };
+  const hypotheses = entry.sequent.context.hypotheses;
+  const known = stateStrings(parent.state);
+
+  let anchor: SemanticSelection;
+  let anchorHypothesis: string | undefined;
+  if (REWRITE_OPERATIONS.has(edge.operation.kind)) {
+    const addressed = rewriteAnchor(operation, entry, selectionTarget, operators);
+    if (addressed === undefined) {
+      return operationFailure("The rewritten occurrence is not in the parent snapshot.");
+    }
+    anchor = addressed;
+    anchorHypothesis =
+      addressed.statement.role === "hypothesis" ? addressed.statement.id : undefined;
+  } else {
+    anchor = {
+      slotId: "target",
+      target: selectionTarget,
+      statement: { role: "conclusion" },
+      occurrence: { kind: "exact", path: [] },
+      fragment: entry.sequent.conclusion.expression,
+      variables: fragmentVariables(entry.sequent.conclusion.expression, entry, operators),
+    };
+  }
+
+  const referenced = referencedIdentifiers(operation, known);
+  const selections: SemanticSelection[] = [anchor];
+  for (const id of referenced) {
+    if (id === anchorHypothesis) continue;
+    const hypothesis = hypotheses.find((candidate) => candidate.id === id);
+    if (hypothesis === undefined) continue;
+    const expression = hypothesis.statement.expression;
+    selections.push({
+      slotId: `ref:${selections.length}`,
+      target: selectionTarget,
+      statement: { role: "hypothesis", id: hypothesis.id },
+      occurrence: { kind: "exact", path: [] },
+      fragment: expression,
+      variables: fragmentVariables(expression, entry, operators),
+    });
+  }
+
+  const parentObligations = new Set(parent.state.obligations.map(({ id }) => id));
+  const candidate = {
+    source: "operation" as const,
+    origin: input.origin ?? "raw-operation",
+    ...(edge.moveId === undefined ? {} : { moveId: edge.moveId }),
+    selections,
+    referenced,
+    operation: edge.operation,
+    transitionClass: edge.transitionClass,
+    obligations: child.state.obligations
+      .filter(({ id }) => !parentObligations.has(id))
+      .map(({ sequent }) => sequent.conclusion.expression),
+  };
+  const parsed = semanticOperationStepSchema.safeParse(candidate);
+  return parsed.success
+    ? { ok: true, step: freezeDetached(parsed.data), diagnostics: [] }
+    : operationFailure("The derived operation plan failed its schema.");
+}
+
+function operationFailure(message: string): OperationStepDerivationResult {
+  return { ok: false, diagnostics: [{ code: "step-not-replayable", message }] };
+}
+
+/** The occurrence a rewrite operation addresses, as the anchor selection. */
+function rewriteAnchor(
+  operation: Readonly<Record<string, unknown>>,
+  entry: Entry,
+  target: ReplayTarget,
+  operators: readonly OperatorDeclaration[],
+): SemanticSelection | undefined {
+  const statement = operation.statement as { kind?: unknown; id?: unknown } | undefined;
+  const path = operation.path;
+  if (
+    statement === undefined ||
+    !Array.isArray(path) ||
+    !path.every((index) => typeof index === "number")
+  ) {
+    return undefined;
+  }
+  const replayStatement: ReplayStatement | undefined =
+    statement.kind === "conclusion"
+      ? { role: "conclusion" }
+      : statement.kind === "hypothesis" && typeof statement.id === "string"
+        ? { role: "hypothesis", id: statement.id as never }
+        : undefined;
+  if (replayStatement === undefined) return undefined;
+  const expression =
+    replayStatement.role === "conclusion"
+      ? entry.sequent.conclusion.expression
+      : entry.sequent.context.hypotheses.find(({ id }) => id === replayStatement.id)?.statement
+          .expression;
+  const container = expression === undefined ? undefined : expressionAt(expression, path);
+  if (container === undefined) return undefined;
+  const lens = operation.lens as { startOperand?: unknown; endOperand?: unknown } | undefined;
+  let occurrence: ReplayOccurrence;
+  let fragment: PlainMathJson;
+  if (lens === undefined) {
+    occurrence = { kind: "exact", path: [...(path as number[])] };
+    fragment = container;
+  } else {
+    const parts = functionParts(container);
+    if (
+      parts === undefined ||
+      typeof lens.startOperand !== "number" ||
+      typeof lens.endOperand !== "number" ||
+      lens.endOperand > parts.operands.length
+    ) {
+      return undefined;
+    }
+    occurrence = {
+      kind: "associative",
+      containerPath: [...(path as number[])],
+      startOperand: lens.startOperand,
+      endOperand: lens.endOperand,
+    };
+    fragment = parts.rebuild(parts.operands.slice(lens.startOperand, lens.endOperand));
+  }
+  return {
+    slotId: "target",
+    target,
+    statement: replayStatement,
+    occurrence,
+    fragment,
+    variables: fragmentVariables(fragment, entry, operators),
+  };
+}
+
+function expressionAt(
+  expression: PlainMathJson,
+  path: readonly unknown[],
+): PlainMathJson | undefined {
+  let current = expression;
+  for (const index of path) {
+    const parts = functionParts(current);
+    const next = typeof index === "number" ? parts?.operands[index] : undefined;
+    if (next === undefined) return undefined;
+    current = next;
+  }
+  return current;
+}
+
+/** Every string in a snapshot's state: its identifiers, among much else. */
+function stateStrings(state: ProofNode["state"]): Set<string> {
+  const strings = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") strings.add(value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (isRecord(value)) Object.values(value).forEach(visit);
+  };
+  visit(state);
+  return strings;
+}
+
+/**
+ * The identifiers an operation names that already existed in the snapshot it was applied to, in
+ * first-use order, excluding its target and the addresses of a rewrite.
+ */
+function referencedIdentifiers(
+  operation: Readonly<Record<string, unknown>>,
+  known: ReadonlySet<string>,
+): string[] {
+  const found: string[] = [];
+  const visit = (value: unknown, key: string): void => {
+    if (typeof value === "string") {
+      if (isIdentifierKey(key) && known.has(value) && !found.includes(value)) found.push(value);
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, key);
+    } else if (isRecord(value)) {
+      for (const [field, item] of Object.entries(value)) {
+        if (!EXPRESSION_KEYS.has(field) && field !== "instantiation") visit(item, field);
+      }
+    }
+  };
+  for (const [field, item] of Object.entries(operation)) {
+    if (!ADDRESS_KEYS.has(field) && !EXPRESSION_KEYS.has(field) && field !== "instantiation") {
+      visit(item, field);
+    }
+  }
+  return found;
+}
+
+export type MacroStepDerivationInput = Readonly<{
+  /** The snapshot the application started from, and the one its last step produced. */
+  parent: ProofNode;
+  child: ProofNode;
+  /** The application's edges in step order, as recorded with their macro link. */
+  edges: readonly Pick<
+    ProofEdge,
+    "id" | "parentNodeId" | "childNodeId" | "moveId" | "operation" | "transitionClass" | "macro"
+  >[];
+  /** The stored macro preview the application was applied from. */
+  preview: Readonly<{
+    id: string;
+    suggestionSetId: string;
+    chosenSuggestionId: string;
+    menuSelection?: SemanticStepDerivationInput["edge"]["menuSelection"];
+  }>;
+  suggestionSet: DisplayedSuggestionSet;
+  operators?: readonly OperatorDeclaration[];
+}>;
+
+/**
+ * The plan of a whole macro application: the first step's selections and menu choices, as the
+ * displayed suggestion recorded them, and every step's operation. The edges must be one complete,
+ * consecutive application.
+ */
+export function deriveMacroStep(input: MacroStepDerivationInput): SemanticStepDerivationResult {
+  try {
+    const { edges, parent, child, preview } = input;
+    const first = edges[0];
+    const last = edges.at(-1);
+    const link = first?.macro;
+    if (first === undefined || last === undefined || link === undefined || edges.length < 2) {
+      return deriveFailure("A macro application has at least two steps.");
+    }
+    const consistent = edges.every(
+      (edge, position) =>
+        edge.macro?.previewId === preview.id &&
+        edge.macro.moveId === link.moveId &&
+        edge.macro.stepIndex === position + 1 &&
+        edge.macro.stepCount === edges.length &&
+        edge.moveId !== undefined &&
+        (position === 0 || edge.parentNodeId === edges[position - 1]?.childNodeId),
+    );
+    if (!consistent || first.parentNodeId !== parent.id || last.childNodeId !== child.id) {
+      return deriveFailure("The macro's steps are not one complete, consecutive application.");
+    }
+    const derived = derive({
+      parent,
+      child,
+      edge: {
+        id: first.id,
+        parentNodeId: parent.id,
+        childNodeId: child.id,
+        moveId: link.moveId,
+        suggestionSetId: preview.suggestionSetId as never,
+        chosenSuggestionId: preview.chosenSuggestionId as never,
+        operation: first.operation,
+        transitionClass: composeTransitionClasses(
+          edges.map(({ transitionClass }) => transitionClass),
+        ),
+        ...(preview.menuSelection === undefined ? {} : { menuSelection: preview.menuSelection }),
+      },
+      suggestionSet: input.suggestionSet,
+      ...(input.operators === undefined ? {} : { operators: input.operators }),
+    });
+    if (!derived.ok) return derived;
+    const parsed = semanticStepSchema.safeParse({
+      ...derived.step,
+      macro: {
+        steps: edges.map((edge) => ({
+          id: edge.macro?.stepId,
+          moveId: edge.moveId,
+          operation: edge.operation,
+        })),
+      },
+    });
+    return parsed.success
+      ? { ok: true, step: freezeDetached(parsed.data), diagnostics: [] }
+      : deriveFailure("The derived macro plan failed its schema.");
+  } catch {
+    return deriveFailure("The stored macro application could not be inspected safely.");
+  }
+}
+
+// --------------------------------------------------------------------------------------------
 // Replay
 // --------------------------------------------------------------------------------------------
 
 export type SemanticReplaySourceStep = Readonly<{
   sourceEdgeId: string;
   /** The plan, or undefined with the reason the step cannot be replayed. */
-  step?: SemanticStep;
+  step?: SemanticPlan;
   unavailable?: string;
 }>;
 
@@ -662,15 +1083,20 @@ export type SemanticReplayInput = Readonly<{
   results?: readonly KernelResult[];
   /** The approved move catalog. */
   moves: readonly MoveDefinition[];
+  /** The approved multi-step macros (N45): a macro step is applied again through its template. */
+  macros?: readonly Readonly<{ move: MoveDefinition; template: AuthoredMoveTemplate }>[];
 }>;
 
 /** One replayed step, ready to persist. */
 export type SemanticReplayedStep = Readonly<{
   index: number;
   sourceEdgeId: string;
+  /** The step's command; the LAST command of a macro step. */
   prepared: PrepareProofCommandSuccess;
+  /** The commands a macro step applied before `prepared`, in order; empty for other steps. */
+  preceding: readonly PrepareProofCommandSuccess[];
   /** The step's plan in the replayed branch's terms, recorded so it can be replayed again. */
-  plan: SemanticStep;
+  plan: SemanticPlan;
   report: ReplayStepReport;
 }>;
 
@@ -695,6 +1121,8 @@ type Correspondence = {
   order: string[];
   /** Source statement or assumption ID → replayed ID. */
   ids: Map<string, string>;
+  /** Source construction-placeholder symbol → the fresh symbol the replayed branch introduced. */
+  placeholders: Map<string, string>;
 };
 
 type Candidate = ReplayCandidate &
@@ -706,9 +1134,14 @@ type Candidate = ReplayCandidate &
 type Attempt =
   | Readonly<{
       ok: true;
+      /** The step's (last) command. */
       prepared: PrepareProofCommandSuccess;
+      /** A macro's earlier commands. */
+      preceding: readonly PrepareProofCommandSuccess[];
+      /** The first (or only) operation, and every operation a macro applied. */
       operation: KernelOperation;
-      moveId: string;
+      operations: readonly KernelOperation[];
+      moveId: string | undefined;
       chosen: readonly Readonly<{ slotId: string; candidate: Candidate }>[];
       parameters: readonly Readonly<{
         recorded: SemanticParameter;
@@ -749,7 +1182,12 @@ function replay(input: SemanticReplayInput): SemanticReplayResult {
     };
   }
   const operators = input.operators ?? [];
-  const correspondence: Correspondence = { symbols: new Map(), order: [], ids: new Map() };
+  const correspondence: Correspondence = {
+    symbols: new Map(),
+    order: [],
+    ids: new Map(),
+    placeholders: new Map(),
+  };
   const firstTarget = input.steps[0]?.step?.selections[0]?.target;
   if (input.focus !== undefined && firstTarget !== undefined) {
     correspondence.ids.set(firstTarget.id, input.focus.id);
@@ -791,6 +1229,7 @@ function replay(input: SemanticReplayInput): SemanticReplayResult {
       index,
       sourceEdgeId,
       prepared: outcome.prepared,
+      preceding: outcome.preceding,
       plan: outcome.plan,
       report: outcome.report,
     });
@@ -822,13 +1261,14 @@ function replay(input: SemanticReplayInput): SemanticReplayResult {
 function emptyStepReport(
   index: number,
   sourceEdgeId: ReplayStepReport["sourceEdgeId"],
-  step: SemanticStep | undefined,
+  step: SemanticPlan | undefined,
   status: "failed" | "not-attempted",
 ): ReplayStepReport {
   return {
     index,
     sourceEdgeId,
-    ...(step === undefined ? {} : { moveId: step.moveId }),
+    ...(step?.moveId === undefined ? {} : { moveId: step.moveId }),
+    source: replayStepSource(step),
     status,
     selections: [],
     substitutions: [],
@@ -843,7 +1283,8 @@ type StepOutcome =
   | Readonly<{
       ok: true;
       prepared: PrepareProofCommandSuccess;
-      plan: SemanticStep;
+      preceding: readonly PrepareProofCommandSuccess[];
+      plan: SemanticPlan;
       report: ReplayStepReport;
     }>
   | Readonly<{
@@ -855,16 +1296,32 @@ type StepOutcome =
 
 function replayStep(
   input: SemanticReplayInput,
-  step: SemanticStep,
+  step: SemanticPlan,
   index: number,
   sourceEdgeId: ReplayStepReport["sourceEdgeId"],
   node: ProofNode,
   correspondence: Correspondence,
   operators: readonly OperatorDeclaration[],
 ): StepOutcome {
+  const macro =
+    step.source === "move" && step.macro !== undefined
+      ? input.macros?.find(({ move }) => move.id === step.moveId)
+      : undefined;
+  if (step.source === "move" && step.macro !== undefined && macro === undefined) {
+    return {
+      ok: false,
+      code: "move-unavailable",
+      message:
+        `The macro ${step.moveId} is not approved in this session, so its application cannot be ` +
+        "replayed. Approve the macro in this session, or replay a path that does not use it.",
+      repairs: [],
+    };
+  }
   const move =
-    step.source === "move" ? input.moves.find(({ id }) => id === step.moveId) : undefined;
-  if (step.source === "move" && move === undefined) {
+    step.source === "move" && step.macro === undefined
+      ? input.moves.find(({ id }) => id === step.moveId)
+      : undefined;
+  if (step.source === "move" && step.macro === undefined && move === undefined) {
     return {
       ok: false,
       code: "move-unavailable",
@@ -876,7 +1333,20 @@ function replayStep(
   // Candidate occurrences per slot across the whole snapshot, best first.
   const perSlot = new Map<string, Candidate[]>();
   for (const selection of step.selections) {
-    perSlot.set(selection.slotId, slotCandidates(node, selection, correspondence, operators));
+    const found = slotCandidates(node, selection, correspondence, operators);
+    // An operation plan addresses whole statements: never a subterm of one.
+    const wholeStatement =
+      step.source === "operation" &&
+      selection.occurrence.kind === "exact" &&
+      selection.occurrence.path.length === 0;
+    perSlot.set(
+      selection.slotId,
+      wholeStatement
+        ? found.filter(
+            ({ occurrence }) => occurrence.kind === "exact" && occurrence.path.length === 0,
+          )
+        : found,
+    );
   }
   const overrides = new Map(
     (input.overrides ?? [])
@@ -939,6 +1409,7 @@ function replayStep(
         input,
         step,
         move,
+        macro,
         index,
         node,
         assignment,
@@ -989,10 +1460,24 @@ function replayStep(
     }
   }
   pairIdentifiers(step.operation, success.operation, correspondence.ids);
+  if (
+    step.operation.kind === "introduce-placeholder" &&
+    success.operation.kind === step.operation.kind
+  ) {
+    correspondence.placeholders.set(step.operation.symbol, success.operation.symbol);
+  }
+  if (step.source === "move" && step.macro !== undefined) {
+    for (const [position, recorded] of step.macro.steps.entries()) {
+      pairIdentifiers(recorded.operation, success.operations[position], correspondence.ids);
+    }
+  }
 
   const prepared = success.prepared;
+  const commands = [...success.preceding, prepared];
   const after = prepared.prepared.node.state;
-  const addedObligations = prepared.prepared.event.delta.obligations.added;
+  const addedObligations = commands.flatMap(
+    ({ prepared: { event } }) => event.delta.obligations.added,
+  );
   const expectedObligations = step.obligations.map((expression) =>
     mapExpression(expression, correspondence, operators),
   );
@@ -1036,11 +1521,17 @@ function replayStep(
   const report: ReplayStepReport = {
     index,
     sourceEdgeId,
-    moveId: moveIdSchema.parse(success.moveId),
+    ...(success.moveId === undefined ? {} : { moveId: moveIdSchema.parse(success.moveId) }),
+    source: replayStepSource(step),
     status: exact ? "exact" : "adapted",
     commandId: prepared.prepared.command.commandId,
+    ...(commands.length < 2
+      ? {}
+      : { commandIds: commands.map(({ prepared: { command } }) => command.commandId) }),
     resultNodeId: prepared.prepared.node.id,
-    transitionClass: prepared.prepared.edge.transitionClass,
+    transitionClass: composeTransitionClasses(
+      commands.map(({ prepared: { edge } }) => edge.transitionClass),
+    ),
     selections: success.chosen.map(({ slotId, candidate }) => ({
       slotId,
       candidate: publicCandidate(candidate),
@@ -1058,7 +1549,11 @@ function replayStep(
     ),
   };
 
-  const plan = replayedPlan(step, success, prepared, operators);
+  // A macro step's later replay goes command by command: its record holds the last command's plan.
+  const plan =
+    step.source === "operation" || step.macro !== undefined
+      ? replayedOperationPlan(step, prepared, operators)
+      : replayedPlan(step, success, prepared, operators);
   if (plan === undefined) {
     return {
       ok: false,
@@ -1067,7 +1562,24 @@ function replayStep(
       repairs: [],
     };
   }
-  return { ok: true, prepared, plan, report };
+  return { ok: true, prepared, preceding: success.preceding, plan, report };
+}
+
+/** The plan of a replayed operation, derived from the command it created. */
+function replayedOperationPlan(
+  step: SemanticPlan,
+  prepared: PrepareProofCommandSuccess,
+  operators: readonly OperatorDeclaration[],
+): SemanticOperationStep | undefined {
+  const { parent, node, edge } = prepared.prepared;
+  const derived = deriveOperation({
+    parent,
+    child: node,
+    edge,
+    origin: step.source === "operation" ? step.origin : "raw-operation",
+    operators,
+  });
+  return derived.ok ? derived.step : undefined;
 }
 
 /** Assignments to try: every slot's best candidate, then one slot varied at a time. */
@@ -1087,8 +1599,9 @@ function* assignments(
 
 function attemptAssignment(
   input: SemanticReplayInput,
-  step: SemanticStep,
+  step: SemanticPlan,
   move: MoveDefinition | undefined,
+  macro: NonNullable<SemanticReplayInput["macros"]>[number] | undefined,
   index: number,
   node: ProofNode,
   chosen: readonly Readonly<{ slotId: string; candidate: Candidate }>[],
@@ -1128,6 +1641,24 @@ function attemptAssignment(
     operators,
     ...(input.results === undefined ? {} : { results: input.results }),
   };
+  if (step.source === "operation") {
+    return attemptOperation(input, step, node, chosen, view, stepCommandId, ids, generator, entry);
+  }
+  if (macro !== undefined && step.macro !== undefined) {
+    return attemptMacro(
+      input,
+      step,
+      macro,
+      node,
+      chosen,
+      selections,
+      view,
+      merged,
+      stepCommandId,
+      environment,
+      entry,
+    );
+  }
   const resultSubstitutions: { symbol: string; expression: PlainMathJson }[] = [];
   const mappedSubstitutions = (step.result?.substitutions ?? []).map(({ symbol, expression }) => {
     const mapped = mapExpression(expression, view, operators) ?? expression;
@@ -1165,27 +1696,17 @@ function attemptAssignment(
             env: environment,
           });
     if (materialized.ok || materialized.diagnostics[0].code !== "requires-input") break;
-    for (const parameterId of materialized.missingParameters) {
-      const recorded = step.parameters.find((parameter) => parameter.parameterId === parameterId);
-      const menu = materialized.menus.find((candidate) => candidate.parameterId === parameterId);
-      const picked =
-        recorded === undefined || menu === undefined
-          ? undefined
-          : pickItem(menu, recorded, view, operators);
-      if (recorded === undefined || picked === undefined) {
-        return {
-          ok: false,
-          code: "parameter-unavailable",
-          message:
-            recorded === undefined
-              ? `The replayed move asks for ${parameterId}, which the step did not choose.`
-              : `No item of the ${parameterId} menu corresponds to the recorded choice.`,
-        };
-      }
-      choices[parameterId] = picked.item.id;
-      parameters.push({ recorded, ...picked });
-      mergeInto(merged, picked.bindings, operators);
-    }
+    const unavailable = chooseParameters(
+      step,
+      materialized.missingParameters,
+      materialized.menus,
+      view,
+      merged,
+      choices,
+      parameters,
+      operators,
+    );
+    if (unavailable !== undefined) return unavailable;
   }
   if (materialized === undefined || !materialized.ok) {
     return {
@@ -1241,11 +1762,339 @@ function attemptAssignment(
   return {
     ok: true,
     prepared,
+    preceding: [],
     operation,
+    operations: [operation],
     moveId,
     chosen,
     parameters,
     resultSubstitutions,
+    menuEntry: entry,
+  };
+}
+
+/** Choose, from regenerated menus, the items corresponding to the recorded choices. */
+function chooseParameters(
+  step: SemanticStep,
+  missing: readonly string[],
+  menus: readonly ParameterMenu[],
+  view: Correspondence,
+  merged: Map<string, PlainMathJson>,
+  choices: Record<string, string>,
+  parameters: Extract<Attempt, { ok: true }>["parameters"][number][],
+  operators: readonly OperatorDeclaration[],
+): Extract<Attempt, { ok: false }> | undefined {
+  for (const parameterId of missing) {
+    const recorded = step.parameters.find((parameter) => parameter.parameterId === parameterId);
+    const menu = menus.find((candidate) => candidate.parameterId === parameterId);
+    const picked =
+      recorded === undefined || menu === undefined
+        ? undefined
+        : pickItem(menu, recorded, view, operators);
+    if (recorded === undefined || picked === undefined) {
+      return {
+        ok: false,
+        code: "parameter-unavailable",
+        message:
+          recorded === undefined
+            ? `The replayed move asks for ${parameterId}, which the step did not choose.`
+            : `No item of the ${parameterId} menu corresponds to the recorded choice.`,
+      };
+    }
+    choices[parameterId] = picked.item.id;
+    parameters.push({ recorded, ...picked });
+    mergeInto(merged, picked.bindings, operators);
+  }
+  return undefined;
+}
+
+type MacroSource = NonNullable<SemanticReplayInput["macros"]>[number];
+
+/**
+ * Apply an approved macro again as one replay step: its template runs on the node from the
+ * re-matched first-step selections, and every step becomes an ordinary validated command. The
+ * last command takes the step's command ID; earlier ones are `<step>:macro:<i>`.
+ */
+function attemptMacro(
+  input: SemanticReplayInput,
+  step: SemanticStep,
+  macro: MacroSource,
+  node: ProofNode,
+  chosen: readonly Readonly<{ slotId: string; candidate: Candidate }>[],
+  selections: Readonly<Record<string, MoveSelectionInput>>,
+  view: Correspondence,
+  merged: Map<string, PlainMathJson>,
+  stepCommandId: string,
+  environment: Readonly<{
+    operators: readonly OperatorDeclaration[];
+    results?: readonly KernelResult[];
+  }>,
+  entry: Entry,
+): Attempt {
+  const operators = environment.operators;
+  const choices: Record<string, string> = {};
+  const parameters: Extract<Attempt, { ok: true }>["parameters"][number][] = [];
+  let run: ReturnType<typeof runMovePlan> | undefined;
+  for (let round = 0; round <= step.parameters.length + 1; round += 1) {
+    run = runMovePlan(
+      macro.template,
+      node.state,
+      selections as Parameters<typeof runMovePlan>[2],
+      choices,
+      environment,
+      stepCommandId,
+    );
+    if (run.ok || run.diagnostic.code !== "requires-input") break;
+    const unavailable = chooseParameters(
+      step,
+      run.diagnostic.missingParameters ?? [],
+      run.diagnostic.menus ?? [],
+      view,
+      merged,
+      choices,
+      parameters,
+      operators,
+    );
+    if (unavailable !== undefined) return unavailable;
+  }
+  if (run === undefined || !run.ok) {
+    const total = macro.template.plan.steps.length;
+    return {
+      ok: false,
+      code: "materialization-failed",
+      message:
+        run === undefined
+          ? "The macro could not be applied again."
+          : `Macro step ${run.diagnostic.stepIndex + 1} of ${total} could not be applied again: ${run.diagnostic.message}`,
+    };
+  }
+  const count = run.steps.length;
+  const authoredMoves = input.moves.filter(({ id }) => id.startsWith("authored:"));
+  const commands: PrepareProofCommandSuccess[] = [];
+  let parent = node;
+  for (const [position, applied] of run.steps.entries()) {
+    const commandId =
+      position === count - 1 ? stepCommandId : `${stepCommandId}:macro:${position + 1}`;
+    const ids = input.recordIds(commandId);
+    const prepared = prepareProofCommand(
+      parent,
+      {
+        commandId,
+        kind: "apply-kernel-operation",
+        actor: input.actor,
+        parentNodeId: parent.id,
+        resultNodeId: ids.resultNodeId,
+        edgeId: ids.edgeId,
+        eventId: ids.eventId,
+        moveId: applied.moveId,
+        operation: applied.operation,
+      },
+      {
+        trustedActor: input.actor,
+        operators,
+        ...(input.results === undefined ? {} : { results: input.results }),
+        ...(authoredMoves.length === 0 ? {} : { moves: authoredMoves }),
+      },
+    );
+    if (!prepared.ok) {
+      return {
+        ok: false,
+        code: "command-rejected",
+        message: `Macro step ${position + 1} of ${count} was rejected: ${prepared.diagnostics[0].message}`,
+      };
+    }
+    commands.push(prepared);
+    parent = prepared.prepared.node;
+  }
+  const last = commands.at(-1);
+  const first = run.operations[0];
+  if (last === undefined || first === undefined) {
+    return { ok: false, code: "materialization-failed", message: "The macro produced no steps." };
+  }
+  return {
+    ok: true,
+    prepared: last,
+    preceding: commands.slice(0, -1),
+    operation: first,
+    operations: run.operations,
+    moveId: step.moveId,
+    chosen,
+    parameters,
+    resultSubstitutions: [],
+    menuEntry: entry,
+  };
+}
+
+/**
+ * Rebuild a stored operation on the target: the target, statements and occurrence come from the
+ * re-matched selections, mathematics through the symbol correspondence, identifiers that existed
+ * through the identity correspondence, and every generated identifier afresh.
+ */
+function attemptOperation(
+  input: SemanticReplayInput,
+  step: SemanticOperationStep,
+  node: ProofNode,
+  chosen: readonly Readonly<{ slotId: string; candidate: Candidate }>[],
+  view: Correspondence,
+  stepCommandId: string,
+  ids: ReturnType<SemanticReplayRecordIds>,
+  generator: MoveIdGenerator,
+  entry: Entry,
+): Attempt {
+  const operators = input.operators ?? [];
+  const anchor = chosen[0]?.candidate;
+  if (anchor === undefined) {
+    return { ok: false, code: "no-matching-selection", message: "The chosen target is missing." };
+  }
+  const hypotheses = new Map<string, string>();
+  for (const [position, recorded] of step.selections.entries()) {
+    const candidate = chosen[position]?.candidate;
+    if (recorded.statement.role === "hypothesis" && candidate?.statement.role === "hypothesis") {
+      hypotheses.set(recorded.statement.id, candidate.statement.id);
+    }
+  }
+  const referenced = new Set(step.referenced);
+  const present = stateStrings(node.state);
+  const generatedIds = new Map<string, string>();
+  const counters = new Map<string, number>();
+  let problem: string | undefined;
+
+  // The fresh symbol of a placeholder this step introduces: a symbol is spliced into mathematics,
+  // so it is generated like an identifier rather than copied.
+  let placeholderSymbol: string | undefined;
+  const resolve = (id: string, key: string): string => {
+    const mapped = hypotheses.get(id);
+    if (mapped !== undefined) return mapped;
+    if (referenced.has(id)) {
+      const carried = view.ids.get(id);
+      if (carried !== undefined && present.has(carried)) return carried;
+      if (present.has(id)) return id;
+      problem ??= `The operation names ${id}, which has no counterpart in the target.`;
+      return id;
+    }
+    const known = generatedIds.get(id);
+    if (known !== undefined) return known;
+    const position = (counters.get(key) ?? 0) + 1;
+    counters.set(key, position);
+    const fresh = /ssumption/.test(key)
+      ? generator.assumptionId(key, position)
+      : generator.statementId(key, position);
+    generatedIds.set(id, fresh);
+    return fresh;
+  };
+  const mapMath = (value: unknown): unknown => {
+    const mapped = plainMathJsonSchema.safeParse(value);
+    const expression = mapped.success ? mapExpression(mapped.data, view, operators) : undefined;
+    if (expression === undefined) {
+      problem ??= "An expression of the operation could not be mapped onto the target.";
+      return value;
+    }
+    return expression;
+  };
+  const walk = (value: unknown, key: string): unknown => {
+    if (EXPRESSION_KEYS.has(key)) return mapMath(value);
+    if (key === "dependencies" && Array.isArray(value)) {
+      // Declared symbols a construction may depend on follow the symbol correspondence.
+      return value.map((item) => {
+        const mapped = mapMath(item);
+        if (typeof mapped === "string") return mapped;
+        problem ??= "A construction dependency maps to something other than a variable.";
+        return item;
+      });
+    }
+    if (key === "instantiation" && isRecord(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map(([symbol, item]) => [symbol, mapMath(item)]),
+      );
+    }
+    if (typeof value === "string") {
+      if (key === "symbol" && step.operation.kind === "introduce-placeholder") {
+        placeholderSymbol ??= generator.symbol("placeholder", 1);
+        return placeholderSymbol;
+      }
+      return isIdentifierKey(key) ? resolve(value, key) : value;
+    }
+    if (Array.isArray(value)) return value.map((item) => walk(item, key));
+    if (isRecord(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map(([field, item]) => [field, walk(item, field)]),
+      );
+    }
+    return value;
+  };
+
+  const recorded = step.operation as unknown as Readonly<Record<string, unknown>>;
+  const rewrite = REWRITE_OPERATIONS.has(step.operation.kind);
+  const rebuilt: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(recorded)) {
+    if (key === "expectedStateId") rebuilt[key] = node.state.id;
+    else if (key === "resultStateId") rebuilt[key] = ids.resultStateId;
+    else if (key === "target") rebuilt[key] = { kind: anchor.target.kind, id: anchor.target.id };
+    else if (rewrite && key === "statement") {
+      rebuilt[key] =
+        anchor.statement.role === "conclusion"
+          ? { kind: "conclusion" }
+          : { kind: "hypothesis", id: anchor.statement.id };
+    } else if (rewrite && key === "path") {
+      rebuilt[key] =
+        anchor.occurrence.kind === "exact"
+          ? anchor.occurrence.path
+          : anchor.occurrence.containerPath;
+    } else if (rewrite && key === "lens") {
+      if (anchor.occurrence.kind === "associative") {
+        rebuilt[key] = {
+          startOperand: anchor.occurrence.startOperand,
+          endOperand: anchor.occurrence.endOperand,
+        };
+      }
+    } else rebuilt[key] = walk(value, key);
+  }
+  if (problem !== undefined) {
+    return { ok: false, code: "materialization-failed", message: problem };
+  }
+  const parsed = kernelOperationSchema.safeParse(rebuilt);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: "materialization-failed",
+      message: "The operation could not be rebuilt on the target.",
+    };
+  }
+  const operation = parsed.data;
+  const authoredMoves = input.moves.filter(({ id }) => id.startsWith("authored:"));
+  const prepared = prepareProofCommand(
+    node,
+    {
+      commandId: stepCommandId,
+      kind: "apply-kernel-operation",
+      actor: input.actor,
+      parentNodeId: node.id,
+      resultNodeId: ids.resultNodeId,
+      edgeId: ids.edgeId,
+      eventId: ids.eventId,
+      ...(step.moveId === undefined ? {} : { moveId: step.moveId }),
+      operation,
+    },
+    {
+      trustedActor: input.actor,
+      operators,
+      ...(input.results === undefined ? {} : { results: input.results }),
+      ...(authoredMoves.length === 0 ? {} : { moves: authoredMoves }),
+    },
+  );
+  if (!prepared.ok) {
+    return { ok: false, code: "command-rejected", message: prepared.diagnostics[0].message };
+  }
+  return {
+    ok: true,
+    prepared,
+    preceding: [],
+    operation,
+    operations: [operation],
+    moveId: step.moveId,
+    chosen,
+    parameters: [],
+    resultSubstitutions: [],
     menuEntry: entry,
   };
 }
@@ -1324,6 +2173,7 @@ function slotCandidates(
       ? correspondence.ids.get(selection.statement.id)
       : undefined;
   const names = selection.variables.map(({ symbol }) => symbol);
+  const fragment = renamePlaceholders(selection.fragment, correspondence.placeholders);
   let order = 0;
   for (const [targetIndex, [kind, entry]] of entries.entries()) {
     const target: ReplayTarget = { kind, id: entry.id };
@@ -1358,7 +2208,7 @@ function slotCandidates(
               : 2;
       for (const found of occurrencesOf(expression, selection, operators)) {
         order += 1;
-        const matched = matchExpressionPattern(selection.fragment, found.subject, names, {
+        const matched = matchExpressionPattern(fragment, found.subject, names, {
           operators,
         });
         const bindings =
@@ -1368,7 +2218,7 @@ function slotCandidates(
         const match: ReplayMatch | undefined =
           bindings !== undefined
             ? classify(bindings, correspondence, operators)
-            : sameShape(selection.fragment, found.subject)
+            : sameShape(fragment, found.subject)
               ? "shape"
               : undefined;
         if (match === undefined) continue;
@@ -1514,7 +2364,7 @@ function publicCandidate(candidate: Candidate): ReplayCandidate {
 }
 
 function listed(
-  step: SemanticStep,
+  step: SemanticPlan,
   perSlot: ReadonlyMap<string, readonly Candidate[]>,
   keep: (candidate: Candidate, slotId: string) => boolean,
 ): z.infer<typeof slotCandidatesSchema>[] {
@@ -1734,12 +2584,31 @@ function mapExpression(
   correspondence: Correspondence,
   operators: readonly OperatorDeclaration[],
 ): PlainMathJson | undefined {
+  const renamed = renamePlaceholders(expression, correspondence.placeholders);
   const substitutions = [...correspondence.symbols].flatMap(([symbol, replacement]) =>
     isSymbol(replacement, symbol) ? [] : [{ symbol, replacement }],
   );
-  if (substitutions.length === 0) return expression;
-  const substituted = substituteMathJson(expression, substitutions, { operators });
+  if (substitutions.length === 0) return renamed;
+  const substituted = substituteMathJson(renamed, substitutions, { operators });
   return substituted.ok ? substituted.expression : undefined;
+}
+
+/**
+ * Rename construction placeholders in a source expression to the fresh ones the replayed branch
+ * introduced. A placeholder occurs only as the head of an application.
+ */
+function renamePlaceholders(
+  expression: PlainMathJson,
+  placeholders: ReadonlyMap<string, string>,
+): PlainMathJson {
+  if (placeholders.size === 0) return expression;
+  const parts = functionParts(expression);
+  if (parts === undefined) return expression;
+  const operands = parts.operands.map((operand) => renamePlaceholders(operand, placeholders));
+  const head = placeholders.get(parts.operator) ?? parts.operator;
+  return Array.isArray(expression)
+    ? ([head, ...operands] as PlainMathJson)
+    : ({ ...(expression as object), fn: [head, ...operands] } as PlainMathJson);
 }
 
 function mergeInto(
@@ -1785,7 +2654,8 @@ function pairIdentifiers(
         field === "instantiation" ||
         field === "proposition" ||
         field === "term" ||
-        field === "witness"
+        field === "witness" ||
+        field === "value"
       ) {
         continue;
       }

@@ -38,7 +38,7 @@ export function PreviewDetails({
         <strong>Review the changes before applying</strong>
         <span className={styles.badgeRow}>
           <TransitionClassBadge transitionClass={preview.transitionClass} />
-          <EvidenceBadge evidence={transitionEvidenceOf(preview.operation)} />
+          <EvidenceBadge evidence={transitionEvidenceOf(preview.operation, preview.evidence)} />
         </span>
       </div>
       <p className={styles.previewMeaning}>{transitionMeaning(preview.transitionClass)}</p>
@@ -294,6 +294,8 @@ function provenanceText(target: PreviewTarget): string | null {
       return ` · side condition of ${provenance.resultId}`;
     case "construction-requirement":
       return ` · construction requirement`;
+    case "binder-membership":
+      return ` · membership needed to instantiate ${provenance.hypothesisId}`;
     default:
       return ` · ${provenance.kind}`;
   }

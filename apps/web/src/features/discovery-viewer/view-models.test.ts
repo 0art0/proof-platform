@@ -4,6 +4,8 @@ import { storedAnalysis, storedPrunedProof, storedSorryAssumptions } from "./art
 import {
   fixtureArtifact,
   fixtureArtifactJson,
+  fixtureArtifactV2,
+  fixtureArtifactV2Json,
   importedFixture,
   unsolvedFixture,
 } from "./fixture.testing";
@@ -18,6 +20,16 @@ describe("the fixture", () => {
   it("is a valid stored artifact", () => {
     expect(parseProofArtifact(fixtureArtifactJson)).toMatchObject({ ok: true });
     expect(importedFixture().provenance.kind).toBe("import");
+  });
+});
+
+describe("version-2 fixture", () => {
+  it("is a valid stored artifact whose edges store evidence and a chronological sequence", () => {
+    expect(parseProofArtifact(fixtureArtifactV2Json)).toMatchObject({ ok: true });
+    expect(fixtureArtifactV2.artifactVersion).toBe(2);
+    expect(fixtureArtifact.artifactVersion).toBe(1);
+    expect(fixtureArtifact.tree.edges.every((edge) => edge.sequence === undefined)).toBe(true);
+    expect(fixtureArtifactV2.tree.edges.every((edge) => edge.sequence !== undefined)).toBe(true);
   });
 });
 
@@ -70,6 +82,21 @@ describe("buildTreeLayout", () => {
     );
   });
 
+  it("shows the stored evidence of every edge, not only the stored route's", () => {
+    const stored = buildTreeLayout(fixtureArtifactV2);
+    const evidence = Object.fromEntries(
+      stored.edges.map(({ edgeId, evidence }) => [edgeId, evidence]),
+    );
+    expect(evidence).toEqual({
+      "edge:command:cases-on-p": "structural",
+      "edge:command:contraposition-1": "structural",
+      "edge:command:contraposition-2": "library-result",
+      "edge:command:contraposition-3": "structural",
+      "edge:command:replay-first:replay:1": "structural",
+      "edge:command:sorry-kept": "sorry",
+    });
+  });
+
   it("marks the current node and calls an unsolved route partial", () => {
     expect(layout.rows.filter(({ isCurrent }) => isCurrent).map(({ nodeId }) => nodeId)).toEqual([
       fixtureArtifact.tree.currentNodeId,
@@ -109,6 +136,29 @@ describe("buildPlaybackTimeline", () => {
     // The backtracking-with-information event follows the case split it recorded.
     expect(position("interaction:backtrack:command:cases-on-p")).toBe(
       position("transition:edge:command:cases-on-p") + 1,
+    );
+  });
+
+  it("plays transitions in stored sequence order, with records after their own step", () => {
+    const stored = buildPlaybackTimeline(fixtureArtifactV2);
+    const storedKeys = stored.entries.map(({ key }) => key);
+    const transitions = storedKeys.filter((key) => key.startsWith("transition:"));
+    // Chronological by the stored sequence (events are stored by ID, which differs).
+    expect(
+      [...fixtureArtifactV2.tree.edges]
+        .sort((left, right) => (left.sequence as number) - (right.sequence as number))
+        .map(({ id }) => `transition:${id}`),
+    ).toEqual(transitions);
+    expect(transitions.indexOf("transition:edge:command:sorry-kept")).toBeLessThan(
+      transitions.indexOf("transition:edge:command:cases-on-p"),
+    );
+    expect(storedKeys.indexOf("interaction:backtrack:command:cases-on-p")).toBe(
+      storedKeys.indexOf("transition:edge:command:cases-on-p") + 1,
+    );
+    // Version 1 stores no sequence: the causal order derived from stored events is unchanged.
+    const derived = keys.filter((key) => key.startsWith("transition:"));
+    expect(derived.indexOf("transition:edge:command:cases-on-p")).toBeLessThan(
+      derived.indexOf("transition:edge:command:sorry-kept"),
     );
   });
 
