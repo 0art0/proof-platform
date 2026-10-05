@@ -262,11 +262,13 @@ export const ELEMENTARY_CORPUS: readonly CorpusProblem[] = [
     goal: ["Less", "a", "c"],
     steps: [
       {
-        note: "Chain the two inequalities forward.",
-        selections: [hypothesis(["Less", "a", "c"], ["Less", "a", "b"])],
-        suggestion: result("less-transitivity", "forward"),
+        note: "Split a < c through the intermediate b, chosen from the term menu.",
+        selections: [goal(["Less", "a", "c"])],
+        suggestion: result("less-transitivity", "backward"),
+        menu: { "instantiation/y": term("b") },
       },
-      closeByHypothesis(["Less", "a", "c"]),
+      closeByHypothesis(["Less", "a", "b"]),
+      closeByHypothesis(["Less", "b", "c"]),
     ],
   },
   {
@@ -430,11 +432,13 @@ export const ELEMENTARY_CORPUS: readonly CorpusProblem[] = [
     goal: ["SubsetEqual", "A", "C"],
     steps: [
       {
-        note: "Chain A ⊆ B with B ⊆ C; the second premise is found among the hypotheses.",
-        selections: [hypothesis(["SubsetEqual", "A", "C"], ["SubsetEqual", "A", "B"])],
-        suggestion: result("subset-transitivity", "forward"),
+        note: "Split A ⊆ C through the intermediate B, chosen from the term menu.",
+        selections: [goal(["SubsetEqual", "A", "C"])],
+        suggestion: result("subset-transitivity", "backward"),
+        menu: { "instantiation/B": term("B") },
       },
-      closeByHypothesis(["SubsetEqual", "A", "C"]),
+      closeByHypothesis(["SubsetEqual", "A", "B"]),
+      closeByHypothesis(["SubsetEqual", "B", "C"]),
     ],
   },
   {
@@ -825,11 +829,13 @@ export const EXTENDED_CORPUS: readonly CorpusProblem[] = [
     goal: divides("a", "c"),
     steps: [
       {
-        note: "Chain a | b with b | c; the second premise is found among the hypotheses.",
-        selections: [hypothesis(divides("a", "c"), divides("a", "b"))],
-        suggestion: result("divides-transitivity", "forward"),
+        note: "Split a | c through the intermediate b, chosen from the term menu.",
+        selections: [goal(divides("a", "c"))],
+        suggestion: result("divides-transitivity", "backward"),
+        menu: { "instantiation/b": term("b") },
       },
-      closeByHypothesis(divides("a", "c")),
+      closeByHypothesis(divides("a", "b")),
+      closeByHypothesis(divides("b", "c")),
     ],
   },
   {
@@ -1072,11 +1078,58 @@ export const EXTENDED_CORPUS: readonly CorpusProblem[] = [
       },
       closeByHypothesis(["LessEqual", "a", "b"]),
       {
-        note: "Chain b ≤ c with c ≤ a.",
-        selections: [hypothesis(["LessEqual", "b", "a"], ["LessEqual", "b", "c"])],
-        suggestion: result("less-equal-transitivity", "forward"),
+        note: "Split b ≤ a through the intermediate c, chosen from the term menu.",
+        selections: [goal(["LessEqual", "b", "a"])],
+        suggestion: result("less-equal-transitivity", "backward"),
+        menu: { "instantiation/y": term("c") },
       },
-      closeByHypothesis(["LessEqual", "b", "a"]),
+      closeByHypothesis(["LessEqual", "b", "c"]),
+      closeByHypothesis(["LessEqual", "c", "a"]),
+    ],
+  },
+  {
+    id: "corpus:zero-on-the-right",
+    title: "An identity read right to left",
+    statement: "For a real a, show a = a + 0.",
+    domain: "algebra",
+    packs: ["pack:arithmetic"],
+    operators: [],
+    declarations: reals("a"),
+    hypotheses: [],
+    goal: ["Equal", "a", ["Add", "a", 0]],
+    steps: [
+      {
+        note: "Apply the symmetric variant of the additive identity, offered as a displayed suggestion.",
+        selections: [goal(["Equal", "a", ["Add", "a", 0]])],
+        suggestion: {
+          source: "result",
+          artifactId: "result:add-zero/symmetric-equality",
+          patternId: "pattern:result:add-zero/symmetric-equality/backward",
+        },
+      },
+    ],
+  },
+  {
+    id: "corpus:contrapositive-form",
+    title: "The contrapositive of transitivity",
+    statement: "For reals a, b, c with not a < c, show not both a < b and b < c.",
+    domain: "order",
+    packs: ["pack:order"],
+    operators: [],
+    declarations: reals("a", "b", "c"),
+    hypotheses: [["Not", ["Less", "a", "c"]]],
+    goal: ["Not", ["And", ["Less", "a", "b"], ["Less", "b", "c"]]],
+    steps: [
+      {
+        note: "Apply the contrapositive variant of transitivity backward, offered as a displayed suggestion.",
+        selections: [goal(["Not", ["And", ["Less", "a", "b"], ["Less", "b", "c"]]])],
+        suggestion: {
+          source: "result",
+          artifactId: "result:less-transitivity/contrapositive",
+          patternId: "pattern:result:less-transitivity/contrapositive/backward",
+        },
+      },
+      closeByHypothesis(["Not", ["Less", "a", "c"]]),
     ],
   },
   {

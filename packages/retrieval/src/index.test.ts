@@ -1421,4 +1421,133 @@ describe("starter domain packs", () => {
       expect.objectContaining({ familyId: "variant-family:result:less-transitivity" }),
     );
   });
+
+  it("displays a backward result needing an instantiation menu within the default limit", () => {
+    const index = createRetrievalIndex(catalog, {
+      operators: packs.flatMap((pack) => pack.operators),
+    });
+    if (!index.ok) throw new Error(index.diagnostics[0].message);
+    const real = { kind: "named", id: "sort:real" } as const;
+    const proofState = proofStateSchema.parse({
+      id: "state:query",
+      goals: [
+        {
+          id: "goal:main",
+          sequent: {
+            context: {
+              declarations: ["a", "b", "c"].map((symbol) => ({
+                id: `declaration:${symbol}`,
+                symbol,
+                sort: real,
+                role: "universal-parameter",
+              })),
+              hypotheses: [
+                { id: "h:ab", statement: { expression: ["Less", "a", "b"] } },
+                { id: "h:bc", statement: { expression: ["Less", "b", "c"] } },
+              ],
+            },
+            conclusion: { expression: ["Less", "a", "c"] },
+          },
+        },
+      ],
+      obligations: [],
+    });
+    const full = index.index.query(proofState, selection(), { limit: 100 });
+    const displayed = index.index.query(proofState, selection(), { limit: 8 });
+    if (!full.ok || !displayed.ok) throw new Error("query failed");
+    // Plain rank order puts transitivity (obligations plus an instantiation menu) behind every
+    // catch-all move, outside the displayed limit.
+    const fullIds = full.suggestions.map(({ artifactId }) => artifactId);
+    expect(fullIds.indexOf("result:less-transitivity")).toBeGreaterThanOrEqual(8);
+    expect(displayed.suggestions).toHaveLength(8);
+    expect(displayed.suggestions).toContainEqual(
+      expect.objectContaining({
+        artifactId: "result:less-transitivity",
+        applicability: "requires-input",
+      }),
+    );
+    // The applicable catch-all move is not displaced, and the displayed list keeps rank order.
+    expect(displayed.suggestions[0]).toMatchObject({ applicability: "applicable" });
+    const positions = displayed.suggestions.map(({ id }) =>
+      full.suggestions.findIndex((suggestion) => suggestion.id === id),
+    );
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+  });
+
+  it("keeps an exact immediate result first when structural requires-input results are reserved", () => {
+    const orderPack = packs.find((pack) => pack.id === "pack:order")!;
+    const index = createRetrievalIndex({
+      results: orderPack.results,
+      moves: HAND_AUTHORED_MOVES,
+      variantFamilies: orderPack.variantFamilies,
+    });
+    if (!index.ok) throw new Error(index.diagnostics[0].message);
+    const real = { kind: "named", id: "sort:real" } as const;
+    const proofState = proofStateSchema.parse({
+      id: "state:query",
+      goals: [
+        {
+          id: "goal:main",
+          sequent: {
+            context: {
+              declarations: ["a", "b"].map((symbol) => ({
+                id: `declaration:${symbol}`,
+                symbol,
+                sort: real,
+                role: "universal-parameter",
+              })),
+              hypotheses: [
+                { id: "h:ab", statement: { expression: ["LessEqual", "a", "b"] } },
+                { id: "h:ba", statement: { expression: ["LessEqual", "b", "a"] } },
+              ],
+            },
+            conclusion: { expression: ["Equal", "a", "b"] },
+          },
+        },
+      ],
+      obligations: [],
+    });
+    const displayed = index.index.query(proofState, selection(), { limit: 8 });
+    if (!displayed.ok) throw new Error("query failed");
+    expect(displayed.suggestions[0]).toMatchObject({
+      artifactId: "result:less-equal-antisymmetry",
+    });
+  });
+
+  it("matches close-by-hypothesis up to renaming of bound symbols", () => {
+    const index = indexFor();
+    const forAll = (symbol: string): PlainMathJson => [
+      "ForAll",
+      ["Element", symbol, "RealNumbers"],
+      ["Equal", symbol, symbol],
+    ];
+    const pair = (proofState: ProofState) => {
+      const result = index.query(
+        proofState,
+        selectionQuery([
+          { id: "target", selection: selection() },
+          { id: "fact", selection: selection({ kind: "hypothesis", id: "hypothesis:fact" }) },
+        ]),
+        { limit: 100 },
+      );
+      if (!result.ok) throw new Error(result.diagnostics[0].message);
+      return result.suggestions;
+    };
+    const renamed = state(forAll("y"), [{ id: "hypothesis:fact", expression: forAll("x") }]);
+    expect(pair(renamed)[0]).toMatchObject({
+      artifactId: "move:close-by-hypothesis",
+      applicability: "applicable",
+    });
+    const single = index.query(renamed, selection(), { limit: 100 });
+    if (!single.ok) throw new Error(single.diagnostics[0].message);
+    expect(single.suggestions.map(({ artifactId }) => artifactId)).toContain(
+      "move:close-by-hypothesis",
+    );
+    const different = state(forAll("y"), [
+      { id: "hypothesis:fact", expression: ["ForAll", ["Element", "x", "RealNumbers"], "p"] },
+    ]);
+    expect(pair(different).map(({ artifactId }) => artifactId)).not.toContain(
+      "move:close-by-hypothesis",
+    );
+  });
 });
