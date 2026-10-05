@@ -357,7 +357,7 @@ decisions for the user and are not scheduled here.
       edges at apply time (the web currently derives it), and a per-session transition sequence so
       playback is chronological. Migration, memory mirror, artifact schema version bump with import of
       version 1. _Accept:_ static-history tests; playback order test.
-- [ ] **N41 Retrieval quality.** Backward result applications that need an instantiation menu must be
+- [x] **N41 Retrieval quality.** Backward result applications that need an instantiation menu must be
       reachable within the displayed limit; `close-by-hypothesis` matches up to alpha-equivalence.
       _Accept:_ corpus problems solved backward without forward scripting; ranking tests.
 - [x] **N42 Construction moves and UI.** Moves and menus for the N11 construction operations (introduce
@@ -1158,3 +1158,21 @@ migrate -- --status` reported up to date.
   smuggled operators/sorts, unapproved or undeclared hypotheses: nothing created) and the design 21.3
   absence test over a corpus problem. `POST /ai` is now an ordinary unknown route and the ignored `env`
   option of `createProofHttpService` is removed. Models and the Gateway transport are unchanged.
+- 2026-10-05 — N41 — `31eef89` — retrieval quality. A backward result needing an instantiation menu or
+  creating obligations is `requires-input` with `noNewObligations = 0`, so it ranked behind the catch-all
+  moves and fell outside the displayed 8. The fix is in the diversity rule, not the limit:
+  `selectWithCategoryDiversity` splits `requires-input` into structural (specificity ≥ 0) and catch-all
+  (−1) categories, and structural suggestions reserve 2 slots after the immediate and with-obligations
+  categories. The rank vector, limit and rank-ordered presentation are unchanged; transitivity backward on
+  `a < c` now displays at 7/8. `close-by-hypothesis` compares goal and hypothesis with the kernel's
+  `alphaEquivalent`.
+  - Corpus (41 problems, 137 steps): `less-transitivity`, `subset-transitivity`, `divisibility-chain` and
+    `cyclic-antisymmetry` are solved backward with a term menu; `zero-on-the-right` and
+    `contrapositive-form` are the first problems to use derived variants through displayed suggestions.
+    Golden changes: those scripts, several rank improvements from 8/8 to 6/8, and the new problems; median
+    steps (3) and selections (4) are unchanged.
+  - Gaps: structural `requires-input` results still display below applicable catch-all moves; other
+    forward-scripted problems keep their forward scripts (backward would cost a step each).
+- 2026-10-05 — Phase 10 complete — N39–N42 and N44–N46 done; N43, N47 and N48 deferred by the user.
+  Final checks on `d2025d3`: verify exit 0; workspace e2e 32/32 on the memory store and 32/32 on a fresh
+  PostgreSQL 18 (migrations 0001–0014).
