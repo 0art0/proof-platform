@@ -22,6 +22,7 @@ import { resolveProofSelection } from "@proof/selections";
 import { z } from "zod";
 import type { DefinitionCatalog } from "../approved-catalog";
 import type { AiRuntime } from "../ai-runtime";
+import type { AiLimiter } from "./ai-rate-limit";
 import { executeTryResultCommand } from "../inquiry-methods";
 import type { LibraryStore } from "../library-repository";
 import type { LlmCallStore } from "../llm-call-repository";
@@ -50,6 +51,8 @@ export type ServiceContext = Readonly<{
   library: LibraryStore | undefined;
   llmCalls?: LlmCallStore | undefined;
   ai?: AiRuntime | undefined;
+  /** Cost guard for provider calls. */
+  aiLimiter?: AiLimiter | undefined;
 }>;
 
 const operandPathSchema = z.array(z.number().int().nonnegative());

@@ -12,6 +12,12 @@ import {
   type SupportedLlmRole,
 } from "@proof/llm";
 import type { LlmDispatchConfiguration } from "./llm-call-repository";
+import {
+  createAiLimiter,
+  DEFAULT_AI_MAX_CONCURRENT,
+  DEFAULT_AI_RATE_PER_MINUTE,
+  type AiLimiter,
+} from "./proof-http/ai-rate-limit";
 
 export type AiRoleRuntime = Readonly<{
   transport: LlmTransport;
@@ -23,6 +29,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
   const key = configuredVercelApiKey(env);
   if (!key.ok) return Object.freeze({});
   const timeoutMs = positiveInteger(env.PROOF_AI_TIMEOUT_MS, DEFAULT_LLM_TIMEOUT_MS);
+  const formalizerTimeoutMs = positiveInteger(env.PROOF_AI_FORMALIZER_TIMEOUT_MS, timeoutMs);
   const formalizerModel = nonEmpty(env.PROOF_AI_FORMALIZER_MODEL) ?? DEFAULT_FORMALIZER_MODEL;
   const formalizerTokens = positiveInteger(
     env.PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS,
@@ -42,7 +49,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         model: formalizerModel,
         reasoningEffort,
         maxOutputTokens: formalizerTokens,
-        timeoutMs,
+        timeoutMs: formalizerTimeoutMs,
       }),
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
@@ -66,6 +73,16 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         minimumConfidence,
       }),
     },
+  });
+}
+
+/** Build the AI cost guard from `PROOF_AI_MAX_CONCURRENT` and `PROOF_AI_RATE_PER_MINUTE`. */
+export function createAiLimiterFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): AiLimiter {
+  return createAiLimiter({
+    maxConcurrent: positiveInteger(env.PROOF_AI_MAX_CONCURRENT, DEFAULT_AI_MAX_CONCURRENT),
+    ratePerMinute: positiveInteger(env.PROOF_AI_RATE_PER_MINUTE, DEFAULT_AI_RATE_PER_MINUTE),
   });
 }
 

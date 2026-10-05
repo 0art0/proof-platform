@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 async function runningService(store: ProofStore): Promise<string> {
-  const service = createProofHttpService(store, { env: {} });
+  const service = createProofHttpService(store);
   services.push(service);
   return (await service.listen()).origin;
 }
@@ -82,5 +82,43 @@ describe("AI HTTP route safety", () => {
       provenance: "deterministic",
       fallbackCandidateIds: [],
     });
+  });
+
+  describe.each([
+    ["/ai/formalize"],
+    [`/proof-sessions/${DEVELOPMENT_PROOF_SESSION_ID}/ai/shortlist`],
+  ] as const)("request body bounds on %s", (path) => {
+    it("answers 413 for an oversize body and 415 for a non-JSON content type", async () => {
+      const store = new InspectableMemoryProofStore();
+      await ensureDevelopmentProofSession(store);
+      const origin = await runningService(store);
+      const oversize = await fetch(`${origin}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ padding: "x".repeat(300 * 1024) }),
+      });
+      expect(oversize.status).toBe(413);
+      const wrongType = await fetch(`${origin}${path}`, {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "{}",
+      });
+      expect(wrongType.status).toBe(415);
+      const invalidJson = await fetch(`${origin}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      });
+      expect(invalidJson.status).toBe(400);
+    });
+  });
+
+  it("treats unknown /ai paths like any other unknown route", async () => {
+    const origin = await runningService(new InspectableMemoryProofStore());
+    const unknown = await fetch(`${origin}/ai`, { method: "POST" });
+    const other = await fetch(`${origin}/not-a-route`, { method: "POST" });
+    expect(unknown.status).toBe(other.status);
+    expect(await unknown.json()).toEqual(await other.json());
+    expect((await fetch(`${origin}/ai/formalize`)).status).toBe(405);
   });
 });

@@ -74,12 +74,6 @@ export async function handleAiRoute(
   const path = pathSegments(request.url);
   if (path === undefined) return false;
 
-  if (path.length === 1 && path[0] === "ai" && request.method === "POST") {
-    writeJson(response, 404, {
-      diagnostics: [{ code: "not-found", message: "The AI operation does not exist." }],
-    });
-    return true;
-  }
   if (path.length === 2 && path[0] === "ai" && path[1] === "formalize") {
     if (request.method !== "POST") return methodNotAllowed(response, "POST");
     await formalize(context, request, response);
@@ -169,15 +163,25 @@ async function formalize(
   }
   const prepared = prepareLlmCall(built.envelope);
   if (!prepared.ok) return writeJson(response, 400, { diagnostics: prepared.diagnostics });
-  const result = await runDurableLlmCall(
-    context.llmCalls,
-    {
-      owner: { kind: "construction", id: constructionId },
-      call: prepared.call,
-      dispatch: configured.dispatch,
-    },
-    configured.transport,
-  );
+  const formalizerOwner: LlmCallOwner = { kind: "construction", id: constructionId };
+  const limited = await admitProviderCall(context, formalizerOwner, prepared.call.id);
+  if (!limited.ok) {
+    response.setHeader("retry-after", String(limited.retryAfterSeconds));
+    return writeJson(response, 429, {
+      status: "rate-limited",
+      diagnostics: [{ code: limited.code, message: LIMIT_MESSAGE }],
+    });
+  }
+  let result;
+  try {
+    result = await runDurableLlmCall(
+      context.llmCalls,
+      { owner: formalizerOwner, call: prepared.call, dispatch: configured.dispatch },
+      configured.transport,
+    );
+  } finally {
+    limited.release();
+  }
   if (result.status !== "completed") {
     return writeJson(response, repositoryStatus(result), { diagnostics: result.diagnostics });
   }
@@ -352,11 +356,27 @@ async function shortlist(
   const prepared = prepareLlmCall(built.envelope);
   if (!prepared.ok) return respondWithFallback(409, prepared.diagnostics[0].message, true);
   const owner: LlmCallOwner = { kind: "proof-session", id: sessionId };
-  const result = await runDurableLlmCall(
-    context.llmCalls,
-    { owner, call: prepared.call, dispatch: configured.dispatch },
-    configured.transport,
-  );
+  const admission = await admitProviderCall(context, owner, prepared.call.id);
+  if (!admission.ok) {
+    response.setHeader("retry-after", String(admission.retryAfterSeconds));
+    return writeJson(response, 429, {
+      status: "deterministic-fallback",
+      provenance: "deterministic",
+      choices: [],
+      fallbackCandidateIds,
+      diagnostics: [{ code: admission.code, message: LIMIT_MESSAGE }],
+    });
+  }
+  let result;
+  try {
+    result = await runDurableLlmCall(
+      context.llmCalls,
+      { owner, call: prepared.call, dispatch: configured.dispatch },
+      configured.transport,
+    );
+  } finally {
+    admission.release();
+  }
   if (result.status !== "completed") {
     return respondWithFallback(repositoryStatus(result), result.diagnostics[0].message);
   }
@@ -402,6 +422,30 @@ async function shortlist(
     fallbackCandidateIds,
     diagnostics: [],
   });
+}
+
+const LIMIT_MESSAGE = "The AI request budget is exhausted; retry later.";
+
+type ProviderAdmission =
+  | Readonly<{ ok: true; release: () => void }>
+  | Readonly<{ ok: false; code: string; retryAfterSeconds: number }>;
+
+/**
+ * Reserve limiter budget only when a provider call will really be dispatched: a stored call with
+ * the same owner and ID is a replay or conflict and never reaches the provider.
+ */
+async function admitProviderCall(
+  context: ServiceContext,
+  owner: LlmCallOwner,
+  callId: string,
+): Promise<ProviderAdmission> {
+  const limiter = context.aiLimiter;
+  if (limiter === undefined) return { ok: true, release: () => undefined };
+  if (context.llmCalls !== undefined) {
+    const existing = await readLlmCall(context.llmCalls, owner, callId);
+    if (existing.status === "found") return { ok: true, release: () => undefined };
+  }
+  return limiter.tryAcquire();
 }
 
 async function readEvidence(

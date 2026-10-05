@@ -36,9 +36,10 @@ import {
   recordInquiryCommand,
 } from "../inquiry-repository";
 import type { LibraryStore } from "../library-repository";
-import { createAiRuntime, type AiRuntime } from "../ai-runtime";
+import type { AiRuntime } from "../ai-runtime";
 import type { LlmCallStore } from "../llm-call-repository";
 import { postgresProofStore } from "../postgres-proof-store";
+import { createAiLimiter, type AiLimiter } from "./ai-rate-limit";
 import { handleAiRoute } from "./ai-routes";
 import { handleArtifactRoute } from "./artifact-routes";
 import { handleConditionalLemmaRoute } from "./conditional-lemma-routes";
@@ -274,8 +275,10 @@ export type ProofHttpServiceOptions = Readonly<{
   /** The session library store; library commands of the envelope need it. */
   library?: LibraryStore;
   llmCalls?: LlmCallStore;
+  /** AI is enabled only by passing a runtime explicitly; the ambient environment is never read. */
   ai?: AiRuntime;
-  env?: Readonly<Record<string, string | undefined>>;
+  /** Cost guard for AI provider calls; defaults to the documented in-process limits. */
+  aiLimiter?: AiLimiter;
 }>;
 
 type HandlerContext = ServiceContext;
@@ -291,7 +294,8 @@ export function createProofHttpService(
     now: options.now,
     library: options.library,
     llmCalls: options.llmCalls,
-    ai: options.ai ?? createAiRuntime(options.env ?? process.env),
+    ai: options.ai,
+    aiLimiter: options.aiLimiter ?? createAiLimiter(),
   };
   const server = createServer((request, response) => {
     void handleRequest(context, request, response).catch(() => {

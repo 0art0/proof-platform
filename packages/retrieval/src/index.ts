@@ -1,3 +1,4 @@
+import { alphaEquivalent } from "@proof/kernel";
 import {
   RESERVED_BUILTIN_SYMBOLS,
   binderShape,
@@ -486,8 +487,13 @@ function buildSuggestionsForMatch(
     )
     .filter(
       (plan) =>
-        moveRelationshipsMatch(candidate.artifact, plan.assignments) &&
-        moveContextIsAvailableForAssignments(candidate.artifact, plan.assignments, state),
+        moveRelationshipsMatch(candidate.artifact, plan.assignments, operators) &&
+        moveContextIsAvailableForAssignments(
+          candidate.artifact,
+          plan.assignments,
+          state,
+          operators,
+        ),
     )
     .flatMap((plan) => {
       const canonicalPatternId = plan.patternMatches
@@ -865,12 +871,17 @@ function combineAbstractionFit(
 function moveRelationshipsMatch(
   move: MoveDefinition,
   assignments: readonly MoveAssignment[],
+  operators: readonly OperatorDeclaration[],
 ): boolean {
   const bySlot = new Map(assignments.map(({ slot, subject }) => [slot.id, subject]));
   const target = bySlot.get("target");
   if (move.implementation.operationKind === "close-by-hypothesis") {
     const fact = bySlot.get("fact");
-    return target === undefined || fact === undefined || subjectsCanRepresentEqual(target, fact);
+    return (
+      target === undefined ||
+      fact === undefined ||
+      subjectsCanRepresentEqual(target, fact, operators)
+    );
   }
   if (move.implementation.operationKind === "close-false-hypothesis") {
     const falseSelection = bySlot.get("false");
@@ -900,11 +911,24 @@ function moveRelationshipsMatch(
   return true;
 }
 
-function subjectsCanRepresentEqual(left: RetrievalSubject, right: RetrievalSubject): boolean {
+/** Equality up to renaming of bound symbols, matching the kernel's `close-by-hypothesis` check. */
+function alphaEqual(
+  left: PlainMathJson,
+  right: PlainMathJson,
+  operators: readonly OperatorDeclaration[],
+): boolean {
+  return alphaEquivalent(left, right, { operators });
+}
+
+function subjectsCanRepresentEqual(
+  left: RetrievalSubject,
+  right: RetrievalSubject,
+  operators: readonly OperatorDeclaration[],
+): boolean {
   return (
     left.abstraction !== undefined ||
     right.abstraction !== undefined ||
-    mathJsonEquals(left.selection.fragment, right.selection.fragment)
+    alphaEqual(left.selection.fragment, right.selection.fragment, operators)
   );
 }
 
@@ -1159,6 +1183,7 @@ function moveContextIsAvailableForAssignments(
   move: MoveDefinition,
   assignments: readonly MoveAssignment[],
   state: ProofState,
+  operators: readonly OperatorDeclaration[],
 ): boolean {
   const operationKind = move.implementation.operationKind;
   if (
@@ -1189,20 +1214,21 @@ function moveContextIsAvailableForAssignments(
     const targetSubject = bySlot.get("target");
     const fact = bySlot.get("fact");
     if (fact !== undefined && targetSubject !== undefined) {
-      return subjectsCanRepresentEqual(fact, targetSubject);
+      return subjectsCanRepresentEqual(fact, targetSubject, operators);
     }
     const targetExpression =
       targetSubject?.selection.fragment ?? target.sequent.conclusion.expression;
     if (fact !== undefined) {
       return (
-        fact.abstraction !== undefined || mathJsonEquals(fact.selection.fragment, targetExpression)
+        fact.abstraction !== undefined ||
+        alphaEqual(fact.selection.fragment, targetExpression, operators)
       );
     }
     if (targetSubject?.abstraction !== undefined) {
       return target.sequent.context.hypotheses.length > 0;
     }
     return target.sequent.context.hypotheses.some((hypothesis) =>
-      mathJsonEquals(hypothesis.statement.expression, targetExpression),
+      alphaEqual(hypothesis.statement.expression, targetExpression, operators),
     );
   }
   const implication = bySlot.get("implication");
@@ -1407,16 +1433,32 @@ const RANK_NO_NEW_OBLIGATIONS = 1;
 /** Slots reserved per category when the limit truncates, so no category is crowded out. */
 const RESERVED_SLOTS_PER_CATEGORY = 2;
 
-type SuggestionCategory = "immediate" | "with-obligations" | "requires-input";
+/** Index of the structural specificity component in every suggestion rank. */
+const RANK_SPECIFICITY = 4;
+
+/**
+ * A requires-input suggestion is structural when its selection already fixes some structure (a
+ * result whose conclusion matches the goal, a move whose slot pattern is not a bare variable) and
+ * catch-all when it matches by a bare variable only. Structural suggestions that need an
+ * instantiation menu or create obligations rank below applicable catch-all moves, so they get
+ * their own reserved slots rather than competing with the catch-all moves for the rest.
+ */
+type SuggestionCategory =
+  "immediate" | "with-obligations" | "structural-requires-input" | "catch-all-requires-input";
 
 const SUGGESTION_CATEGORIES: readonly SuggestionCategory[] = [
   "immediate",
   "with-obligations",
-  "requires-input",
+  "structural-requires-input",
+  "catch-all-requires-input",
 ];
 
 function suggestionCategory(suggestion: RetrievalSuggestion): SuggestionCategory {
-  if (suggestion.applicability === "requires-input") return "requires-input";
+  if (suggestion.applicability === "requires-input") {
+    return (suggestion.rank[RANK_SPECIFICITY] ?? -1) >= 0
+      ? "structural-requires-input"
+      : "catch-all-requires-input";
+  }
   return suggestion.rank[RANK_NO_NEW_OBLIGATIONS] === 1 ? "immediate" : "with-obligations";
 }
 

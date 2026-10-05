@@ -6,7 +6,7 @@ import { postgresLibraryStore } from "./postgres-library-store";
 import { MemoryLlmCallStore } from "./memory-llm-call-store";
 import { postgresLlmCallStore } from "./postgres-llm-call-store";
 import type { LlmCallStore } from "./llm-call-repository";
-import { createAiRuntime } from "./ai-runtime";
+import { createAiLimiterFromEnv, createAiRuntime } from "./ai-runtime";
 import {
   DEFAULT_MIGRATIONS_DIRECTORY,
   applyMigrations,
@@ -113,6 +113,7 @@ export async function startProofWorker(env: ProofWorkerEnvironment): Promise<Sta
       library: selection.library,
       llmCalls: selection.llmCalls,
       ai: createAiRuntime(env),
+      aiLimiter: createAiLimiterFromEnv(env),
     });
     const port = parsePort(env.PROOF_HTTP_PORT);
     const { origin } = await service.listen({ host: env.PROOF_HTTP_HOST ?? "127.0.0.1", port });
