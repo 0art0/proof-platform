@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, ProofEdge } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
+import { AiShortlist } from "./ai-shortlist";
 import { NO_MACROS, type MacroInfoMap } from "./macro-info";
 import { layoutSuggestions, type SuggestionLayoutEntry } from "./preview-diff";
 import { suggestionQualifiers } from "./suggestion-qualifiers";
@@ -59,6 +60,8 @@ export type SuggestionPanelProps = SuggestionPanelActions &
     authorMovesHref?: string | undefined;
     /** Approved multi-step macros of the session, by move ID. */
     macros?: MacroInfoMap | undefined;
+    /** Where AI ranking may be requested; absent when it is unavailable or read-only. */
+    aiShortlist?: Readonly<{ sessionId: string; nodeId: string }> | undefined;
   }>;
 
 /**
@@ -73,6 +76,7 @@ export function SuggestionPanel({
   view,
   authorMovesHref,
   macros = NO_MACROS,
+  aiShortlist,
   ...actions
 }: SuggestionPanelProps) {
   const displayedSet =
@@ -185,6 +189,17 @@ export function SuggestionPanel({
             </>
           )}
         </p>
+      ) : null}
+      {suggestions.kind === "ready" &&
+      aiShortlist !== undefined &&
+      suggestions.suggestionSet.suggestions.length > 1 ? (
+        <AiShortlist
+          key={suggestions.suggestionSet.id}
+          sessionId={aiShortlist.sessionId}
+          nodeId={aiShortlist.nodeId}
+          suggestionSet={suggestions.suggestionSet}
+          disabled={mutationPending}
+        />
       ) : null}
       {suggestions.kind === "ready" ? (
         <ol className={styles.suggestions} data-testid="suggestion-list">

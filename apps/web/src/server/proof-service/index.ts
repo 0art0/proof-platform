@@ -1600,3 +1600,107 @@ export async function previewConditionalLemma(
   if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
   return parsed.data;
 }
+
+// ---------------------------------------------------------------------------------------------
+// AI assistance (design plan §4.2, §4.4, §15.2)
+// ---------------------------------------------------------------------------------------------
+
+/** The model roles the worker can serve; every other role is unimplemented. */
+export const AI_ROLES = ["topic-extractor", "proof-state-formalizer", "move-shortlister"] as const;
+export type AiRole = (typeof AI_ROLES)[number];
+export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
+export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
+  "topic-extractor": false,
+  "proof-state-formalizer": false,
+  "move-shortlister": false,
+});
+
+const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
+
+/** Which AI roles are configured on the worker; an unreachable worker means none are. */
+export async function readAiCapabilities(
+  options: ProofServiceRequestOptions = {},
+): Promise<AiCapabilities> {
+  try {
+    const response = await requestProofService("/ai/capabilities", {
+      method: "GET",
+      ...signalOption(options.signal),
+    });
+    const value = await readValidatedEnvelope(response);
+    const parsed = aiCapabilitiesSchema.safeParse(value);
+    if (response.status !== 200 || !parsed.success) return NO_AI_CAPABILITIES;
+    const { roles } = parsed.data;
+    return {
+      "topic-extractor": roles["topic-extractor"] === true,
+      "proof-state-formalizer": roles["proof-state-formalizer"] === true,
+      "move-shortlister": roles["move-shortlister"] === true,
+    };
+  } catch {
+    return NO_AI_CAPABILITIES;
+  }
+}
+
+const aiRequestBodySchema = z.record(z.string(), z.unknown());
+const aiAnswerSchema = z
+  .object({
+    status: z.string().min(1).optional(),
+    diagnostics: z
+      .array(z.object({ code: z.string().min(1), message: z.string().min(1) }).passthrough())
+      .optional(),
+  })
+  .passthrough();
+
+/** The worker AI endpoints the web application relays. */
+export type AiEndpoint =
+  | Readonly<{ kind: "topics" }>
+  | Readonly<{ kind: "topic-decisions" }>
+  | Readonly<{ kind: "formalize" }>
+  | Readonly<{ kind: "shortlist"; sessionId: string }>;
+
+function aiEndpointPath(endpoint: AiEndpoint): string {
+  if (endpoint.kind === "topics") return "/ai/topics";
+  if (endpoint.kind === "topic-decisions") return "/ai/topics/decisions";
+  if (endpoint.kind === "formalize") return "/ai/formalize";
+  const sessionId = parseIdentifier(endpoint.sessionId, "proof session");
+  return `/proof-sessions/${encodeURIComponent(sessionId)}/ai/shortlist`;
+}
+
+/**
+ * Relay one AI request. The worker validates the request strictly and records the call; its
+ * answer (proposal, fallback, or diagnostics) is relayed intact so the browser can show why a
+ * proposal was not admitted. Nothing here can change proof state.
+ */
+export async function relayAiRequest(
+  endpoint: AiEndpoint,
+  bodyInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const body = aiRequestBodySchema.safeParse(bodyInput);
+  if (!body.success) throw invalidRequest("The AI request must be a JSON object.");
+  const response = await requestProofService(aiEndpointPath(endpoint), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body.data),
+    ...signalOption(options.signal),
+  });
+  const value = await readValidatedEnvelope(response);
+  const parsed = aiAnswerSchema.safeParse(value);
+  if (!parsed.success) throw invalidUpstreamResponse();
+  if (response.status === 200 || response.status === 201) {
+    return { ok: true, status: response.status, body: parsed.data };
+  }
+  const first = parsed.data.diagnostics?.[0];
+  if (first === undefined || response.status < 400 || response.status > 599) {
+    throw invalidUpstreamResponse();
+  }
+  return {
+    ok: false,
+    status:
+      response.status === 422 || response.status === 429
+        ? response.status
+        : publicFailureStatus(response.status),
+    code: first.code,
+    message: first.message,
+    body: parsed.data,
+  };
+}

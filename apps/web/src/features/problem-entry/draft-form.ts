@@ -79,6 +79,22 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
       return { format: "mathjson", expression: expression.ok ? expression.expression : 0 };
     });
 
+  const draft = {
+    ...formSetupContext(form, options),
+    declarations: form.declarations.map(({ symbol, sort }) => ({ symbol: symbol.trim(), sort })),
+    hypotheses: statements(form.hypotheses, "Hypothesis"),
+    goals: statements(form.goals, "Goal"),
+  } as ProblemDraft;
+  return problems.length === 0 ? { ok: true, draft } : { ok: false, problems };
+}
+
+/** The part of a draft the AI roles may see: everything except declarations and statements. */
+export type SetupContext = Pick<
+  ProblemDraft,
+  "problem" | "background" | "preferences" | "libraryLayerIds" | "packs"
+>;
+
+export function formSetupContext(form: ProblemForm, options: ProblemSetupOptions): SetupContext {
   const optionalPacks = new Set(
     options.packs.filter((pack) => !pack.alwaysActive).map((pack) => pack.id),
   );
@@ -86,7 +102,7 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
   const backgroundDomains = commaList(form.backgroundDomains);
   const preferredDomains = commaList(form.preferredDomains);
   const notation = lines(form.notation);
-  const draft = {
+  return {
     problem: { title: form.title.trim(), statement: form.statement.trim() },
     background: {
       level: form.backgroundLevel.trim(),
@@ -109,11 +125,52 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
     packs: options.packs
       .map((pack) => pack.id)
       .filter((id) => optionalPacks.has(id) && form.packIds.includes(id)),
-    declarations: form.declarations.map(({ symbol, sort }) => ({ symbol: symbol.trim(), sort })),
-    hypotheses: statements(form.hypotheses, "Hypothesis"),
-    goals: statements(form.goals, "Goal"),
-  } as ProblemDraft;
-  return problems.length === 0 ? { ok: true, draft } : { ok: false, problems };
+  } as SetupContext;
+}
+
+/** The required fields the AI roles need: the problem and the background, not the statements. */
+export function missingSetupFields(form: ProblemForm): readonly FormProblem[] {
+  return missingRequiredFields(form).filter(
+    ({ field }) => !field.startsWith("Variable or object") && !field.startsWith("Goal"),
+  );
+}
+
+/** Editable rows for the declarations and statements of a draft (an AI draft, for example). */
+export function draftStatementRows(
+  draft: Pick<ProblemDraft, "declarations" | "hypotheses" | "goals">,
+  nextKey: () => number,
+): Pick<ProblemForm, "declarations" | "hypotheses" | "goals"> {
+  const row = (input: ProblemStatementInput): StatementRow =>
+    input.format === "latex"
+      ? { key: nextKey(), format: "latex", text: input.latex }
+      : { key: nextKey(), format: "mathjson", text: JSON.stringify(input.expression) };
+  return {
+    declarations: draft.declarations.map(({ symbol, sort }) => ({ key: nextKey(), symbol, sort })),
+    hypotheses: draft.hypotheses.map(row),
+    goals: draft.goals.map(row),
+  };
+}
+
+export type TopicSuggestions = Readonly<{
+  domains: readonly string[];
+  notation: readonly Readonly<{ symbol: string; meaning: string }>[];
+}>;
+
+/** Add approved topic domains and notation to the preferences, keeping what is already there. */
+export function withTopicPreferences(
+  form: ProblemForm,
+  topics: TopicSuggestions,
+): Pick<ProblemForm, "preferredDomains" | "notation"> {
+  const domains = commaList(form.preferredDomains);
+  const notation = lines(form.notation);
+  const addedDomains = topics.domains.filter((domain) => !domains.includes(domain));
+  const addedNotation = topics.notation
+    .map(({ symbol, meaning }) => `${symbol}: ${meaning}`)
+    .filter((line) => !notation.includes(line));
+  return {
+    preferredDomains: [...domains, ...addedDomains].join(", "),
+    notation: [...notation, ...addedNotation].join("\n"),
+  };
 }
 
 /**

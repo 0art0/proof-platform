@@ -77,7 +77,12 @@ export type StoredProofSession = Readonly<{
   background?: string | undefined;
 }>;
 
-export type StoredProofWorkspaceProps = Readonly<{ session: StoredProofSession; node: ProofNode }>;
+export type StoredProofWorkspaceProps = Readonly<{
+  session: StoredProofSession;
+  node: ProofNode;
+  /** Whether the proof service can rank suggestions with a model. */
+  aiShortlist?: boolean | undefined;
+}>;
 type HistoryState =
   | Readonly<{ kind: "loading" }>
   | Readonly<{ kind: "ready"; nodes: readonly ProofNode[]; edges: readonly HistoryEdge[] }>
@@ -99,6 +104,7 @@ export function StoredProofWorkspace(props: StoredProofWorkspaceProps) {
 function StatefulStoredWorkspace({
   session: initialSession,
   node: initialNode,
+  aiShortlist = false,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -746,6 +752,9 @@ function StatefulStoredWorkspace({
         macros={macros}
         presentation={presentation}
         view={view}
+        aiShortlist={
+          aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
+        }
         {...panelActions}
       />
       <InquiryPanel

@@ -12,6 +12,9 @@ import { z } from "zod";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 export const DEFAULT_FORMALIZER_MODEL = "openai/gpt-6-luna";
 export const DEFAULT_SHORTLISTER_MODEL = "typesafe-ai/jev";
+export const DEFAULT_TOPIC_EXTRACTOR_MODEL = DEFAULT_FORMALIZER_MODEL;
+export const DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT = "medium" as const;
+export const DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS = 8_000;
 export const DEFAULT_FORMALIZER_REASONING_EFFORT = "high" as const;
 export const DEFAULT_LLM_TIMEOUT_MS = 120_000;
 export const DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS = 32_000;
@@ -118,7 +121,7 @@ export function createVercelStructuredOutputTransport(
     if (asRecord(first)?.finish_reason !== "stop") return null;
     const message = asRecord(asRecord(first)?.message);
     if (message?.refusal !== undefined && message.refusal !== null) {
-      return { kind: "declined", reason: "The model declined this formalization request." };
+      return { kind: "declined", reason: "The model declined this request." };
     }
     const content = message?.content;
     if (typeof content !== "string" || content.length === 0) return null;

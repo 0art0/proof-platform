@@ -559,3 +559,42 @@
 .labelKey dd {
   margin: 0;
 }
+
+.aiShortlist {
+  display: grid;
+  gap: 0.45rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.aiShortlistButton {
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--surface-strong);
+  padding: 0.45rem 0.7rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.aiShortlistButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.aiShortlistHint,
+.aiShortlistNote {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.aiShortlistPicks {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.85rem;
+}

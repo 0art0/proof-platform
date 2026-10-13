@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { StoredProofWorkspace } from "../../../features/stored-proof-workspace";
 import {
   ProofServiceError,
+  readAiCapabilities,
   readCurrentProofSession,
   readProofSessionMetadata,
 } from "../../../server/proof-service";
@@ -26,7 +27,10 @@ export default async function SessionPage({
     }
     throw error;
   }
-  const metadata = await readProofSessionMetadata(loaded.session.id);
+  const [metadata, capabilities] = await Promise.all([
+    readProofSessionMetadata(loaded.session.id),
+    readAiCapabilities(),
+  ]);
   const session =
     metadata === undefined
       ? loaded.session
@@ -38,7 +42,11 @@ export default async function SessionPage({
         };
   return (
     <main>
-      <StoredProofWorkspace session={session} node={loaded.node} />
+      <StoredProofWorkspace
+        session={session}
+        node={loaded.node}
+        aiShortlist={capabilities["move-shortlister"]}
+      />
     </main>
   );
 }

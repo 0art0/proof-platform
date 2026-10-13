@@ -6,6 +6,9 @@ import {
   DEFAULT_LLM_TIMEOUT_MS,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   DEFAULT_SHORTLISTER_MODEL,
+  DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_TOPIC_EXTRACTOR_MODEL,
+  DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
   buildProofStateFormalizerContext,
   prepareLlmCall,
   type PreparedLlmCall,
@@ -18,9 +21,21 @@ describe("createAiRuntime", () => {
     expect(createAiRuntime({ AI_GATEWAY_API_KEY: "  ", AI_API_KEY: "" })).toEqual({});
   });
 
-  it("configures Luna formalization and Jev shortlisting with the documented defaults", () => {
+  it("configures Luna topics and formalization and Jev shortlisting with the documented defaults", () => {
     const runtime = createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential" });
-    expect(Object.keys(runtime).sort()).toEqual(["move-shortlister", "proof-state-formalizer"]);
+    expect(Object.keys(runtime).sort()).toEqual([
+      "move-shortlister",
+      "proof-state-formalizer",
+      "topic-extractor",
+    ]);
+    expect(runtime["topic-extractor"]?.dispatch).toEqual({
+      provider: "vercel-ai-gateway",
+      model: DEFAULT_TOPIC_EXTRACTOR_MODEL,
+      promptVersion: "topic-extractor-v1",
+      maxOutputTokens: DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
+      reasoningEffort: DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
+    });
+    expect(typeof runtime["topic-extractor"]?.transport).toBe("function");
     expect(runtime["proof-state-formalizer"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_FORMALIZER_MODEL,
@@ -48,6 +63,14 @@ describe("createAiRuntime", () => {
       PROOF_AI_FORMALIZER_REASONING_EFFORT: "xhigh",
       PROOF_AI_SHORTLISTER_MODEL: "typesafe-ai/jev-test",
       PROOF_AI_SHORTLISTER_MIN_CONFIDENCE: "0.8",
+      PROOF_AI_TOPIC_MODEL: "openai/luna-topics",
+      PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS: "4000",
+      PROOF_AI_TOPIC_REASONING_EFFORT: "low",
+    });
+    expect(runtime["topic-extractor"]?.dispatch).toMatchObject({
+      model: "openai/luna-topics",
+      maxOutputTokens: 4_000,
+      reasoningEffort: "low",
     });
     expect(runtime["proof-state-formalizer"]?.dispatch).toMatchObject({
       model: "openai/luna-test",
@@ -66,6 +89,8 @@ describe("createAiRuntime", () => {
     ["max output tokens", { PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS: "-2" }],
     ["reasoning effort", { PROOF_AI_FORMALIZER_REASONING_EFFORT: "extreme" }],
     ["minimum confidence", { PROOF_AI_SHORTLISTER_MIN_CONFIDENCE: "1.1" }],
+    ["topic max output tokens", { PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS: "0" }],
+    ["topic reasoning effort", { PROOF_AI_TOPIC_REASONING_EFFORT: "maximal" }],
   ])("rejects an invalid %s override", (_name, config) => {
     expect(() => createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential", ...config })).toThrow();
   });

@@ -7,6 +7,9 @@ import {
   DEFAULT_LLM_TIMEOUT_MS,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   DEFAULT_SHORTLISTER_MODEL,
+  DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_TOPIC_EXTRACTOR_MODEL,
+  DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
   configuredVercelApiKey,
   type LlmTransport,
   type SupportedLlmRole,
@@ -35,7 +38,21 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS,
     DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   );
-  const reasoningEffort = parseReasoningEffort(env.PROOF_AI_FORMALIZER_REASONING_EFFORT);
+  const reasoningEffort = parseReasoningEffort(
+    "PROOF_AI_FORMALIZER_REASONING_EFFORT",
+    env.PROOF_AI_FORMALIZER_REASONING_EFFORT,
+    DEFAULT_FORMALIZER_REASONING_EFFORT,
+  );
+  const topicModel = nonEmpty(env.PROOF_AI_TOPIC_MODEL) ?? DEFAULT_TOPIC_EXTRACTOR_MODEL;
+  const topicTokens = positiveInteger(
+    env.PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS,
+    DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
+  );
+  const topicReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_TOPIC_REASONING_EFFORT",
+    env.PROOF_AI_TOPIC_REASONING_EFFORT,
+    DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
+  );
   const shortlisterModel = nonEmpty(env.PROOF_AI_SHORTLISTER_MODEL) ?? DEFAULT_SHORTLISTER_MODEL;
   const minimumConfidence = boundedNumber(
     env.PROOF_AI_SHORTLISTER_MIN_CONFIDENCE,
@@ -43,6 +60,22 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
   );
 
   return Object.freeze({
+    "topic-extractor": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: topicModel,
+        reasoningEffort: topicReasoningEffort,
+        maxOutputTokens: topicTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: topicModel,
+        promptVersion: "topic-extractor-v1",
+        maxOutputTokens: topicTokens,
+        reasoningEffort: topicReasoningEffort,
+      }),
+    },
     "proof-state-formalizer": {
       transport: createVercelStructuredOutputTransport({
         apiKey: key.apiKey,
@@ -108,10 +141,16 @@ function boundedNumber(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
-function parseReasoningEffort(value: string | undefined): "low" | "medium" | "high" | "xhigh" {
-  if (value === undefined || value.trim() === "") return DEFAULT_FORMALIZER_REASONING_EFFORT;
+type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+function parseReasoningEffort(
+  name: string,
+  value: string | undefined,
+  fallback: ReasoningEffort,
+): ReasoningEffort {
+  if (value === undefined || value.trim() === "") return fallback;
   if (value === "low" || value === "medium" || value === "high" || value === "xhigh") {
     return value;
   }
-  throw new Error("PROOF_AI_FORMALIZER_REASONING_EFFORT must be low, medium, high, or xhigh.");
+  throw new Error(`${name} must be low, medium, high, or xhigh.`);
 }

@@ -1,8 +1,10 @@
 # AI endpoints
 
-The worker exposes two single-call AI roles. Both use the Vercel AI Gateway and persist a
-validated call record before returning a proposal. AI responses never execute proof commands or
-change a proof session directly.
+The worker exposes three single-call AI roles: the topic extractor, the proof-state formalizer and
+the move shortlister. All use the Vercel AI Gateway and persist a validated call record before
+returning a proposal. AI responses never execute proof commands or change a proof session directly.
+The other roles of design plan §15.2 (initial librarian, move executor, attestor, background
+gatekeeper, generality reviewer, stateful proof agent) are not implemented.
 
 ## Configuration
 
@@ -18,10 +20,12 @@ starting the updated worker. A single-instance deployment can use `PROOF_AUTO_MI
 normal migration runner is `npm run migrate`.
 
 Defaults are `openai/gpt-6-luna` with high reasoning effort and a 32,000 token output limit for the
-formalizer, and `typesafe-ai/jev` for shortlisting. Configuration can be overridden with
+formalizer, the same model with medium reasoning effort and an 8,000 token output limit for topic
+extraction, and `typesafe-ai/jev` for shortlisting. Configuration can be overridden with
 `PROOF_AI_FORMALIZER_MODEL`, `PROOF_AI_FORMALIZER_REASONING_EFFORT`,
 `PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`, `PROOF_AI_SHORTLISTER_MODEL`,
-`PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, `PROOF_AI_TIMEOUT_MS`, and `PROOF_AI_FORMALIZER_TIMEOUT_MS`
+`PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, `PROOF_AI_TOPIC_MODEL`, `PROOF_AI_TOPIC_REASONING_EFFORT`,
+`PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS`, `PROOF_AI_TIMEOUT_MS`, and `PROOF_AI_FORMALIZER_TIMEOUT_MS`
 (the formalizer's total budget; defaults to `PROOF_AI_TIMEOUT_MS`, itself 120000 ms; raise it for
 long high-effort generations). The confidence threshold defaults
 to `0.55`; Jev's native confidence and candidate probabilities are included in the stored structured
@@ -29,7 +33,8 @@ evidence. Missing credentials disable these routes. No model fallback is silentl
 
 ## Cost guard and status codes
 
-Both AI routes can trigger paid provider calls, so they share an in-process limiter: a global cap on
+The topic, formalizer and shortlist routes can trigger paid provider calls, so they share an
+in-process limiter: a global cap on
 concurrent provider calls (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token bucket
 (`PROOF_AI_RATE_PER_MINUTE`, default 20; it is also the burst size). A request over budget gets
 `429` with a `Retry-After` header (seconds) and a stable diagnostic code: `ai-rate-limited` or
@@ -42,6 +47,8 @@ worker is still trusted.
 | Status | Meaning on the AI routes                                                         |
 | ------ | -------------------------------------------------------------------------------- |
 | 400    | invalid JSON or request, unknown pack, candidate not in the displayed set        |
+| 404    | a topic decision names a call that does not exist for that construction          |
+| 409    | stale session or suggestion set; topic decision ID reused or not reviewable      |
 | 413    | request body over 256 KiB                                                        |
 | 415    | `Content-Type` is not `application/json`                                         |
 | 422    | the model output was rejected or the draft failed admission; nothing was created |
@@ -49,6 +56,58 @@ worker is still trusted.
 | 503    | `ai-disabled` (no provider configured), transport failure, or uncertain call     |
 
 Unknown `/ai/*` paths are ordinary unknown routes.
+
+## Capabilities
+
+`GET /ai/capabilities` answers `{ "roles": { "topic-extractor": bool, "proof-state-formalizer":
+bool, "move-shortlister": bool } }`. A role is `true` only when it has a configured transport and
+evidence storage. No model name, endpoint or credential is disclosed. The web application reads it to
+decide which AI controls to enable.
+
+## Suggest topics
+
+`POST /ai/topics` proposes a topic and vocabulary manifest (design plan §4.2) from the problem,
+the background and the optional preferences only. Declarations, hypotheses, goals and library
+content are never sent.
+
+```json
+{
+  "constructionId": "construction:example",
+  "id": "llm-call:topics-example",
+  "problem": { "title": "A small example", "statement": "Prove that p implies p." },
+  "background": { "level": "first-year undergraduate", "summary": "Logic.", "assumptions": [] },
+  "preferences": { "domains": ["logic"] }
+}
+```
+
+A validated manifest answers `status: "proposed"` with `provenance: { kind:
+"minimal-context-llm", role: "topic-extractor" }`, the `callId`, and the `proposal` (`domains`,
+`objectKinds`, `vocabulary`, `notation`, `backgroundTopics`, `customOperators`). A context request
+or refusal answers `status: "insufficient-context"` or `"declined"` with the model's `result`. A
+malformed manifest (an extra field such as a solution, duplicates, another kind) is recorded and
+rejected with `422`. The manifest changes nothing on its own.
+
+### Record a topic decision
+
+`POST /ai/topics/decisions` records the reviewer's decision on a stored proposal:
+
+```json
+{
+  "constructionId": "construction:example",
+  "decisionId": "topic-decision:example",
+  "callId": "llm-call:topics-example",
+  "decision": "approved",
+  "rationale": "Matches the problem.",
+  "decidedAt": "2026-10-13T12:00:00.000Z"
+}
+```
+
+The worker reads the proposal from the stored call; a client cannot send its own. The reviewer is
+the web actor `actor:web`. An approval also yields an approved manifest with the ID
+`topic-manifest:<decisionId>`. The client chooses `decisionId` and `decidedAt` once, so a retried
+decision replays (`200`, `replayed: true`). Reusing the ID for a different decision is `409
+decision-id-conflict`. Only a validated `topic-manifest` output can be decided (`409
+proposal-not-reviewable`). Topic evidence is construction-owned, like the formalizer's.
 
 ## Formalize a problem
 
@@ -127,6 +186,24 @@ agent actions still go through the existing proof command protocol.
 Shortlist evidence is session-owned and included in exported session artifacts under `llmCalls`.
 Construction-owned formalizer evidence is available through its construction evidence route; it is
 not implicitly attached to a later proof-session artifact.
+
+## Web interface
+
+The web application relays these routes through same-origin proxies (`/api/ai/topics`,
+`/api/ai/topics/decisions`, `/api/ai/formalize` and `/api/proof-sessions/:sessionId/ai-shortlist`),
+keeping the worker's status codes, including `429`.
+
+- **New problem.** An optional "AI assistance" section asks for topics and for a drafted setup once
+  the problem and background are filled in. Topics are approved or rejected explicitly. Approved
+  areas and notation reach the preferences only through "Add these areas and notation to my
+  preferences". A drafted setup, even one that needs review, replaces the variables, hypotheses and
+  goals only through an explicit button, and then goes through the usual "Check setup" and "Start
+  exploring". The review marks a setup that started from an AI draft. Every call from one form
+  shares a construction ID.
+- **Workspace.** When a displayed suggestion list has two or more entries, "Ask AI to rank these"
+  sends its first 32 candidates with the `explicit-user` trigger. The ranked picks appear above the
+  unchanged list, and any fallback is reported in place. Read-only sessions do not offer it.
+- When a role is not configured, its control is disabled with an explanation.
 
 ## Transport behaviour
 

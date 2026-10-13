@@ -16,11 +16,16 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
+import { AiAssist, NO_AI_SETUP, type AiSetupCapabilities } from "./ai-assist";
 import {
   draftPathLabel,
+  draftStatementRows,
   emptyProblemForm,
+  formSetupContext,
   formToDraft,
   missingRequiredFields,
+  missingSetupFields,
+  withTopicPreferences,
   type DeclarationRow,
   type FormProblem,
   type ProblemForm,
@@ -61,6 +66,9 @@ export type ProblemEntryFormProps = Readonly<{
   /** Navigate to the created session; defaults to a full navigation. */
   navigate?: (url: string) => void;
   createSessionId?: () => string;
+  /** Which AI setup roles the proof service offers; none by default. */
+  ai?: AiSetupCapabilities;
+  createAiId?: (prefix: string) => string;
 }>;
 
 const apiFailureSchema = z
@@ -72,7 +80,8 @@ const apiFailureSchema = z
   .strict();
 
 /**
- * New problem (design plan §4.1, §4.4 without the formalizer). The draft stays in the browser.
+ * New problem (design plan §4.1, §4.2, §4.4). The draft stays in the browser. Optional AI help
+ * proposes topics and a drafted setup; a draft is loaded into the form only on request.
  * "Check setup" asks the worker to validate it and shows the mathematical content; only
  * "Start exploring" on an unchanged reviewed draft creates the session and root node.
  * Any edit after review discards the review.
@@ -81,12 +90,17 @@ export function ProblemEntryForm({
   options,
   navigate = (url) => window.location.assign(url),
   createSessionId = () => `session:${crypto.randomUUID()}`,
+  ai = NO_AI_SETUP,
+  createAiId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
 }: ProblemEntryFormProps) {
   const [form, setForm] = useState<ProblemForm>(emptyProblemForm);
   const [reviewed, setReviewed] = useState<Reviewed>();
   const [notice, setNotice] = useState<Notice>();
   const [busy, setBusy] = useState<"review" | "approve">();
   const nextKey = useRef(100);
+  // Owner of this form's AI calls, so a topic proposal and a draft keep their evidence together.
+  const [constructionId] = useState(() => createAiId("construction:web"));
+  const [aiDraftCallId, setAiDraftCallId] = useState<string>();
 
   const packOperators = useMemo(() => operatorsByPack(options), [options]);
   const selectedOperators = useMemo(
@@ -324,6 +338,19 @@ export function ProblemEntryForm({
         </fieldset>
       </details>
 
+      <AiAssist
+        capabilities={ai}
+        context={formSetupContext(form, options)}
+        missing={missingSetupFields(form)}
+        constructionId={constructionId}
+        createId={createAiId}
+        onUseTopics={(topics) => update((f) => ({ ...f, ...withTopicPreferences(f, topics) }))}
+        onUseDraft={(draft, callId) => {
+          update((f) => ({ ...f, ...draftStatementRows(draft, key) }));
+          setAiDraftCallId(callId);
+        }}
+      />
+
       <Section title="What is known and what to prove">
         <p className={styles.sectionIntro}>
           Enter any assumptions and a goal. Add variables or objects if they appear in these
@@ -433,6 +460,7 @@ export function ProblemEntryForm({
       ) : (
         <ReviewPanel
           reviewed={reviewed}
+          aiDraftCallId={aiDraftCallId}
           sorts={options.sorts}
           approvable={approvable}
           busy={busy === "approve"}
@@ -447,6 +475,7 @@ export function ProblemEntryForm({
 
 function ReviewPanel({
   reviewed,
+  aiDraftCallId,
   sorts,
   approvable,
   busy,
@@ -455,6 +484,7 @@ function ReviewPanel({
   onApprove,
 }: Readonly<{
   reviewed: Reviewed;
+  aiDraftCallId: string | undefined;
   sorts: ProblemSetupOptions["sorts"];
   approvable: boolean;
   busy: boolean;
@@ -472,6 +502,12 @@ function ReviewPanel({
     <section className={styles.review} aria-label="Review">
       <h2>Review your setup</h2>
       <p>Check that the problem, assumptions, and goal are represented as you intend.</p>
+      {aiDraftCallId === undefined ? null : (
+        <p className={styles.provenance} role="note">
+          The variables, hypotheses and goals started from an AI draft ({aiDraftCallId}). Check them
+          carefully.
+        </p>
+      )}
       <dl className={styles.reviewList}>
         <dt>Problem</dt>
         <dd>
