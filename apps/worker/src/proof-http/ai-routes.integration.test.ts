@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { LlmTransport } from "@proof/llm";
+import { NONE_RELEVANT_CHOICE_ID, NONE_RELEVANT_CRITERION, type LlmTransport } from "@proof/llm";
 import {
   DEVELOPMENT_PROOF_SESSION_ID,
   DEVELOPMENT_ROOT_NODE,
@@ -78,7 +78,7 @@ async function createScenario(transport: LlmTransport, aiLimiter?: AiLimiter) {
     suggestionSet,
     candidateIds,
     initialNodeId: current.session.currentNodeId,
-    shortlist: () =>
+    shortlist: (trigger: string = "explicit-user") =>
       fetch(`${origin}${sessionPath}/ai/shortlist`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -87,18 +87,22 @@ async function createScenario(transport: LlmTransport, aiLimiter?: AiLimiter) {
           expectedCurrentNodeId: current.session.currentNodeId,
           suggestionSetId: suggestionSet.id,
           candidateIds,
-          trigger: "explicit-user",
+          trigger,
         }),
       }),
   };
 }
 
-function jevTransport(): LlmTransport {
+/** An honest Jev answer: the first displayed candidate, or the none-relevant option. */
+function jevTransport(
+  options: Readonly<{ noneRelevant?: boolean; confidence?: number }> = {},
+): LlmTransport {
   return async (call) => {
     if (call.envelope.role !== "move-shortlister") return null;
     const candidates = call.envelope.context.candidates;
     const choice = candidates[0];
     if (choice === undefined) return null;
+    const chosenId = options.noneRelevant === true ? NONE_RELEVANT_CHOICE_ID : choice.id;
     return {
       kind: "jev-choice",
       minimumConfidence: dispatch.minimumConfidence,
@@ -109,17 +113,23 @@ function jevTransport(): LlmTransport {
           shortlist: {
             type: "choice",
             instructions: "Choose the strongest displayed candidate.",
-            criteria: Object.fromEntries(candidates.map(({ id, name }) => [id, name])),
+            criteria: {
+              ...Object.fromEntries(candidates.map(({ id, name }) => [id, name])),
+              [NONE_RELEVANT_CHOICE_ID]: NONE_RELEVANT_CRITERION,
+            },
           },
         },
       },
       providerOutput: {
         type: "choice",
-        choice: choice.id,
+        choice: chosenId,
         probabilities: Object.fromEntries(
-          candidates.map(({ id }) => [id, id === choice.id ? 1 : 0]),
+          [...candidates.map(({ id }) => id), NONE_RELEVANT_CHOICE_ID].map((id) => [
+            id,
+            id === chosenId ? 1 : 0,
+          ]),
         ),
-        confidence: 0.99,
+        confidence: options.confidence ?? 0.99,
       },
     };
   };
@@ -187,6 +197,153 @@ describe("AI routes over the proof HTTP service", () => {
       expect(calls.records[0]?.evidence.status).toBe(evidenceStatus);
     },
   );
+
+  describe("trigger", () => {
+    it("stores an automatic ranking with the automatic trigger, not explicit-user", async () => {
+      const scenario = await createScenario(jevTransport());
+      const response = await scenario.shortlist("automatic");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ status: "shortlisted" });
+      const calls = await json<{
+        records: Array<{
+          preparedCall: { envelope: { context: { trigger: string } } };
+        }>;
+      }>(await fetch(`${scenario.origin}${scenario.sessionPath}/llm-calls`));
+      expect(calls.records).toHaveLength(1);
+      expect(calls.records[0]?.preparedCall.envelope.context.trigger).toBe("automatic");
+    });
+
+    it("rejects an unknown trigger without dispatching", async () => {
+      let dispatchCount = 0;
+      const honest = jevTransport();
+      const scenario = await createScenario(async (call) => {
+        dispatchCount += 1;
+        return honest(call);
+      });
+      const response = await scenario.shortlist("background");
+      expect(response.status).toBe(400);
+      expect(dispatchCount).toBe(0);
+    });
+  });
+
+  describe("none-relevant outcome", () => {
+    it("returns a distinct status with the reason and the deterministic list, and stores the evidence", async () => {
+      const scenario = await createScenario(jevTransport({ noneRelevant: true }));
+      expect(scenario.candidateIds.length).toBeGreaterThan(1);
+      const before = await json<{ session: { currentNodeId: string } }>(
+        await fetch(`${scenario.origin}${scenario.sessionPath}`),
+      );
+      const response = await scenario.shortlist("automatic");
+      expect(response.status).toBe(200);
+      const result = await json<{ callId: string }>(response);
+      expect(result).toMatchObject({
+        status: "none-relevant",
+        provenance: "minimal-context-llm",
+        suggestionSetId: scenario.suggestionSet.id,
+        nodeId: scenario.initialNodeId,
+        choices: [],
+        confidence: 0.99,
+        reason: expect.any(String),
+        fallbackCandidateIds: scenario.candidateIds,
+        diagnostics: [],
+      });
+
+      const record = await json<{
+        record: { id: string; evidence: { status: string; output: unknown } };
+      }>(await fetch(`${scenario.origin}${scenario.sessionPath}/llm-calls/${result.callId}`));
+      expect(record.record.evidence).toMatchObject({
+        status: "validated",
+        output: { kind: "none-relevant", confidence: 0.99 },
+      });
+      const after = await json<{ session: { currentNodeId: string } }>(
+        await fetch(`${scenario.origin}${scenario.sessionPath}`),
+      );
+      expect(after.session.currentNodeId).toBe(before.session.currentNodeId);
+      const history = await json<{ edges: unknown[] }>(
+        await fetch(`${scenario.origin}${scenario.sessionPath}/history`),
+      );
+      expect(history.edges).toHaveLength(0);
+    });
+
+    it("replays a stored none-relevant call without dispatching again", async () => {
+      let dispatchCount = 0;
+      const honest = jevTransport({ noneRelevant: true });
+      const scenario = await createScenario(async (call) => {
+        dispatchCount += 1;
+        return honest(call);
+      });
+      expect((await scenario.shortlist()).status).toBe(200);
+      const replay = await scenario.shortlist();
+      expect(await replay.json()).toMatchObject({ status: "none-relevant", replayed: true });
+      expect(dispatchCount).toBe(1);
+    });
+
+    it("falls back to the deterministic list when the none-relevant answer is low-confidence", async () => {
+      const scenario = await createScenario(jevTransport({ noneRelevant: true, confidence: 0.2 }));
+      const response = await scenario.shortlist("automatic");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        status: "deterministic-fallback",
+        provenance: "deterministic",
+        choices: [],
+        fallbackCandidateIds: scenario.candidateIds,
+      });
+      const calls = await json<{
+        records: Array<{ evidence: { status: string; output: { kind: string } } }>;
+      }>(await fetch(`${scenario.origin}${scenario.sessionPath}/llm-calls`));
+      expect(calls.records[0]?.evidence).toMatchObject({
+        status: "validated",
+        output: { kind: "declined" },
+      });
+    });
+
+    it("treats a none-relevant output below the dispatch threshold as a fallback", async () => {
+      // A transport that bypasses Jev's own threshold, as a future non-Jev shortlister could.
+      const scenario = await createScenario(async () => ({
+        result: { kind: "none-relevant", confidence: 0.1, reason: "Nothing fits." },
+      }));
+      const response = await scenario.shortlist();
+      expect(await response.json()).toMatchObject({
+        status: "deterministic-fallback",
+        fallbackCandidateIds: scenario.candidateIds,
+      });
+    });
+
+    it("reports a stale session instead of a none-relevant outcome, with no fallback list", async () => {
+      let startDispatch!: () => void;
+      let resumeDispatch!: () => void;
+      const dispatchStarted = new Promise<void>((resolve) => {
+        startDispatch = resolve;
+      });
+      const dispatchPaused = new Promise<void>((resolve) => {
+        resumeDispatch = resolve;
+      });
+      const honest = jevTransport({ noneRelevant: true });
+      const scenario = await createScenario(async (call) => {
+        startDispatch();
+        await dispatchPaused;
+        return honest(call);
+      });
+      const pending = scenario.shortlist("automatic");
+      await dispatchStarted;
+      const child = createProofNodeSchema().parse({
+        ...DEVELOPMENT_ROOT_NODE,
+        id: "node:development-ai-none-race-child",
+        state: { ...DEVELOPMENT_ROOT_NODE.state, id: "state:development-ai-none-race-child" },
+      });
+      scenario.store.nodes.set(key(DEVELOPMENT_PROOF_SESSION_ID, child.id), child);
+      const session = scenario.store.sessions.get(DEVELOPMENT_PROOF_SESSION_ID);
+      if (session === undefined) throw new Error("The test session was not initialized.");
+      scenario.store.sessions.set(DEVELOPMENT_PROOF_SESSION_ID, {
+        ...session,
+        currentNodeId: child.id,
+      });
+      resumeDispatch();
+      const response = await pending;
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ status: "stale", fallbackCandidateIds: [] });
+    });
+  });
 
   it("includes session-owned LLM evidence in the exported artifact", async () => {
     const scenario = await createScenario(jevTransport());
@@ -293,9 +450,15 @@ describe("AI routes over the proof HTTP service", () => {
         } | null;
         if (base === null || call.envelope.role !== "move-shortlister") return base;
         const ids = call.envelope.context.candidates.map(({ id }) => id);
+        const picked = pick(ids);
         return {
           ...base,
-          providerOutput: { type: "choice", confidence: 0.99, ...pick(ids) },
+          providerOutput: {
+            type: "choice",
+            confidence: 0.99,
+            ...picked,
+            probabilities: { ...picked.probabilities, [NONE_RELEVANT_CHOICE_ID]: 0 },
+          },
         };
       };
     }

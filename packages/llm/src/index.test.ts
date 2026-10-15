@@ -13,6 +13,8 @@ import {
   executePreparedLlmCall,
   llmCallEvidenceSchema,
   llmOutputSchemaForRole,
+  NONE_RELEVANT_CHOICE_ID,
+  NONE_RELEVANT_CRITERION,
   prepareLlmCall,
   validateLlmOutput,
   type LlmTransport,
@@ -131,13 +133,17 @@ function topicEnvelope() {
   });
 }
 
-function shortlisterEnvelope(current = node(), set = suggestionSet(current)) {
+function shortlisterEnvelope(
+  current = node(),
+  set = suggestionSet(current),
+  trigger: "explicit-user" | "automatic" | "deterministic-empty" = "explicit-user",
+) {
   return buildMoveShortlisterContext({
     id: "llm-call:shortlist",
     node: current,
     suggestionSet: set,
     candidateIds: ["suggestion:one"],
-    trigger: "explicit-user",
+    trigger,
     maxChoices: 1,
   });
 }
@@ -557,14 +563,17 @@ describe("validated LLM call boundary", () => {
           shortlist: {
             type: "choice",
             instructions: "Choose the best supplied candidate.",
-            criteria: { "suggestion:one": "Candidate one" },
+            criteria: {
+              "suggestion:one": "Candidate one",
+              [NONE_RELEVANT_CHOICE_ID]: NONE_RELEVANT_CRITERION,
+            },
           },
         },
       },
       providerOutput: {
         type: "choice",
         choice: "suggestion:one",
-        probabilities: { "suggestion:one": 1 },
+        probabilities: { "suggestion:one": 1, [NONE_RELEVANT_CHOICE_ID]: 0 },
         confidence: 0.9,
       },
     };
@@ -596,6 +605,205 @@ describe("validated LLM call boundary", () => {
     expect(validateLlmOutput(prepared.call, wrongProbabilityKeys)).toMatchObject({
       ok: false,
       diagnostics: [{ code: "invalid-output" }],
+    });
+  });
+
+  describe("none-relevant outcome", () => {
+    function prepared(trigger: "explicit-user" | "automatic" = "explicit-user") {
+      const envelope = shortlisterEnvelope(node(), undefined, trigger);
+      if (!envelope.ok) throw new Error(envelope.diagnostics[0].message);
+      if (envelope.envelope.role !== "move-shortlister")
+        throw new Error("Expected shortlist context.");
+      const call = prepareLlmCall(envelope.envelope);
+      if (!call.ok) throw new Error(call.diagnostics[0].message);
+      return { call: call.call, envelope: envelope.envelope };
+    }
+    const noneRelevant = { kind: "none-relevant", confidence: 0.8, reason: "Nothing fits." };
+
+    it("accepts a strict none-relevant answer and keeps it as stored evidence", async () => {
+      const { call } = prepared();
+      expect(validateLlmOutput(call, { result: noneRelevant })).toMatchObject({
+        ok: true,
+        output: noneRelevant,
+      });
+      const evidence = await executePreparedLlmCall(call, async () => ({ result: noneRelevant }));
+      expect(evidence).toMatchObject({ status: "validated", output: noneRelevant });
+      expect(llmCallEvidenceSchema.safeParse(evidence).success).toBe(true);
+    });
+
+    it.each([
+      ["a missing confidence", { kind: "none-relevant", reason: "Nothing fits." }],
+      ["a missing reason", { kind: "none-relevant", confidence: 0.8 }],
+      ["an empty reason", { ...noneRelevant, reason: "" }],
+      ["an over-long reason", { ...noneRelevant, reason: "x".repeat(501) }],
+      ["a confidence above one", { ...noneRelevant, confidence: 1.2 }],
+      ["a negative confidence", { ...noneRelevant, confidence: -0.1 }],
+      ["a non-numeric confidence", { ...noneRelevant, confidence: "high" }],
+      ["a smuggled field", { ...noneRelevant, choices: [] }],
+    ])("rejects %s", (_name, output) => {
+      expect(validateLlmOutput(prepared().call, { result: output })).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "invalid-output" }],
+      });
+    });
+
+    it("is not an outcome of the other roles", () => {
+      const topic = topicEnvelope();
+      if (!topic.ok) throw new Error(topic.diagnostics[0].message);
+      const topicCall = prepareLlmCall(topic.envelope);
+      if (!topicCall.ok) throw new Error(topicCall.diagnostics[0].message);
+      expect(validateLlmOutput(topicCall.call, { result: noneRelevant })).toMatchObject({
+        ok: false,
+      });
+    });
+
+    it("records the automatic trigger in the envelope and rejects unknown triggers", () => {
+      expect(prepared("automatic").envelope.context.trigger).toBe("automatic");
+      expect(
+        buildMoveShortlisterContext({
+          id: "llm-call:shortlist",
+          node: node(),
+          suggestionSet: suggestionSet(node()),
+          candidateIds: ["suggestion:one"],
+          trigger: "background",
+        }),
+      ).toMatchObject({ ok: false, diagnostics: [{ code: "invalid-request" }] });
+    });
+
+    it("explains in the system message when to choose it", () => {
+      const system = prepared().call.messages[0].content;
+      expect(system).toContain("none-relevant");
+      expect(system).toContain("confidence");
+      expect(system).toContain("short reason");
+    });
+
+    it("rejects a candidate that uses the reserved ID", () => {
+      const current = node();
+      const set = suggestionSet(current);
+      const reserved = displayedSuggestionSetSchema.parse({
+        ...set,
+        suggestions: [{ ...set.suggestions[0]!, id: NONE_RELEVANT_CHOICE_ID }],
+      });
+      expect(
+        buildMoveShortlisterContext({
+          id: "llm-call:shortlist",
+          node: current,
+          suggestionSet: reserved,
+          candidateIds: [NONE_RELEVANT_CHOICE_ID],
+          trigger: "explicit-user",
+        }),
+      ).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "invalid-request", message: "The projected context is invalid." }],
+      });
+    });
+
+    function jevAnswer(
+      envelope: unknown,
+      overrides: {
+        choice?: string;
+        probabilities?: Record<string, number>;
+        confidence?: number;
+        criteria?: Record<string, string>;
+      } = {},
+    ) {
+      return {
+        kind: "jev-choice",
+        minimumConfidence: 0.55,
+        providerRequest: {
+          model: "jev-test-model",
+          state: envelope,
+          questions: {
+            shortlist: {
+              type: "choice",
+              instructions: "Choose the best supplied candidate.",
+              criteria: overrides.criteria ?? {
+                "suggestion:one": "Candidate one",
+                [NONE_RELEVANT_CHOICE_ID]: NONE_RELEVANT_CRITERION,
+              },
+            },
+          },
+        },
+        providerOutput: {
+          type: "choice",
+          choice: overrides.choice ?? NONE_RELEVANT_CHOICE_ID,
+          probabilities: overrides.probabilities ?? {
+            "suggestion:one": 0.1,
+            [NONE_RELEVANT_CHOICE_ID]: 0.9,
+          },
+          confidence: overrides.confidence ?? 0.85,
+        },
+      };
+    }
+
+    it("maps a confident Jev none-relevant choice to the validated outcome", async () => {
+      const { call, envelope } = prepared();
+      const answer = jevAnswer(envelope);
+      expect(validateLlmOutput(call, { result: answer })).toMatchObject({
+        ok: true,
+        output: { kind: "none-relevant", confidence: 0.85, reason: expect.any(String) },
+      });
+      const evidence = await executePreparedLlmCall(call, async () => answer);
+      expect(evidence).toMatchObject({
+        status: "validated",
+        rawResponse: answer,
+        output: { kind: "none-relevant", confidence: 0.85 },
+      });
+      expect(llmCallEvidenceSchema.safeParse(evidence).success).toBe(true);
+    });
+
+    it("keeps a low-confidence none-relevant choice as a declined fallback, not an outcome", async () => {
+      const { call, envelope } = prepared();
+      const answer = jevAnswer(envelope, { confidence: 0.3 });
+      expect(validateLlmOutput(call, { result: answer })).toMatchObject({
+        ok: true,
+        output: { kind: "declined" },
+      });
+    });
+
+    it("still prefers a displayed candidate when Jev picks one", () => {
+      const { call, envelope } = prepared();
+      const answer = jevAnswer(envelope, {
+        choice: "suggestion:one",
+        probabilities: { "suggestion:one": 0.7, [NONE_RELEVANT_CHOICE_ID]: 0.3 },
+      });
+      expect(validateLlmOutput(call, { result: answer })).toMatchObject({
+        ok: true,
+        output: { kind: "move-shortlist", choices: [{ suggestionId: "suggestion:one" }] },
+      });
+    });
+
+    it.each([
+      [
+        "a request that omits the none-relevant option",
+        { criteria: { "suggestion:one": "Candidate one" } },
+      ],
+      [
+        "probabilities that omit the none-relevant option",
+        { probabilities: { "suggestion:one": 1 } },
+      ],
+      [
+        "a none-relevant choice that is not the most probable",
+        {
+          probabilities: { "suggestion:one": 0.8, [NONE_RELEVANT_CHOICE_ID]: 0.2 },
+        },
+      ],
+      [
+        "an unknown extra option",
+        {
+          probabilities: {
+            "suggestion:one": 0.4,
+            [NONE_RELEVANT_CHOICE_ID]: 0.5,
+            "outcome:other": 0.1,
+          },
+        },
+      ],
+    ])("rejects %s", (_name, overrides) => {
+      const { call, envelope } = prepared();
+      expect(validateLlmOutput(call, { result: jevAnswer(envelope, overrides) })).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: "invalid-output" }],
+      });
     });
   });
 

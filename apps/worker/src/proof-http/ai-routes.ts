@@ -4,6 +4,7 @@ import {
   buildProofStateFormalizerContext,
   buildTopicExtractorContext,
   prepareLlmCall,
+  shortlisterTriggerSchema,
   SUPPORTED_LLM_ROLES,
 } from "@proof/llm";
 import {
@@ -74,7 +75,7 @@ const shortlistRequestSchema = z
     expectedCurrentNodeId: stableIdentifierSchema,
     suggestionSetId: suggestionSetIdSchema,
     candidateIds: z.array(stableIdentifierSchema).min(1).max(32),
-    trigger: z.enum(["deterministic-empty", "explicit-user"]),
+    trigger: shortlisterTriggerSchema,
     maxChoices: z.number().int().min(1).max(8).optional(),
   })
   .strict()
@@ -627,6 +628,27 @@ async function shortlist(
     );
   }
   const evidence = result.record.evidence;
+  const output = evidence.status === "validated" ? evidence.output : undefined;
+  if (
+    output?.kind === "none-relevant" &&
+    output.confidence >= (result.record.dispatch.minimumConfidence ?? 0)
+  ) {
+    // A validated, confident "nothing here is relevant". The deterministic list is still returned
+    // so the client can keep showing it; the outcome is distinct from every fallback below.
+    return writeJson(response, 200, {
+      status: "none-relevant",
+      provenance: "minimal-context-llm",
+      callId: result.record.id,
+      replayed: result.replayed,
+      suggestionSetId: stored.suggestionSet.id,
+      nodeId: loaded.node.id,
+      choices: [],
+      confidence: output.confidence,
+      reason: output.reason,
+      fallbackCandidateIds,
+      diagnostics: [],
+    });
+  }
   if (evidence.status !== "validated" || evidence.output?.kind !== "move-shortlist") {
     return respondWithFallback(
       200,
@@ -634,7 +656,9 @@ async function shortlist(
         ? "The Jev request failed; deterministic suggestions remain available."
         : evidence.output?.kind === "declined"
           ? evidence.output.reason
-          : (evidence.diagnostics[0]?.message ?? "Jev did not return an admissible shortlist."),
+          : evidence.output?.kind === "none-relevant"
+            ? "Jev's no-relevant-suggestion answer was below the confidence threshold."
+            : (evidence.diagnostics[0]?.message ?? "Jev did not return an admissible shortlist."),
       false,
       result.record.id,
       result.replayed,

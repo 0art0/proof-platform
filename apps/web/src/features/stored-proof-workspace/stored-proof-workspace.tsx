@@ -744,6 +744,9 @@ function StatefulStoredWorkspace({
           {READ_ONLY_REASON}: suggestions can be viewed but not applied.
         </p>
       ) : null}
+      {/* onDescribeMove (focus the move instructions box) and onFindMoreResults (library
+          top-up) are deliberately unwired until their backends exist: see
+          docs/ai-agents-architecture.md §5 and §2. Without them the panel shows neither button. */}
       <SuggestionPanel
         suggestions={suggestions}
         move={moveState}

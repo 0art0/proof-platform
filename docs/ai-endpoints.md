@@ -157,11 +157,13 @@ changed context should use a new call ID.
 ## Shortlist displayed moves
 
 `POST /proof-sessions/:sessionId/ai/shortlist` accepts a call ID, the expected current node ID, a
-stored displayed suggestion-set ID, candidate suggestion IDs, and the trigger (`explicit-user` or
-`deterministic-empty`). Candidate IDs must be members of that stored set. The response contains
-ordered candidate IDs and provenance. A Jev refusal, malformed response, low-confidence response,
-disabled runtime, or transport failure returns the deterministic candidate order from the stored
-set. If the current node or suggestion set is stale, the response is marked stale and contains no
+stored displayed suggestion-set ID, candidate suggestion IDs, and the trigger: `explicit-user`
+(the user asked), `automatic` (the user's selections produced a list of two or more suggestions and
+automatic ranking is on) or `deterministic-empty`. The trigger is stored in the call evidence as
+sent. Candidate IDs must be members of that stored set. The response contains ordered candidate IDs
+and provenance. A Jev refusal, malformed response, low-confidence response (including a
+low-confidence none-relevant answer), disabled runtime, or transport failure returns the
+deterministic candidate order from the stored set. If the current node or suggestion set is stale, the response is marked stale and contains no
 fallback candidates. A single supplied candidate is returned deterministically without a model
 call.
 
@@ -180,6 +182,36 @@ The successful response has `status: "shortlisted"`, `provenance: "minimal-conte
 anchored `suggestionSetId` and `nodeId`, and ordered `choices` containing existing suggestion IDs.
 Deterministic outcomes use `status: "deterministic-fallback"` and `provenance: "deterministic"`.
 The route references the existing displayed set; it does not create a new suggestion set.
+
+### None relevant
+
+The shortlister may also answer that no displayed candidate is relevant to the selections. This is a
+validated outcome of its own, distinct from a refusal, a malformed answer and a low-confidence
+answer. The response is `200`:
+
+```json
+{
+  "status": "none-relevant",
+  "provenance": "minimal-context-llm",
+  "callId": "llm-call:shortlist-example",
+  "replayed": false,
+  "suggestionSetId": "suggestion-set:displayed-example",
+  "nodeId": "node:current",
+  "choices": [],
+  "confidence": 0.9,
+  "reason": "Jev judged that none of the displayed suggestions is relevant to the selection.",
+  "fallbackCandidateIds": ["suggestion:one", "suggestion:two"],
+  "diagnostics": []
+}
+```
+
+`fallbackCandidateIds` is the deterministic list, so a client can keep showing it. The call evidence
+stores the output `{ "kind": "none-relevant", "confidence", "reason" }`. The outcome is accepted only
+when its confidence reaches the configured threshold (`PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`). A
+none-relevant answer below it is stored as `declined` (Jev) or answered as an ordinary
+`deterministic-fallback`, exactly like any other low-confidence answer. A client uses the outcome to
+offer "Describe a move" and "Find more results" (`docs/ai-agents-architecture.md` §4); neither
+action exists on the worker yet.
 
 This endpoint records an immutable LLM call record but does not preview or apply any move. Human or
 agent actions still go through the existing proof command protocol.
@@ -200,9 +232,21 @@ keeping the worker's status codes, including `429`.
   goals only through an explicit button, and then goes through the usual "Check setup" and "Start
   exploring". The review marks a setup that started from an AI draft. Every call from one form
   shares a construction ID.
-- **Workspace.** When a displayed suggestion list has two or more entries, "Ask AI to rank these"
-  sends its first 32 candidates with the `explicit-user` trigger. The ranked picks appear above the
-  unchanged list, and any fallback is reported in place. Read-only sessions do not offer it.
+- **Workspace.** When a displayed suggestion list has two or more entries, the workspace ranks its
+  first 32 candidates automatically (trigger `automatic`) once the list has stayed displayed for
+  about half a second, so quickly changing the selection costs nothing. The ranked picks appear
+  above the unchanged list. A visible checkbox, "Rank suggestions with AI automatically", turns this
+  off; it is on by default and remembered in the browser (local storage; without storage the choice
+  lasts for the page). "Ask AI to rank these" sends the same request with the `explicit-user`
+  trigger, and it stays available when automatic ranking is on. Each suggestion list is ranked at
+  most once automatically, answers for a list that is no longer displayed are ignored, and nothing is
+  sent while a step is being applied. An automatic run that falls back (a `429`, a fallback answer,
+  an unreachable service) shows nothing and leaves the deterministic list; an explicit run reports
+  the fallback in place. A none-relevant answer shows "None of these suggestions look relevant to
+  your selection." above the unchanged list, with "Describe a move" and "Find more results" buttons
+  that appear only when the host provides the matching callbacks (they are not wired yet). The empty
+  suggestions state offers the same optional "Find more results". Read-only sessions, and
+  deployments without a configured shortlister, show no AI controls and send no AI requests.
 - When a role is not configured, its control is disabled with an explanation.
 
 ## Transport behaviour
@@ -231,6 +275,15 @@ never stored or logged.
 | fetch rejects without abort                   | `network`                   | yes     |
 | total budget exhausted                        | `timeout`                   | no      |
 | Jev answer without any confidence             | `missing-confidence`        | no      |
+| Jev answer choosing `outcome:none-relevant`   | `none-relevant` outcome     |         |
+
+The Jev Choice question offers every displayed candidate plus one reserved option,
+`outcome:none-relevant` ("None of the displayed suggestions is relevant to the selected fragment."),
+which no candidate may use as its ID. The returned probabilities must cover exactly the candidates
+and that option and sum to one, and the choice must be the most probable one. Choosing the reserved
+option with enough confidence is the none-relevant outcome above; with too little confidence it is
+a `declined` fallback. Jev returns no free text, so the stored reason is a fixed sentence. The
+confidence is extracted from the answer exactly as for any other choice.
 
 Jev confidence is read from the answer, then `providerMetadata.typesafe.confidence.shortlist`, then
 a scalar `providerMetadata.typesafe.confidence`. The stored Jev `rawResponse` still embeds the
