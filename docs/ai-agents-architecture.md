@@ -1,0 +1,153 @@
+# AI agent architecture
+
+This document specifies the five AI agents of the problem-to-proof pipeline. It refines design plan
+§4.2–§4.5, §12.4, §13 and §15.2, and refinement §7, and is the shared contract for their
+implementation. `docs/ai-endpoints.md` documents the routes as they ship.
+
+Every agent below obeys the product invariants in `AGENTS.md`:
+
+- Each call is a single, role-scoped, recorded LLM call (`@proof/llm` envelope → transport →
+  validated structured output → stored call evidence).
+- No agent output mutates proof state. Proof-state changes go through the command protocol and the
+  kernel. Library changes go through explicit library-addition events and the deterministic
+  admission gate (`admitLibraryArtifact`).
+- Deterministic computation runs first, and every model output is validated deterministically
+  before anything uses it.
+
+"Constants" are the platform's existing notion of vocabulary: operator declarations
+(`OperatorDeclaration`, including the reserved built-ins) together with the sorts they use. The
+"active constants" of a session are the operators and sorts declared by its approved setup, plus any
+operators that were added later through a recorded library addition.
+
+## 1. Background proposer (`background-proposer`)
+
+It supersedes the topic extractor in the new-problem UI. The worker keeps the `topic-extractor`
+role, so stored evidence still reads, but the web UI no longer calls it.
+
+- **Input:** the problem statement and optional preferences. On a revision it also receives the
+  previous proposal and the user's free-text feedback. A revision is a new call that references the
+  previous call ID, so the whole chain is recorded.
+- **Output:**
+  - a background profile (the existing `backgroundProfileSchema`: level, summary, assumptions,
+    domains, maximum level), presented as the background relative to which the proof will be
+    motivated;
+  - a list of constants. Each constant is either a reference to an existing operator (a reserved
+    built-in, or one from an approved pack or the global registry) or a new operator declaration
+    with signature, LaTeX and natural-language presentation;
+  - for each constant, a one-line rationale.
+
+  The proposer must choose constants so that the problem can be formalized using only them; the
+  system prompt says so.
+- **Validation:** every constant parses as an `OperatorDeclaration`, there are no duplicates or
+  symbol clashes, and every sort is a known sort ID.
+- **UI:** the user enters only the problem, then clicks "Propose background". The page shows the
+  background and the constants with their rationales, plus a feedback box ("Revise with feedback")
+  and an "Accept" button. Accepting fills the existing background fields and records an approval
+  decision, like the existing topic decision. The fields stay editable by hand.
+
+## 2. Library agent (`librarian`)
+
+- **Input:** the background profile, the constants to cover, and a request kind:
+  - `initial`: all active constants.
+  - `new-constants`: the old active constants plus newly activated constants. Requested results
+    involve the new constants together with the old ones, as well as the new constants alone.
+  - `no-relevant-results`: the active constants plus a minimal, abstracted description of the
+    local situation (selection fragments and their sorts only, per §15.3; never the original
+    problem or proof history).
+
+  In every kind the agent also receives the names and statements of the results already in the
+  session library, so that it does not duplicate them.
+- **Output:** library results in the library's existing result shape: MathJSON statement,
+  premises, application directions and patterns, name, description, and background
+  classification. Definitions may be included where the library schema supports them. Output is
+  capped, at most 40 results per call. The agent may also return new constant declarations that
+  the results need; each must be justified.
+- **Admission:** every result goes through `admitLibraryArtifact` in the session's (or
+  construction's) operator environment and background profile. Rejected items are recorded with
+  their diagnostics and are not added. Deterministic variant generation (`generateVariants`) runs
+  on admitted results.
+- **Initial library (setup):** the results are shown on the new-problem page as a reviewable list.
+  The user can remove entries, then approves the remaining set in bulk. The approved set becomes
+  the problem's `layer:initial-problem` content and is passed to the formalizer as its approved
+  library, alongside any packs.
+- **Top-ups (during proof):** these are admitted automatically, with no user review step, as
+  recorded library-addition events in `layer:proof-time-background` (origin `service`). The UI
+  shows them as ordinary library additions, without an "AI" disclaimer badge. Their provenance is
+  still stored and exported. Earlier suggestion menus are never rewritten (§12.4).
+  - **New-constant trigger:** when a committed step applies a library result whose operators
+    include a constant that is not active, that constant becomes active through a recorded event,
+    and a `new-constants` top-up is requested automatically.
+  - **No-relevant-results trigger:** this is user-initiated, from the empty suggestion state or
+    from the shortlister's "none relevant" outcome. The button reads "Find more results".
+
+## 3. Formalization agent (`proof-state-formalizer`, existing)
+
+This agent is unchanged except for its context. It receives the approved constants (as
+`approvedLibrary.operators`/`sorts`) and the approved initial library. Its system prompt requires
+it to formalize using only those constants. Any operator in the draft that is not among them is a
+validation diagnostic, `unapproved-constant`, and the draft returns `needs-review`.
+
+## 4. Move shortlister (`move-shortlister`, existing role)
+
+- It runs automatically, with Jev, when the user's selections produce a displayed suggestion list
+  of two or more entries. A per-user toggle, remembered locally, turns this off. The explicit "Ask
+  AI to rank these" path remains. It is subject to the existing cost guard; on a `429` it falls
+  back silently to the deterministic list.
+- **Output gains a `none-relevant` outcome:** Jev may answer that no displayed candidate is
+  relevant to the selections. This is a validated outcome, distinct from a refusal or a low
+  confidence. The UI then says that none of the suggestions look relevant and offers:
+  - "Describe a move" (it focuses the move-instruction box, §5);
+  - "Find more results" (a library top-up, §2).
+
+## 5. Move performer (`move-executor`)
+
+- **Input (minimal context, §15.3):** a natural-language move description, either from the user's
+  move-instruction box or from a shortlisted technique; the current selections; the target goal or
+  obligation sequent, restricted to the declarations and hypotheses it uses; the active constants;
+  and the IDs and statements of approved library results relevant to the selections. The input
+  never includes the original problem, other branches, or alternative suggestions.
+- **Output:** an ordered sequence of kernel operations, at most `MAX_PLAN_STEPS` (16), in the
+  kernel's operation schema minus the state IDs, which the worker assigns. The output may instead
+  be `insufficient-context` or `declined`. The executor may not emit `mark-sorry` or
+  `close-by-accepted-inference`: sorries remain user-selected, and attestation is a separate role.
+- **Preview:** the worker runs the sequence through the kernel against the current state (the
+  `planMoveSequence` path). It returns either the resulting state, the composed transition class
+  (equivalence, strengthening or weakening, shown prominently) and the new obligations, or the
+  first failing step with its kernel diagnostic. Nothing is committed.
+- **Apply:** only on the user's confirmation. The previewed operations are committed as a
+  sequence of ordinary commands through the command protocol. This is the same path as authored
+  macros. The commands carry provenance that references the executor call: `user-proposal` for a
+  box instruction, `minimal-context-llm` otherwise. If the session moved on since the preview, the
+  apply is rejected as stale.
+- **UI:** a "Move instructions" text box sits next to the proof state, with the placeholder
+  "Describe a step, e.g. 'split into cases on whether n is even'". It shows Preview, then the
+  diff/preview card, Apply, and Discard. After an applied one-off step, a "Save as reusable move"
+  button creates an authored-move draft from the applied operations through the existing
+  `author-move-draft` command. That draft goes through the existing review; nothing is auto-promoted.
+
+## Configuration defaults
+
+| Role                | Model               | Effort | Max output | Env prefix             |
+| ------------------- | ------------------- | ------ | ---------- | ---------------------- |
+| background-proposer | `openai/gpt-6-luna` | medium | 8,000      | `PROOF_AI_BACKGROUND_` |
+| librarian           | `openai/gpt-6-luna` | high   | 32,000     | `PROOF_AI_LIBRARIAN_`  |
+| formalizer          | unchanged           |        |            |                        |
+| move-shortlister    | `typesafe-ai/jev`   |        |            | unchanged              |
+| move-executor       | `openai/gpt-6-luna` | high   | 16,000     | `PROOF_AI_EXECUTOR_`   |
+
+Each new role adds `<PREFIX>MODEL`, `<PREFIX>REASONING_EFFORT` and `<PREFIX>MAX_OUTPUT_TOKENS`,
+reports itself in `GET /ai/capabilities`, and shares the cost guard. A role whose transport is not
+configured disables its UI controls, and each disabled control explains why.
+
+## Migrations
+
+These numbers are pre-assigned so that parallel work does not collide. Each migration widens
+`llm_calls_role_check`, as 0013 does.
+
+- `0015_llm_background_proposer_role.sql`
+- `0016_llm_librarian_role.sql`
+- `0017_llm_move_executor_role.sql`
+
+Because the lanes are developed in parallel, each migration's role list must include every role
+that exists on its own branch. The final merge reconciles the lists, so the last-applied migration
+lists all roles.
