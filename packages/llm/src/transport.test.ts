@@ -10,6 +10,7 @@ import {
   createVercelJevShortlisterTransport,
   createVercelStructuredOutputTransport,
   executePreparedLlmCall,
+  NONE_RELEVANT_CHOICE_ID,
   prepareLlmCall,
   validateLlmOutput,
   type PreparedLlmCall,
@@ -234,7 +235,11 @@ describe("Vercel Jev shortlist transport", () => {
             shortlist: {
               type: "choice",
               choice: "suggestion:two",
-              probabilities: { "suggestion:one": 0.2, "suggestion:two": 0.8 },
+              probabilities: {
+                "suggestion:one": 0.2,
+                "suggestion:two": 0.8,
+                [NONE_RELEVANT_CHOICE_ID]: 0,
+              },
               confidence: 0.91,
             },
           },
@@ -254,6 +259,7 @@ describe("Vercel Jev shortlist transport", () => {
           criteria: {
             "suggestion:one": "Candidate one",
             "suggestion:two": "Candidate two",
+            [NONE_RELEVANT_CHOICE_ID]: expect.stringContaining("None of the displayed"),
           },
         },
       },
@@ -277,7 +283,11 @@ describe("Vercel Jev shortlist transport", () => {
             shortlist: {
               type: "choice",
               choice: "suggestion:two",
-              probabilities: { "suggestion:one": 0.2, "suggestion:two": 0.8 },
+              probabilities: {
+                "suggestion:one": 0.2,
+                "suggestion:two": 0.8,
+                [NONE_RELEVANT_CHOICE_ID]: 0,
+              },
               confidence: 0.4,
             },
           },
@@ -325,6 +335,53 @@ describe("Vercel Jev shortlist transport", () => {
     expect(validateLlmOutput(call, forgedState)).toMatchObject({
       ok: false,
       diagnostics: [{ code: "invalid-output" }],
+    });
+  });
+
+  describe("none-relevant answers", () => {
+    const noneProbabilities = {
+      "suggestion:one": 0.05,
+      "suggestion:two": 0.05,
+      [NONE_RELEVANT_CHOICE_ID]: 0.9,
+    };
+    function noneWith(confidence: number | undefined, minimumConfidence = 0.55) {
+      return createVercelJevShortlisterTransport({
+        apiKey: "test-key",
+        minimumConfidence,
+        fetch: async () =>
+          response({
+            answers: {
+              shortlist: {
+                type: "choice",
+                choice: NONE_RELEVANT_CHOICE_ID,
+                probabilities: noneProbabilities,
+                ...(confidence === undefined ? {} : { confidence }),
+              },
+            },
+          }),
+      });
+    }
+
+    it("turns a confident none-relevant answer into a stored, validated outcome", async () => {
+      const evidence = await executePreparedLlmCall(shortlistCall(), noneWith(0.82));
+      expect(evidence).toMatchObject({
+        status: "validated",
+        rawResponse: { providerOutput: { choice: NONE_RELEVANT_CHOICE_ID, confidence: 0.82 } },
+        output: { kind: "none-relevant", confidence: 0.82 },
+      });
+    });
+
+    it("falls back like any other low-confidence answer", async () => {
+      const evidence = await executePreparedLlmCall(shortlistCall(), noneWith(0.2));
+      expect(evidence).toMatchObject({ status: "validated", output: { kind: "declined" } });
+    });
+
+    it("still requires a confidence for the none-relevant choice", async () => {
+      const evidence = await executePreparedLlmCall(shortlistCall(), noneWith(undefined));
+      expect(evidence).toMatchObject({
+        status: "transport-failed",
+        diagnostics: [{ subcode: "missing-confidence" }],
+      });
     });
   });
 });
@@ -536,7 +593,11 @@ describe("transport failure classification and retries", () => {
 });
 
 describe("Jev confidence extraction", () => {
-  const probabilities = { "suggestion:one": 0.2, "suggestion:two": 0.8 };
+  const probabilities = {
+    "suggestion:one": 0.2,
+    "suggestion:two": 0.8,
+    [NONE_RELEVANT_CHOICE_ID]: 0,
+  };
   function jevWith(answerExtras: object, top: object) {
     return createVercelJevShortlisterTransport({
       apiKey: "test-key",

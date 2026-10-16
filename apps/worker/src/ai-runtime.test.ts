@@ -61,7 +61,7 @@ describe("createAiRuntime", () => {
     expect(runtime["move-shortlister"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway-evaluation",
       model: DEFAULT_SHORTLISTER_MODEL,
-      promptVersion: "move-shortlister-jev-v1",
+      promptVersion: "move-shortlister-jev-v2",
       minimumConfidence: DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
     });
     expect(typeof runtime["proof-state-formalizer"]?.transport).toBe("function");

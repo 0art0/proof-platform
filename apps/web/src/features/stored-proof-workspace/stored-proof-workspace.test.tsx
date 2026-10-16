@@ -1035,3 +1035,113 @@ describe("StoredProofWorkspace", () => {
     );
   });
 });
+
+describe("StoredProofWorkspace AI ranking", () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => window.localStorage.clear());
+
+  function twoSuggestions(id: string): DisplayedSuggestionSet {
+    const set = suggestionSet(id, "First idea", "result:first");
+    const second = {
+      ...set.suggestions[0],
+      id: "suggestion:second",
+      artifactId: "result:second",
+      patternId: "pattern:second",
+      name: "Second idea",
+      selectionMatches: [{ selectionId: "selection:primary", patternId: "pattern:second" }],
+    };
+    return displayedSuggestionSetSchema.parse({
+      ...set,
+      suggestions: [set.suggestions[0], second],
+    });
+  }
+
+  function aiFetch(set: DisplayedSuggestionSet, shortlistAnswer: () => Response) {
+    const shortlistBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = mockWithHistory(async (input, init) => {
+      if (String(input).endsWith("/ai-shortlist")) {
+        shortlistBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return shortlistAnswer();
+      }
+      return jsonResponse({
+        ok: true,
+        data: { suggestionSet: set, replayed: false, transitionClasses: [] },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return shortlistBodies;
+  }
+
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("ranks a displayed list automatically once, with the automatic trigger", async () => {
+    const set = twoSuggestions("suggestion-set:auto");
+    const bodies = aiFetch(set, () =>
+      jsonResponse({
+        ok: true,
+        data: {
+          status: "shortlisted",
+          provenance: "minimal-context-llm",
+          suggestionSetId: set.id,
+          nodeId: node.id,
+          choices: [{ suggestionId: "suggestion:second", rationale: "Fits best." }],
+          fallbackCandidateIds: [],
+          diagnostics: [],
+        },
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+
+    const picks = await screen.findByRole("list", { name: "AI picks" }, { timeout: 4_000 });
+    expect(picks).toHaveTextContent("Second idea — Fits best.");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
+      trigger: "automatic",
+      expectedCurrentNodeId: node.id,
+      suggestionSetId: set.id,
+      candidateIds: ["suggestion:result:first", "suggestion:second"],
+    });
+  });
+
+  it("falls back silently to the list on a rate limit and leaves the next-step buttons unwired", async () => {
+    const set = twoSuggestions("suggestion-set:limited");
+    const bodies = aiFetch(set, () =>
+      jsonResponse({ ok: false, error: { code: "ai-rate-limited", message: "Retry later." } }, 429),
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await screen.findByTestId("suggestion-list");
+    await waitFor(() => expect(bodies).toHaveLength(1), { timeout: 4_000 });
+    await wait(50);
+    expect(screen.queryByText(/No AI ranking:/)).toBeNull();
+    expect(screen.getByTestId("suggestion-list").children).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Describe a move" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find more results" })).toBeNull();
+  });
+
+  it("makes no AI request, and shows no AI control, when the shortlister is not configured", async () => {
+    const set = twoSuggestions("suggestion-set:off");
+    const bodies = aiFetch(set, () => jsonResponse({ ok: false }, 500));
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await screen.findByTestId("suggestion-list");
+    await wait(900);
+    expect(bodies).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: "AI ranking" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("makes no AI request for a read-only session", async () => {
+    const set = twoSuggestions("suggestion-set:read-only");
+    const bodies = aiFetch(set, () => jsonResponse({ ok: false }, 500));
+    render(
+      <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiShortlist />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await screen.findByTestId("suggestion-list");
+    await wait(900);
+    expect(bodies).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: "AI ranking" })).toBeNull();
+  });
+});

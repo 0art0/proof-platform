@@ -160,17 +160,43 @@ const candidateCardSchema = z
   .strict();
 export type CandidateCard = z.infer<typeof candidateCardSchema>;
 
+/**
+ * Why a shortlist was requested: the user pressed the button (`explicit-user`), the user's
+ * selections produced a list and automatic ranking was on (`automatic`), or the deterministic
+ * list was empty (`deterministic-empty`).
+ */
+export const SHORTLISTER_TRIGGERS = ["deterministic-empty", "explicit-user", "automatic"] as const;
+export const shortlisterTriggerSchema = z.enum(SHORTLISTER_TRIGGERS);
+export type ShortlisterTrigger = z.infer<typeof shortlisterTriggerSchema>;
+
+/**
+ * The reserved Jev option meaning "no displayed candidate is relevant to the selections". It is
+ * added to the Choice question next to the candidates and can never be a candidate ID.
+ */
+export const NONE_RELEVANT_CHOICE_ID = "outcome:none-relevant";
+export const NONE_RELEVANT_CRITERION =
+  "None of the displayed suggestions is relevant to the selected fragment.";
+
 const moveShortlisterContextSchema = z
   .object({
     nodeId: stableIdentifierSchema,
     stateId: stableIdentifierSchema,
     suggestionSetId: stableIdentifierSchema,
-    trigger: z.enum(["deterministic-empty", "explicit-user"]),
+    trigger: shortlisterTriggerSchema,
     selections: z.array(shortlisterSelectionSchema).min(1).max(16),
     candidates: z.array(candidateCardSchema).min(1).max(32),
     maxChoices: z.number().int().min(1).max(8),
   })
-  .strict();
+  .strict()
+  .superRefine((context, refinement) => {
+    if (context.candidates.some(({ id }) => id === NONE_RELEVANT_CHOICE_ID)) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["candidates"],
+        message: "A candidate cannot use the reserved none-relevant ID.",
+      });
+    }
+  });
 export type MoveShortlisterContext = z.infer<typeof moveShortlisterContextSchema>;
 
 const envelopeBaseShape = {
@@ -414,7 +440,7 @@ const moveShortlisterRequestSchema = z
     node: z.unknown(),
     suggestionSet: z.unknown(),
     candidateIds: z.array(stableIdentifierSchema).min(1).max(32),
-    trigger: z.enum(["deterministic-empty", "explicit-user"]),
+    trigger: shortlisterTriggerSchema,
     maxChoices: z.number().int().min(1).max(8).default(5),
     operators: z.array(operatorDeclarationSchema).default([]),
   })
@@ -523,6 +549,20 @@ export const moveShortlistProposalSchema = z
   .strict();
 export type MoveShortlistProposal = z.infer<typeof moveShortlistProposalSchema>;
 
+/**
+ * The shortlister judged that no displayed candidate is relevant to the selections. It is a
+ * validated outcome, distinct from a refusal and from a low-confidence answer (which is kept as a
+ * `declined` output and falls back to the deterministic list).
+ */
+export const moveShortlistNoneRelevantSchema = z
+  .object({
+    kind: z.literal("none-relevant"),
+    confidence: z.number().finite().min(0).max(1),
+    reason: shortTextSchema,
+  })
+  .strict();
+export type MoveShortlistNoneRelevant = z.infer<typeof moveShortlistNoneRelevantSchema>;
+
 const topicOutputSchema = z.union([
   topicManifestProposalSchema,
   topicInsufficientContextSchema,
@@ -530,6 +570,7 @@ const topicOutputSchema = z.union([
 ]);
 const shortlisterOutputSchema = z.union([
   moveShortlistProposalSchema,
+  moveShortlistNoneRelevantSchema,
   shortlisterInsufficientContextSchema,
   declinedSchema,
 ]);
@@ -721,18 +762,26 @@ function expectedSystemMessage(role: SupportedLlmRole): string {
   }
   if (role === "proof-state-formalizer") return FORMALIZER_SYSTEM_MESSAGE;
   if (role === "background-proposer") return BACKGROUND_PROPOSER_SYSTEM_MESSAGE;
-  return "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
+  return SHORTLISTER_SYSTEM_MESSAGE;
 }
+
+const SHORTLISTER_SYSTEM_MESSAGE =
+  "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics. If every supplied candidate is clearly unrelated to the selected fragment, return a none-relevant outcome with your confidence and a short reason instead of forcing a choice; use it only when no candidate is a plausible next step for the selection, not when the best candidate is merely a weak fit.";
+/** The shortlister message before the none-relevant outcome existed. */
+const SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE =
+  "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
 
 /**
  * System messages a stored call may carry. Formalizer calls recorded before the approved-constants
- * instruction was added keep their original message, so existing evidence stays readable; new
- * calls are always prepared with the current message.
+ * instruction was added, and shortlister calls recorded before the none-relevant outcome, keep their
+ * original message, so existing evidence stays readable; new calls are always prepared with the
+ * current message.
  */
 function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean {
   return (
     content === expectedSystemMessage(role) ||
-    (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE)
+    (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE) ||
+    (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE)
   );
 }
 
@@ -789,10 +838,14 @@ export function validateLlmOutput(
       return failure("invalid-output", "Jev output is only valid for a move-shortlister call.");
     }
     const candidates = call.envelope.context.candidates;
-    const expectedIds = candidates.map(({ id }) => id).sort();
+    // The Choice question offers every displayed candidate plus the reserved none-relevant option.
+    const expectedIds = [...candidates.map(({ id }) => id), NONE_RELEVANT_CHOICE_ID].sort();
     const probabilityIds = Object.keys(jevResult.providerOutput.probabilities).sort();
     const criteria = jevResult.providerRequest.questions.shortlist.criteria;
-    const expectedCriteria = Object.fromEntries(candidates.map(({ id, name }) => [id, name]));
+    const expectedCriteria = {
+      ...Object.fromEntries(candidates.map(({ id, name }) => [id, name])),
+      [NONE_RELEVANT_CHOICE_ID]: NONE_RELEVANT_CRITERION,
+    };
     const probabilities = jevResult.providerOutput.probabilities;
     const probabilityTotal = Object.values(probabilities).reduce((sum, value) => sum + value, 0);
     const highestProbability = Math.max(...Object.values(probabilities));
@@ -808,22 +861,30 @@ export function validateLlmOutput(
         "Jev probabilities or request context do not match the shortlist.",
       );
     }
+    const { choice, confidence } = jevResult.providerOutput;
     const output =
-      jevResult.providerOutput.confidence < jevResult.minimumConfidence
+      confidence < jevResult.minimumConfidence
         ? {
             kind: "declined" as const,
             reason: "Jev shortlist confidence is below the configured threshold.",
           }
-        : {
-            kind: "move-shortlist" as const,
-            choices: [
-              {
-                suggestionId: jevResult.providerOutput.choice,
-                rationale:
-                  "This candidate had the highest Jev probability and met the confidence threshold.",
-              },
-            ],
-          };
+        : choice === NONE_RELEVANT_CHOICE_ID
+          ? {
+              kind: "none-relevant" as const,
+              confidence,
+              reason:
+                "Jev judged that none of the displayed suggestions is relevant to the selection.",
+            }
+          : {
+              kind: "move-shortlist" as const,
+              choices: [
+                {
+                  suggestionId: choice,
+                  rationale:
+                    "This candidate had the highest Jev probability and met the confidence threshold.",
+                },
+              ],
+            };
     return { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 

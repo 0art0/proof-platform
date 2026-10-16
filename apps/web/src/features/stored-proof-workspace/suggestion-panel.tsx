@@ -62,6 +62,16 @@ export type SuggestionPanelProps = SuggestionPanelActions &
     macros?: MacroInfoMap | undefined;
     /** Where AI ranking may be requested; absent when it is unavailable or read-only. */
     aiShortlist?: Readonly<{ sessionId: string; nodeId: string }> | undefined;
+    /**
+     * "Describe a move" on the none-relevant notice (architecture §5: it focuses the move
+     * instructions box). The button is shown only when this is provided.
+     */
+    onDescribeMove?: (() => void) | undefined;
+    /**
+     * "Find more results" on the none-relevant notice and on the empty-suggestions state
+     * (architecture §2: a library top-up). The button is shown only when this is provided.
+     */
+    onFindMoreResults?: (() => void) | undefined;
   }>;
 
 /**
@@ -77,6 +87,8 @@ export function SuggestionPanel({
   authorMovesHref,
   macros = NO_MACROS,
   aiShortlist,
+  onDescribeMove,
+  onFindMoreResults,
   ...actions
 }: SuggestionPanelProps) {
   const displayedSet =
@@ -188,6 +200,14 @@ export function SuggestionPanel({
               <Link href={authorMovesHref}>Create a reusable move</Link>
             </>
           )}
+          {onFindMoreResults === undefined ? null : (
+            <>
+              {" "}
+              <button type="button" className={styles.emptyGuideButton} onClick={onFindMoreResults}>
+                Find more results
+              </button>
+            </>
+          )}
         </p>
       ) : null}
       {suggestions.kind === "ready" &&
@@ -199,6 +219,8 @@ export function SuggestionPanel({
           nodeId={aiShortlist.nodeId}
           suggestionSet={suggestions.suggestionSet}
           disabled={mutationPending}
+          onDescribeMove={onDescribeMove}
+          onFindMoreResults={onFindMoreResults}
         />
       ) : null}
       {suggestions.kind === "ready" ? (

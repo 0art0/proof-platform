@@ -132,7 +132,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway-evaluation",
         model: shortlisterModel,
-        promptVersion: "move-shortlister-jev-v1",
+        promptVersion: "move-shortlister-jev-v2",
         minimumConfidence,
       }),
     },
