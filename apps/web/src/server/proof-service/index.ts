@@ -1606,13 +1606,19 @@ export async function previewConditionalLemma(
 // ---------------------------------------------------------------------------------------------
 
 /** The model roles the worker can serve; every other role is unimplemented. */
-export const AI_ROLES = ["topic-extractor", "proof-state-formalizer", "move-shortlister"] as const;
+export const AI_ROLES = [
+  "topic-extractor",
+  "proof-state-formalizer",
+  "move-shortlister",
+  "move-executor",
+] as const;
 export type AiRole = (typeof AI_ROLES)[number];
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
 export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "topic-extractor": false,
   "proof-state-formalizer": false,
   "move-shortlister": false,
+  "move-executor": false,
 });
 
 const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
@@ -1634,6 +1640,7 @@ export async function readAiCapabilities(
       "topic-extractor": roles["topic-extractor"] === true,
       "proof-state-formalizer": roles["proof-state-formalizer"] === true,
       "move-shortlister": roles["move-shortlister"] === true,
+      "move-executor": roles["move-executor"] === true,
     };
   } catch {
     return NO_AI_CAPABILITIES;
@@ -1655,14 +1662,19 @@ export type AiEndpoint =
   | Readonly<{ kind: "topics" }>
   | Readonly<{ kind: "topic-decisions" }>
   | Readonly<{ kind: "formalize" }>
-  | Readonly<{ kind: "shortlist"; sessionId: string }>;
+  | Readonly<{ kind: "shortlist"; sessionId: string }>
+  | Readonly<{ kind: "execute"; sessionId: string }>
+  | Readonly<{ kind: "execute-apply"; sessionId: string }>;
 
 function aiEndpointPath(endpoint: AiEndpoint): string {
   if (endpoint.kind === "topics") return "/ai/topics";
   if (endpoint.kind === "topic-decisions") return "/ai/topics/decisions";
   if (endpoint.kind === "formalize") return "/ai/formalize";
   const sessionId = parseIdentifier(endpoint.sessionId, "proof session");
-  return `/proof-sessions/${encodeURIComponent(sessionId)}/ai/shortlist`;
+  const base = `/proof-sessions/${encodeURIComponent(sessionId)}/ai`;
+  if (endpoint.kind === "execute") return `${base}/execute`;
+  if (endpoint.kind === "execute-apply") return `${base}/execute/apply`;
+  return `${base}/shortlist`;
 }
 
 /**

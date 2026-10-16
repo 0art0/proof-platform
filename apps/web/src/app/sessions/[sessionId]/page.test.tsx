@@ -44,7 +44,11 @@ async function workspaceProps() {
   const page = (await SessionPage({
     params: Promise.resolve({ sessionId: "session%3Atest" }),
   })) as ReactElement<{
-    children: ReactElement<{ session: Record<string, unknown>; aiShortlist: boolean }>;
+    children: ReactElement<{
+      session: Record<string, unknown>;
+      aiShortlist: boolean;
+      aiExecutor: boolean;
+    }>;
   }>;
   expect(isValidElement(page)).toBe(true);
   return page.props.children.props;
@@ -56,6 +60,7 @@ describe("the session page", () => {
       "topic-extractor": false,
       "proof-state-formalizer": false,
       "move-shortlister": true,
+      "move-executor": true,
     });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue({
@@ -72,6 +77,7 @@ describe("the session page", () => {
       background: "Natural deduction.",
     });
     expect(props.aiShortlist).toBe(true);
+    expect(props.aiExecutor).toBe(true);
   });
 
   it("opens a session without stored metadata under its id", async () => {
@@ -79,11 +85,13 @@ describe("the session page", () => {
       "topic-extractor": false,
       "proof-state-formalizer": false,
       "move-shortlister": false,
+      "move-executor": false,
     });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue(undefined);
     const props = await workspaceProps();
     expect(props.session).toEqual(session);
     expect(props.aiShortlist).toBe(false);
+    expect(props.aiExecutor).toBe(false);
   });
 });

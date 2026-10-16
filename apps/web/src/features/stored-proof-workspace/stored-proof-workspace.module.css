@@ -3,6 +3,26 @@
   gap: 1.25rem;
 }
 
+/*
+ * The proof state and the move-instruction box. On a wide screen they sit side by side; below
+ * that the box follows the proof state directly, so the proof keeps the width it has today.
+ */
+.stateRow {
+  display: grid;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.stateRow > * {
+  min-width: 0;
+}
+
+@media (min-width: 85rem) {
+  .stateRow {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  }
+}
+
 .interactionShell[data-busy="true"] {
   pointer-events: none;
   opacity: 0.72;

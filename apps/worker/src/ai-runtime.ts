@@ -1,6 +1,9 @@
 import {
   createVercelJevShortlisterTransport,
   createVercelStructuredOutputTransport,
+  DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_EXECUTOR_MODEL,
+  DEFAULT_EXECUTOR_REASONING_EFFORT,
   DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   DEFAULT_FORMALIZER_MODEL,
   DEFAULT_FORMALIZER_REASONING_EFFORT,
@@ -53,6 +56,16 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_TOPIC_REASONING_EFFORT,
     DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
   );
+  const executorModel = nonEmpty(env.PROOF_AI_EXECUTOR_MODEL) ?? DEFAULT_EXECUTOR_MODEL;
+  const executorTokens = positiveInteger(
+    env.PROOF_AI_EXECUTOR_MAX_OUTPUT_TOKENS,
+    DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+  );
+  const executorReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_EXECUTOR_REASONING_EFFORT",
+    env.PROOF_AI_EXECUTOR_REASONING_EFFORT,
+    DEFAULT_EXECUTOR_REASONING_EFFORT,
+  );
   const shortlisterModel = nonEmpty(env.PROOF_AI_SHORTLISTER_MODEL) ?? DEFAULT_SHORTLISTER_MODEL;
   const minimumConfidence = boundedNumber(
     env.PROOF_AI_SHORTLISTER_MIN_CONFIDENCE,
@@ -90,6 +103,22 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         promptVersion: "proof-state-formalizer-v1",
         maxOutputTokens: formalizerTokens,
         reasoningEffort,
+      }),
+    },
+    "move-executor": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: executorModel,
+        reasoningEffort: executorReasoningEffort,
+        maxOutputTokens: executorTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: executorModel,
+        promptVersion: "move-executor-v1",
+        maxOutputTokens: executorTokens,
+        reasoningEffort: executorReasoningEffort,
       }),
     },
     "move-shortlister": {

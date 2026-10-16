@@ -51,6 +51,7 @@ import {
   type ParameterMenuRecord,
   type PrepareProofCommandSuccess,
   type ProofCommandReceipt,
+  type ProposalLink,
   type ProofEdge,
   type ProofDeletionRecord,
   type ProofNode,
@@ -529,6 +530,7 @@ export type RepositoryDiagnosticCode =
   | "preview-not-found"
   | "preview-rejected"
   | "macro-step-failed"
+  | "plan-step-failed"
   | "invalid-edge-record"
   | "invalid-proof-history"
   | "backtrack-rejected"
@@ -3238,6 +3240,200 @@ export async function executeMacroPreview(
     });
   } catch (error: unknown) {
     return transactionFailure(error, "The macro could not be applied atomically.");
+  }
+}
+
+/** The command ID of one step (1-based) of a confirmed move-executor plan. */
+export function proposalStepCommandId(
+  prefix: string,
+  index: number,
+): ApplyKernelCommand["commandId"] {
+  return `${prefix}:step:${index}` as ApplyKernelCommand["commandId"];
+}
+
+export type ExecuteProposalPlanInput = Readonly<{
+  /** The step command IDs are `<prefix>:step:<i>`; a retry with the same prefix replays. */
+  commandIdPrefix: string;
+  /** The node the plan was previewed at, which must still be the session's current node. */
+  expectedCurrentNodeId: ProofNode["id"];
+  /** Concrete kernel operations, chained from that node's state. */
+  operations: readonly unknown[];
+  proposal: Readonly<Pick<ProposalLink, "source" | "callId">>;
+}>;
+
+/**
+ * Commit a confirmed move-executor plan (architecture §5) as a sequence of ordinary raw
+ * `apply-kernel-operation` commands in ONE transaction, the way a macro's steps are committed. Step
+ * `i` is command `<prefix>:step:<i>`, prepared by `prepareProofCommand` against the node step
+ * `i-1` created, so the kernel validates every step on its own and each step creates a fresh
+ * node, edge, event and command record. Every command carries the proposal link naming the stored
+ * LLM call. A failing step records nothing. A retry with the same prefix replays the recorded
+ * steps; a cursor that moved on is a stale-command conflict.
+ */
+export async function executeProposalPlan(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  input: ExecuteProposalPlanInput,
+  trustedActorInput: unknown,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+): Promise<ExecuteMacroResult> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  const trustedActor = safeParse(actorSchema, trustedActorInput);
+  if (sessionId === undefined || trustedActor === undefined) {
+    return repositoryFailure(
+      "rejected",
+      "command-rejected",
+      "The session ID or trusted actor is invalid.",
+    );
+  }
+  const stepCount = input.operations.length;
+  if (stepCount < 1 || stepCount > 16) {
+    return repositoryFailure(
+      "rejected",
+      "command-rejected",
+      "A confirmed plan has between 1 and 16 steps.",
+    );
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const loadedSession = await loadSession(transaction, sessionId, definitions);
+      if (!loadedSession.ok) return loadedSession.failure;
+      const { session, environment } = loadedSession;
+      const stepCommandId = (index: number) => proposalStepCommandId(input.commandIdPrefix, index);
+      const context = {
+        trustedActor,
+        ...(environment.operators === undefined ? {} : { operators: environment.operators }),
+        ...(environment.results === undefined ? {} : { results: environment.results }),
+        ...(environment.moves === undefined ? {} : { moves: environment.moves }),
+      };
+      const commandFor = (index: number, parentNodeId: ProofNode["id"]) => {
+        const id = stepCommandId(index + 1);
+        const ids = derivedMoveRecordIds(id);
+        return {
+          commandId: id,
+          kind: "apply-kernel-operation",
+          actor: trustedActor,
+          parentNodeId,
+          resultNodeId: ids.resultNodeId,
+          edgeId: ids.edgeId,
+          eventId: ids.eventId,
+          operation: input.operations[index],
+          proposal: {
+            source: input.proposal.source,
+            role: "move-executor",
+            callId: input.proposal.callId,
+            stepIndex: index + 1,
+            stepCount,
+          },
+        };
+      };
+
+      const firstId = stepCommandId(1);
+      if ((await transaction.readCommand(session.id, firstId)) !== undefined) {
+        // A retry: every recorded step must reproduce, and the cursor must still be at the end.
+        const results: PrepareProofCommandSuccess[] = [];
+        let parent: ProofNode["id"] = input.expectedCurrentNodeId;
+        for (let index = 0; index < stepCount; index += 1) {
+          const recordedInput = await transaction.readCommand(session.id, stepCommandId(index + 1));
+          const recorded =
+            recordedInput === undefined
+              ? undefined
+              : safeParse(createPrepareProofCommandSuccessSchema(environment), recordedInput);
+          if (recorded === undefined) {
+            return repositoryFailure(
+              "rejected",
+              "invalid-command-record",
+              "A recorded plan step failed runtime validation or is missing.",
+            );
+          }
+          const replayed = prepareProofCommand(
+            recorded.prepared.parent,
+            commandFor(index, parent),
+            { ...context, previous: recorded },
+          );
+          if (!replayed.ok) {
+            return repositoryFailure(
+              "rejected",
+              "command-rejected",
+              `Step ${index + 1} of ${stepCount} conflicts with the recorded application: ${replayed.diagnostics[0].message}`,
+            );
+          }
+          results.push(replayed);
+          parent = replayed.prepared.node.id;
+        }
+        if (session.currentNodeId !== results.at(-1)?.prepared.node.id) {
+          return repositoryFailure(
+            "rejected",
+            "serialized-stale-command",
+            "The recorded plan was superseded by navigation or a later move.",
+          );
+        }
+        return { status: "committed" as const, results, replayed: true };
+      }
+
+      for (const id of [input.commandIdPrefix as ApplyKernelCommand["commandId"], firstId]) {
+        const deleted = await deletedCommandFailure(transaction, session.id, id);
+        if (deleted !== undefined) return deleted;
+      }
+      if (session.currentNodeId !== input.expectedCurrentNodeId) {
+        return repositoryFailure(
+          "rejected",
+          "serialized-stale-command",
+          "The current proof node changed before the plan was applied.",
+        );
+      }
+      const currentInput = await transaction.readNode(session.id, session.currentNodeId);
+      const currentNode =
+        currentInput === undefined
+          ? undefined
+          : parseNodeRecord(currentInput, session, environment, session.currentNodeId);
+      if (currentNode === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-current-node",
+          "The stored current proof node is missing or failed validation.",
+        );
+      }
+      const results: PrepareProofCommandSuccess[] = [];
+      let node = currentNode;
+      for (let index = 0; index < stepCount; index += 1) {
+        if ((await transaction.readCommand(session.id, stepCommandId(index + 1))) !== undefined) {
+          return repositoryFailure(
+            "rejected",
+            "command-rejected",
+            "A plan step's command ID is already recorded.",
+          );
+        }
+        const prepared = prepareProofCommand(node, commandFor(index, node.id), context);
+        if (!prepared.ok) {
+          return repositoryFailure(
+            "rejected",
+            "plan-step-failed",
+            `Step ${index + 1} of ${stepCount} was rejected: ${prepared.diagnostics[0].message}`,
+          );
+        }
+        results.push(prepared);
+        node = prepared.prepared.node;
+      }
+      const sequencedResults = await sequenceCommands(
+        transaction,
+        session.id,
+        environment,
+        results,
+      );
+      for (const result of sequencedResults) {
+        await transaction.insertNode(session.id, result.prepared.node);
+        await transaction.insertEdge(session.id, result.prepared.edge);
+        await transaction.insertEvent(session.id, result.prepared.event);
+        await transaction.insertCommand(session.id, result);
+      }
+      if (!(await transaction.repointCurrentNode(session.id, currentNode.id, node.id))) {
+        throw new SerializedStaleCommandError();
+      }
+      return { status: "committed" as const, results: sequencedResults, replayed: false };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The plan could not be applied atomically.");
   }
 }
 

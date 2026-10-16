@@ -1145,3 +1145,265 @@ describe("StoredProofWorkspace AI ranking", () => {
     expect(screen.queryByRole("group", { name: "AI ranking" })).toBeNull();
   });
 });
+
+describe("StoredProofWorkspace move instructions", () => {
+  const afterNode = createProofNodeSchema().parse({
+    id: "node:after-instruction",
+    state: { id: "state:after-instruction", goals: [], obligations: [] },
+  });
+
+  const previewAnswer = {
+    ok: true,
+    data: {
+      status: "previewed",
+      provenance: { kind: "user-proposal", role: "move-executor" },
+      callId: "llm-call:execute-00000000-0000-4000-8000-000000000001",
+      replayed: false,
+      nodeId: node.id,
+      explanation: "Close the goal.",
+      transitionClass: "equivalence",
+      evidence: "structural",
+      steps: [
+        {
+          index: 1,
+          operation: { kind: "close-true" },
+          transitionClass: "equivalence",
+          evidence: "structural",
+        },
+      ],
+      preview: {
+        transitionClass: "equivalence",
+        evidence: "structural",
+        beforeState: node.state,
+        afterState: afterNode.state,
+        delta: {
+          goals: { added: [], removed: ["goal:test"], updated: [] },
+          obligations: { added: [], removed: [], updated: [] },
+        },
+      },
+      diagnostics: [],
+    },
+  };
+
+  /** Two displayed suggestions, so the shortlister has something to rank. */
+  function twoMoves(id: string): DisplayedSuggestionSet {
+    const set = suggestionSet(id, "First idea", "result:first");
+    const first = set.suggestions[0]!;
+    return displayedSuggestionSetSchema.parse({
+      ...set,
+      suggestions: [
+        first,
+        {
+          ...first,
+          id: "suggestion:second",
+          artifactId: "result:second",
+          patternId: "pattern:second",
+          name: "Second idea",
+          selectionMatches: [{ selectionId: "selection:primary", patternId: "pattern:second" }],
+        },
+      ],
+    });
+  }
+
+  function instructionFetch(onRequest: (url: string, body: unknown) => Response | undefined) {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    let moved = false;
+    const fetchMock = mockWithHistory(async (input, init) => {
+      const url = String(input);
+      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      calls.push({ url, body });
+      const answer = onRequest(url, body);
+      if (answer !== undefined) {
+        moved = moved || url.endsWith("/ai-execute/apply");
+        return answer;
+      }
+      if (url.endsWith("/api/proof-sessions/session%3Atest")) {
+        const current = moved ? afterNode : node;
+        return jsonResponse({
+          ok: true,
+          data: { session: { ...session, currentNodeId: current.id }, node: current },
+        });
+      }
+      return jsonResponse({ ok: false, error: { code: "unexpected", message: url } }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { calls, fetchMock };
+  }
+
+  it("marks a step a model proposed in the history, with where it came from", async () => {
+    const edge = {
+      id: "edge:ai-1",
+      commandId: "command:ai-1",
+      parentNodeId: node.id,
+      childNodeId: afterNode.id,
+      operation: {
+        kind: "close-true",
+        expectedStateId: node.state.id,
+        resultStateId: afterNode.state.id,
+        target: { kind: "goal", id: "goal:test" },
+      },
+      transitionClass: "equivalence",
+      proposal: {
+        source: "user-proposal",
+        role: "move-executor",
+        callId: "llm-call:execute-1",
+        stepIndex: 1,
+        stepCount: 2,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) =>
+        String(input).endsWith("/history")
+          ? jsonResponse({
+              ok: true,
+              data: {
+                session,
+                nodes: [node, afterNode],
+                edges: [{ edge, name: "close-true" }],
+              },
+            })
+          : jsonResponse({ ok: true, data: { records: [] } }),
+      ),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    expect(await screen.findByText(/AI step 1 of 2 from your description/)).toBeVisible();
+  });
+
+  it("shows the box beside the proof, disabled with a reason when the model is not configured", () => {
+    render(<StoredProofWorkspace session={session} node={node} />);
+    const panel = screen.getByRole("region", { name: "Move instructions" });
+    expect(within(panel).getByRole("textbox", { name: "Describe a step" })).toBeDisabled();
+    const preview = within(panel).getByRole("button", { name: "Preview" });
+    expect(preview).toBeDisabled();
+    expect(preview).toHaveAccessibleDescription(/no AI provider is configured/);
+  });
+
+  it("is disabled with the read-only reason in an imported session", () => {
+    render(
+      <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiExecutor />,
+    );
+    const panel = screen.getByRole("region", { name: "Move instructions" });
+    expect(within(panel).getByRole("button", { name: "Preview" })).toHaveAccessibleDescription(
+      /read-only/,
+    );
+  });
+
+  it("previews a described step for the selection, applies it, and moves to the new proof state", async () => {
+    const { calls, fetchMock } = instructionFetch((url) =>
+      url.endsWith("/ai-execute")
+        ? jsonResponse(previewAnswer)
+        : url.endsWith("/ai-execute/apply")
+          ? jsonResponse(
+              {
+                ok: true,
+                data: {
+                  status: "applied",
+                  callId: previewAnswer.data.callId,
+                  replayed: false,
+                  nodeId: afterNode.id,
+                  transitionClass: "equivalence",
+                  steps: [{ index: 1 }],
+                },
+              },
+              201,
+            )
+          : undefined,
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiExecutor />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const panel = screen.getByRole("region", { name: "Move instructions" });
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Describe a step" }), {
+      target: { value: "close it" },
+    });
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "Preview" }));
+    });
+
+    const previewCall = calls.find(({ url }) => url.endsWith("/ai-execute"));
+    expect(previewCall?.body).toMatchObject({
+      expectedCurrentNodeId: node.id,
+      instruction: "close it",
+      source: "user-instruction",
+      target: { kind: "goal", id: "goal:test" },
+      selections: [{ kind: "exact", path: [0] }],
+    });
+    expect(screen.getByRole("region", { name: "Proposed steps" })).toBeVisible();
+    // Nothing is applied by a preview.
+    expect(calls.some(({ url }) => url.endsWith("/ai-execute/apply"))).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    });
+    const applyCall = calls.find(({ url }) => url.endsWith("/ai-execute/apply"));
+    expect(applyCall?.body).toEqual({
+      callId: previewAnswer.data.callId,
+      expectedCurrentNodeId: node.id,
+    });
+    expect(await screen.findByText(/Applied 1 step from your description/)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Proposed steps" })).toBeNull();
+    // The history is read again for the new current node.
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/history")).length,
+    ).toBeGreaterThan(1);
+  });
+
+  it("wires 'Describe a move' on the none-relevant notice to the description box", async () => {
+    const twoCandidates = twoMoves("suggestion-set:none-relevant");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(async (input) =>
+        String(input).endsWith("/ai-shortlist")
+          ? jsonResponse({
+              ok: true,
+              data: {
+                status: "none-relevant",
+                suggestionSetId: twoCandidates.id,
+                reason: "Nothing fits.",
+              },
+            })
+          : jsonResponse({
+              ok: true,
+              data: { suggestionSet: twoCandidates, replayed: false, transitionClasses: [] },
+            }),
+      ),
+    );
+    window.localStorage.clear();
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist aiExecutor />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask AI to rank these" }));
+    const describe = await screen.findByRole("button", { name: "Describe a move" });
+    fireEvent.click(describe);
+    expect(screen.getByRole("textbox", { name: "Describe a step" })).toHaveFocus();
+    // "Find more results" has no backend yet and stays unwired.
+    expect(screen.queryByRole("button", { name: "Find more results" })).toBeNull();
+  });
+
+  it("offers 'Describe a move' only when the box can take a description", async () => {
+    const twoCandidates = twoMoves("suggestion-set:none-relevant-off");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(async (input) =>
+        String(input).endsWith("/ai-shortlist")
+          ? jsonResponse({
+              ok: true,
+              data: {
+                status: "none-relevant",
+                suggestionSetId: twoCandidates.id,
+                reason: "Nothing fits.",
+              },
+            })
+          : jsonResponse({
+              ok: true,
+              data: { suggestionSet: twoCandidates, replayed: false, transitionClasses: [] },
+            }),
+      ),
+    );
+    window.localStorage.clear();
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask AI to rank these" }));
+    await screen.findByText(/None of these suggestions look relevant/);
+    expect(screen.queryByRole("button", { name: "Describe a move" })).toBeNull();
+  });
+});
