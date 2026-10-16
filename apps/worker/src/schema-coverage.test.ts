@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { SUPPORTED_LLM_ROLES } from "@proof/llm";
 import { MemoryLibraryStore } from "./memory-library-store";
 import { DEFAULT_MIGRATIONS_DIRECTORY, loadMigrations } from "./migrations/runner";
 import { SESSION_TABLES_IN_DELETION_ORDER } from "./postgres-proof-store";
@@ -77,6 +78,16 @@ describe("migration schema", () => {
     expect(sql).toContain("(record ->> 'evidence') IS NOT DISTINCT FROM evidence");
     // It adds columns only: existing rows are neither inferred nor rewritten.
     expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
+  });
+
+  it("admits every supported LLM role in the latest llm_calls role constraint (0015)", () => {
+    const latest = [...migrations]
+      .reverse()
+      .find((migration) => migration.sql.includes("ADD CONSTRAINT llm_calls_role_check"));
+    expect(latest?.name).toBe("0015_llm_background_proposer_role.sql");
+    const list = /CHECK \(role IN \(([^)]*)\)\)/.exec(latest?.sql ?? "")?.[1] ?? "";
+    const roles = [...list.matchAll(/'([a-z-]+)'/g)].map((match) => match[1]);
+    expect(roles.sort()).toEqual([...SUPPORTED_LLM_ROLES].sort());
   });
 
   it("keeps the event provenance constraint (0003) and the discarding client release", () => {

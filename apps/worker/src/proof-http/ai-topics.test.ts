@@ -86,6 +86,7 @@ describe("AI capabilities endpoint", () => {
     expect(await response.json()).toEqual({
       roles: {
         "topic-extractor": false,
+        "background-proposer": false,
         "proof-state-formalizer": false,
         "move-shortlister": false,
       },
@@ -98,6 +99,7 @@ describe("AI capabilities endpoint", () => {
     expect(await (await fetch(`${configured.origin}/ai/capabilities`)).json()).toEqual({
       roles: {
         "topic-extractor": true,
+        "background-proposer": false,
         "proof-state-formalizer": false,
         "move-shortlister": false,
       },

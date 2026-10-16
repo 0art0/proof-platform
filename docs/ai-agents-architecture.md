@@ -38,6 +38,7 @@ role, so stored evidence still reads, but the web UI no longer calls it.
 
   The proposer must choose constants so that the problem can be formalized using only them; the
   system prompt says so.
+
 - **Validation:** every constant parses as an `OperatorDeclaration`, there are no duplicates or
   symbol clashes, and every sort is a known sort ID.
 - **UI:** the user enters only the problem, then clicks "Propose background". The page shows the
@@ -57,6 +58,7 @@ role, so stored evidence still reads, but the web UI no longer calls it.
 
   In every kind the agent also receives the names and statements of the results already in the
   session library, so that it does not duplicate them.
+
 - **Output:** library results in the library's existing result shape: MathJSON statement,
   premises, application directions and patterns, name, description, and background
   classification. Definitions may be included where the library schema supports them. Output is

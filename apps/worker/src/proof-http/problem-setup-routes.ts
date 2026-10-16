@@ -2,22 +2,31 @@
  * HTTP routes for manual problem and session creation (roadmap N26):
  *
  * - `GET /problem-setup/options`: sort, layer and pack menus;
- * - `POST /problem-drafts/validate` `{ draft }`: 200 `{ ok: true, review }` or 422
- *   `{ ok: false, diagnostics }` with draft paths; writes nothing;
- * - `POST /proof-sessions` `{ sessionId, draft, reviewedDigest }`: approval. 201 creates the
- *   session and root node; 200 replays an identical approval; 422 an invalid draft; 409 a stale
- *   review or an existing session with other content. Only a 201 writes.
+ * - `POST /problem-drafts/validate` `{ draft, approvedBackground? }`: 200 `{ ok: true, review }` or
+ *   422 `{ ok: false, diagnostics }` with draft paths; writes nothing;
+ * - `POST /proof-sessions` `{ sessionId, draft, reviewedDigest, approvedBackground? }`: approval.
+ *   201 creates the session and root node; 200 replays an identical approval; 422 an invalid
+ *   draft; 409 a stale review or an existing session with other content. Only a 201 writes.
+ *
+ * `approvedBackground` is `{ constructionId, decisionId }`, naming an approved background decision
+ * (`POST /ai/background/decisions`). The worker resolves its constants from storage and adds them
+ * to the session's operators; a missing decision is 404, a rejected one 409. The reviewed digest
+ * covers the operators, so approving with other constants than the review used is stale.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   createProofNodeSchema,
-  problemDraftValidationRequestSchema,
   problemDraftValidationResponseSchema,
   problemSetupDiagnosticSchema,
   problemSetupOptionsSchema,
   proofSessionMetadataSchema,
+  type OperatorDeclaration,
 } from "@proof/protocol";
 import { z } from "zod";
+import {
+  constructionApprovedBackgroundSchema,
+  loadApprovedConstants,
+} from "../approved-background";
 import { approveProblemSession, problemSetupOptions, validateProblemDraft } from "../problem-setup";
 import { proofSessionSchema, type ProofSession } from "../proof-repository";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
@@ -54,12 +63,19 @@ export async function handleProblemSetupRoute(
   }
 
   if (path === "/problem-drafts/validate" && request.method === "POST") {
-    const body = await readStrictJson(request, problemDraftValidationRequestSchema);
+    const body = await readStrictJson(request, draftValidationBodySchema);
     if (!body.ok) {
       writeJson(response, body.status, invalidRequest(body.message));
       return true;
     }
-    const validated = validateProblemDraft(body.value.draft);
+    const constants = await resolveConstants(context, body.value.approvedBackground);
+    if (!constants.ok) {
+      writeJson(response, constants.status, { diagnostics: constants.diagnostics });
+      return true;
+    }
+    const validated = validateProblemDraft(body.value.draft, undefined, {
+      constants: constants.constants,
+    });
     if (validated.ok) {
       writeValidatedJson(response, 200, problemDraftValidationResponseSchema, {
         ok: true,
@@ -80,7 +96,19 @@ export async function handleProblemSetupRoute(
       writeJson(response, body.status, invalidRequest(body.message));
       return true;
     }
-    const approved = await approveProblemSession(context.store, body.value);
+    const split = splitApprovedBackground(body.value);
+    if (!split.ok) {
+      writeJson(response, 400, invalidRequest("The approved background reference is invalid."));
+      return true;
+    }
+    const constants = await resolveConstants(context, split.approvedBackground);
+    if (!constants.ok) {
+      writeJson(response, constants.status, { diagnostics: constants.diagnostics });
+      return true;
+    }
+    const approved = await approveProblemSession(context.store, split.request, {
+      constants: constants.constants,
+    });
     switch (approved.status) {
       case "invalid-request":
         writeJson(response, 400, invalidRequest(approved.message));
@@ -120,6 +148,56 @@ export async function handleProblemSetupRoute(
     }
   }
   return false;
+}
+
+const draftValidationBodySchema = z
+  .object({
+    draft: z.unknown(),
+    approvedBackground: constructionApprovedBackgroundSchema.optional(),
+  })
+  .strict();
+
+type ApprovedBackgroundReference = z.infer<typeof constructionApprovedBackgroundSchema>;
+
+/**
+ * Separate the optional `approvedBackground` reference from an approval body, leaving the strict
+ * protocol request (`sessionId`, `draft`, `reviewedDigest`) exactly as the client sent it.
+ */
+function splitApprovedBackground(
+  value: unknown,
+):
+  | Readonly<{ ok: true; request: unknown; approvedBackground?: ApprovedBackgroundReference }>
+  | Readonly<{ ok: false }> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: true, request: value };
+  }
+  const { approvedBackground, ...request } = value as Record<string, unknown>;
+  if (approvedBackground === undefined) return { ok: true, request: value };
+  const reference = constructionApprovedBackgroundSchema.safeParse(approvedBackground);
+  return reference.success
+    ? { ok: true, request, approvedBackground: reference.data }
+    : { ok: false };
+}
+
+/** The constants of the referenced approved background, resolved from storage (none if absent). */
+async function resolveConstants(
+  context: ServiceContext,
+  reference: ApprovedBackgroundReference | undefined,
+): Promise<
+  | Readonly<{ ok: true; constants: readonly OperatorDeclaration[] }>
+  | Readonly<{
+      ok: false;
+      status: number;
+      diagnostics: readonly [Readonly<{ code: string; message: string }>];
+    }>
+> {
+  if (reference === undefined) return { ok: true, constants: [] };
+  const loaded = await loadApprovedConstants(
+    context.llmCalls,
+    reference.constructionId,
+    reference.decisionId,
+  );
+  return loaded.ok ? { ok: true, constants: loaded.constants } : loaded;
 }
 
 function withoutMetadata(session: ProofSession): ProofSession {

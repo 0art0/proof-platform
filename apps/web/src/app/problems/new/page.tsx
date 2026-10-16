@@ -33,7 +33,7 @@ export default async function NewProblemPage() {
         <ProblemEntryForm
           options={options}
           ai={{
-            topics: capabilities["topic-extractor"],
+            background: capabilities["background-proposer"],
             formalizer: capabilities["proof-state-formalizer"],
           }}
         />

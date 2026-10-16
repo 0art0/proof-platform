@@ -25,7 +25,8 @@ import {
   formToDraft,
   missingRequiredFields,
   missingSetupFields,
-  withTopicPreferences,
+  withBackgroundProfile,
+  type AcceptedBackground,
   type DeclarationRow,
   type FormProblem,
   type ProblemForm,
@@ -43,6 +44,8 @@ type Reviewed = Readonly<{
   operators: readonly OperatorDeclaration[];
   /** Chosen once per review, so a retried approval is idempotent. */
   sessionId: string;
+  /** The accepted background whose constants the review used; approval names the same one. */
+  accepted: AcceptedBackground | undefined;
 }>;
 
 type TextField =
@@ -81,7 +84,9 @@ const apiFailureSchema = z
 
 /**
  * New problem (design plan §4.1, §4.2, §4.4). The draft stays in the browser. Optional AI help
- * proposes topics and a drafted setup; a draft is loaded into the form only on request.
+ * proposes a background with its constants, and a drafted setup; accepting a background fills in
+ * the background fields and makes its constants available to the setup, and a draft is loaded
+ * into the form only on request.
  * "Check setup" asks the worker to validate it and shows the mathematical content; only
  * "Start exploring" on an unchanged reviewed draft creates the session and root node.
  * Any edit after review discards the review.
@@ -98,9 +103,11 @@ export function ProblemEntryForm({
   const [notice, setNotice] = useState<Notice>();
   const [busy, setBusy] = useState<"review" | "approve">();
   const nextKey = useRef(100);
-  // Owner of this form's AI calls, so a topic proposal and a draft keep their evidence together.
+  // Owner of this form's AI calls, so a background proposal and a draft keep their evidence together.
   const [constructionId] = useState(() => createAiId("construction:web"));
   const [aiDraftCallId, setAiDraftCallId] = useState<string>();
+  // The background the user accepted; its constants are named by decision, never sent as text.
+  const [accepted, setAccepted] = useState<AcceptedBackground>();
 
   const packOperators = useMemo(() => operatorsByPack(options), [options]);
   const selectedOperators = useMemo(
@@ -110,14 +117,25 @@ export function ProblemEntryForm({
       ),
     [form.packIds, options.packs, packOperators],
   );
-  const latex = useMemo(
-    () => createLatexRenderer({ operators: selectedOperators }),
-    [selectedOperators],
-  );
+  // LaTeX previews know the accepted constants' notation as well as the selected packs'.
+  const latex = useMemo(() => {
+    const known = new Set(selectedOperators.map(({ symbol }) => symbol));
+    const constants = (accepted?.constants ?? [])
+      .map(({ operator }) => operator)
+      .filter(({ symbol }) => !known.has(symbol));
+    try {
+      return createLatexRenderer({ operators: [...selectedOperators, ...constants] });
+    } catch {
+      return createLatexRenderer({ operators: selectedOperators });
+    }
+  }, [selectedOperators, accepted]);
 
   const current = useMemo(() => formToDraft(form, options), [form, options]);
   const approvable =
-    reviewed !== undefined && current.ok && JSON.stringify(current.draft) === reviewed.draftKey;
+    reviewed !== undefined &&
+    current.ok &&
+    JSON.stringify(current.draft) === reviewed.draftKey &&
+    reviewed.accepted?.decisionId === accepted?.decisionId;
 
   /** Every edit goes through here, and every edit invalidates the review. */
   const update = (change: (previous: ProblemForm) => ProblemForm) => {
@@ -147,7 +165,10 @@ export function ProblemEntryForm({
     setBusy("review");
     setNotice(undefined);
     try {
-      const response = await postJson("/api/problem-drafts/validate", { draft });
+      const response = await postJson("/api/problem-drafts/validate", {
+        draft,
+        ...backgroundReference(constructionId, accepted),
+      });
       if (response.ok) {
         const parsed = z
           .object({
@@ -174,6 +195,7 @@ export function ProblemEntryForm({
           node: node.data,
           operators,
           sessionId: createSessionId(),
+          accepted,
         });
         return;
       }
@@ -194,6 +216,7 @@ export function ProblemEntryForm({
         sessionId: reviewed.sessionId,
         draft: reviewed.draft,
         reviewedDigest: reviewed.review.digest,
+        ...backgroundReference(constructionId, reviewed.accepted),
       });
       if (response.ok) {
         recordRecentSession({
@@ -344,7 +367,16 @@ export function ProblemEntryForm({
         missing={missingSetupFields(form)}
         constructionId={constructionId}
         createId={createAiId}
-        onUseTopics={(topics) => update((f) => ({ ...f, ...withTopicPreferences(f, topics) }))}
+        accepted={accepted}
+        onAcceptBackground={(background) => {
+          update((f) => ({ ...f, ...withBackgroundProfile(background.profile) }));
+          setAccepted(background);
+        }}
+        onForgetBackground={() => {
+          setReviewed(undefined);
+          setNotice(undefined);
+          setAccepted(undefined);
+        }}
         onUseDraft={(draft, callId) => {
           update((f) => ({ ...f, ...draftStatementRows(draft, key) }));
           setAiDraftCallId(callId);
@@ -542,6 +574,18 @@ function ReviewPanel({
             .filter((name): name is string => name !== undefined)
             .join(", ") || "None selected"}
         </dd>
+        {reviewed.accepted === undefined || reviewed.accepted.constants.length === 0 ? null : (
+          <>
+            <dt>Accepted constants</dt>
+            <dd>
+              {reviewed.accepted.constants.map(({ operator }) => (
+                <code key={operator.id} className={styles.token}>
+                  {operator.symbol}
+                </code>
+              ))}
+            </dd>
+          </>
+        )}
         <dt>Variables and objects</dt>
         <dd>
           {context === undefined || context.declarations.length === 0
@@ -723,6 +767,16 @@ async function postJson(
     parsed = undefined;
   }
   return { ok: response.ok, status: response.status, body: parsed };
+}
+
+/** The reference through which the worker resolves the accepted constants; none if not accepted. */
+function backgroundReference(
+  constructionId: string,
+  accepted: AcceptedBackground | undefined,
+): Record<string, unknown> {
+  return accepted === undefined
+    ? {}
+    : { approvedBackground: { constructionId, decisionId: accepted.decisionId } };
 }
 
 function failureNotice(body: unknown): Notice {

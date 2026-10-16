@@ -29,6 +29,7 @@ describe("readAiCapabilities", () => {
       {
         roles: {
           "topic-extractor": true,
+          "background-proposer": true,
           "proof-state-formalizer": false,
           "move-shortlister": true,
           attestor: true,
@@ -37,7 +38,7 @@ describe("readAiCapabilities", () => {
       200,
     );
     expect(await readAiCapabilities()).toEqual({
-      "topic-extractor": true,
+      "background-proposer": true,
       "proof-state-formalizer": false,
       "move-shortlister": true,
     });
@@ -75,7 +76,7 @@ describe("relayAiRequest", () => {
   ])("maps a worker %s to %s with its first diagnostic", async (status, expected) => {
     const body = { status: "x", diagnostics: [{ code: "some-code", message: "Some message." }] };
     stubWorker(body, status);
-    expect(await relayAiRequest({ kind: "topics" }, {})).toEqual({
+    expect(await relayAiRequest({ kind: "background" }, {})).toEqual({
       ok: false,
       status: expected,
       code: "some-code",

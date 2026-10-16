@@ -1,5 +1,7 @@
-import { problemDraftValidationRequestSchema } from "@proof/protocol";
-import { validateProblemDraftRequest } from "../../../../server/proof-service";
+import {
+  problemDraftValidationBodySchema,
+  validateProblemDraftRequest,
+} from "../../../../server/proof-service";
 import {
   proofApiFailure,
   proofProtocolAnswer,
@@ -27,9 +29,13 @@ export async function POST(request: Request): Promise<Response> {
     }
     return proofApiFailure("invalid_request", "The JSON request body is invalid.", 400);
   }
-  const parsed = problemDraftValidationRequestSchema.safeParse(body);
+  const parsed = problemDraftValidationBodySchema.safeParse(body);
   if (!parsed.success) {
-    return proofApiFailure("invalid_request", "The request must be { draft }.", 400);
+    return proofApiFailure(
+      "invalid_request",
+      "The request must be { draft } with an optional approvedBackground reference.",
+      400,
+    );
   }
 
   try {

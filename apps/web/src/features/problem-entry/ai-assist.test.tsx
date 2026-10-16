@@ -31,15 +31,35 @@ const options = {
   ],
 } as ProblemSetupOptions;
 
-const MANIFEST = {
-  kind: "topic-manifest",
-  domains: ["propositional logic"],
-  objectKinds: ["propositions"],
-  vocabulary: ["disjunction"],
-  notation: [{ symbol: "∨", meaning: "or" }],
-  backgroundTopics: ["truth tables"],
-  customOperators: [],
+const INTEGER = { kind: "named", id: "sort:integer" };
+const COPRIME = {
+  id: "operator:coprime",
+  symbol: "Coprime",
+  signature: { parameters: [INTEGER, INTEGER], result: { kind: "proposition" } },
+  presentation: {
+    displayName: "coprime",
+    latex: {
+      template: String.raw`#1\perp #2`,
+      precedence: "relation",
+      parse: { trigger: String.raw`\perp`, notation: "infix" },
+    },
+    naturalLanguage: [{ template: "#1 and #2 are coprime" }],
+  },
 };
+
+function proposal(level = "first-year undergraduate") {
+  return {
+    kind: "background-proposal",
+    background: {
+      level,
+      summary: "Elementary number theory.",
+      assumptions: ["Divisibility of integers", "Euclid's lemma"],
+      domains: ["number theory", "algebra"],
+      maximumLevel: "undergraduate",
+    },
+    constants: [{ operator: COPRIME, rationale: "The goal says two integers are coprime." }],
+  };
+}
 
 const DRAFT = {
   problem: { title: "Disjunction", statement: "Show p or q from p." },
@@ -99,15 +119,22 @@ beforeEach(() => {
   calls = [];
   answers = new Map([
     [
-      "/api/ai/topics",
+      "/api/ai/background",
       (body) =>
         Response.json({
           ok: true,
-          data: { status: "proposed", callId: body.id, replayed: false, proposal: MANIFEST },
+          data: {
+            status: "proposed",
+            callId: body.id,
+            replayed: false,
+            proposal: proposal(
+              body.revision === undefined ? undefined : "second-year undergraduate",
+            ),
+          },
         }),
     ],
     [
-      "/api/ai/topics/decisions",
+      "/api/ai/background/decisions",
       (body) =>
         Response.json(
           { ok: true, data: { status: "recorded", decision: { decision: body.decision } } },
@@ -126,6 +153,7 @@ beforeEach(() => {
       "/api/problem-drafts/validate",
       () => Response.json({ ok: true, data: { ok: true, review: review() } }),
     ],
+    ["/api/proof-sessions", () => Response.json({ ok: true, data: {} }, { status: 201 })],
   ]);
   vi.stubGlobal(
     "fetch",
@@ -144,7 +172,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderForm(ai = { topics: true, formalizer: true }) {
+function renderForm(ai = { background: true, formalizer: true }) {
   let ids = 0;
   render(
     <ProblemEntryForm
@@ -161,6 +189,10 @@ function change(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+function fillStatement() {
+  change("Problem statement", "Show that consecutive integers are coprime.");
+}
+
 function fillProblem() {
   change("Problem title", "Disjunction");
   change("Problem statement", "Show p or q from p.");
@@ -172,67 +204,217 @@ const section = () => screen.getByRole("region", { name: "AI assistance" });
 const button = (name: string) => within(section()).getByRole("button", { name });
 const callsTo = (url: string) => calls.filter((call) => call.url === url);
 
+async function propose() {
+  fireEvent.click(button("Propose background"));
+  return screen.findByRole("group", { name: "Proposed background" });
+}
+
 describe("AI assistance in problem entry", () => {
   it("explains when AI is not configured and offers nothing to click", () => {
-    renderForm({ topics: false, formalizer: false });
+    renderForm({ background: false, formalizer: false });
     fillProblem();
     expect(section()).toHaveTextContent("not configured on this proof service");
-    expect(button("Suggest topics")).toBeDisabled();
+    expect(button("Propose background")).toBeDisabled();
+    expect(section()).toHaveTextContent("Not configured.");
     expect(button("Draft the setup")).toBeDisabled();
   });
 
-  it("asks for the problem and background before any request", () => {
+  it("needs only the problem statement to propose a background, and says so", () => {
     renderForm();
-    expect(section()).toHaveTextContent("Fill in Problem title, Problem statement");
-    expect(button("Suggest topics")).toBeDisabled();
-    fillProblem();
-    expect(button("Suggest topics")).toBeEnabled();
+    expect(button("Propose background")).toBeDisabled();
+    expect(section()).toHaveTextContent("Enter the problem statement first.");
+    // The background fields are what a proposal fills in; they need not be filled first.
+    fillStatement();
+    expect(button("Propose background")).toBeEnabled();
+    expect(section()).not.toHaveTextContent("Enter the problem statement first.");
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("");
   });
 
-  it("suggests topics from the problem and background only, and records approval", async () => {
+  it("asks for the background fields before drafting a setup, and points to the proposal", () => {
     renderForm();
+    fillStatement();
+    expect(button("Draft the setup")).toBeDisabled();
+    expect(section()).toHaveTextContent("Fill in Problem title, Assumed level");
+    expect(section()).toHaveTextContent("an accepted background fills in the background fields");
     fillProblem();
-    change("Variable or object 1", "secret");
-    fireEvent.click(button("Suggest topics"));
-    const proposal = await screen.findByLabelText("Suggested topics");
-    expect(proposal).toHaveTextContent("propositional logic");
-    expect(proposal).toHaveTextContent("∨: or");
+    expect(button("Draft the setup")).toBeEnabled();
+  });
 
-    const [request] = callsTo("/api/ai/topics");
+  it("proposes from the problem statement and preferences only, and shows the result card", async () => {
+    renderForm();
+    fillStatement();
+    change("Preferred areas of mathematics", "number theory");
+    change("Variable or object 1", "secret");
+    const card = await propose();
+
+    const [request] = callsTo("/api/ai/background");
     expect(Object.keys(request!.body).sort()).toEqual([
-      "background",
       "constructionId",
       "id",
+      "preferences",
       "problem",
     ]);
+    expect(request!.body).toMatchObject({
+      constructionId: "construction:web-1",
+      id: "llm-call:background-2",
+      problem: {
+        title: "Untitled problem",
+        statement: "Show that consecutive integers are coprime.",
+      },
+      preferences: { domains: ["number theory"] },
+    });
     expect(JSON.stringify(request!.body)).not.toContain("secret");
 
-    change("Note on your decision", "Looks right.");
-    fireEvent.click(within(proposal).getByRole("button", { name: "Approve topics" }));
-    await within(proposal).findByText("You approved these topics.");
-    expect(callsTo("/api/ai/topics/decisions")[0]?.body).toMatchObject({
-      constructionId: request!.body.constructionId,
-      callId: "llm-call:topics-2",
-      decision: "approved",
-      rationale: "Looks right.",
-    });
-    // Nothing reaches the preferences until the user asks.
-    expect(screen.getByLabelText("Preferred areas of mathematics")).toHaveValue("");
-    fireEvent.click(
-      within(proposal).getByRole("button", {
-        name: "Add these areas and notation to my preferences",
-      }),
-    );
-    expect(screen.getByLabelText("Preferred areas of mathematics")).toHaveValue(
-      "propositional logic",
-    );
-    expect(screen.getByLabelText("Notation preferences (one per line)")).toHaveValue("∨: or");
+    expect(card).toHaveTextContent("Proposed by AI from your problem statement");
+    expect(card).toHaveTextContent("Background levelfirst-year undergraduate");
+    expect(card).toHaveTextContent("Elementary number theory.");
+    expect(card).toHaveTextContent("Divisibility of integers; Euclid's lemma");
+    expect(card).toHaveTextContent("number theory, algebra");
+    expect(card).toHaveTextContent("Up to undergraduate level.");
+    const constants = within(card).getByRole("list");
+    expect(constants).toHaveTextContent("x_1\\perp x_2");
+    expect(constants).toHaveTextContent("coprime");
+    expect(constants).toHaveTextContent("$x_1$ and $x_2$ are coprime");
+    expect(constants).toHaveTextContent("The goal says two integers are coprime.");
+    // Nothing is filled in until the user accepts.
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("");
+    expect(callsTo("/api/ai/background/decisions")).toHaveLength(0);
   });
 
-  it("records a rejection and retries a failed recording with the same decision", async () => {
+  it("sends the entered title when there is one", async () => {
+    renderForm();
+    change("Problem title", "Coprime neighbours");
+    fillStatement();
+    await propose();
+    expect(callsTo("/api/ai/background")[0]!.body).toMatchObject({
+      problem: { title: "Coprime neighbours" },
+    });
+  });
+
+  it("says when the proposal has no constants", async () => {
+    answers.set("/api/ai/background", (body) =>
+      Response.json({
+        ok: true,
+        data: {
+          status: "proposed",
+          callId: body.id,
+          proposal: { ...proposal(), constants: [] },
+        },
+      }),
+    );
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    expect(card).toHaveTextContent("The problem needs no notation beyond built-in mathematics.");
+    expect(within(card).queryByRole("list")).toBeNull();
+  });
+
+  it("revises with feedback, naming the previous call and never sending the proposal back", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    const revise = within(card).getByRole("button", { name: "Revise with feedback" });
+    expect(revise).toBeDisabled();
+    expect(card).toHaveTextContent("To revise, describe what to change first.");
+
+    fireEvent.change(within(card).getByLabelText("Feedback for a revision"), {
+      target: { value: "  Assume a bit more.  " },
+    });
+    expect(revise).toBeEnabled();
+    fireEvent.click(revise);
+    await within(card).findByText("second-year undergraduate");
+
+    const [first, second] = callsTo("/api/ai/background");
+    expect(second!.body).toMatchObject({
+      constructionId: first!.body.constructionId,
+      id: "llm-call:background-3",
+      revision: { previousCallId: "llm-call:background-2", feedback: "Assume a bit more." },
+    });
+    expect(Object.keys(second!.body.revision as object).sort()).toEqual([
+      "feedback",
+      "previousCallId",
+    ]);
+    expect(JSON.stringify(second!.body)).not.toContain("background-proposal");
+    expect(within(card).getByLabelText("Feedback for a revision")).toHaveValue("");
+
+    // A further revision chains from the latest proposal.
+    fireEvent.change(within(card).getByLabelText("Feedback for a revision"), {
+      target: { value: "Drop Euclid." },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "Revise with feedback" }));
+    await vi.waitFor(() => expect(callsTo("/api/ai/background")).toHaveLength(3));
+    expect(callsTo("/api/ai/background")[2]!.body.revision).toMatchObject({
+      previousCallId: "llm-call:background-3",
+    });
+  });
+
+  it("keeps the proposal and explains when a revision fails", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    answers.set("/api/ai/background", () =>
+      Response.json(
+        {
+          ok: false,
+          error: { code: "call-not-found", message: "The LLM call does not exist." },
+          details: {
+            diagnostics: [{ code: "call-not-found", message: "The LLM call does not exist." }],
+          },
+        },
+        { status: 404 },
+      ),
+    );
+    fireEvent.change(within(card).getByLabelText("Feedback for a revision"), {
+      target: { value: "More." },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "Revise with feedback" }));
+    expect(await within(section()).findByRole("alert")).toHaveTextContent(
+      "The LLM call does not exist.",
+    );
+    expect(screen.getByRole("group", { name: "Proposed background" })).toHaveTextContent(
+      "first-year undergraduate",
+    );
+  });
+
+  it("accepts a proposal: records the decision, fills the background fields and keeps them editable", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    await within(card).findByRole("button", { name: "Accepted" });
+
+    const [decision] = callsTo("/api/ai/background/decisions");
+    expect(decision!.body).toMatchObject({
+      constructionId: "construction:web-1",
+      callId: "llm-call:background-2",
+      decisionId: "background-decision-3",
+      decision: "approved",
+      rationale: "Accepted in the problem setup form.",
+    });
+    expect(decision!.body.decidedAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    // The existing background fields are filled, and remain ordinary editable fields.
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("first-year undergraduate");
+    expect(screen.getByLabelText("What the reader is expected to know")).toHaveValue(
+      "Elementary number theory.",
+    );
+    expect(screen.getByLabelText("Specific background assumptions (one per line)")).toHaveValue(
+      "Divisibility of integers\nEuclid's lemma",
+    );
+    expect(screen.getByLabelText("Areas of mathematics")).toHaveValue("number theory, algebra");
+    expect(screen.getByLabelText("Highest level of included results")).toHaveValue("undergraduate");
+    change("Assumed level", "second-year undergraduate");
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("second-year undergraduate");
+
+    const status = within(card).getByRole("status");
+    expect(status).toHaveTextContent("Accepted.");
+    expect(status).toHaveTextContent("its constant (Coprime) will be used");
+    expect(within(card).getByRole("button", { name: "Accepted" })).toBeDisabled();
+  });
+
+  it("retries a failed recording with the same decision", async () => {
     let failures = 1;
-    const recorded = answers.get("/api/ai/topics/decisions")!;
-    answers.set("/api/ai/topics/decisions", (body) =>
+    const recorded = answers.get("/api/ai/background/decisions")!;
+    answers.set("/api/ai/background/decisions", (body) =>
       failures-- > 0
         ? Response.json(
             { ok: false, error: { code: "service_unavailable", message: "Unavailable." } },
@@ -241,17 +423,143 @@ describe("AI assistance in problem entry", () => {
         : recorded(body),
     );
     renderForm();
-    fillProblem();
-    fireEvent.click(button("Suggest topics"));
-    const proposal = await screen.findByLabelText("Suggested topics");
-    fireEvent.click(within(proposal).getByRole("button", { name: "Reject topics" }));
-    await within(proposal).findByText(/Your decision was not recorded/);
-    fireEvent.click(within(proposal).getByRole("button", { name: "Reject topics" }));
-    await within(proposal).findByText(/You rejected these topics/);
-    const [first, second] = callsTo("/api/ai/topics/decisions");
+    fillStatement();
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    await within(card).findByText(/Your acceptance was not recorded/);
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("");
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    await within(card).findByRole("button", { name: "Accepted" });
+    const [first, second] = callsTo("/api/ai/background/decisions");
     expect(second!.body).toEqual(first!.body);
-    expect(first!.body).toMatchObject({ decision: "rejected" });
-    expect(within(proposal).queryByRole("button", { name: /preferences/ })).toBeNull();
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("first-year undergraduate");
+  });
+
+  it("explains a refused acceptance, changes nothing, and offers a revision instead", async () => {
+    answers.set("/api/ai/background/decisions", () =>
+      Response.json(
+        {
+          ok: false,
+          error: {
+            code: "approved-constant-conflict",
+            message: "Divides is already an operator of the pack pack:divisibility.",
+          },
+          details: {
+            diagnostics: [
+              {
+                code: "approved-constant-conflict",
+                message: "Divides is already an operator of the pack pack:divisibility.",
+              },
+            ],
+          },
+        },
+        { status: 409 },
+      ),
+    );
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    expect(await within(card).findByRole("alert")).toHaveTextContent(
+      "This proposal cannot be accepted: Divides is already an operator of the pack",
+    );
+    expect(screen.getByLabelText("Assumed level")).toHaveValue("");
+    expect(within(card).getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(within(card).getByRole("button", { name: "Revise with feedback" })).toBeDisabled();
+  });
+
+  it("flags a proposal made before the problem statement was edited", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    expect(card).not.toHaveTextContent("You have edited the problem");
+    change("Problem statement", "Show that consecutive integers are coprime, in detail.");
+    expect(card).toHaveTextContent("You have edited the problem or preferences");
+  });
+
+  it("names the accepted background, and only that decision, when drafting, checking and approving", async () => {
+    renderForm();
+    fillStatement();
+    change("Problem title", "Coprime neighbours");
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    await within(card).findByRole("button", { name: "Accepted" });
+    change("Variable or object 1", "p");
+
+    fireEvent.click(button("Draft the setup"));
+    const drafted = await screen.findByLabelText("Drafted setup");
+    const [formalize] = callsTo("/api/ai/formalize");
+    expect(formalize!.body).toMatchObject({
+      constructionId: "construction:web-1",
+      approvedBackground: { decisionId: "background-decision-3" },
+    });
+    expect(JSON.stringify(formalize!.body)).not.toContain("signature");
+    expect(JSON.stringify(formalize!.body)).not.toContain("operators");
+
+    fireEvent.click(
+      within(drafted).getByRole("button", { name: /Replace my variables, hypotheses/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    const reviewed = await screen.findByRole("region", { name: "Review" });
+    expect(reviewed).toHaveTextContent("Accepted constants");
+    expect(reviewed).toHaveTextContent("Coprime");
+    const [validate] = callsTo("/api/problem-drafts/validate");
+    expect(validate!.body.approvedBackground).toEqual({
+      constructionId: "construction:web-1",
+      decisionId: "background-decision-3",
+    });
+    expect(JSON.stringify(validate!.body)).not.toContain("signature");
+
+    fireEvent.click(within(reviewed).getByRole("button", { name: "Start exploring" }));
+    await vi.waitFor(() => expect(callsTo("/api/proof-sessions")).toHaveLength(1));
+    expect(callsTo("/api/proof-sessions")[0]!.body).toMatchObject({
+      sessionId: "session:test",
+      reviewedDigest: review().digest,
+      approvedBackground: {
+        constructionId: "construction:web-1",
+        decisionId: "background-decision-3",
+      },
+    });
+  });
+
+  it("invalidates a review when the accepted constants change, and can stop using them", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    await within(card).findByRole("button", { name: "Accepted" });
+    change("Problem title", "Coprime neighbours");
+    change("Variable or object 1", "p");
+    change("Goal 1", "p");
+    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    await screen.findByRole("region", { name: "Review" });
+
+    fireEvent.click(within(card).getByRole("button", { name: "Stop using these constants" }));
+    expect(screen.queryByRole("region", { name: "Review" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Stop using these constants" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    await screen.findByRole("region", { name: "Review" });
+    const validations = callsTo("/api/problem-drafts/validate");
+    expect(validations).toHaveLength(2);
+    expect(validations[1]!.body).not.toHaveProperty("approvedBackground");
+    expect(screen.getByRole("region", { name: "Review" })).not.toHaveTextContent(
+      "Accepted constants",
+    );
+  });
+
+  it("keeps an earlier acceptance in use while a new proposal is being considered", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    await within(card).findByRole("button", { name: "Accepted" });
+    fireEvent.click(button("Propose background"));
+    await vi.waitFor(() => expect(callsTo("/api/ai/background")).toHaveLength(2));
+    const fresh = await screen.findByRole("group", { name: "Proposed background" });
+    await within(fresh).findByRole("button", { name: "Accept" });
+    expect(section()).toHaveTextContent("An earlier proposal is accepted and in use.");
+    expect(within(fresh).getByRole("button", { name: "Accept" })).toBeEnabled();
   });
 
   it("loads a drafted setup only on request, then reviews it with its provenance", async () => {
@@ -261,13 +569,15 @@ describe("AI assistance in problem entry", () => {
     const drafted = await screen.findByLabelText("Drafted setup");
     expect(drafted).toHaveTextContent("p \\lor q");
     expect(screen.getByLabelText("Goal 1")).toHaveValue("");
-    expect(callsTo("/api/ai/formalize")[0]?.body).toMatchObject({
+    const [formalize] = callsTo("/api/ai/formalize");
+    expect(formalize!.body).toMatchObject({
       constructionId: "construction:web-1",
       id: "llm-call:formalize-2",
       problem: DRAFT.problem,
       libraryLayerIds: DRAFT.libraryLayerIds,
       packs: [],
     });
+    expect(formalize!.body).not.toHaveProperty("approvedBackground");
 
     fireEvent.click(
       within(drafted).getByRole("button", {
@@ -286,20 +596,29 @@ describe("AI assistance in problem entry", () => {
       hypotheses: DRAFT.hypotheses,
       goals: DRAFT.goals,
     });
+    expect(callsTo("/api/problem-drafts/validate")[0]?.body).not.toHaveProperty(
+      "approvedBackground",
+    );
     expect(callsTo("/api/proof-sessions")).toHaveLength(0);
   });
 
-  it("shows why a draft needs review and still lets the user load it", async () => {
+  it("shows why a draft needs review, including an unapproved constant, and still lets the user load it", async () => {
     answers.set("/api/ai/formalize", () =>
       Response.json(
         {
           ok: false,
-          error: { code: "undeclared-symbol", message: "Goal 1 uses r." },
+          error: { code: "unapproved-constant", message: "Goal 1 applies the operator Gcd." },
           details: {
             status: "needs-review",
             callId: "llm-call:formalize-2",
             draft: { ...DRAFT, goals: [{ format: "latex", latex: "r" }] },
-            diagnostics: [{ code: "undeclared-symbol", message: "Goal 1 uses r.", path: [] }],
+            diagnostics: [
+              {
+                code: "unapproved-constant",
+                message: "Goal 1 applies the operator Gcd, which is not an approved constant.",
+                path: ["goals", 0, "latex"],
+              },
+            ],
           },
         },
         { status: 422 },
@@ -309,7 +628,7 @@ describe("AI assistance in problem entry", () => {
     fillProblem();
     fireEvent.click(button("Draft the setup"));
     const drafted = await screen.findByLabelText("Drafted setup");
-    expect(drafted).toHaveTextContent("Goal 1 uses r.");
+    expect(drafted).toHaveTextContent("which is not an approved constant");
     fireEvent.click(within(drafted).getByRole("button", { name: /Replace my variables/ }));
     expect(screen.getByLabelText("Goal 1")).toHaveValue("r");
   });
@@ -325,14 +644,39 @@ describe("AI assistance in problem entry", () => {
       { code: "invalid-output", message: "The LLM output is malformed." },
       "did not pass validation and was discarded",
     ],
-  ])("explains a %s answer", async (status, error, text) => {
-    answers.set("/api/ai/topics", () =>
+  ])("explains a %s answer to a proposal", async (status, error, text) => {
+    answers.set("/api/ai/background", () =>
       Response.json({ ok: false, error, details: { diagnostics: [error] } }, { status }),
     );
     renderForm();
-    fillProblem();
-    fireEvent.click(button("Suggest topics"));
+    fillStatement();
+    fireEvent.click(button("Propose background"));
     expect(await within(section()).findByRole("alert")).toHaveTextContent(text);
+    expect(screen.queryByRole("group", { name: "Proposed background" })).toBeNull();
+  });
+
+  it("relays a model request for more detail without a proposal", async () => {
+    answers.set("/api/ai/background", (body) =>
+      Response.json({
+        ok: true,
+        data: {
+          status: "insufficient-context",
+          callId: body.id,
+          replayed: false,
+          result: {
+            kind: "insufficient-context",
+            requestedCategories: ["problem-detail"],
+            rationale: "Which integers are meant?",
+          },
+        },
+      }),
+    );
+    renderForm();
+    fillStatement();
+    fireEvent.click(button("Propose background"));
+    expect(await within(section()).findByRole("alert")).toHaveTextContent(
+      "The model asked for more detail (problem-detail): Which integers are meant?",
+    );
   });
 
   it("relays a model refusal without a proposal", async () => {
@@ -354,5 +698,24 @@ describe("AI assistance in problem entry", () => {
       "The model declined: Not a mathematics problem.",
     );
     expect(screen.queryByLabelText("Drafted setup")).toBeNull();
+  });
+
+  it("rejects a malformed proposal from the proof service", async () => {
+    answers.set("/api/ai/background", (body) =>
+      Response.json({
+        ok: true,
+        data: {
+          status: "proposed",
+          callId: body.id,
+          proposal: { ...proposal(), constants: [{ operator: { id: "x" }, rationale: "r" }] },
+        },
+      }),
+    );
+    renderForm();
+    fillStatement();
+    fireEvent.click(button("Propose background"));
+    expect(await within(section()).findByRole("alert")).toHaveTextContent(
+      "The proof service returned an invalid response.",
+    );
   });
 });

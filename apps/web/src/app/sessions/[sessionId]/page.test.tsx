@@ -53,7 +53,7 @@ async function workspaceProps() {
 describe("the session page", () => {
   it("passes the stored problem title, statement and background summary to the workspace", async () => {
     readAiCapabilities.mockResolvedValue({
-      "topic-extractor": false,
+      "background-proposer": false,
       "proof-state-formalizer": false,
       "move-shortlister": true,
     });
@@ -76,7 +76,7 @@ describe("the session page", () => {
 
   it("opens a session without stored metadata under its id", async () => {
     readAiCapabilities.mockResolvedValue({
-      "topic-extractor": false,
+      "background-proposer": false,
       "proof-state-formalizer": false,
       "move-shortlister": false,
     });

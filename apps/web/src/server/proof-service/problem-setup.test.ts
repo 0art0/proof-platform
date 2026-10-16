@@ -105,6 +105,38 @@ describe("createProblemSession", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("names the approved background by decision, and refuses any declaration of its own", async () => {
+    const reference = { constructionId: "construction:web-1", decisionId: "background-decision-1" };
+    const fetchMock = stubWorker({ session, node, metadata, replayed: false }, 201);
+    await createProblemSession({ ...approval, approvedBackground: reference });
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ ...approval, approvedBackground: reference });
+
+    for (const approvedBackground of [
+      { ...reference, operators: [] },
+      { constructionId: "construction:web-1" },
+      "background-decision-1",
+    ]) {
+      await expect(createProblemSession({ ...approval, approvedBackground })).rejects.toMatchObject(
+        { code: "invalid_request" },
+      );
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("relays an unknown or rejected approved background as the worker's status", async () => {
+    stubWorker(
+      { diagnostics: [{ code: "decision-not-found", message: "No such decision." }] },
+      404,
+    );
+    expect(
+      await createProblemSession({
+        ...approval,
+        approvedBackground: { constructionId: "construction:web-1", decisionId: "decision:x" },
+      }),
+    ).toMatchObject({ ok: false, status: 404, code: "decision-not-found" });
+  });
 });
 
 describe("validateProblemDraftRequest", () => {
@@ -128,5 +160,25 @@ describe("validateProblemDraftRequest", () => {
     await expect(validateProblemDraftRequest({ draft: {} })).rejects.toMatchObject({
       code: "invalid_upstream_response",
     });
+  });
+
+  it("names the approved background by decision, and refuses any declaration of its own", async () => {
+    const reference = { constructionId: "construction:web-1", decisionId: "background-decision-1" };
+    const fetchMock = stubWorker(
+      { ok: false, diagnostics: [{ code: "invalid-draft", message: "m", path: [] }] },
+      422,
+    );
+    await validateProblemDraftRequest({ draft: {}, approvedBackground: reference });
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe("http://proof-worker.test/problem-drafts/validate");
+    expect(JSON.parse(String(init.body))).toEqual({ draft: {}, approvedBackground: reference });
+
+    await expect(
+      validateProblemDraftRequest({
+        draft: {},
+        approvedBackground: { ...reference, constants: [{ symbol: "Coprime" }] },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

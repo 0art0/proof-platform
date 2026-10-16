@@ -1,6 +1,9 @@
 import {
   createVercelJevShortlisterTransport,
   createVercelStructuredOutputTransport,
+  DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
+  DEFAULT_BACKGROUND_PROPOSER_MODEL,
+  DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
   DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   DEFAULT_FORMALIZER_MODEL,
   DEFAULT_FORMALIZER_REASONING_EFFORT,
@@ -53,6 +56,17 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_TOPIC_REASONING_EFFORT,
     DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
   );
+  const backgroundModel =
+    nonEmpty(env.PROOF_AI_BACKGROUND_MODEL) ?? DEFAULT_BACKGROUND_PROPOSER_MODEL;
+  const backgroundTokens = positiveInteger(
+    env.PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS,
+    DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
+  );
+  const backgroundReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_BACKGROUND_REASONING_EFFORT",
+    env.PROOF_AI_BACKGROUND_REASONING_EFFORT,
+    DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
+  );
   const shortlisterModel = nonEmpty(env.PROOF_AI_SHORTLISTER_MODEL) ?? DEFAULT_SHORTLISTER_MODEL;
   const minimumConfidence = boundedNumber(
     env.PROOF_AI_SHORTLISTER_MIN_CONFIDENCE,
@@ -76,6 +90,22 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         reasoningEffort: topicReasoningEffort,
       }),
     },
+    "background-proposer": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: backgroundModel,
+        reasoningEffort: backgroundReasoningEffort,
+        maxOutputTokens: backgroundTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: backgroundModel,
+        promptVersion: "background-proposer-v1",
+        maxOutputTokens: backgroundTokens,
+        reasoningEffort: backgroundReasoningEffort,
+      }),
+    },
     "proof-state-formalizer": {
       transport: createVercelStructuredOutputTransport({
         apiKey: key.apiKey,
@@ -87,7 +117,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: formalizerModel,
-        promptVersion: "proof-state-formalizer-v1",
+        promptVersion: "proof-state-formalizer-v2",
         maxOutputTokens: formalizerTokens,
         reasoningEffort,
       }),

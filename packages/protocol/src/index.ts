@@ -50,6 +50,7 @@ import { definitionReferencesSchema, type DefinitionReference } from "./interact
 
 export {
   BUILTIN_BINDER_SPECIFICATIONS,
+  RESERVED_BUILTIN_SYMBOLS,
   declarationSchema,
   freeSymbolNames,
   operatorDeclarationSchema,

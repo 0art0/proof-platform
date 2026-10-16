@@ -101,10 +101,82 @@ export function problemSetupOptions(
   }) as ProblemSetupOptions;
 }
 
+/**
+ * Operators the session gets besides its packs': the constants of an approved background, which
+ * the worker resolved from storage. They follow the packs' operators in the session environment.
+ */
+export type ProblemDraftOptions = Readonly<{ constants?: readonly OperatorDeclaration[] }>;
+
+const APPROVED_CONSTANTS_ORIGIN = "the approved background constants";
+
+/** The operators of a session: the selected packs' (catalog order), then the approved constants. */
+export function resolveSessionOperators(
+  selectedPackIds: readonly string[],
+  packs: readonly LibraryPack[],
+  constants: readonly OperatorDeclaration[],
+  add: (code: ProblemSetupDiagnosticCode, message: string, path: readonly PathKey[]) => void,
+  packIdsPath: readonly PathKey[],
+): Readonly<{
+  operators: readonly OperatorDeclaration[];
+  /** Where each operator symbol comes from, as a phrase: "the pack pack:sets" and so on. */
+  origin: ReadonlyMap<string, string>;
+}> {
+  const selected = new Set(selectedPackIds);
+  const operators: OperatorDeclaration[] = [];
+  const origin = new Map<string, string>();
+  for (const pack of packs.filter((candidate) => selected.has(candidate.id))) {
+    for (const operator of pack.operators) {
+      const existing = operators.find((candidate) => candidate.symbol === operator.symbol);
+      if (existing === undefined) {
+        operators.push(operator);
+        origin.set(operator.symbol, `the pack ${pack.id}`);
+      } else if (!jsonEquals(existing, operator)) {
+        add(
+          "pack-operator-conflict",
+          `The packs ${origin.get(operator.symbol)?.replace("the pack ", "") ?? "?"} and ${pack.id} declare ${operator.symbol} differently.`,
+          [...packIdsPath, selectedPackIds.indexOf(pack.id)],
+        );
+      }
+    }
+  }
+  for (const constant of constants) {
+    const same = operators.find((candidate) => candidate.symbol === constant.symbol);
+    if (same !== undefined) {
+      // The same declaration is a reference to the existing operator; another one is a clash.
+      if (!jsonEquals(same, constant)) {
+        add(
+          "pack-operator-conflict",
+          `The approved constant ${constant.symbol} differs from the operator ${constant.symbol} of ${origin.get(constant.symbol) ?? "?"}.`,
+          ["approvedBackground"],
+        );
+      }
+      continue;
+    }
+    const trigger = constant.presentation?.latex?.parse?.trigger;
+    const clash = operators.find(
+      (candidate) =>
+        candidate.id === constant.id ||
+        (trigger !== undefined && candidate.presentation?.latex?.parse?.trigger === trigger),
+    );
+    if (clash !== undefined) {
+      add(
+        "pack-operator-conflict",
+        `The approved constant ${constant.symbol} reuses the ID or LaTeX trigger of the operator ${clash.symbol}.`,
+        ["approvedBackground"],
+      );
+      continue;
+    }
+    operators.push(constant);
+    origin.set(constant.symbol, APPROVED_CONSTANTS_ORIGIN);
+  }
+  return { operators, origin };
+}
+
 /** Validate a draft and build exactly what approval would store. Pure. */
 export function validateProblemDraft(
   input: unknown,
   packs: readonly LibraryPack[] = starterLibraryPacks(),
+  options: ProblemDraftOptions = {},
 ): ProblemDraftValidation {
   const diagnostics: ProblemSetupDiagnostic[] = [];
   const add = (code: ProblemSetupDiagnosticCode, message: string, path: readonly PathKey[]) =>
@@ -129,25 +201,16 @@ export function validateProblemDraft(
     add,
   );
 
-  // The session's operators are the selected packs' operators, in catalog order.
+  // The session's operators are the selected packs' operators, in catalog order, then the
+  // constants of an approved background.
   const selected = new Set(draft.packs);
-  const operators: OperatorDeclaration[] = [];
-  const operatorPack = new Map<string, string>();
-  for (const pack of packs.filter((candidate) => selected.has(candidate.id))) {
-    for (const operator of pack.operators) {
-      const existing = operators.find((candidate) => candidate.symbol === operator.symbol);
-      if (existing === undefined) {
-        operators.push(operator);
-        operatorPack.set(operator.symbol, pack.id);
-      } else if (!jsonEquals(existing, operator)) {
-        add(
-          "pack-operator-conflict",
-          `The packs ${operatorPack.get(operator.symbol) ?? "?"} and ${pack.id} declare ${operator.symbol} differently.`,
-          ["packs", draft.packs.indexOf(pack.id)],
-        );
-      }
-    }
-  }
+  const { operators, origin: operatorOrigin } = resolveSessionOperators(
+    draft.packs,
+    packs,
+    options.constants ?? [],
+    add,
+    ["packs"],
+  );
   const operatorSymbols = new Set(operators.map((operator) => operator.symbol));
 
   let declarationsValid = true;
@@ -164,7 +227,7 @@ export function validateProblemDraft(
       declarationsValid = false;
       add(
         "operator-symbol",
-        `${symbol} is an operator of the pack ${operatorPack.get(symbol) ?? "?"}.`,
+        `${symbol} is an operator of ${operatorOrigin.get(symbol) ?? "the setup"}.`,
         path,
       );
     }
@@ -309,6 +372,94 @@ export function validateProblemDraft(
   return Object.freeze({ ok: true as const, diagnostics: [] as const, value });
 }
 
+/** A statement applies an operator that the setup did not approve (formalizer spec section 3). */
+export type UnapprovedConstantDiagnostic = Readonly<{
+  code: "unapproved-constant";
+  message: string;
+  path: readonly PathKey[];
+}>;
+
+/**
+ * Every operator a draft's hypotheses and goals apply that is neither a reserved built-in, nor an
+ * operator of the selected packs or the approved constants, nor a symbol the draft declares. LaTeX
+ * is read with the approved operators' parse triggers, so notation outside that set is not
+ * recognized as an operator either. A statement that does not parse is left to the usual
+ * validation diagnostics.
+ */
+export function unapprovedConstantDiagnostics(
+  draft: ProblemDraft,
+  packs: readonly LibraryPack[] = starterLibraryPacks(),
+  options: ProblemDraftOptions = {},
+): readonly UnapprovedConstantDiagnostic[] {
+  const { operators } = resolveSessionOperators(
+    draft.packs,
+    packs,
+    options.constants ?? [],
+    () => undefined,
+    ["packs"],
+  );
+  const approved = new Set(operators.map((operator) => operator.symbol));
+  const declared = new Set(draft.declarations.map(({ symbol }) => symbol));
+  const unselectedPack = new Map<string, string>();
+  for (const pack of packs) {
+    if (draft.packs.includes(pack.id)) continue;
+    for (const operator of pack.operators) {
+      if (!approved.has(operator.symbol) && !unselectedPack.has(operator.symbol)) {
+        unselectedPack.set(operator.symbol, pack.id);
+      }
+    }
+  }
+  const latex = cachedLatexRenderer(operators);
+  const diagnostics: UnapprovedConstantDiagnostic[] = [];
+  const check = (kind: "hypotheses" | "goals", input: ProblemStatementInput, index: number) => {
+    let expression: PlainMathJson;
+    if (input.format === "latex") {
+      const parsed = latex.parse(input.latex);
+      if (!parsed.ok) return;
+      expression = parsed.expression;
+    } else {
+      expression = input.expression;
+    }
+    const heads = functionHeads(expression);
+    const label = kind === "goals" ? `Goal ${index + 1}` : `Hypothesis ${index + 1}`;
+    const used = safely(() => freeSymbolNames(expression, { operators })) ?? [];
+    for (const symbol of used) {
+      if (!heads.has(symbol) || declared.has(symbol) || RESERVED_BUILTIN_SYMBOLS.has(symbol)) {
+        continue;
+      }
+      const pack = unselectedPack.get(symbol);
+      diagnostics.push({
+        code: "unapproved-constant",
+        message:
+          `${label} applies the operator ${symbol}, which is not an approved constant.` +
+          (pack === undefined
+            ? ` The approved operators are: ${[...approved].join(", ") || "none"}.`
+            : ` It belongs to the pack ${pack}, which is not selected.`),
+        path: [kind, index, input.format === "latex" ? "latex" : "expression"],
+      });
+    }
+  };
+  draft.hypotheses.forEach((input, index) => check("hypotheses", input, index));
+  draft.goals.forEach((input, index) => check("goals", input, index));
+  return diagnostics;
+}
+
+/** Function heads (applied symbols) that occur anywhere in a plain MathJSON expression. */
+function functionHeads(expression: PlainMathJson, result: Set<string> = new Set()): Set<string> {
+  let operands: readonly PlainMathJson[] = [];
+  if (Array.isArray(expression)) {
+    const [head, ...rest] = expression;
+    if (typeof head === "string") result.add(head);
+    operands = rest as PlainMathJson[];
+  } else if (typeof expression === "object" && expression !== null && "fn" in expression) {
+    const [head, ...rest] = expression.fn;
+    if (typeof head === "string") result.add(head);
+    operands = rest as PlainMathJson[];
+  }
+  operands.forEach((operand) => functionHeads(operand, result));
+  return result;
+}
+
 /** `sha256:` digest of exactly what approval stores. */
 export function problemSetupDigest(
   rootNode: ProofNode,
@@ -330,7 +481,11 @@ export type ApproveProblemSessionResult =
   | Readonly<{ status: "session-conflict"; message: string }>
   | Readonly<{ status: "failed"; failure: RepositoryFailure }>;
 
-export type ApproveProblemSessionOptions = Readonly<{ packs?: readonly LibraryPack[] }>;
+export type ApproveProblemSessionOptions = Readonly<{
+  packs?: readonly LibraryPack[];
+  /** Constants of an approved background, resolved by the caller from storage. */
+  constants?: readonly OperatorDeclaration[];
+}>;
 
 /**
  * Approve a reviewed draft: the only way a manually entered problem becomes a session. The root
@@ -348,7 +503,9 @@ export async function approveProblemSession(
   if (!request.success || sessionId === undefined || !sessionId.success) {
     return { status: "invalid-request", message: "The approval request is invalid." };
   }
-  const validated = validateProblemDraft(request.data.draft, options.packs);
+  const validated = validateProblemDraft(request.data.draft, options.packs, {
+    ...(options.constants === undefined ? {} : { constants: options.constants }),
+  });
   if (!validated.ok) return { status: "invalid-draft", diagnostics: validated.diagnostics };
   const { value } = validated;
   if (value.review.digest !== request.data.reviewedDigest) {

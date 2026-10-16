@@ -63,9 +63,30 @@ describe("POST /api/problem-drafts/validate", () => {
     });
   });
 
+  it("relays the approved background reference with the draft", async () => {
+    mocks.validateProblemDraftRequest.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { ok: true, review: { digest: "sha256:x" } },
+    });
+    const approvedBackground = { constructionId: "construction:web-1", decisionId: "decision:1" };
+    const incoming = request({ draft, approvedBackground });
+    expect((await POST(incoming)).status).toBe(200);
+    expect(mocks.validateProblemDraftRequest).toHaveBeenCalledExactlyOnceWith(
+      { draft, approvedBackground },
+      { signal: incoming.signal },
+    );
+  });
+
   it.each([
     ["no draft", {}, {}],
     ["extra fields", { draft, sessionId: "session:x" }, {}],
+    [
+      "client-supplied constants",
+      { draft, approvedBackground: { constructionId: "c", decisionId: "d", operators: [] } },
+      {},
+    ],
+    ["an incomplete background reference", { draft, approvedBackground: { decisionId: "d" } }, {}],
     ["cross-origin", { draft }, { origin: "https://hostile.test" }],
     ["non-JSON", { draft }, { "content-type": "text/plain" }],
   ])("rejects %s before calling the adapter", async (_label, value, headers) => {

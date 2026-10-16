@@ -8,15 +8,15 @@ vi.mock("../../../server/proof-service", async (importOriginal) => {
   return { ...actual, relayAiRequest: mocks.relayAiRequest };
 });
 
-import { POST as topics } from "./topics/route";
-import { POST as decisions } from "./topics/decisions/route";
+import { POST as background } from "./background/route";
+import { POST as decisions } from "./background/decisions/route";
 import { POST as formalize } from "./formalize/route";
 import { POST as shortlist } from "../proof-sessions/[sessionId]/ai-shortlist/route";
 
 const ORIGIN = "http://proof.test";
 
 function request(value: unknown, headers: HeadersInit = {}): Request {
-  return new Request(`${ORIGIN}/api/ai/topics`, {
+  return new Request(`${ORIGIN}/api/ai/background`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -36,7 +36,7 @@ describe("AI relay routes", () => {
     mocks.relayAiRequest.mockResolvedValue({ ok: true, status: 200, body });
     const context = { params: Promise.resolve({ sessionId: "session:a" }) };
     for (const response of [
-      await topics(request({ id: "x" })),
+      await background(request({ id: "x" })),
       await decisions(request({ id: "x" })),
       await formalize(request({ id: "x" })),
       await shortlist(request({ id: "x" }), context),
@@ -45,8 +45,8 @@ describe("AI relay routes", () => {
       expect(await response.json()).toEqual({ ok: true, data: body });
     }
     expect(mocks.relayAiRequest.mock.calls.map(([endpoint]) => endpoint)).toEqual([
-      { kind: "topics" },
-      { kind: "topic-decisions" },
+      { kind: "background" },
+      { kind: "background-decisions" },
       { kind: "formalize" },
       { kind: "shortlist", sessionId: "session:a" },
     ]);
@@ -64,7 +64,7 @@ describe("AI relay routes", () => {
       message: "Retry later.",
       body,
     });
-    const response = await topics(request({ id: "x" }));
+    const response = await background(request({ id: "x" }));
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({
       ok: false,
@@ -74,8 +74,8 @@ describe("AI relay routes", () => {
   });
 
   it("refuses cross-origin requests and non-object bodies without contacting the worker", async () => {
-    expect((await topics(request({}, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
-    expect((await topics(request([1, 2]))).status).toBe(400);
+    expect((await background(request({}, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
+    expect((await background(request([1, 2]))).status).toBe(400);
     expect(mocks.relayAiRequest).not.toHaveBeenCalled();
   });
 });

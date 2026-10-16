@@ -43,6 +43,7 @@ import {
 } from "@proof/protocol";
 import {
   problemApprovalRequestSchema,
+  problemDraftValidationRequestSchema,
   problemDraftValidationResponseSchema,
   problemSetupDiagnosticSchema,
   problemSetupOptionsSchema,
@@ -1132,6 +1133,25 @@ const problemSetupFailureSchema = z.union([
 ]);
 
 /**
+ * Names an approved background decision (`POST /ai/background/decisions`) whose constants the
+ * worker resolves from storage for the setup check and the session approval. The browser never
+ * sends operator declarations.
+ */
+export const approvedBackgroundReferenceSchema = z
+  .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
+  .strict();
+
+/** `POST /api/problem-drafts/validate` body: the protocol request plus the optional reference. */
+export const problemDraftValidationBodySchema = problemDraftValidationRequestSchema.extend({
+  approvedBackground: approvedBackgroundReferenceSchema.optional(),
+});
+
+/** `POST /api/proof-sessions` body: the protocol approval request plus the optional reference. */
+export const problemApprovalBodySchema = problemApprovalRequestSchema.extend({
+  approvedBackground: approvedBackgroundReferenceSchema.optional(),
+});
+
+/**
  * Validate a draft into a review; writes nothing. A 422 carries the draft diagnostics and is
  * returned, not thrown, so the form can show every one of them.
  */
@@ -1139,7 +1159,7 @@ export async function validateProblemDraftRequest(
   requestInput: unknown,
   options: ProofServiceRequestOptions = {},
 ): Promise<ProtocolServiceAnswer> {
-  const request = z.object({ draft: z.unknown() }).strict().safeParse(requestInput);
+  const request = problemDraftValidationBodySchema.safeParse(requestInput);
   if (!request.success) throw invalidRequest("The draft validation request is invalid.");
   const response = await requestProofService("/problem-drafts/validate", {
     method: "POST",
@@ -1189,7 +1209,7 @@ export async function createProblemSession(
   requestInput: unknown,
   options: ProofServiceRequestOptions = {},
 ): Promise<ProtocolServiceAnswer> {
-  const request = problemApprovalRequestSchema.safeParse(requestInput);
+  const request = problemApprovalBodySchema.safeParse(requestInput);
   if (!request.success) throw invalidRequest("The approval request is invalid.");
   const response = await requestProofService("/proof-sessions", {
     method: "POST",
@@ -1606,11 +1626,15 @@ export async function previewConditionalLemma(
 // ---------------------------------------------------------------------------------------------
 
 /** The model roles the worker can serve; every other role is unimplemented. */
-export const AI_ROLES = ["topic-extractor", "proof-state-formalizer", "move-shortlister"] as const;
+export const AI_ROLES = [
+  "background-proposer",
+  "proof-state-formalizer",
+  "move-shortlister",
+] as const;
 export type AiRole = (typeof AI_ROLES)[number];
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
 export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
-  "topic-extractor": false,
+  "background-proposer": false,
   "proof-state-formalizer": false,
   "move-shortlister": false,
 });
@@ -1631,7 +1655,7 @@ export async function readAiCapabilities(
     if (response.status !== 200 || !parsed.success) return NO_AI_CAPABILITIES;
     const { roles } = parsed.data;
     return {
-      "topic-extractor": roles["topic-extractor"] === true,
+      "background-proposer": roles["background-proposer"] === true,
       "proof-state-formalizer": roles["proof-state-formalizer"] === true,
       "move-shortlister": roles["move-shortlister"] === true,
     };
@@ -1652,14 +1676,14 @@ const aiAnswerSchema = z
 
 /** The worker AI endpoints the web application relays. */
 export type AiEndpoint =
-  | Readonly<{ kind: "topics" }>
-  | Readonly<{ kind: "topic-decisions" }>
+  | Readonly<{ kind: "background" }>
+  | Readonly<{ kind: "background-decisions" }>
   | Readonly<{ kind: "formalize" }>
   | Readonly<{ kind: "shortlist"; sessionId: string }>;
 
 function aiEndpointPath(endpoint: AiEndpoint): string {
-  if (endpoint.kind === "topics") return "/ai/topics";
-  if (endpoint.kind === "topic-decisions") return "/ai/topics/decisions";
+  if (endpoint.kind === "background") return "/ai/background";
+  if (endpoint.kind === "background-decisions") return "/ai/background/decisions";
   if (endpoint.kind === "formalize") return "/ai/formalize";
   const sessionId = parseIdentifier(endpoint.sessionId, "proof session");
   return `/proof-sessions/${encodeURIComponent(sessionId)}/ai/shortlist`;

@@ -64,9 +64,28 @@ describe("POST /api/proof-sessions", () => {
     });
   });
 
+  it("relays the approved background reference with the approval", async () => {
+    mocks.createProblemSession.mockResolvedValue({ ok: true, status: 201, body: {} });
+    const approvedBackground = { constructionId: "construction:web-1", decisionId: "decision:1" };
+    const incoming = request({ ...approval, approvedBackground });
+    expect((await POST(incoming)).status).toBe(201);
+    expect(mocks.createProblemSession).toHaveBeenCalledExactlyOnceWith(
+      { ...approval, approvedBackground },
+      { signal: incoming.signal },
+    );
+  });
+
   it.each([
     ["a missing digest", { sessionId: "session:new", draft: {} }, {}],
     ["extra authority", { ...approval, actor: "admin" }, {}],
+    [
+      "client-supplied constants",
+      {
+        ...approval,
+        approvedBackground: { constructionId: "c", decisionId: "d", operators: [] },
+      },
+      {},
+    ],
     ["cross-origin", approval, { origin: "https://hostile.test" }],
     ["cross-site fetch", approval, { "sec-fetch-site": "cross-site" }],
     ["non-JSON", approval, { "content-type": "text/plain" }],

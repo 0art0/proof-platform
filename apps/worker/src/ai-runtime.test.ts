@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
+  DEFAULT_BACKGROUND_PROPOSER_MODEL,
+  DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
   DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   DEFAULT_FORMALIZER_MODEL,
   DEFAULT_FORMALIZER_REASONING_EFFORT,
@@ -21,13 +24,25 @@ describe("createAiRuntime", () => {
     expect(createAiRuntime({ AI_GATEWAY_API_KEY: "  ", AI_API_KEY: "" })).toEqual({});
   });
 
-  it("configures Luna topics and formalization and Jev shortlisting with the documented defaults", () => {
+  it("configures Luna topics, background proposal and formalization and Jev shortlisting with the documented defaults", () => {
     const runtime = createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential" });
     expect(Object.keys(runtime).sort()).toEqual([
+      "background-proposer",
       "move-shortlister",
       "proof-state-formalizer",
       "topic-extractor",
     ]);
+    expect(DEFAULT_BACKGROUND_PROPOSER_MODEL).toBe("openai/gpt-6-luna");
+    expect(DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT).toBe("medium");
+    expect(DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS).toBe(8_000);
+    expect(runtime["background-proposer"]?.dispatch).toEqual({
+      provider: "vercel-ai-gateway",
+      model: DEFAULT_BACKGROUND_PROPOSER_MODEL,
+      promptVersion: "background-proposer-v1",
+      maxOutputTokens: DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
+      reasoningEffort: DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
+    });
+    expect(typeof runtime["background-proposer"]?.transport).toBe("function");
     expect(runtime["topic-extractor"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_TOPIC_EXTRACTOR_MODEL,
@@ -39,7 +54,7 @@ describe("createAiRuntime", () => {
     expect(runtime["proof-state-formalizer"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_FORMALIZER_MODEL,
-      promptVersion: "proof-state-formalizer-v1",
+      promptVersion: "proof-state-formalizer-v2",
       maxOutputTokens: DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_FORMALIZER_REASONING_EFFORT,
     });
@@ -66,11 +81,19 @@ describe("createAiRuntime", () => {
       PROOF_AI_TOPIC_MODEL: "openai/luna-topics",
       PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS: "4000",
       PROOF_AI_TOPIC_REASONING_EFFORT: "low",
+      PROOF_AI_BACKGROUND_MODEL: "openai/luna-background",
+      PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS: "6000",
+      PROOF_AI_BACKGROUND_REASONING_EFFORT: "high",
     });
     expect(runtime["topic-extractor"]?.dispatch).toMatchObject({
       model: "openai/luna-topics",
       maxOutputTokens: 4_000,
       reasoningEffort: "low",
+    });
+    expect(runtime["background-proposer"]?.dispatch).toMatchObject({
+      model: "openai/luna-background",
+      maxOutputTokens: 6_000,
+      reasoningEffort: "high",
     });
     expect(runtime["proof-state-formalizer"]?.dispatch).toMatchObject({
       model: "openai/luna-test",
@@ -91,6 +114,8 @@ describe("createAiRuntime", () => {
     ["minimum confidence", { PROOF_AI_SHORTLISTER_MIN_CONFIDENCE: "1.1" }],
     ["topic max output tokens", { PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS: "0" }],
     ["topic reasoning effort", { PROOF_AI_TOPIC_REASONING_EFFORT: "maximal" }],
+    ["background max output tokens", { PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS: "0" }],
+    ["background reasoning effort", { PROOF_AI_BACKGROUND_REASONING_EFFORT: "maximal" }],
   ])("rejects an invalid %s override", (_name, config) => {
     expect(() => createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential", ...config })).toThrow();
   });

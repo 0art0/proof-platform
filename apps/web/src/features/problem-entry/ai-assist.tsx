@@ -1,14 +1,25 @@
 "use client";
 
-import { Fragment, useState } from "react";
-import { problemDraftSchema, type ProblemDraft } from "@proof/protocol";
+import { useState } from "react";
+import { createPresentation } from "@proof/language";
+import {
+  backgroundProfileSchema,
+  operatorDeclarationSchema,
+  problemDraftSchema,
+  type OperatorDeclaration,
+  type PlainMathJson,
+  type ProblemDraft,
+} from "@proof/protocol";
 import { z } from "zod";
-import type { FormProblem, SetupContext, TopicSuggestions } from "./draft-form";
+import type { AcceptedBackground, FormProblem, SetupContext } from "./draft-form";
 import styles from "./problem-entry.module.css";
 
 /** Which setup roles the worker reports as configured. */
-export type AiSetupCapabilities = Readonly<{ topics: boolean; formalizer: boolean }>;
-export const NO_AI_SETUP: AiSetupCapabilities = Object.freeze({ topics: false, formalizer: false });
+export type AiSetupCapabilities = Readonly<{ background: boolean; formalizer: boolean }>;
+export const NO_AI_SETUP: AiSetupCapabilities = Object.freeze({
+  background: false,
+  formalizer: false,
+});
 
 export type AiAssistProps = Readonly<{
   capabilities: AiSetupCapabilities;
@@ -19,24 +30,23 @@ export type AiAssistProps = Readonly<{
   /** Owner of every call made from this form, so its evidence stays together. */
   constructionId: string;
   createId: (prefix: string) => string;
-  onUseTopics: (topics: TopicSuggestions) => void;
+  /** The background the user accepted, if any; the setup uses its constants. */
+  accepted: AcceptedBackground | undefined;
+  onAcceptBackground: (accepted: AcceptedBackground) => void;
+  onForgetBackground: () => void;
   onUseDraft: (draft: ProblemDraft, callId: string) => void;
 }>;
 
-const manifestSchema = z
+const proposalSchema = z
   .object({
-    kind: z.literal("topic-manifest"),
-    domains: z.array(z.string()),
-    objectKinds: z.array(z.string()),
-    vocabulary: z.array(z.string()),
-    notation: z.array(z.object({ symbol: z.string(), meaning: z.string() }).strict()),
-    backgroundTopics: z.array(z.string()),
-    customOperators: z.array(
-      z.object({ symbol: z.string(), name: z.string(), arity: z.number() }).strict(),
+    kind: z.literal("background-proposal"),
+    background: backgroundProfileSchema,
+    constants: z.array(
+      z.object({ operator: operatorDeclarationSchema, rationale: z.string() }).strict(),
     ),
   })
   .strict();
-type Manifest = z.infer<typeof manifestSchema>;
+type Proposal = z.infer<typeof proposalSchema>;
 
 /** A context request or refusal: the model returned no proposal. */
 const nonProposalSchema = z.object({
@@ -50,8 +60,8 @@ const nonProposalSchema = z.object({
     z.object({ kind: z.literal("declined"), reason: z.string() }),
   ]),
 });
-const topicAnswerSchema = z.union([
-  z.object({ status: z.literal("proposed"), callId: z.string(), proposal: manifestSchema }),
+const backgroundAnswerSchema = z.union([
+  z.object({ status: z.literal("proposed"), callId: z.string(), proposal: proposalSchema }),
   nonProposalSchema,
 ]);
 const formalizeAnswerSchema = z.union([
@@ -70,7 +80,7 @@ const needsReviewSchema = z.object({
 });
 const decisionAnswerSchema = z.object({
   status: z.literal("recorded"),
-  decision: z.object({ decision: z.enum(["approved", "rejected"]) }),
+  decision: z.object({ decision: z.literal("approved") }),
 });
 const apiAnswerSchema = z.union([
   z.object({ ok: z.literal(true), data: z.unknown() }),
@@ -82,22 +92,30 @@ const apiAnswerSchema = z.union([
 ]);
 
 type Failure = Readonly<{ kind: "failed"; message: string }>;
-type TopicState =
+type Proposed = Readonly<{
+  callId: string;
+  /** The problem and preferences the proposal was made from. */
+  problemKey: string;
+  proposal: Proposal;
+}>;
+type RequestStatus =
   | Readonly<{ kind: "idle" }>
-  | Readonly<{ kind: "loading" }>
-  | Failure
-  | Readonly<{ kind: "proposed"; callId: string; contextKey: string; proposal: Manifest }>;
-type Decision = Readonly<{
+  | Readonly<{ kind: "loading"; action: "propose" | "revise" }>
+  | Failure;
+type PendingDecision = Readonly<{
   decisionId: string;
   decidedAt: string;
-  decision: "approved" | "rejected";
+  decision: "approved";
   rationale: string;
 }>;
 type DecisionState =
   | Readonly<{ kind: "undecided" }>
-  | Readonly<{ kind: "recording"; pending: Decision }>
-  | Readonly<{ kind: "unrecorded"; pending: Decision; message: string }>
-  | Readonly<{ kind: "recorded"; decision: "approved" | "rejected"; applied: boolean }>;
+  | Readonly<{ kind: "recording"; pending: PendingDecision }>
+  /** Transient failure: a retry reuses the same decision, so it stays idempotent. */
+  | Readonly<{ kind: "unrecorded"; pending: PendingDecision; message: string }>
+  /** The worker refused this proposal; retrying cannot help, a revision can. */
+  | Readonly<{ kind: "refused"; message: string }>
+  | Readonly<{ kind: "recorded" }>;
 type DraftState =
   | Readonly<{ kind: "idle" }>
   | Readonly<{ kind: "loading" }>
@@ -112,9 +130,12 @@ type DraftState =
     }>;
 
 /**
- * Optional AI help while setting up a problem (design plan §4.2 and §4.4). Both roles return
- * proposals only: topics are approved or rejected explicitly, and a drafted setup is loaded into
- * the form only on request, where it still goes through "Check setup" and approval.
+ * Optional AI help while setting up a problem (`docs/ai-agents-architecture.md` sections 1 and 3).
+ * Both roles return proposals only. The background proposer sees the problem statement and
+ * preferences, proposes a background and the constants the problem needs, and can revise its
+ * proposal from the user's feedback; nothing changes until the user accepts, which fills the
+ * background fields and makes the constants available to the setup. A drafted setup is loaded
+ * into the form only on request, where it still goes through "Check setup" and approval.
  */
 export function AiAssist({
   capabilities,
@@ -122,65 +143,74 @@ export function AiAssist({
   missing,
   constructionId,
   createId,
-  onUseTopics,
+  accepted,
+  onAcceptBackground,
+  onForgetBackground,
   onUseDraft,
 }: AiAssistProps) {
-  const [topics, setTopics] = useState<TopicState>({ kind: "idle" });
+  const [proposed, setProposed] = useState<Proposed>();
+  const [status, setStatus] = useState<RequestStatus>({ kind: "idle" });
+  const [feedback, setFeedback] = useState("");
   const [decision, setDecision] = useState<DecisionState>({ kind: "undecided" });
-  const [note, setNote] = useState("");
   const [draft, setDraft] = useState<DraftState>({ kind: "idle" });
-  const contextKey = JSON.stringify(context);
-  const anyAvailable = capabilities.topics || capabilities.formalizer;
-  const ready = missing.length === 0;
+  const problemKey = JSON.stringify([context.problem, context.preferences]);
+  const contextKey = JSON.stringify([context, accepted?.decisionId]);
+  const anyAvailable = capabilities.background || capabilities.formalizer;
+  const statementFilled = context.problem.statement.length > 0;
+  const loading = status.kind === "loading";
 
-  const suggestTopics = async () => {
-    setTopics({ kind: "loading" });
-    setDecision({ kind: "undecided" });
-    setNote("");
-    const answer = await postAi("/api/ai/topics", {
+  const ask = async (action: "propose" | "revise") => {
+    const previous = action === "revise" ? proposed : undefined;
+    setStatus({ kind: "loading", action });
+    const answer = await postAi("/api/ai/background", {
       constructionId,
-      id: createId("llm-call:topics"),
-      problem: context.problem,
-      background: context.background,
+      id: createId("llm-call:background"),
+      problem: {
+        title: context.problem.title || "Untitled problem",
+        statement: context.problem.statement,
+      },
       ...(context.preferences === undefined ? {} : { preferences: context.preferences }),
+      ...(previous === undefined
+        ? {}
+        : { revision: { previousCallId: previous.callId, feedback: feedback.trim() } }),
     });
-    if (!answer.ok) return setTopics({ kind: "failed", message: answer.message });
-    const parsed = topicAnswerSchema.safeParse(answer.data);
-    if (!parsed.success) return setTopics(invalidAnswer());
+    if (!answer.ok) return setStatus({ kind: "failed", message: answer.message });
+    const parsed = backgroundAnswerSchema.safeParse(answer.data);
+    if (!parsed.success) return setStatus(invalidAnswer());
     if (parsed.data.status !== "proposed") {
-      return setTopics({ kind: "failed", message: nonProposalMessage(parsed.data.result) });
+      return setStatus({ kind: "failed", message: nonProposalMessage(parsed.data.result) });
     }
-    setTopics({
-      kind: "proposed",
+    setProposed({
       callId: parsed.data.callId,
-      contextKey,
+      problemKey,
       proposal: parsed.data.proposal,
     });
+    setFeedback("");
+    setDecision({ kind: "undecided" });
+    setStatus({ kind: "idle" });
   };
 
-  const decide = async (choice: "approved" | "rejected") => {
-    if (topics.kind !== "proposed") return;
-    // A retry after a failed recording reuses the same decision, so it stays idempotent.
-    const pending: Decision =
-      decision.kind === "unrecorded" && decision.pending.decision === choice
+  const accept = async () => {
+    if (proposed === undefined) return;
+    const pending: PendingDecision =
+      decision.kind === "unrecorded"
         ? decision.pending
         : {
-            decisionId: createId("topic-decision"),
+            decisionId: createId("background-decision"),
             decidedAt: new Date().toISOString(),
-            decision: choice,
-            rationale:
-              note.trim() ||
-              (choice === "approved"
-                ? "Approved in the problem setup form."
-                : "Rejected in the problem setup form."),
+            decision: "approved",
+            rationale: "Accepted in the problem setup form.",
           };
     setDecision({ kind: "recording", pending });
-    const answer = await postAi("/api/ai/topics/decisions", {
+    const answer = await postAi("/api/ai/background/decisions", {
       constructionId,
-      callId: topics.callId,
+      callId: proposed.callId,
       ...pending,
     });
     const parsed = answer.ok ? decisionAnswerSchema.safeParse(answer.data) : undefined;
+    if (!answer.ok && answer.status === 409) {
+      return setDecision({ kind: "refused", message: answer.message });
+    }
     if (!answer.ok || parsed === undefined || !parsed.success) {
       return setDecision({
         kind: "unrecorded",
@@ -188,7 +218,13 @@ export function AiAssist({
         message: answer.ok ? "The proof service returned an invalid response." : answer.message,
       });
     }
-    setDecision({ kind: "recorded", decision: parsed.data.decision.decision, applied: false });
+    setDecision({ kind: "recorded" });
+    onAcceptBackground({
+      decisionId: pending.decisionId,
+      callId: proposed.callId,
+      profile: proposed.proposal.background,
+      constants: proposed.proposal.constants,
+    });
   };
 
   const draftSetup = async () => {
@@ -197,6 +233,9 @@ export function AiAssist({
       constructionId,
       id: createId("llm-call:formalize"),
       ...context,
+      ...(accepted === undefined
+        ? {}
+        : { approvedBackground: { decisionId: accepted.decisionId } }),
     });
     if (!answer.ok) {
       const review = needsReviewSchema.safeParse(answer.details);
@@ -228,76 +267,94 @@ export function AiAssist({
     });
   };
 
+  const isAccepted = proposed !== undefined && accepted?.callId === proposed.callId;
+  const acceptedElsewhere = accepted !== undefined && !isAccepted;
+
   return (
     <section className={styles.section} aria-label="AI assistance">
       <h2>AI assistance (optional)</h2>
       <p className={styles.sectionIntro}>
-        A model can suggest the topics involved and draft the variables, hypotheses and goals from
-        your problem statement. Its answers are proposals: nothing changes until you accept them,
-        and a drafted setup is still checked and approved by you before exploring starts.
+        A model can propose the background your problem is set against, together with the constants
+        (operators and notation) it needs, and can draft the variables, hypotheses and goals. Its
+        answers are proposals: nothing changes until you accept them, and a drafted setup is still
+        checked and approved by you before exploring starts.
       </p>
       {!anyAvailable ? (
         <p className={styles.hint} role="note">
           AI assistance is not configured on this proof service. You can enter the setup by hand
           below.
         </p>
-      ) : !ready ? (
-        <p className={styles.hint} role="note">
-          Fill in {missing.map(({ field }) => field).join(", ")} first; the model sees only the
-          problem, the background and your preferences.
-        </p>
       ) : null}
 
       <div className={styles.aiStep}>
-        <h3>Suggest topics</h3>
+        <h3>Propose background</h3>
         <p className={styles.sectionIntro}>
-          Areas, objects, vocabulary and notation the problem appears to involve. Approved notation
-          and areas can be added to your preferences.
+          Enter the problem statement, then ask for a background and constants. The model sees only
+          the problem statement and your preferences, and you can revise its answer with feedback.
         </p>
         <button
           type="button"
           className={styles.secondary}
-          disabled={!capabilities.topics || !ready || topics.kind === "loading"}
-          onClick={() => void suggestTopics()}
+          disabled={!capabilities.background || !statementFilled || loading}
+          onClick={() => void ask("propose")}
         >
-          {topics.kind === "loading" ? "Suggesting topics…" : "Suggest topics"}
+          {status.kind === "loading" && status.action === "propose"
+            ? "Proposing…"
+            : "Propose background"}
         </button>
-        {capabilities.topics ? null : <em className={styles.hint}> Not configured.</em>}
-        {topics.kind === "failed" ? (
+        {!capabilities.background ? (
+          <em className={styles.hint}> Not configured.</em>
+        ) : !statementFilled ? (
+          <em className={styles.hint}> Enter the problem statement first.</em>
+        ) : null}
+        {status.kind === "failed" ? (
           <p role="alert" className={styles.warning}>
-            {topics.message}
+            {status.message}
           </p>
         ) : null}
-        {topics.kind === "proposed" ? (
-          <TopicProposal
-            proposal={topics.proposal}
-            stale={topics.contextKey !== contextKey}
-            decision={decision}
-            note={note}
-            onNote={setNote}
-            onDecide={(choice) => void decide(choice)}
-            onUse={() => {
-              onUseTopics({ domains: topics.proposal.domains, notation: topics.proposal.notation });
-              setDecision({ kind: "recorded", decision: "approved", applied: true });
-            }}
-          />
+        {acceptedElsewhere ? (
+          <AcceptedNote accepted={accepted} onForget={onForgetBackground} elsewhere />
         ) : null}
+        {proposed === undefined ? null : (
+          <BackgroundProposal
+            proposed={proposed}
+            stale={proposed.problemKey !== problemKey}
+            accepted={isAccepted ? accepted : undefined}
+            decision={decision}
+            feedback={feedback}
+            onFeedback={setFeedback}
+            revising={status.kind === "loading" && status.action === "revise"}
+            busy={loading}
+            onRevise={() => void ask("revise")}
+            onAccept={() => void accept()}
+            onForget={onForgetBackground}
+          />
+        )}
       </div>
 
       <div className={styles.aiStep}>
         <h3>Draft the setup</h3>
         <p className={styles.sectionIntro}>
-          Proposes variables, hypotheses and goals using the selected notation packs.
+          Proposes variables, hypotheses and goals using the selected notation packs and any
+          accepted constants.
         </p>
         <button
           type="button"
           className={styles.secondary}
-          disabled={!capabilities.formalizer || !ready || draft.kind === "loading"}
+          disabled={!capabilities.formalizer || missing.length > 0 || draft.kind === "loading"}
           onClick={() => void draftSetup()}
         >
           {draft.kind === "loading" ? "Drafting…" : "Draft the setup"}
         </button>
-        {capabilities.formalizer ? null : <em className={styles.hint}> Not configured.</em>}
+        {!capabilities.formalizer ? (
+          <em className={styles.hint}> Not configured.</em>
+        ) : missing.length > 0 ? (
+          <em className={styles.hint}>
+            {" "}
+            Fill in {missing.map(({ field }) => field).join(", ")} first; an accepted background
+            fills in the background fields for you.
+          </em>
+        ) : null}
         {draft.kind === "failed" ? (
           <p role="alert" className={styles.warning}>
             {draft.message}
@@ -318,104 +375,183 @@ export function AiAssist({
   );
 }
 
-function TopicProposal({
-  proposal,
+function BackgroundProposal({
+  proposed,
   stale,
+  accepted,
   decision,
-  note,
-  onNote,
-  onDecide,
-  onUse,
+  feedback,
+  onFeedback,
+  revising,
+  busy,
+  onRevise,
+  onAccept,
+  onForget,
 }: Readonly<{
-  proposal: Manifest;
+  proposed: Proposed;
   stale: boolean;
+  /** Set when this very proposal is the one the user accepted. */
+  accepted: AcceptedBackground | undefined;
   decision: DecisionState;
-  note: string;
-  onNote: (note: string) => void;
-  onDecide: (choice: "approved" | "rejected") => void;
-  onUse: () => void;
+  feedback: string;
+  onFeedback: (feedback: string) => void;
+  revising: boolean;
+  busy: boolean;
+  onRevise: () => void;
+  onAccept: () => void;
+  onForget: () => void;
 }>) {
-  const rows: readonly (readonly [string, readonly string[]])[] = [
-    ["Areas of mathematics", proposal.domains],
-    ["Kinds of objects", proposal.objectKinds],
-    ["Vocabulary", proposal.vocabulary],
-    ["Notation", proposal.notation.map(({ symbol, meaning }) => `${symbol}: ${meaning}`)],
-    ["Background topics", proposal.backgroundTopics],
-    [
-      "Operators likely needed",
-      proposal.customOperators.map(({ symbol, name, arity }) => `${symbol} (${name}, ${arity})`),
-    ],
-  ];
+  const { background, constants } = proposed.proposal;
   const recording = decision.kind === "recording";
+  const noFeedback = feedback.trim().length === 0;
   return (
-    <div className={styles.aiProposal} role="group" aria-label="Suggested topics">
-      <p className={styles.provenance}>Suggested by AI from your problem and background.</p>
+    <div className={styles.aiProposal} role="group" aria-label="Proposed background">
+      <p className={styles.provenance}>
+        {accepted === undefined
+          ? "Proposed by AI from your problem statement. It has not been accepted."
+          : "Proposed by AI and accepted by you."}
+      </p>
       <dl className={styles.reviewList}>
-        {rows.map(([label, values]) => (
-          <Fragment key={label}>
-            <dt>{label}</dt>
-            <dd>{values.length === 0 ? "None" : values.join("; ")}</dd>
-          </Fragment>
-        ))}
+        <dt>Background level</dt>
+        <dd>{background.level}</dd>
+        <dt>Background summary</dt>
+        <dd>{background.summary}</dd>
+        <dt>Assumptions</dt>
+        <dd>{background.assumptions.length === 0 ? "None" : background.assumptions.join("; ")}</dd>
+        <dt>Domains</dt>
+        <dd>
+          {background.domains === undefined || background.domains.length === 0
+            ? "None"
+            : background.domains.join(", ")}
+          {background.maximumLevel === undefined ? null : (
+            <em className={styles.hint}> Up to {background.maximumLevel} level.</em>
+          )}
+        </dd>
+        <dt>Constants</dt>
+        <dd>
+          {constants.length === 0 ? (
+            "None. The problem needs no notation beyond built-in mathematics."
+          ) : (
+            <>
+              <em className={styles.hint}>
+                The operators and notation the setup may use besides built-in mathematics.
+              </em>
+              <ul className={styles.constantList}>
+                {constants.map(({ operator, rationale }) => (
+                  <ConstantItem key={operator.id} operator={operator} rationale={rationale} />
+                ))}
+              </ul>
+            </>
+          )}
+        </dd>
       </dl>
       {stale ? (
         <p className={styles.hint} role="note">
-          You have edited the problem or background since these topics were suggested.
+          You have edited the problem or preferences since this was proposed.
         </p>
       ) : null}
-      {decision.kind === "recorded" ? (
-        <>
-          <p role="status">
-            {decision.decision === "approved"
-              ? "You approved these topics."
-              : "You rejected these topics; nothing was changed."}
-          </p>
-          {decision.decision === "approved" ? (
-            <button
-              type="button"
-              className={styles.secondary}
-              disabled={decision.applied}
-              onClick={onUse}
-            >
-              {decision.applied
-                ? "Added to your preferences"
-                : "Add these areas and notation to my preferences"}
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <label className={styles.field}>
-            <span data-marker="optional">Note on your decision</span>
-            <input value={note} onChange={(event) => onNote(event.currentTarget.value)} />
-          </label>
-          <div className={styles.aiDecision}>
-            <button
-              type="button"
-              className={styles.secondary}
-              disabled={recording}
-              onClick={() => onDecide("approved")}
-            >
-              Approve topics
-            </button>
-            <button
-              type="button"
-              className={styles.secondary}
-              disabled={recording}
-              onClick={() => onDecide("rejected")}
-            >
-              Reject topics
-            </button>
-          </div>
-          {decision.kind === "unrecorded" ? (
-            <p role="alert" className={styles.warning}>
-              Your decision was not recorded: {decision.message} Trying again is safe.
-            </p>
-          ) : null}
-        </>
-      )}
+
+      {accepted === undefined ? null : <AcceptedNote accepted={accepted} onForget={onForget} />}
+
+      <label className={styles.field}>
+        <span>Feedback for a revision</span>
+        <textarea
+          rows={2}
+          placeholder="e.g. also allow the greatest common divisor"
+          value={feedback}
+          onChange={(event) => onFeedback(event.currentTarget.value)}
+        />
+      </label>
+      <div className={styles.aiDecision}>
+        <button
+          type="button"
+          className={styles.secondary}
+          disabled={noFeedback || busy || recording}
+          onClick={onRevise}
+        >
+          {revising ? "Revising…" : "Revise with feedback"}
+        </button>
+        <button
+          type="button"
+          className={styles.secondary}
+          disabled={accepted !== undefined || busy || recording}
+          onClick={onAccept}
+        >
+          {recording ? "Accepting…" : accepted === undefined ? "Accept" : "Accepted"}
+        </button>
+      </div>
+      {noFeedback || accepted === undefined ? (
+        <p className={styles.hint}>
+          {noFeedback ? "To revise, describe what to change first. " : null}
+          {accepted === undefined
+            ? "Accepting fills in the background fields below, which you can still edit."
+            : null}
+        </p>
+      ) : null}
+      {decision.kind === "unrecorded" ? (
+        <p role="alert" className={styles.warning}>
+          Your acceptance was not recorded: {decision.message} Trying again is safe.
+        </p>
+      ) : null}
+      {decision.kind === "refused" ? (
+        <p role="alert" className={styles.warning}>
+          This proposal cannot be accepted: {decision.message}
+        </p>
+      ) : null}
     </div>
   );
+}
+
+function AcceptedNote({
+  accepted,
+  onForget,
+  elsewhere = false,
+}: Readonly<{ accepted: AcceptedBackground; onForget: () => void; elsewhere?: boolean }>) {
+  const count = accepted.constants.length;
+  return (
+    <p role="status" className={styles.hint}>
+      {elsewhere ? "An earlier proposal is accepted and in use. " : "Accepted. "}
+      {count === 0
+        ? "Its background fills in the fields below; no constants are added."
+        : `Its background fills in the fields below, and its ${count === 1 ? "constant" : `${count} constants`} (${accepted.constants
+            .map(({ operator }) => operator.symbol)
+            .join(", ")}) will be used when drafting and checking the setup.`}{" "}
+      {count === 0 ? null : (
+        <button type="button" className={styles.linkButton} onClick={onForget}>
+          Stop using these constants
+        </button>
+      )}
+    </p>
+  );
+}
+
+function ConstantItem({
+  operator,
+  rationale,
+}: Readonly<{ operator: OperatorDeclaration; rationale: string }>) {
+  const { latex, prose } = renderConstant(operator);
+  return (
+    <li>
+      <code>{latex}</code> <strong>{operator.presentation?.displayName ?? operator.symbol}</strong>
+      <span className={styles.prose}> {prose}</span>
+      <span className={styles.hint}> {rationale}</span>
+    </li>
+  );
+}
+
+/** A constant applied to placeholder operands, in LaTeX and in words. */
+function renderConstant(operator: OperatorDeclaration): { latex: string; prose: string } {
+  const operands = operator.signature.parameters.map((_, index) => `x_${index + 1}`);
+  try {
+    const presentation = createPresentation({ operators: [operator] });
+    const expression: PlainMathJson = [operator.symbol, ...operands];
+    return {
+      latex: presentation.latex(expression),
+      prose: presentation.naturalLanguage(expression),
+    };
+  } catch {
+    return { latex: `${operator.symbol}(${operands.join(", ")})`, prose: "" };
+  }
 }
 
 function DraftProposal({
@@ -482,7 +618,8 @@ function DraftProposal({
       </dl>
       {stale ? (
         <p className={styles.hint} role="note">
-          You have edited the problem, background or packs since this draft was made.
+          You have edited the problem, background, packs or accepted constants since this draft was
+          made.
         </p>
       ) : null}
       {state.used ? (
@@ -500,7 +637,7 @@ function DraftProposal({
 
 type AiAnswer =
   | Readonly<{ ok: true; data: unknown }>
-  | Readonly<{ ok: false; message: string; details?: unknown }>;
+  | Readonly<{ ok: false; message: string; status?: number; details?: unknown }>;
 
 async function postAi(url: string, body: unknown): Promise<AiAnswer> {
   let response: Response;
@@ -528,6 +665,7 @@ async function postAi(url: string, body: unknown): Promise<AiAnswer> {
   return {
     ok: false,
     message: failureMessage(response.status, parsed.data.error),
+    status: response.status,
     details: parsed.data.details,
   };
 }
@@ -544,7 +682,7 @@ function failureMessage(status: number, error: Readonly<{ code: string; message:
 function nonProposalMessage(result: z.infer<typeof nonProposalSchema>["result"]): string {
   return result.kind === "declined"
     ? `The model declined: ${result.reason}`
-    : `The model asked for more detail (${result.requestedCategories.join(", ")}): ${result.rationale} Add it to the background or preferences and try again.`;
+    : `The model asked for more detail (${result.requestedCategories.join(", ")}): ${result.rationale} Add that detail to the problem statement or the background and try again.`;
 }
 
 function invalidAnswer(): Failure {

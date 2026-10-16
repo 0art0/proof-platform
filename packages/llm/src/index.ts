@@ -21,9 +21,17 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
+import {
+  BACKGROUND_PROPOSER_SYSTEM_MESSAGE,
+  backgroundProposerContextSchema,
+  backgroundProposerOutputSchema,
+  backgroundProposerWireResultSchema,
+  normalizeBackgroundProposerWireResult,
+} from "./background-proposer";
 
 export const LLM_ROLES = [
   "topic-extractor",
+  "background-proposer",
   "librarian",
   "proof-state-formalizer",
   "move-shortlister",
@@ -40,6 +48,7 @@ export const SUPPORTED_LLM_ROLES = [
   "topic-extractor",
   "proof-state-formalizer",
   "move-shortlister",
+  "background-proposer",
 ] as const;
 export const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
@@ -57,6 +66,15 @@ const uniqueShortTextsSchema = z
 
 export { backgroundProfileSchema, type BackgroundProfile } from "@proof/protocol";
 export * from "./transport";
+export {
+  MAX_BACKGROUND_CONSTANTS,
+  backgroundProposalSchema,
+  backgroundProposerOutputSchema,
+  type BackgroundConstant,
+  type BackgroundProposal,
+  type BackgroundProposerContext,
+  type BackgroundProposerOutput,
+} from "./background-proposer";
 
 const topicExtractorContextSchema = z
   .object({
@@ -215,10 +233,18 @@ const proofStateFormalizerEnvelopeSchema = z
     context: formalizerContextSchema,
   })
   .strict();
+const backgroundProposerEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("background-proposer"),
+    context: backgroundProposerContextSchema,
+  })
+  .strict();
 export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   topicExtractorEnvelopeSchema,
   proofStateFormalizerEnvelopeSchema,
   moveShortlisterEnvelopeSchema,
+  backgroundProposerEnvelopeSchema,
 ]);
 export type LlmContextEnvelope = z.infer<typeof llmContextEnvelopeSchema>;
 
@@ -312,6 +338,39 @@ export function buildTopicExtractorContext(input: unknown): BuildLlmContextResul
       ...(request.preferences === undefined ? {} : { preferences: request.preferences }),
     },
   });
+}
+
+const backgroundProposerRequestSchema = z
+  .object({
+    id: llmCallIdSchema,
+    problem: backgroundProposerContextSchema.shape.problem,
+    preferences: backgroundProposerContextSchema.shape.preferences,
+    revision: backgroundProposerContextSchema.shape.revision,
+  })
+  .strict();
+
+/**
+ * Project the problem statement (and, on a revision, the previous proposal and the user's
+ * feedback) into a background-proposer envelope. The previous proposal is validated like any
+ * proposal, so a forged one is refused.
+ */
+export function buildBackgroundProposerContext(
+  input: unknown,
+): RoleLlmContextResult<"background-proposer"> {
+  const request = safeParsePlain(backgroundProposerRequestSchema, input);
+  if (request === undefined) {
+    return failure("invalid-request", "The background proposer request is invalid.");
+  }
+  return envelopeSuccess({
+    id: request.id,
+    schemaVersion: "llm-context/v1",
+    role: "background-proposer",
+    context: {
+      problem: request.problem,
+      ...(request.preferences === undefined ? {} : { preferences: request.preferences }),
+      ...(request.revision === undefined ? {} : { revision: request.revision }),
+    },
+  }) as RoleLlmContextResult<"background-proposer">;
 }
 
 const proofStateFormalizerRequestSchema = z
@@ -553,9 +612,11 @@ const formalizerWireResultSchema = z.union([
 export type ValidatedLlmOutput =
   | z.infer<typeof topicOutputSchema>
   | z.infer<typeof shortlisterOutputSchema>
-  | z.infer<typeof formalizerOutputSchema>;
+  | z.infer<typeof formalizerOutputSchema>
+  | z.infer<typeof backgroundProposerOutputSchema>;
 
 const topicWireSchema = z.object({ result: topicOutputSchema }).strict();
+const backgroundWireSchema = z.object({ result: backgroundProposerWireResultSchema }).strict();
 const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).strict();
 const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
 
@@ -595,6 +656,7 @@ const jevChoiceResultSchema = z
 export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
   if (role === "topic-extractor") return topicWireSchema;
   if (role === "proof-state-formalizer") return formalizerWireSchema;
+  if (role === "background-proposer") return backgroundWireSchema;
   return shortlisterWireSchema;
 }
 
@@ -617,7 +679,7 @@ export const preparedLlmCallSchema = z
     if (call.messages[0].role !== "system" || call.messages[1].role !== "user") {
       context.addIssue({ code: "custom", message: "Calls require system and user messages." });
     }
-    if (call.messages[0].content !== expectedSystemMessage(call.role)) {
+    if (!acceptsSystemMessage(call.role, call.messages[0].content)) {
       context.addIssue({ code: "custom", message: "The system message must match the role." });
     }
     if (call.messages[1].content !== JSON.stringify(call.envelope)) {
@@ -649,14 +711,29 @@ export function prepareLlmCall(
     : { ok: true, call: freezeDetached(candidate), diagnostics: [] };
 }
 
+const FORMALIZER_BASE_SYSTEM_MESSAGE =
+  "Return one structured N26 problem draft, a permitted context request, or a refusal. Mirror the existing proof-state model in the draft: use the supplied problem, background, preferences, library layers, and selected packs exactly; use declarations with admitted sorts; express hypotheses and goals as LaTeX inputs. Do not add a separate presentation AST, a library result, proof steps, or unsupported variable kinds. The worker validates and parses the draft into authoritative plain MathJSON, then presents it for human review. The draft is a proposal, never an approved proof state.";
+const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. If the problem needs an operator that is not listed, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
+
 function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "topic-extractor") {
     return "Return only a topic manifest, a permitted context request, or a refusal. Do not solve the problem.";
   }
-  if (role === "proof-state-formalizer") {
-    return "Return one structured N26 problem draft, a permitted context request, or a refusal. Mirror the existing proof-state model in the draft: use the supplied problem, background, preferences, library layers, and selected packs exactly; use declarations with admitted sorts; express hypotheses and goals as LaTeX inputs. Do not add a separate presentation AST, a library result, proof steps, or unsupported variable kinds. The worker validates and parses the draft into authoritative plain MathJSON, then presents it for human review. The draft is a proposal, never an approved proof state.";
-  }
+  if (role === "proof-state-formalizer") return FORMALIZER_SYSTEM_MESSAGE;
+  if (role === "background-proposer") return BACKGROUND_PROPOSER_SYSTEM_MESSAGE;
   return "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
+}
+
+/**
+ * System messages a stored call may carry. Formalizer calls recorded before the approved-constants
+ * instruction was added keep their original message, so existing evidence stays readable; new
+ * calls are always prepared with the current message.
+ */
+function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean {
+  return (
+    content === expectedSystemMessage(role) ||
+    (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE)
+  );
 }
 
 export function validateLlmOutput(
@@ -673,6 +750,15 @@ export function validateLlmOutput(
     const output = safeParsePlain(topicOutputSchema, candidate);
     return output === undefined
       ? failure("invalid-output", "The LLM output is malformed.")
+      : { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  if (call.role === "background-proposer") {
+    const wireOutput = safeParsePlain(backgroundProposerWireResultSchema, candidate);
+    const output =
+      wireOutput === undefined ? undefined : normalizeBackgroundProposerWireResult(wireOutput);
+    return output === undefined
+      ? failure("invalid-output", "The LLM output is malformed or breaks a background rule.")
       : { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 
@@ -855,7 +941,12 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
     status: z.enum(["validated", "rejected", "transport-failed"]),
     rawResponse: z.unknown(),
     output: z
-      .union([topicOutputSchema, formalizerOutputSchema, shortlisterOutputSchema])
+      .union([
+        topicOutputSchema,
+        formalizerOutputSchema,
+        shortlisterOutputSchema,
+        backgroundProposerOutputSchema,
+      ])
       .optional(),
     diagnostics: z.array(llmBoundaryDiagnosticSchema),
   })
@@ -895,7 +986,9 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         (evidence.role === "proof-state-formalizer" &&
           !formalizerOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "move-shortlister" &&
-          !shortlisterOutputSchema.safeParse(evidence.output).success))
+          !shortlisterOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "background-proposer" &&
+          !backgroundProposerOutputSchema.safeParse(evidence.output).success))
     ) {
       context.addIssue({ code: "custom", message: "Evidence output must match the call role." });
     }

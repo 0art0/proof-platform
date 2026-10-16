@@ -1,6 +1,8 @@
 import { isPlainMathJson } from "@proof/mathjson-model";
 import type {
   BackgroundLevel,
+  BackgroundProfile,
+  OperatorDeclaration,
   PlainMathJson,
   ProblemDraft,
   ProblemSetupOptions,
@@ -151,25 +153,36 @@ export function draftStatementRows(
   };
 }
 
-export type TopicSuggestions = Readonly<{
-  domains: readonly string[];
-  notation: readonly Readonly<{ symbol: string; meaning: string }>[];
+/**
+ * A background the user accepted: the proposal's profile and constants, and the approval decision
+ * through which the worker resolves those constants. The browser holds the constants only to show
+ * them and to preview LaTeX; requests name the decision and never carry declarations.
+ */
+export type AcceptedBackground = Readonly<{
+  decisionId: string;
+  /** The stored proposer call the decision approved. */
+  callId: string;
+  profile: BackgroundProfile;
+  constants: readonly Readonly<{ operator: OperatorDeclaration; rationale: string }>[];
 }>;
 
-/** Add approved topic domains and notation to the preferences, keeping what is already there. */
-export function withTopicPreferences(
-  form: ProblemForm,
-  topics: TopicSuggestions,
-): Pick<ProblemForm, "preferredDomains" | "notation"> {
-  const domains = commaList(form.preferredDomains);
-  const notation = lines(form.notation);
-  const addedDomains = topics.domains.filter((domain) => !domains.includes(domain));
-  const addedNotation = topics.notation
-    .map(({ symbol, meaning }) => `${symbol}: ${meaning}`)
-    .filter((line) => !notation.includes(line));
+/** The background fields of the form for an accepted profile; they stay editable by hand. */
+export function withBackgroundProfile(
+  profile: BackgroundProfile,
+): Pick<
+  ProblemForm,
+  | "backgroundLevel"
+  | "backgroundSummary"
+  | "backgroundAssumptions"
+  | "backgroundDomains"
+  | "maximumLevel"
+> {
   return {
-    preferredDomains: [...domains, ...addedDomains].join(", "),
-    notation: [...notation, ...addedNotation].join("\n"),
+    backgroundLevel: profile.level,
+    backgroundSummary: profile.summary,
+    backgroundAssumptions: profile.assumptions.join("\n"),
+    backgroundDomains: (profile.domains ?? []).join(", "),
+    maximumLevel: profile.maximumLevel ?? "",
   };
 }
 

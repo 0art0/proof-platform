@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBackgroundProposerContext,
   buildTopicExtractorContext,
   prepareLlmCall,
+  type BackgroundProposal,
   type LlmTransport,
   type PreparedLlmCall,
   type TopicManifestProposal,
 } from "@proof/llm";
 import {
+  readApprovedBackground,
   readLlmCall,
+  recordBackgroundProposalDecision,
   recordTopicProposalDecision,
   runDurableLlmCall,
   type LlmCallOwner,
@@ -272,6 +276,163 @@ describe("topic proposal review", () => {
     expect(await recordTopicProposalDecision(store, approval())).toMatchObject({
       status: "rejected",
       diagnostics: [{ code: "proposal-not-reviewable" }],
+    });
+  });
+});
+
+const backgroundProposal: BackgroundProposal = {
+  kind: "background-proposal",
+  background: { level: "undergraduate", summary: "Elementary graph theory.", assumptions: [] },
+  constants: [],
+};
+
+function backgroundCall(id = "llm-call:background"): PreparedLlmCall {
+  const context = buildBackgroundProposerContext({
+    id,
+    problem: "Show that every finite tree has a leaf.",
+  });
+  if (!context.ok) throw new Error(context.diagnostics[0].message);
+  const prepared = prepareLlmCall(context.envelope);
+  if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+  return prepared.call;
+}
+
+function backgroundApproval(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "decision:background",
+    owner,
+    callId: "llm-call:background",
+    reviewerId: "user:reviewer",
+    decidedAt: "2026-10-15T05:00:00+00:00",
+    proposal: backgroundProposal,
+    rationale: "The background fits the problem.",
+    decision: "approved",
+    approvedManifestId: "background-approval:decision:background",
+    ...overrides,
+  };
+}
+
+describe("background proposal review", () => {
+  const providerResult = {
+    result: {
+      kind: "background-proposal",
+      background: {
+        level: "undergraduate",
+        summary: "Elementary graph theory.",
+        assumptions: [],
+        domains: null,
+        maximumLevel: null,
+      },
+      constants: [],
+    },
+  };
+
+  async function proposed() {
+    const store = new MemoryLlmCallStore();
+    await runDurableLlmCall(
+      store,
+      { owner, call: backgroundCall(), dispatch },
+      async () => providerResult,
+    );
+    return store;
+  }
+
+  it("records approval of the exact validated proposal and resolves it from storage", async () => {
+    const store = await proposed();
+    expect(await recordBackgroundProposalDecision(store, backgroundApproval())).toMatchObject({
+      status: "recorded",
+      replayed: false,
+      approvedBackground: {
+        id: "background-approval:decision:background",
+        sourceCallId: "llm-call:background",
+        proposal: backgroundProposal,
+      },
+    });
+    expect(await recordBackgroundProposalDecision(store, backgroundApproval())).toMatchObject({
+      status: "recorded",
+      replayed: true,
+    });
+    expect(await readApprovedBackground(store, owner, "decision:background")).toMatchObject({
+      status: "found",
+      approved: { decisionId: "decision:background", proposal: backgroundProposal },
+    });
+    expect(store.proofState.currentNodeId).toBe("node:untouched");
+  });
+
+  it("records a rejection that resolves to nothing", async () => {
+    const store = await proposed();
+    const rejection = {
+      id: "decision:background",
+      owner,
+      callId: "llm-call:background",
+      reviewerId: "user:reviewer",
+      decidedAt: "2026-10-15T05:00:00+00:00",
+      proposal: backgroundProposal,
+      rationale: "Too narrow.",
+      decision: "rejected",
+    };
+    const recorded = await recordBackgroundProposalDecision(store, rejection);
+    expect(recorded).toMatchObject({ status: "recorded", replayed: false });
+    expect(recorded).not.toHaveProperty("approvedBackground");
+    expect(await readApprovedBackground(store, owner, "decision:background")).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "decision-not-approved" }],
+    });
+    // An approval needs the approved item's ID, and a rejection must not carry one.
+    expect(
+      await recordBackgroundProposalDecision(store, backgroundApproval({ approvedManifestId: "" })),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "invalid-request" }] });
+    expect(
+      await recordBackgroundProposalDecision(store, {
+        ...rejection,
+        approvedManifestId: "background-approval:decision:background",
+      }),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "invalid-request" }] });
+  });
+
+  it("rejects altered proposals, other roles, other kinds of decisions and unknown lookups", async () => {
+    const store = await proposed();
+    const altered = {
+      ...backgroundProposal,
+      background: { ...backgroundProposal.background, level: "research" },
+    };
+    expect(
+      await recordBackgroundProposalDecision(store, backgroundApproval({ proposal: altered })),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "proposal-not-reviewable" }] });
+
+    await runDurableLlmCall(store, runInput(), async () => proposal);
+    expect(
+      await recordBackgroundProposalDecision(
+        store,
+        backgroundApproval({ callId: "llm-call:topic" }),
+      ),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "proposal-not-reviewable" }] });
+
+    await recordBackgroundProposalDecision(store, backgroundApproval());
+    expect(
+      await recordBackgroundProposalDecision(
+        store,
+        backgroundApproval({ rationale: "A different review." }),
+      ),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "decision-id-conflict" }] });
+    // The same decision ID cannot be reused for a topic decision.
+    expect(
+      await recordTopicProposalDecision(store, approval({ id: "decision:background" })),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "decision-id-conflict" }] });
+    expect(await readApprovedBackground(store, owner, "decision:missing")).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "decision-not-found" }],
+    });
+    expect(
+      await readApprovedBackground(
+        store,
+        { kind: "construction", id: "construction:other" },
+        "decision:background",
+      ),
+    ).toMatchObject({ status: "rejected", diagnostics: [{ code: "decision-not-found" }] });
+    expect(await readApprovedBackground(store, owner, "not an id!")).toMatchObject({
+      status: "rejected",
+      diagnostics: [{ code: "invalid-request" }],
     });
   });
 });
