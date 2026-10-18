@@ -1,12 +1,16 @@
 /**
- * Small HTTP helpers shared by the AI routes (`ai-routes.ts`, `ai-execute-routes.ts`): bounded JSON
- * bodies, JSON answers, the cost-guard admission and the status of an LLM-call repository failure.
+ * Small HTTP helpers shared by the AI routes (`ai-routes.ts`, `ai-execute-routes.ts`,
+ * `ai-library-routes.ts`): bounded JSON bodies, JSON answers, the cost-guard admission and the
+ * status of an LLM-call repository failure.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readLlmCall, type LlmCallOwner } from "../llm-call-repository";
 import { type ServiceContext } from "./shared";
 
 export const MAX_AI_REQUEST_BYTES = 256 * 1024;
+
+/** The single human actor of the web application; reviews are recorded under it. */
+export const WEB_REVIEWER_ID = "actor:web";
 
 export const LIMIT_MESSAGE = "The AI request budget is exhausted; retry later.";
 

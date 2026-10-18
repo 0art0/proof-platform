@@ -44,9 +44,12 @@ import {
   proofSessionIdSchema,
   readDisplayedSuggestionSet,
 } from "../proof-repository";
+import { applyExecutedMove, executeMove } from "./ai-execute-routes";
+import { type ServiceContext } from "./shared";
 import {
-  admitProviderCall,
   LIMIT_MESSAGE,
+  WEB_REVIEWER_ID,
+  admitProviderCall,
   methodNotAllowed,
   pathSegments,
   problem,
@@ -54,8 +57,13 @@ import {
   repositoryStatus,
   writeJson,
 } from "./ai-http";
-import { applyExecutedMove, executeMove } from "./ai-execute-routes";
-import { type ServiceContext } from "./shared";
+import { decideLibrary, proposeLibrary } from "./ai-library-routes";
+import {
+  approvedLibraryReferenceSchema,
+  formalizerLibraryResults,
+  loadApprovedLibrary,
+} from "../approved-library";
+import type { ApprovedInitialLibrary } from "../library-proposal";
 
 const formalizeRequestSchema = z
   .object({
@@ -70,6 +78,8 @@ const formalizeRequestSchema = z
     packs: z.array(stableIdentifierSchema).max(7),
     /** The approved background whose constants the formalizer may use; resolved from storage. */
     approvedBackground: approvedBackgroundReferenceSchema.optional(),
+    /** The approved initial library whose results the formalizer is shown; resolved from storage. */
+    approvedLibrary: approvedLibraryReferenceSchema.optional(),
   })
   .strict();
 const backgroundRequestSchema = z
@@ -108,8 +118,6 @@ const proposalDecisionRequestSchema = z
     decidedAt: z.string().datetime({ offset: true }),
   })
   .strict();
-/** The single human actor of the web application; topic reviews are recorded under it. */
-const WEB_REVIEWER_ID = "actor:web";
 const shortlistRequestSchema = z
   .object({
     id: stableIdentifierSchema,
@@ -174,6 +182,18 @@ export async function handleAiRoute(
   ) {
     if (request.method !== "POST") return methodNotAllowed(response, "POST");
     await decideBackground(context, request, response);
+    return true;
+  }
+
+  if (path.length === 2 && path[0] === "ai" && path[1] === "library") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await proposeLibrary(context, request, response);
+    return true;
+  }
+
+  if (path.length === 3 && path[0] === "ai" && path[1] === "library" && path[2] === "decisions") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await decideLibrary(context, request, response);
     return true;
   }
 
@@ -497,6 +517,9 @@ async function proposeBackground(
             notation: preferences.data.notation ?? [],
           },
         }),
+    // The global operator registry (the packs' operators), so that a constant can reference an
+    // existing operator with its exact signature instead of clashing with it.
+    operators: starterLibraryPacks().flatMap((pack) => pack.operators),
     ...(previous === undefined ? {} : { revision: previous }),
   });
   if (!built.ok) return writeJson(response, 400, { diagnostics: built.diagnostics });
@@ -664,7 +687,8 @@ async function formalize(
       ],
     });
   }
-  const { constructionId, approvedBackground, ...formalizerInput } = requestData.data;
+  const { constructionId, approvedBackground, approvedLibrary, ...formalizerInput } =
+    requestData.data;
   const packs = starterLibraryPacks();
   const selectedPacks = packs.filter((pack) => formalizerInput.packs.includes(pack.id));
   if (selectedPacks.length !== formalizerInput.packs.length) {
@@ -682,15 +706,30 @@ async function formalize(
     if (!loaded.ok) return writeJson(response, loaded.status, { diagnostics: loaded.diagnostics });
     constants = loaded.constants;
   }
+  // The same holds for the approved initial library: the decision names result IDs, and the
+  // artifacts (and the new constants they apply) are read from the stored librarian call.
+  let library: ApprovedInitialLibrary | undefined;
+  if (approvedLibrary !== undefined) {
+    const loaded = await loadApprovedLibrary(
+      context.llmCalls,
+      constructionId,
+      approvedLibrary.decisionId,
+    );
+    if (!loaded.ok) return writeJson(response, loaded.status, { diagnostics: loaded.diagnostics });
+    library = loaded.library;
+  }
   const constantConflicts: string[] = [];
   const { operators: approvedOperators } = resolveSessionOperators(
     formalizerInput.packs,
     packs,
     constants,
     (_code, message, path) => {
-      if (path[0] === "approvedBackground") constantConflicts.push(message);
+      if (path[0] === "approvedBackground" || path[0] === "approvedLibrary") {
+        constantConflicts.push(message);
+      }
     },
     ["packs"],
+    library?.constants ?? [],
   );
   if (constantConflicts.length > 0) {
     return writeJson(response, 409, {
@@ -700,15 +739,7 @@ async function formalize(
   const built = buildProofStateFormalizerContext({
     ...formalizerInput,
     approvedLibrary: {
-      results: selectedPacks.flatMap((pack) =>
-        pack.results.map(({ id, name, description, statement, premises }) => ({
-          id,
-          name,
-          description,
-          statement: statement.expression,
-          premises: premises.map((premise) => premise.expression),
-        })),
-      ),
+      results: formalizerLibraryResults(selectedPacks, library),
       operators: approvedOperators,
       sorts: PROBLEM_SETUP_SORT_CHOICES.map(({ id }) => id),
     },
@@ -787,7 +818,7 @@ async function formalize(
   }
   // Any operator outside the approved set (the selected packs, the approved constants and the
   // built-in symbols) is reported precisely and returns the draft for review.
-  const unapproved = unapprovedConstantDiagnostics(draft, packs, { constants });
+  const unapproved = unapprovedConstantDiagnostics(draft, packs, { constants, library });
   if (unapproved.length > 0) {
     return writeJson(response, 422, {
       status: "needs-review",
@@ -797,7 +828,7 @@ async function formalize(
       diagnostics: unapproved,
     });
   }
-  const admission = validateProblemDraft(draft, packs, { constants });
+  const admission = validateProblemDraft(draft, packs, { constants, library });
   if (!admission.ok) {
     return writeJson(response, 422, {
       status: "needs-review",

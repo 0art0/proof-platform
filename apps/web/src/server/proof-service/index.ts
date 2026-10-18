@@ -1141,14 +1141,25 @@ export const approvedBackgroundReferenceSchema = z
   .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
   .strict();
 
-/** `POST /api/problem-drafts/validate` body: the protocol request plus the optional reference. */
+/**
+ * Names an approved library decision (`POST /ai/library/decisions`) whose results the worker
+ * resolves from the stored librarian call for the setup check and the session approval. The
+ * browser never sends library artifacts.
+ */
+export const approvedLibraryReferenceSchema = z
+  .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
+  .strict();
+
+/** `POST /api/problem-drafts/validate` body: the protocol request plus the optional references. */
 export const problemDraftValidationBodySchema = problemDraftValidationRequestSchema.extend({
   approvedBackground: approvedBackgroundReferenceSchema.optional(),
+  approvedLibrary: approvedLibraryReferenceSchema.optional(),
 });
 
-/** `POST /api/proof-sessions` body: the protocol approval request plus the optional reference. */
+/** `POST /api/proof-sessions` body: the protocol approval request plus the optional references. */
 export const problemApprovalBodySchema = problemApprovalRequestSchema.extend({
   approvedBackground: approvedBackgroundReferenceSchema.optional(),
+  approvedLibrary: approvedLibraryReferenceSchema.optional(),
 });
 
 /**
@@ -1628,6 +1639,7 @@ export async function previewConditionalLemma(
 /** The model roles the worker can serve; every other role is unimplemented. */
 export const AI_ROLES = [
   "background-proposer",
+  "librarian",
   "proof-state-formalizer",
   "move-shortlister",
   "move-executor",
@@ -1636,6 +1648,7 @@ export type AiRole = (typeof AI_ROLES)[number];
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
 export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "background-proposer": false,
+  librarian: false,
   "proof-state-formalizer": false,
   "move-shortlister": false,
   "move-executor": false,
@@ -1658,6 +1671,7 @@ export async function readAiCapabilities(
     const { roles } = parsed.data;
     return {
       "background-proposer": roles["background-proposer"] === true,
+      librarian: roles.librarian === true,
       "proof-state-formalizer": roles["proof-state-formalizer"] === true,
       "move-shortlister": roles["move-shortlister"] === true,
       "move-executor": roles["move-executor"] === true,
@@ -1677,10 +1691,14 @@ const aiAnswerSchema = z
   })
   .passthrough();
 
+const MAX_LIBRARY_PROPOSAL_RESPONSE_BYTES = 8 * 1024 * 1024;
+
 /** The worker AI endpoints the web application relays. */
 export type AiEndpoint =
   | Readonly<{ kind: "background" }>
   | Readonly<{ kind: "background-decisions" }>
+  | Readonly<{ kind: "library" }>
+  | Readonly<{ kind: "library-decisions" }>
   | Readonly<{ kind: "formalize" }>
   | Readonly<{ kind: "shortlist"; sessionId: string }>
   | Readonly<{ kind: "execute"; sessionId: string }>
@@ -1689,6 +1707,8 @@ export type AiEndpoint =
 function aiEndpointPath(endpoint: AiEndpoint): string {
   if (endpoint.kind === "background") return "/ai/background";
   if (endpoint.kind === "background-decisions") return "/ai/background/decisions";
+  if (endpoint.kind === "library") return "/ai/library";
+  if (endpoint.kind === "library-decisions") return "/ai/library/decisions";
   if (endpoint.kind === "formalize") return "/ai/formalize";
   const sessionId = parseIdentifier(endpoint.sessionId, "proof session");
   const base = `/proof-sessions/${encodeURIComponent(sessionId)}/ai`;
@@ -1715,7 +1735,12 @@ export async function relayAiRequest(
     body: JSON.stringify(body.data),
     ...signalOption(options.signal),
   });
-  const value = await readValidatedEnvelope(response);
+  // A library proposal carries up to 40 results with their variants, which can exceed the usual
+  // bound for an AI answer.
+  const value = await readValidatedEnvelope(
+    response,
+    endpoint.kind === "library" ? MAX_LIBRARY_PROPOSAL_RESPONSE_BYTES : MAX_RESPONSE_BYTES,
+  );
   const parsed = aiAnswerSchema.safeParse(value);
   if (!parsed.success) throw invalidUpstreamResponse();
   if (response.status === 200 || response.status === 201) {

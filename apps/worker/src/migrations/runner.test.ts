@@ -278,20 +278,11 @@ describe("baselineMigrations", () => {
 });
 
 describe("the product migrations", () => {
-  // docs/ai-agents-architecture.md pre-assigns 0016 to the librarian lane, developed on a parallel
-  // branch. Once it is merged the chain is contiguous and this exemption is removed.
-  const RESERVED_FOR_PARALLEL_LANES = new Set([16]);
-
   it("load, are numbered contiguously from 0001, and carry a transaction envelope", async () => {
     const migrations = await loadMigrations(DEFAULT_MIGRATIONS_DIRECTORY);
     expect(migrations.length).toBeGreaterThanOrEqual(12);
-    const numbers = migrations.map((migration) => Number(migration.name.slice(0, 4)));
-    const missing: number[] = [];
-    for (let number = 1; number <= Math.max(...numbers); number += 1) {
-      if (!numbers.includes(number)) missing.push(number);
-    }
-    expect(missing.filter((number) => !RESERVED_FOR_PARALLEL_LANES.has(number))).toEqual([]);
-    migrations.forEach((migration) => {
+    migrations.forEach((migration, index) => {
+      expect(migration.name.startsWith(String(index + 1).padStart(4, "0"))).toBe(true);
       expect(migration.checksum).toBe(migrationChecksum(migration.sql));
       const body = withoutTransactionEnvelope(migration.sql);
       expect(body).not.toMatch(/^\s*BEGIN\s*;/i);

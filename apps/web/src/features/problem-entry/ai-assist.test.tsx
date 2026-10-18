@@ -172,7 +172,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderForm(ai = { background: true, formalizer: true }) {
+function renderForm(ai = { background: true, library: true, formalizer: true }) {
   let ids = 0;
   render(
     <ProblemEntryForm
@@ -211,7 +211,7 @@ async function propose() {
 
 describe("AI assistance in problem entry", () => {
   it("explains when AI is not configured and offers nothing to click", () => {
-    renderForm({ background: false, formalizer: false });
+    renderForm({ background: false, library: false, formalizer: false });
     fillProblem();
     expect(section()).toHaveTextContent("not configured on this proof service");
     expect(button("Propose background")).toBeDisabled();

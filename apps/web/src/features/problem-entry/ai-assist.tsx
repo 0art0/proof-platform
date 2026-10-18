@@ -11,13 +11,20 @@ import {
   type ProblemDraft,
 } from "@proof/protocol";
 import { z } from "zod";
-import type { AcceptedBackground, FormProblem, SetupContext } from "./draft-form";
+import { invalidAnswer, nonProposalSchema, postAi } from "./ai-api";
+import type { AcceptedBackground, ApprovedLibrary, FormProblem, SetupContext } from "./draft-form";
+import { LibraryStep } from "./library-step";
 import styles from "./problem-entry.module.css";
 
 /** Which setup roles the worker reports as configured. */
-export type AiSetupCapabilities = Readonly<{ background: boolean; formalizer: boolean }>;
+export type AiSetupCapabilities = Readonly<{
+  background: boolean;
+  library: boolean;
+  formalizer: boolean;
+}>;
 export const NO_AI_SETUP: AiSetupCapabilities = Object.freeze({
   background: false,
+  library: false,
   formalizer: false,
 });
 
@@ -34,6 +41,12 @@ export type AiAssistProps = Readonly<{
   accepted: AcceptedBackground | undefined;
   onAcceptBackground: (accepted: AcceptedBackground) => void;
   onForgetBackground: () => void;
+  /** The operators of the selected packs and the accepted constants, for rendering results. */
+  operators: readonly OperatorDeclaration[];
+  /** The library the user approved, if any; the setup records its results. */
+  approvedLibrary: ApprovedLibrary | undefined;
+  onApproveLibrary: (library: ApprovedLibrary) => void;
+  onForgetLibrary: () => void;
   onUseDraft: (draft: ProblemDraft, callId: string) => void;
 }>;
 
@@ -48,18 +61,6 @@ const proposalSchema = z
   .strict();
 type Proposal = z.infer<typeof proposalSchema>;
 
-/** A context request or refusal: the model returned no proposal. */
-const nonProposalSchema = z.object({
-  status: z.enum(["insufficient-context", "declined"]),
-  result: z.union([
-    z.object({
-      kind: z.literal("insufficient-context"),
-      requestedCategories: z.array(z.string()),
-      rationale: z.string(),
-    }),
-    z.object({ kind: z.literal("declined"), reason: z.string() }),
-  ]),
-});
 const backgroundAnswerSchema = z.union([
   z.object({ status: z.literal("proposed"), callId: z.string(), proposal: proposalSchema }),
   nonProposalSchema,
@@ -82,15 +83,6 @@ const decisionAnswerSchema = z.object({
   status: z.literal("recorded"),
   decision: z.object({ decision: z.literal("approved") }),
 });
-const apiAnswerSchema = z.union([
-  z.object({ ok: z.literal(true), data: z.unknown() }),
-  z.object({
-    ok: z.literal(false),
-    error: z.object({ code: z.string(), message: z.string() }),
-    details: z.unknown().optional(),
-  }),
-]);
-
 type Failure = Readonly<{ kind: "failed"; message: string }>;
 type Proposed = Readonly<{
   callId: string;
@@ -130,12 +122,14 @@ type DraftState =
     }>;
 
 /**
- * Optional AI help while setting up a problem (`docs/ai-agents-architecture.md` sections 1 and 3).
- * Both roles return proposals only. The background proposer sees the problem statement and
+ * Optional AI help while setting up a problem (`docs/ai-agents-architecture.md` sections 1 to 3).
+ * Every role returns proposals only. The background proposer sees the problem statement and
  * preferences, proposes a background and the constants the problem needs, and can revise its
  * proposal from the user's feedback; nothing changes until the user accepts, which fills the
- * background fields and makes the constants available to the setup. A drafted setup is loaded
- * into the form only on request, where it still goes through "Check setup" and approval.
+ * background fields and makes the constants available to the setup. Once a background is
+ * accepted, the library builder proposes general results for it (it never sees the problem), and
+ * the user keeps the ones they want. A drafted setup is loaded into the form only on request,
+ * where it still goes through "Check setup" and approval.
  */
 export function AiAssist({
   capabilities,
@@ -146,6 +140,10 @@ export function AiAssist({
   accepted,
   onAcceptBackground,
   onForgetBackground,
+  operators,
+  approvedLibrary,
+  onApproveLibrary,
+  onForgetLibrary,
   onUseDraft,
 }: AiAssistProps) {
   const [proposed, setProposed] = useState<Proposed>();
@@ -154,8 +152,8 @@ export function AiAssist({
   const [decision, setDecision] = useState<DecisionState>({ kind: "undecided" });
   const [draft, setDraft] = useState<DraftState>({ kind: "idle" });
   const problemKey = JSON.stringify([context.problem, context.preferences]);
-  const contextKey = JSON.stringify([context, accepted?.decisionId]);
-  const anyAvailable = capabilities.background || capabilities.formalizer;
+  const contextKey = JSON.stringify([context, accepted?.decisionId, approvedLibrary?.decisionId]);
+  const anyAvailable = capabilities.background || capabilities.library || capabilities.formalizer;
   const statementFilled = context.problem.statement.length > 0;
   const loading = status.kind === "loading";
 
@@ -236,6 +234,9 @@ export function AiAssist({
       ...(accepted === undefined
         ? {}
         : { approvedBackground: { decisionId: accepted.decisionId } }),
+      ...(approvedLibrary === undefined
+        ? {}
+        : { approvedLibrary: { decisionId: approvedLibrary.decisionId } }),
     });
     if (!answer.ok) {
       const review = needsReviewSchema.safeParse(answer.details);
@@ -275,9 +276,10 @@ export function AiAssist({
       <h2>AI assistance (optional)</h2>
       <p className={styles.sectionIntro}>
         A model can propose the background your problem is set against, together with the constants
-        (operators and notation) it needs, and can draft the variables, hypotheses and goals. Its
-        answers are proposals: nothing changes until you accept them, and a drafted setup is still
-        checked and approved by you before exploring starts.
+        (operators and notation) it needs, build a starting library of general results for that
+        background, and draft the variables, hypotheses and goals. Its answers are proposals:
+        nothing changes until you accept them, and a drafted setup is still checked and approved by
+        you before exploring starts.
       </p>
       {!anyAvailable ? (
         <p className={styles.hint} role="note">
@@ -332,11 +334,23 @@ export function AiAssist({
         )}
       </div>
 
+      <LibraryStep
+        available={capabilities.library}
+        constructionId={constructionId}
+        createId={createId}
+        accepted={accepted}
+        packs={context.packs}
+        operators={operators}
+        approved={approvedLibrary}
+        onApprove={onApproveLibrary}
+        onForget={onForgetLibrary}
+      />
+
       <div className={styles.aiStep}>
         <h3>Draft the setup</h3>
         <p className={styles.sectionIntro}>
-          Proposes variables, hypotheses and goals using the selected notation packs and any
-          accepted constants.
+          Proposes variables, hypotheses and goals using the selected notation packs, any accepted
+          constants and the approved library.
         </p>
         <button
           type="button"
@@ -635,56 +649,8 @@ function DraftProposal({
   );
 }
 
-type AiAnswer =
-  | Readonly<{ ok: true; data: unknown }>
-  | Readonly<{ ok: false; message: string; status?: number; details?: unknown }>;
-
-async function postAi(url: string, body: unknown): Promise<AiAnswer> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    });
-  } catch {
-    return { ok: false, message: "The proof service could not be reached." };
-  }
-  let value: unknown;
-  try {
-    value = await response.json();
-  } catch {
-    value = undefined;
-  }
-  const parsed = apiAnswerSchema.safeParse(value);
-  if (!parsed.success || parsed.data.ok !== response.ok) {
-    return { ok: false, message: "The proof service returned an invalid response." };
-  }
-  if (parsed.data.ok) return { ok: true, data: parsed.data.data };
-  return {
-    ok: false,
-    message: failureMessage(response.status, parsed.data.error),
-    status: response.status,
-    details: parsed.data.details,
-  };
-}
-
-function failureMessage(status: number, error: Readonly<{ code: string; message: string }>) {
-  if (status === 429) return "Too many AI requests right now. Wait a minute and try again.";
-  if (error.code === "ai-disabled") return "AI assistance is not configured on this server.";
-  if (error.code === "invalid-output") {
-    return "The model's answer did not pass validation and was discarded. Nothing changed.";
-  }
-  return error.message;
-}
-
 function nonProposalMessage(result: z.infer<typeof nonProposalSchema>["result"]): string {
   return result.kind === "declined"
     ? `The model declined: ${result.reason}`
     : `The model asked for more detail (${result.requestedCategories.join(", ")}): ${result.rationale} Add that detail to the problem statement or the background and try again.`;
-}
-
-function invalidAnswer(): Failure {
-  return { kind: "failed", message: "The proof service returned an invalid response." };
 }

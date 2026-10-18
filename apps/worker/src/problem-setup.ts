@@ -18,7 +18,12 @@
  * Only the MathJSON is stored; LaTeX is input syntax. New mathematics entering here is the
  * `setup` payload source of the command protocol.
  */
-import { libraryPacksForOperators, starterLibraryPacks, type LibraryPack } from "@proof/library";
+import {
+  admitLibraryArtifact,
+  libraryPacksForOperators,
+  starterLibraryPacks,
+  type LibraryPack,
+} from "@proof/library";
 import { createLatexRenderer, type LatexRenderer } from "@proof/language";
 import {
   RESERVED_BUILTIN_SYMBOLS,
@@ -40,12 +45,14 @@ import {
   type ProblemSetupDiagnostic,
   type ProblemSetupDiagnosticCode,
   type ProblemSetupOptions,
+  type ProblemSetupInitialLibrary,
   type ProblemSetupReview,
   type ProblemStatementInput,
   type ProofNode,
   type ProofSessionMetadata,
 } from "@proof/protocol";
 import { definitionHash } from "./approved-catalog";
+import type { ApprovedInitialLibrary } from "./library-proposal";
 import {
   freezeDetached,
   initializeProofSession,
@@ -102,20 +109,30 @@ export function problemSetupOptions(
 }
 
 /**
- * Operators the session gets besides its packs': the constants of an approved background, which
- * the worker resolved from storage. They follow the packs' operators in the session environment.
+ * Operators the session gets besides its packs': the constants of an approved background and the
+ * new constants of an approved initial library, which the worker resolved from storage. They
+ * follow the packs' operators in the session environment. The approved library's artifacts are
+ * checked against the environment and recorded as setup additions when the session is created.
  */
-export type ProblemDraftOptions = Readonly<{ constants?: readonly OperatorDeclaration[] }>;
+export type ProblemDraftOptions = Readonly<{
+  constants?: readonly OperatorDeclaration[];
+  library?: ApprovedInitialLibrary | undefined;
+}>;
 
 const APPROVED_CONSTANTS_ORIGIN = "the approved background constants";
+const APPROVED_LIBRARY_CONSTANTS_ORIGIN = "the approved library constants";
 
-/** The operators of a session: the selected packs' (catalog order), then the approved constants. */
+/**
+ * The operators of a session: the selected packs' (catalog order), then the approved background
+ * constants, then the approved library's new constants.
+ */
 export function resolveSessionOperators(
   selectedPackIds: readonly string[],
   packs: readonly LibraryPack[],
   constants: readonly OperatorDeclaration[],
   add: (code: ProblemSetupDiagnosticCode, message: string, path: readonly PathKey[]) => void,
   packIdsPath: readonly PathKey[],
+  libraryConstants: readonly OperatorDeclaration[] = [],
 ): Readonly<{
   operators: readonly OperatorDeclaration[];
   /** Where each operator symbol comes from, as a phrase: "the pack pack:sets" and so on. */
@@ -139,36 +156,50 @@ export function resolveSessionOperators(
       }
     }
   }
-  for (const constant of constants) {
-    const same = operators.find((candidate) => candidate.symbol === constant.symbol);
-    if (same !== undefined) {
-      // The same declaration is a reference to the existing operator; another one is a clash.
-      if (!jsonEquals(same, constant)) {
+  const addConstants = (
+    declared: readonly OperatorDeclaration[],
+    label: string,
+    constantsOrigin: string,
+    path: PathKey,
+  ) => {
+    for (const constant of declared) {
+      const same = operators.find((candidate) => candidate.symbol === constant.symbol);
+      if (same !== undefined) {
+        // The same declaration is a reference to the existing operator; another one is a clash.
+        if (!jsonEquals(same, constant)) {
+          add(
+            "pack-operator-conflict",
+            `The ${label} ${constant.symbol} differs from the operator ${constant.symbol} of ${origin.get(constant.symbol) ?? "?"}.`,
+            [path],
+          );
+        }
+        continue;
+      }
+      const trigger = constant.presentation?.latex?.parse?.trigger;
+      const clash = operators.find(
+        (candidate) =>
+          candidate.id === constant.id ||
+          (trigger !== undefined && candidate.presentation?.latex?.parse?.trigger === trigger),
+      );
+      if (clash !== undefined) {
         add(
           "pack-operator-conflict",
-          `The approved constant ${constant.symbol} differs from the operator ${constant.symbol} of ${origin.get(constant.symbol) ?? "?"}.`,
-          ["approvedBackground"],
+          `The ${label} ${constant.symbol} reuses the ID or LaTeX trigger of the operator ${clash.symbol}.`,
+          [path],
         );
+        continue;
       }
-      continue;
+      operators.push(constant);
+      origin.set(constant.symbol, constantsOrigin);
     }
-    const trigger = constant.presentation?.latex?.parse?.trigger;
-    const clash = operators.find(
-      (candidate) =>
-        candidate.id === constant.id ||
-        (trigger !== undefined && candidate.presentation?.latex?.parse?.trigger === trigger),
-    );
-    if (clash !== undefined) {
-      add(
-        "pack-operator-conflict",
-        `The approved constant ${constant.symbol} reuses the ID or LaTeX trigger of the operator ${clash.symbol}.`,
-        ["approvedBackground"],
-      );
-      continue;
-    }
-    operators.push(constant);
-    origin.set(constant.symbol, APPROVED_CONSTANTS_ORIGIN);
-  }
+  };
+  addConstants(constants, "approved constant", APPROVED_CONSTANTS_ORIGIN, "approvedBackground");
+  addConstants(
+    libraryConstants,
+    "approved library constant",
+    APPROVED_LIBRARY_CONSTANTS_ORIGIN,
+    "approvedLibrary",
+  );
   return { operators, origin };
 }
 
@@ -210,6 +241,7 @@ export function validateProblemDraft(
     options.constants ?? [],
     add,
     ["packs"],
+    options.library?.constants ?? [],
   );
   const operatorSymbols = new Set(operators.map((operator) => operator.symbol));
 
@@ -314,6 +346,9 @@ export function validateProblemDraft(
 
   const hypotheses = draft.hypotheses.map((input, index) => statement("hypotheses", input, index));
   const goals = draft.goals.map((input, index) => statement("goals", input, index));
+  if (options.library !== undefined) {
+    addLibraryDiagnostics(options.library, draft, operators, add);
+  }
   if (diagnostics.length > 0) return failed(diagnostics);
 
   const context = {
@@ -361,15 +396,80 @@ export function validateProblemDraft(
 
   const rootNode = node.data;
   const activePackIds = libraryPacksForOperators(operators, packs).map((pack) => pack.id);
-  const digest = problemSetupDigest(rootNode, operators, metadata.data);
+  const digest = problemSetupDigest(rootNode, operators, metadata.data, options.library);
+  const initialLibrary =
+    options.library === undefined ? undefined : summarizeInitialLibrary(options.library);
   const value = freezeDetached({
     draft,
     rootNode,
     operators,
     metadata: metadata.data,
-    review: { rootNode, operators, metadata: metadata.data, activePackIds, digest },
+    review: {
+      rootNode,
+      operators,
+      metadata: metadata.data,
+      activePackIds,
+      ...(initialLibrary === undefined ? {} : { initialLibrary }),
+      digest,
+    },
   }) as ValidatedProblemDraft;
   return Object.freeze({ ok: true as const, diagnostics: [] as const, value });
+}
+
+/** The session the gate is asked about when no session exists yet; the verdict ignores it. */
+const SETUP_REVIEW_SESSION_ID = "session:setup-review";
+
+/**
+ * The approved library must be recordable in the session this setup would create: its layer is
+ * active, and every result (with its variants) passes the gate in the session's operators and
+ * background. Anything the gate would reject at approval is reported now, with the check.
+ */
+function addLibraryDiagnostics(
+  library: ApprovedInitialLibrary,
+  draft: ProblemDraft,
+  operators: readonly OperatorDeclaration[],
+  add: (code: ProblemSetupDiagnosticCode, message: string, path: readonly PathKey[]) => void,
+): void {
+  if (!draft.libraryLayerIds.includes("layer:initial-problem")) {
+    add(
+      "approved-library-invalid",
+      "The approved library belongs to the Initial problem library; include that layer in the setup, or stop using the library.",
+      ["libraryLayerIds"],
+    );
+  }
+  for (const artifact of [...library.results, ...library.variants]) {
+    const gate = admitLibraryArtifact({
+      artifact,
+      layer: "initial-problem",
+      sessionId: SETUP_REVIEW_SESSION_ID,
+      profile: draft.background,
+      environment: { operators },
+    });
+    if (gate.ok) continue;
+    const invalid = gate.diagnostics.some(({ code }) => code === "invalid-artifact");
+    add(
+      "approved-library-invalid",
+      invalid
+        ? `The approved result "${artifact.name}" is not valid with this setup's operators. Select the notation packs it needs, or build the library again.`
+        : `The approved result "${artifact.name}" cannot be added: ${gate.diagnostics.map(({ message }) => message).join(" ")}`,
+      ["approvedLibrary"],
+    );
+  }
+}
+
+/** What the review shows of an approved library: the kept results and what comes with them. */
+function summarizeInitialLibrary(library: ApprovedInitialLibrary): ProblemSetupInitialLibrary {
+  return {
+    results: library.results.map((result) => ({
+      id: result.id,
+      name: result.name,
+      description: result.description,
+      statement: result.statement.expression,
+      premises: result.premises.map(({ expression }) => expression),
+    })),
+    variantCount: library.variants.length,
+    addedOperatorSymbols: library.constants.map(({ symbol }) => symbol),
+  };
 }
 
 /** A statement applies an operator that the setup did not approve (formalizer spec section 3). */
@@ -397,6 +497,7 @@ export function unapprovedConstantDiagnostics(
     options.constants ?? [],
     () => undefined,
     ["packs"],
+    options.library?.constants ?? [],
   );
   const approved = new Set(operators.map((operator) => operator.symbol));
   const declared = new Set(draft.declarations.map(({ symbol }) => symbol));
@@ -460,13 +561,25 @@ function functionHeads(expression: PlainMathJson, result: Set<string> = new Set(
   return result;
 }
 
-/** `sha256:` digest of exactly what approval stores. */
+/**
+ * `sha256:` digest of exactly what approval stores. An approved initial library is part of it
+ * (its approved results and their variants, in full), so approving with another library than the
+ * one reviewed is stale; a setup without a library hashes as it always did.
+ */
 export function problemSetupDigest(
   rootNode: ProofNode,
   operators: readonly OperatorDeclaration[],
   metadata: ProofSessionMetadata,
+  library?: ApprovedInitialLibrary,
 ): ProblemSetupReview["digest"] {
-  return definitionHash({ rootNode, operators, metadata });
+  return definitionHash({
+    rootNode,
+    operators,
+    metadata,
+    ...(library === undefined
+      ? {}
+      : { initialLibrary: { results: library.results, variants: library.variants } }),
+  });
 }
 
 export type ApproveProblemSessionResult =
@@ -485,6 +598,12 @@ export type ApproveProblemSessionOptions = Readonly<{
   packs?: readonly LibraryPack[];
   /** Constants of an approved background, resolved by the caller from storage. */
   constants?: readonly OperatorDeclaration[];
+  /**
+   * An approved initial library, resolved by the caller from storage. Approval checks it and
+   * covers it with the digest; recording its additions is the caller's step after the session
+   * exists (`recordInitialLibrary`), because the library has its own transaction.
+   */
+  library?: ApprovedInitialLibrary | undefined;
 }>;
 
 /**
@@ -505,6 +624,7 @@ export async function approveProblemSession(
   }
   const validated = validateProblemDraft(request.data.draft, options.packs, {
     ...(options.constants === undefined ? {} : { constants: options.constants }),
+    ...(options.library === undefined ? {} : { library: options.library }),
   });
   if (!validated.ok) return { status: "invalid-draft", diagnostics: validated.diagnostics };
   const { value } = validated;

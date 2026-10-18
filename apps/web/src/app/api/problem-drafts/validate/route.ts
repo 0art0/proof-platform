@@ -33,7 +33,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!parsed.success) {
     return proofApiFailure(
       "invalid_request",
-      "The request must be { draft } with an optional approvedBackground reference.",
+      "The request must be { draft } with optional approvedBackground and approvedLibrary references.",
       400,
     );
   }

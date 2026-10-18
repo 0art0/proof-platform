@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@proof/kernel": "*",
+    "@proof/library": "*",
     "@proof/moves": "*",
     "@proof/protocol": "*",
     "zod": "^4.5.4"

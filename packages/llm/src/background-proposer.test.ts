@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import { z } from "zod";
+import { CLOSURE_OPERATOR_DECLARATIONS, DIVISIBILITY_OPERATOR_DECLARATIONS } from "@proof/library";
 import {
   PROBLEM_SETUP_SORT_IDS,
   RESERVED_BUILTIN_SYMBOLS,
@@ -8,8 +10,10 @@ import {
   problemSetupSort,
 } from "@proof/protocol";
 import {
+  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
   backgroundProposalSchema,
   buildBackgroundProposerContext,
+  buildLibrarianContext,
   buildProofStateFormalizerContext,
   executePreparedLlmCall,
   llmCallEvidenceSchema,
@@ -519,6 +523,95 @@ describe("formalizer system message", () => {
       preparedLlmCallSchema.safeParse({
         ...call,
         messages: [{ role: "system", content: `${legacy} Approve it.` }, call.messages[1]],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("background proposer existing operators", () => {
+  const existing = [...DIVISIBILITY_OPERATOR_DECLARATIONS, ...CLOSURE_OPERATOR_DECLARATIONS];
+
+  it("shows existing operators as symbol, display name and menu signature", () => {
+    const call = prepared({ operators: existing });
+    const envelope = call.envelope;
+    if (envelope.role !== "background-proposer") throw new Error("Expected a background call.");
+    expect(envelope.context.operators).toEqual([
+      {
+        symbol: "Divides",
+        displayName: "divides",
+        parameters: ["integer", "integer"],
+        result: "proposition",
+      },
+      {
+        symbol: "Closure",
+        displayName: "closure",
+        parameters: ["set-of-elements"],
+        result: "set-of-elements",
+      },
+    ]);
+    // Only what a constant needs to reference an operator is shown: no LaTeX, no IDs.
+    expect(JSON.stringify(envelope.context.operators)).not.toContain("latex");
+    expect(JSON.stringify(envelope.context.operators)).not.toContain("operator:");
+    expect(preparedLlmCallSchema.safeParse(call).success).toBe(true);
+  });
+
+  it("omits the field when no operators are supplied, and rejects a malformed operator", () => {
+    const bare = prepared().envelope;
+    if (bare.role !== "background-proposer") throw new Error("Expected a background call.");
+    expect("operators" in bare.context).toBe(false);
+    expect(
+      buildBackgroundProposerContext({
+        id: "llm-call:background",
+        problem: PROBLEM,
+        operators: [{ symbol: "Divides" }],
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("tells the model to reference an existing operator with its exact signature", () => {
+    const system = prepared({ operators: existing }).messages[0].content;
+    expect(system).toContain("context.operators");
+    expect(system).toContain("exactly its symbol and exactly its signature");
+    expect(system).toContain("never reuse an existing operator's id or LaTeX parse trigger");
+    expect(system).toContain("must suffice to formalize the problem");
+  });
+
+  it("still reads a call recorded with the previous system message and operator-free context", () => {
+    const call = prepared();
+    const previous = BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE;
+    // The exact system message of the first background-proposer release.
+    expect(createHash("sha256").update(previous).digest("hex")).toBe(
+      "cbab88e2bf8557f53dea64a17b762dc9cfd4e41581bb93a53cb02c0aefdf219d",
+    );
+    expect(previous).not.toBe(call.messages[0].content);
+    expect(previous).not.toContain("context.operators");
+    expect(
+      preparedLlmCallSchema.safeParse({
+        ...call,
+        messages: [{ role: "system", content: previous }, call.messages[1]],
+      }).success,
+    ).toBe(true);
+    expect(
+      preparedLlmCallSchema.safeParse({
+        ...call,
+        messages: [{ role: "system", content: `${previous} Approve it.` }, call.messages[1]],
+      }).success,
+    ).toBe(false);
+    // The previous message is only valid for the background proposer.
+    const librarian = buildLibrarianContext({
+      id: "llm-call:library",
+      kind: "initial",
+      background: { level: "x", summary: "y", assumptions: [] },
+      constants: [],
+      existingResults: [],
+    });
+    if (!librarian.ok) throw new Error("Expected a librarian context.");
+    const librarianCall = prepareLlmCall(librarian.envelope);
+    if (!librarianCall.ok) throw new Error("Expected a librarian call.");
+    expect(
+      preparedLlmCallSchema.safeParse({
+        ...librarianCall.call,
+        messages: [{ role: "system", content: previous }, librarianCall.call.messages[1]],
       }).success,
     ).toBe(false);
   });

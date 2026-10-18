@@ -144,10 +144,25 @@ describe("background proposer endpoint", () => {
     const envelope = seen[0]!.envelope;
     expect(envelope.role).toBe("background-proposer");
     if (envelope.role !== "background-proposer") return;
-    expect(Object.keys(envelope.context).sort()).toEqual(["preferences", "problem"]);
+    expect(Object.keys(envelope.context).sort()).toEqual(["operators", "preferences", "problem"]);
     expect(envelope.context.problem).toContain("m = n + 1");
     expect(envelope.context.preferences).toEqual({ domains: ["number theory"], notation: [] });
     expect(seen[0]!.messages[0].content).toContain("must suffice to formalize the problem");
+    // The registry's operators are offered so that a constant can reference one with its exact
+    // signature: symbol, display name and sort-name signature, and nothing about notation.
+    const operators = envelope.context.operators ?? [];
+    expect(operators.map(({ symbol }) => symbol).sort()).toEqual(
+      starterLibraryPacks()
+        .flatMap((pack) => pack.operators.map(({ symbol }) => symbol))
+        .sort(),
+    );
+    expect(operators.find(({ symbol }) => symbol === "Divides")).toEqual({
+      symbol: "Divides",
+      displayName: "divides",
+      parameters: ["integer", "integer"],
+      result: "proposition",
+    });
+    expect(seen[0]!.messages[0].content).toContain("context.operators");
     expect(store.sessions.size).toBe(0);
     expect(store.nodes.size).toBe(0);
 
@@ -184,7 +199,7 @@ describe("background proposer endpoint", () => {
     expect(await response.json()).toMatchObject({ proposal: { constants: [] } });
     const envelope = seen[0]!.envelope;
     if (envelope.role !== "background-proposer") throw new Error("Expected a background call.");
-    expect(Object.keys(envelope.context)).toEqual(["problem"]);
+    expect(Object.keys(envelope.context).sort()).toEqual(["operators", "problem"]);
   });
 
   it("replays a repeated call ID without contacting the provider again", async () => {
@@ -804,6 +819,7 @@ describe("background-proposer capability", () => {
     expect(await roles(configured)).toEqual({
       "topic-extractor": false,
       "background-proposer": true,
+      librarian: false,
       "proof-state-formalizer": false,
       "move-shortlister": false,
       "move-executor": false,

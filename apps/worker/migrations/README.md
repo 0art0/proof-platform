@@ -38,6 +38,10 @@ approval decisions are stored in `llm_topic_decisions` beside the topic decision
 proposal shape differs; the referenced call's role tells them apart), so no table is added. Each
 widening lists every role that exists on its branch.
 
+`0016_llm_librarian_role.sql` expands it once more to include the librarian. The user's bulk
+approval of its results is again a row of `llm_topic_decisions` (it names the stored call and the
+approved result IDs only, never the artifacts), so no table is added.
+
 `0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
 events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
 as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so

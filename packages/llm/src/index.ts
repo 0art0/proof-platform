@@ -23,12 +23,22 @@ import {
 } from "@proof/protocol";
 import { z } from "zod";
 import {
+  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
   BACKGROUND_PROPOSER_SYSTEM_MESSAGE,
+  MAX_EXISTING_OPERATORS,
   backgroundProposerContextSchema,
   backgroundProposerOutputSchema,
   backgroundProposerWireResultSchema,
+  describeExistingOperators,
   normalizeBackgroundProposerWireResult,
 } from "./background-proposer";
+import {
+  LIBRARIAN_SYSTEM_MESSAGE,
+  librarianContextSchema,
+  librarianOutputSchema,
+  librarianWireResultSchema,
+  normalizeLibrarianWireResult,
+} from "./librarian";
 import {
   MAX_PLAN_STEPS,
   executorInsufficientContextSchema,
@@ -63,6 +73,7 @@ export const SUPPORTED_LLM_ROLES = [
   "move-shortlister",
   "background-proposer",
   "move-executor",
+  "librarian",
 ] as const;
 export const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
@@ -81,14 +92,35 @@ const uniqueShortTextsSchema = z
 export { backgroundProfileSchema, type BackgroundProfile } from "@proof/protocol";
 export * from "./transport";
 export {
+  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
   MAX_BACKGROUND_CONSTANTS,
+  MAX_EXISTING_OPERATORS,
   backgroundProposalSchema,
   backgroundProposerOutputSchema,
   type BackgroundConstant,
   type BackgroundProposal,
   type BackgroundProposerContext,
   type BackgroundProposerOutput,
+  type ExistingOperator,
 } from "./background-proposer";
+export {
+  MAX_LIBRARIAN_CONTEXT_CONSTANTS,
+  MAX_LIBRARIAN_CONTEXT_RESULTS,
+  MAX_LIBRARIAN_NEW_CONSTANTS,
+  MAX_LIBRARIAN_RESULTS,
+  librarianContextSchema,
+  librarianNewConstants,
+  librarianOutputSchema,
+  librarianProposalSchema,
+  librarianResultSchema,
+  type LibrarianContext,
+  type LibrarianExistingResult,
+  type LibrarianOutput,
+  type LibrarianProposal,
+  type LibrarianRequestKind,
+  type LibrarianResult,
+  type LibrarianUnusableResult,
+} from "./librarian";
 
 const topicExtractorContextSchema = z
   .object({
@@ -311,6 +343,8 @@ const topicExtractorEnvelopeSchema = z
     context: topicExtractorContextSchema,
   })
   .strict();
+/** The formalizer is shown at most this many library results. */
+export const MAX_FORMALIZER_LIBRARY_RESULTS = 64;
 const formalizerLibraryResultSchema = z
   .object({
     id: stableIdentifierSchema,
@@ -329,7 +363,7 @@ const formalizerContextSchema = z
     packs: z.array(problemSetupPackIdSchema).max(7),
     approvedLibrary: z
       .object({
-        results: z.array(formalizerLibraryResultSchema).max(64),
+        results: z.array(formalizerLibraryResultSchema).max(MAX_FORMALIZER_LIBRARY_RESULTS),
         operators: z.array(operatorDeclarationSchema).max(128),
         sorts: z.array(problemSetupSortIdSchema).max(11),
       })
@@ -374,12 +408,20 @@ const moveExecutorEnvelopeSchema = z
     context: moveExecutorContextSchema,
   })
   .strict();
+const librarianEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("librarian"),
+    context: librarianContextSchema,
+  })
+  .strict();
 export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   topicExtractorEnvelopeSchema,
   proofStateFormalizerEnvelopeSchema,
   moveShortlisterEnvelopeSchema,
   backgroundProposerEnvelopeSchema,
   moveExecutorEnvelopeSchema,
+  librarianEnvelopeSchema,
 ]);
 export type LlmContextEnvelope = z.infer<typeof llmContextEnvelopeSchema>;
 
@@ -480,6 +522,8 @@ const backgroundProposerRequestSchema = z
     id: llmCallIdSchema,
     problem: backgroundProposerContextSchema.shape.problem,
     preferences: backgroundProposerContextSchema.shape.preferences,
+    /** The operators that already exist (the global registry), which constants may reference. */
+    operators: z.array(operatorDeclarationSchema).max(MAX_EXISTING_OPERATORS).optional(),
     revision: backgroundProposerContextSchema.shape.revision,
   })
   .strict();
@@ -487,7 +531,8 @@ const backgroundProposerRequestSchema = z
 /**
  * Project the problem statement (and, on a revision, the previous proposal and the user's
  * feedback) into a background-proposer envelope. The previous proposal is validated like any
- * proposal, so a forged one is refused.
+ * proposal, so a forged one is refused. The existing operators, when supplied, appear in the
+ * context as symbol, display name and signature, so that a constant can reference one.
  */
 export function buildBackgroundProposerContext(
   input: unknown,
@@ -503,9 +548,36 @@ export function buildBackgroundProposerContext(
     context: {
       problem: request.problem,
       ...(request.preferences === undefined ? {} : { preferences: request.preferences }),
+      ...(request.operators === undefined
+        ? {}
+        : { operators: describeExistingOperators(request.operators) }),
       ...(request.revision === undefined ? {} : { revision: request.revision }),
     },
   }) as RoleLlmContextResult<"background-proposer">;
+}
+
+const librarianRequestIdSchema = z.looseObject({ id: llmCallIdSchema });
+
+/**
+ * Build a librarian envelope. The request is the call ID plus the context: the request kind with
+ * the background, the constants to cover and the results already in the library. There is no
+ * problem statement in a librarian's context, and a request that carries one (or any other field)
+ * is refused.
+ */
+export function buildLibrarianContext(input: unknown): RoleLlmContextResult<"librarian"> {
+  const identified = safeParsePlain(librarianRequestIdSchema, input);
+  if (identified === undefined) {
+    return failure("invalid-request", "The librarian request is invalid.");
+  }
+  const { id, ...candidate } = identified;
+  const context = safeParsePlain(librarianContextSchema, candidate);
+  if (context === undefined) return failure("invalid-request", "The librarian request is invalid.");
+  return envelopeSuccess({
+    id,
+    schemaVersion: "llm-context/v1",
+    role: "librarian",
+    context,
+  }) as RoleLlmContextResult<"librarian">;
 }
 
 const proofStateFormalizerRequestSchema = z
@@ -1005,10 +1077,12 @@ export type ValidatedLlmOutput =
   | z.infer<typeof shortlisterOutputSchema>
   | z.infer<typeof formalizerOutputSchema>
   | z.infer<typeof backgroundProposerOutputSchema>
-  | z.infer<typeof executorOutputSchema>;
+  | z.infer<typeof executorOutputSchema>
+  | z.infer<typeof librarianOutputSchema>;
 
 const topicWireSchema = z.object({ result: topicOutputSchema }).strict();
 const backgroundWireSchema = z.object({ result: backgroundProposerWireResultSchema }).strict();
+const librarianWireSchema = z.object({ result: librarianWireResultSchema }).strict();
 const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).strict();
 const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
 const executorWireSchema = z.object({ result: executorWireResultSchema }).strict();
@@ -1051,6 +1125,7 @@ export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
   if (role === "proof-state-formalizer") return formalizerWireSchema;
   if (role === "background-proposer") return backgroundWireSchema;
   if (role === "move-executor") return executorWireSchema;
+  if (role === "librarian") return librarianWireSchema;
   return shortlisterWireSchema;
 }
 
@@ -1115,6 +1190,7 @@ function expectedSystemMessage(role: SupportedLlmRole): string {
   }
   if (role === "proof-state-formalizer") return FORMALIZER_SYSTEM_MESSAGE;
   if (role === "background-proposer") return BACKGROUND_PROPOSER_SYSTEM_MESSAGE;
+  if (role === "librarian") return LIBRARIAN_SYSTEM_MESSAGE;
   if (role === "move-executor") return MOVE_EXECUTOR_SYSTEM_MESSAGE;
   return SHORTLISTER_SYSTEM_MESSAGE;
 }
@@ -1128,15 +1204,17 @@ const SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE =
 
 /**
  * System messages a stored call may carry. Formalizer calls recorded before the approved-constants
- * instruction was added, and shortlister calls recorded before the none-relevant outcome, keep their
- * original message, so existing evidence stays readable; new calls are always prepared with the
- * current message.
+ * instruction was added, shortlister calls recorded before the none-relevant outcome, and
+ * background-proposer calls recorded before existing operators were offered, keep their
+ * original message, so existing evidence stays readable; new calls are always prepared with
+ * the current message.
  */
 function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean {
   return (
     content === expectedSystemMessage(role) ||
     (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE) ||
-    (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE)
+    (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "background-proposer" && content === BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE)
   );
 }
 
@@ -1163,6 +1241,17 @@ export function validateLlmOutput(
       wireOutput === undefined ? undefined : normalizeBackgroundProposerWireResult(wireOutput);
     return output === undefined
       ? failure("invalid-output", "The LLM output is malformed or breaks a background rule.")
+      : { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  if (call.role === "librarian") {
+    const wireOutput = safeParsePlain(librarianWireResultSchema, candidate);
+    const output =
+      wireOutput === undefined || call.envelope.role !== "librarian"
+        ? undefined
+        : normalizeLibrarianWireResult(wireOutput, call.envelope.context);
+    return output === undefined
+      ? failure("invalid-output", "The LLM output is malformed or breaks a library rule.")
       : { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 
@@ -1413,6 +1502,7 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         shortlisterOutputSchema,
         backgroundProposerOutputSchema,
         executorOutputSchema,
+        librarianOutputSchema,
       ])
       .optional(),
     diagnostics: z.array(llmBoundaryDiagnosticSchema),
@@ -1457,7 +1547,9 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         (evidence.role === "background-proposer" &&
           !backgroundProposerOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "move-executor" &&
-          !executorOutputSchema.safeParse(evidence.output).success))
+          !executorOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "librarian" &&
+          !librarianOutputSchema.safeParse(evidence.output).success))
     ) {
       context.addIssue({ code: "custom", message: "Evidence output must match the call role." });
     }
