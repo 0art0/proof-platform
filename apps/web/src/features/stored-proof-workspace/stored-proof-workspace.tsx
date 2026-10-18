@@ -51,9 +51,10 @@ import {
   suggestionApiResponseSchema,
   suggestionRequestSchema,
   type MoveChoiceRequest,
-  type ProofSelectionDescriptor,
 } from "./api-contract";
+import { toDescriptor } from "./selection-descriptor";
 import { createInteractionRecorder } from "./interaction-recorder";
+import { MoveInstructions } from "./move-instructions";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
@@ -82,6 +83,8 @@ export type StoredProofWorkspaceProps = Readonly<{
   node: ProofNode;
   /** Whether the proof service can rank suggestions with a model. */
   aiShortlist?: boolean | undefined;
+  /** Whether the proof service can turn a described step into kernel steps with a model. */
+  aiExecutor?: boolean | undefined;
 }>;
 type HistoryState =
   | Readonly<{ kind: "loading" }>
@@ -105,6 +108,7 @@ function StatefulStoredWorkspace({
   session: initialSession,
   node: initialNode,
   aiShortlist = false,
+  aiExecutor = false,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -128,6 +132,7 @@ function StatefulStoredWorkspace({
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const commandIds = useRef(new Map<string, MoveChoiceRequest["commandId"]>());
   const mutationPendingRef = useRef(false);
+  const instructionsRef = useRef<HTMLTextAreaElement | null>(null);
   // Whether the last reported selection was empty. A snapshot starts with no selection.
   const selectionEmpty = useRef(true);
   const recordInteraction = useMemo(() => createInteractionRecorder(session.id), [session.id]);
@@ -606,6 +611,51 @@ function StatefulStoredWorkspace({
     [loadHistory, rejectShownPreview, resetTransientState, session.id],
   );
 
+  /** "Describe a move" on the shortlist's none-relevant notice: go to the description box. */
+  const focusInstructions = useCallback(() => {
+    const box = instructionsRef.current;
+    if (box === null) return;
+    box.scrollIntoView?.({ block: "center" });
+    box.focus();
+  }, []);
+
+  /** The move-instruction box commits a plan like any other proof command: one at a time. */
+  const beginExecutorApply = useCallback(() => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    actionGeneration.current += 1;
+    return true;
+  }, []);
+  const endExecutorApply = useCallback(() => {
+    mutationPendingRef.current = false;
+    setMutationPending(false);
+  }, []);
+  const adoptExecutorResult = useCallback(
+    async ({ nodeId, stepCount }: Readonly<{ nodeId: string; stepCount: number }>) => {
+      const current = await readCurrentSession(session.id);
+      if (!current.ok || current.value.node.id !== nodeId) {
+        setNotice({
+          state: "rejected",
+          message:
+            "The steps were applied, but the new current node could not be loaded; reload the page.",
+        });
+        void loadHistory();
+        return;
+      }
+      rejectShownPreview("superseded");
+      setSession(current.value.session);
+      setNode(current.value.node);
+      resetTransientState();
+      setNotice({
+        state: "committed",
+        message: `Applied ${stepCount} step${stepCount === 1 ? "" : "s"} from your description; now at ${nodeId}.`,
+      });
+      void loadHistory();
+    },
+    [loadHistory, rejectShownPreview, resetTransientState, session.id],
+  );
+
   const breadcrumb = useMemo(() => {
     if (history.kind === "loading") return { kind: "loading" } as const;
     const crumbs =
@@ -722,20 +772,37 @@ function StatefulStoredWorkspace({
         view={view}
         abstraction={abstraction}
       />
-      <div
-        className={styles.interactionShell}
-        data-busy={mutationPending}
-        aria-busy={mutationPending}
-      >
-        <ProofWorkspace
-          key={node.id}
+      <div className={styles.stateRow}>
+        <div
+          className={styles.interactionShell}
+          data-busy={mutationPending}
+          aria-busy={mutationPending}
+        >
+          <ProofWorkspace
+            key={node.id}
+            node={node}
+            operators={session.operators}
+            view={view}
+            onSelectionChange={handleSelectionChange}
+            gestures={drag.bindings}
+            selectionRequest={drag.selectionRequest}
+            suggestionsLink={suggestionsLink}
+          />
+        </div>
+        <MoveInstructions
+          sessionId={session.id}
           node={node}
           operators={session.operators}
+          selections={selections}
+          presentation={presentation}
           view={view}
-          onSelectionChange={handleSelectionChange}
-          gestures={drag.bindings}
-          selectionRequest={drag.selectionRequest}
-          suggestionsLink={suggestionsLink}
+          enabled={aiExecutor}
+          readOnly={readOnly}
+          busy={mutationPending}
+          textareaRef={instructionsRef}
+          onApplyStart={beginExecutorApply}
+          onApplyEnd={endExecutorApply}
+          onApplied={adoptExecutorResult}
         />
       </div>
 
@@ -744,9 +811,9 @@ function StatefulStoredWorkspace({
           {READ_ONLY_REASON}: suggestions can be viewed but not applied.
         </p>
       ) : null}
-      {/* onDescribeMove (focus the move instructions box) and onFindMoreResults (library
-          top-up) are deliberately unwired until their backends exist: see
-          docs/ai-agents-architecture.md §5 and §2. Without them the panel shows neither button. */}
+      {/* onFindMoreResults (library top-up) is deliberately unwired until its backend exists: see
+          docs/ai-agents-architecture.md §2. Without it the panel shows no such button. "Describe a
+          move" is offered only when the move-instruction box can take a description. */}
       <SuggestionPanel
         suggestions={suggestions}
         move={moveState}
@@ -758,6 +825,7 @@ function StatefulStoredWorkspace({
         aiShortlist={
           aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
         }
+        onDescribeMove={aiExecutor && !readOnly ? focusInstructions : undefined}
         {...panelActions}
       />
       <InquiryPanel
@@ -863,7 +931,7 @@ function HistoryView({
                       {incoming === undefined
                         ? `Root · ${node.id}`
                         : link === undefined
-                          ? `${incoming.name} · ${incoming.edge.transitionClass} · ${node.id}`
+                          ? `${incoming.name} · ${incoming.edge.transitionClass}${proposalNote(incoming.edge)} · ${node.id}`
                           : `${macroStepLabel(link, macroNames(macros))} · ${humanizeMoveId(incoming.name)} · ${incoming.edge.transitionClass} · ${node.id}`}
                     </small>
                   </button>
@@ -875,6 +943,16 @@ function HistoryView({
       ) : null}
     </section>
   );
+}
+
+/** A step a model proposed and the user confirmed says so in the history. */
+function proposalNote(edge: ProofEdge): string {
+  if (edge.proposal === undefined) return "";
+  const origin =
+    edge.proposal.source === "user-proposal"
+      ? "from your description"
+      : "from a suggested technique";
+  return ` · AI step ${edge.proposal.stepIndex} of ${edge.proposal.stepCount} ${origin}`;
 }
 
 function orderedHistory(nodes: readonly ProofNode[], edges: readonly HistoryEdge[]) {
@@ -929,26 +1007,6 @@ function selectionRole(
 ): "proposition" | "term" | "binder" | undefined {
   const resolved = resolveProofSelection(state, selection, { operators });
   return resolved.ok ? resolved.selection.position.role : undefined;
-}
-
-function toDescriptor(
-  selection: AnchoredProofSelection,
-  abstraction?: ProofSelectionDescriptor["abstraction"],
-): ProofSelectionDescriptor {
-  const retrievalOnly = abstraction === undefined ? {} : { abstraction };
-  return selection.kind === "exact"
-    ? { kind: "exact", anchor: selection.anchor, path: [...selection.path], ...retrievalOnly }
-    : {
-        ...retrievalOnly,
-        kind: "associative",
-        anchor: selection.anchor,
-        containerPath: [...selection.containerPath],
-        startOperand: selection.startOperand,
-        endOperand: selection.endOperand,
-        ...(selection.displayRange === undefined
-          ? {}
-          : { displayRange: [...selection.displayRange] as [number, number] }),
-      };
 }
 
 function suggestionSetId(stateId: string, generation: number): string {

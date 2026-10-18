@@ -32,6 +32,7 @@ describe("readAiCapabilities", () => {
           "background-proposer": true,
           "proof-state-formalizer": false,
           "move-shortlister": true,
+          "move-executor": true,
           attestor: true,
         },
       },
@@ -41,6 +42,7 @@ describe("readAiCapabilities", () => {
       "background-proposer": true,
       "proof-state-formalizer": false,
       "move-shortlister": true,
+      "move-executor": true,
     });
   });
 
@@ -65,6 +67,17 @@ describe("relayAiRequest", () => {
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(String(url)).toBe("http://proof-worker.test/proof-sessions/session%3Aa/ai/shortlist");
     expect(init.body).toBe(JSON.stringify({ id: 1 }));
+  });
+
+  it.each([
+    ["execute", "/proof-sessions/session%3Aa/ai/execute"],
+    ["execute-apply", "/proof-sessions/session%3Aa/ai/execute/apply"],
+  ] as const)("posts a %s request to its worker path", async (kind, path) => {
+    const fetchMock = stubWorker({ status: "previewed", callId: "llm-call:x" }, 200);
+    await relayAiRequest({ kind, sessionId: "session:a" }, { id: 1 });
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe(`http://proof-worker.test${path}`);
+    expect(init.method).toBe("POST");
   });
 
   it.each([

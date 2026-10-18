@@ -46,6 +46,7 @@ export default async function SessionPage({
         session={session}
         node={loaded.node}
         aiShortlist={capabilities["move-shortlister"]}
+        aiExecutor={capabilities["move-executor"]}
       />
     </main>
   );

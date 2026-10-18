@@ -1630,6 +1630,7 @@ export const AI_ROLES = [
   "background-proposer",
   "proof-state-formalizer",
   "move-shortlister",
+  "move-executor",
 ] as const;
 export type AiRole = (typeof AI_ROLES)[number];
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
@@ -1637,6 +1638,7 @@ export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "background-proposer": false,
   "proof-state-formalizer": false,
   "move-shortlister": false,
+  "move-executor": false,
 });
 
 const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
@@ -1658,6 +1660,7 @@ export async function readAiCapabilities(
       "background-proposer": roles["background-proposer"] === true,
       "proof-state-formalizer": roles["proof-state-formalizer"] === true,
       "move-shortlister": roles["move-shortlister"] === true,
+      "move-executor": roles["move-executor"] === true,
     };
   } catch {
     return NO_AI_CAPABILITIES;
@@ -1679,14 +1682,19 @@ export type AiEndpoint =
   | Readonly<{ kind: "background" }>
   | Readonly<{ kind: "background-decisions" }>
   | Readonly<{ kind: "formalize" }>
-  | Readonly<{ kind: "shortlist"; sessionId: string }>;
+  | Readonly<{ kind: "shortlist"; sessionId: string }>
+  | Readonly<{ kind: "execute"; sessionId: string }>
+  | Readonly<{ kind: "execute-apply"; sessionId: string }>;
 
 function aiEndpointPath(endpoint: AiEndpoint): string {
   if (endpoint.kind === "background") return "/ai/background";
   if (endpoint.kind === "background-decisions") return "/ai/background/decisions";
   if (endpoint.kind === "formalize") return "/ai/formalize";
   const sessionId = parseIdentifier(endpoint.sessionId, "proof session");
-  return `/proof-sessions/${encodeURIComponent(sessionId)}/ai/shortlist`;
+  const base = `/proof-sessions/${encodeURIComponent(sessionId)}/ai`;
+  if (endpoint.kind === "execute") return `${base}/execute`;
+  if (endpoint.kind === "execute-apply") return `${base}/execute/apply`;
+  return `${base}/shortlist`;
 }
 
 /**

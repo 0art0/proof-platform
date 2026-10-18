@@ -80,14 +80,16 @@ describe("migration schema", () => {
     expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
   });
 
-  it("admits every supported LLM role in the latest llm_calls role constraint (0015)", () => {
-    const latest = [...migrations]
-      .reverse()
-      .find((migration) => migration.sql.includes("ADD CONSTRAINT llm_calls_role_check"));
-    expect(latest?.name).toBe("0015_llm_background_proposer_role.sql");
-    const list = /CHECK \(role IN \(([^)]*)\)\)/.exec(latest?.sql ?? "")?.[1] ?? "";
-    const roles = [...list.matchAll(/'([a-z-]+)'/g)].map((match) => match[1]);
-    expect(roles.sort()).toEqual([...SUPPORTED_LLM_ROLES].sort());
+  it("lets the last role-constraint migration store every supported LLM role", () => {
+    const widening = migrations.filter(({ sql }) => sql.includes("llm_calls_role_check"));
+    const last = widening[widening.length - 1];
+    expect(last?.name.startsWith("0017_")).toBe(true);
+    const allowed = [...(last?.sql.matchAll(/'([a-z-]+)'/g) ?? [])].map((match) => match[1]);
+    for (const role of SUPPORTED_LLM_ROLES) expect(allowed, role).toContain(role);
+    // The earlier roles stay valid: a widening never narrows the stored history.
+    for (const role of ["topic-extractor", "move-shortlister", "proof-state-formalizer"]) {
+      expect(allowed, role).toContain(role);
+    }
   });
 
   it("keeps the event provenance constraint (0003) and the discarding client release", () => {

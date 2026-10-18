@@ -441,3 +441,26 @@ test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw 
   const raw = JSON.parse((await page.getByTestId("raw-proof-state").textContent()) ?? "{}");
   expect(raw.state.id).toBe("state:development-root");
 });
+
+test("the move-instruction box is visible and explains why it is off without an AI provider", async ({
+  page,
+}) => {
+  await page.goto("/sessions/session%3Adevelopment");
+  await waitForWorkspace(page);
+
+  // The end-to-end deployment configures no AI provider, so the box is shown but disabled, and
+  // says why in place instead of hiding.
+  const panel = page.getByRole("region", { name: "Move instructions" });
+  await expect(panel).toBeVisible();
+  const description = panel.getByRole("textbox", { name: "Describe a step" });
+  await expect(description).toBeDisabled();
+  await expect(description).toHaveAttribute(
+    "placeholder",
+    "Describe a step, e.g. 'split into cases on whether n is even'",
+  );
+  const preview = panel.getByRole("button", { name: "Preview", exact: true });
+  await expect(preview).toBeDisabled();
+  await expect(panel).toContainText("no AI provider is configured");
+  // Nothing in the existing flow is displaced: the suggestion panel is still there.
+  await expect(page.getByRole("region", { name: "Available suggestions" })).toBeVisible();
+});

@@ -5,8 +5,12 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import {
+  buildMoveExecutorContext,
   buildMoveShortlisterContext,
   buildProofStateFormalizerContext,
+  DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_EXECUTOR_MODEL,
+  DEFAULT_EXECUTOR_REASONING_EFFORT,
   createVercelJevShortlisterTransport,
   createVercelStructuredOutputTransport,
   executePreparedLlmCall,
@@ -644,6 +648,91 @@ describe("Jev confidence extraction", () => {
     expect(evidence).toMatchObject({
       status: "transport-failed",
       diagnostics: [{ code: "transport-failed", subcode: "missing-confidence" }],
+    });
+  });
+});
+
+describe("Vercel structured move-executor transport", () => {
+  function executorCall(): PreparedLlmCall {
+    const node: ProofNode = createProofNodeSchema().parse({
+      id: "node:current",
+      state: {
+        id: "state:current",
+        goals: [
+          {
+            id: "goal:main",
+            sequent: {
+              context: {
+                declarations: ["p"].map((symbol, index) => ({
+                  id: `declaration:${index}`,
+                  symbol,
+                  sort: { kind: "proposition" },
+                  role: "universal-parameter",
+                })),
+                hypotheses: [],
+              },
+              conclusion: { expression: ["Implies", "p", "p"] },
+            },
+          },
+        ],
+        obligations: [],
+      },
+    });
+    const built = buildMoveExecutorContext({
+      id: "llm-call:executor-transport",
+      node,
+      instruction: "assume the antecedent",
+      source: "user-instruction",
+      target: { kind: "goal", id: "goal:main" },
+    });
+    if (!built.ok) throw new Error(built.diagnostics[0].message);
+    const prepared = prepareLlmCall(built.envelope);
+    if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+    return prepared.call;
+  }
+
+  it("sends the executor defaults and the strict plan schema, and its wire plan validates", async () => {
+    const call = executorCall();
+    let requestBody: Record<string, unknown> | undefined;
+    const wirePlan = {
+      result: {
+        kind: "plan",
+        steps: [
+          {
+            kind: "introduce-implication",
+            target: { kind: "goal", id: "goal:main" },
+            hypothesisId: "assume-p",
+          },
+        ],
+        explanation: "Assume the antecedent.",
+      },
+    };
+    const transport = createVercelStructuredOutputTransport({
+      apiKey: "test-key",
+      model: DEFAULT_EXECUTOR_MODEL,
+      reasoningEffort: DEFAULT_EXECUTOR_REASONING_EFFORT,
+      maxOutputTokens: DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return response({
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify(wirePlan) } }],
+        });
+      },
+    });
+    const output = await transport(call);
+    expect(requestBody).toMatchObject({
+      model: "openai/gpt-6-luna",
+      max_completion_tokens: 16_000,
+      reasoning_effort: "high",
+      response_format: {
+        type: "json_schema",
+        json_schema: { strict: true, name: "proof_move_executor_output" },
+      },
+    });
+    expect(output).toEqual(wirePlan);
+    expect(validateLlmOutput(call, output)).toMatchObject({
+      ok: true,
+      output: { kind: "plan", steps: [{ kind: "introduce-implication" }] },
     });
   });
 });

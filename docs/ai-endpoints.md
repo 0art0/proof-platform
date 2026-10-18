@@ -1,11 +1,13 @@
 # AI endpoints
 
-The worker exposes four single-call AI roles: the background proposer, the topic extractor, the
-proof-state formalizer and the move shortlister. All use the Vercel AI Gateway and persist a
-validated call record before returning a proposal. AI responses never execute proof commands or
-change a proof session directly. The other roles of design plan §15.2 (initial librarian, move
-executor, attestor, background gatekeeper, generality reviewer, stateful proof agent) are not
-implemented. The agent architecture is specified in `docs/ai-agents-architecture.md`.
+The worker exposes five single-call AI roles: the background proposer, the topic extractor, the
+proof-state formalizer, the move shortlister and the move executor. All use the Vercel AI Gateway
+and persist a validated call record before returning a proposal. AI responses never execute proof
+commands or change a proof session directly; the move executor's plan is committed only by a
+separate apply request that the user makes after reading a kernel preview. The other roles of
+design plan §15.2 (initial librarian, attestor, background gatekeeper, generality reviewer,
+stateful proof agent) are not implemented. The agent architecture is specified in
+`docs/ai-agents-architecture.md`.
 
 The background proposer supersedes the topic extractor in the new-problem page: the web
 application no longer calls the topic routes. The worker keeps the `topic-extractor` role and its
@@ -21,30 +23,33 @@ PROOF_STORE=memory node --env-file=.env.local --import tsx apps/worker/src/main.
 ```
 
 For an existing PostgreSQL database, apply migrations `0013_llm_formalizer_role.sql` and
-`0015_llm_background_proposer_role.sql` before starting the updated worker (0015 widens the
-`llm_calls` role constraint; background decisions reuse the `llm_topic_decisions` table). A
-single-instance deployment can use `PROOF_AUTO_MIGRATE=true`; the normal migration runner is
-`npm run migrate`.
+`0015_llm_background_proposer_role.sql` and `0017_llm_move_executor_role.sql` before starting the
+updated worker (each widens the `llm_calls` role constraint; background decisions reuse the
+`llm_topic_decisions` table; 0016 is reserved for the librarian, see
+`docs/ai-agents-architecture.md`). A single-instance deployment can use
+`PROOF_AUTO_MIGRATE=true`; the normal migration runner is `npm run migrate`.
 
 Defaults are `openai/gpt-6-luna` with high reasoning effort and a 32,000 token output limit for the
-formalizer, the same model with medium reasoning effort and an 8,000 token output limit for the
+formalizer, the same model with high reasoning effort and a 16,000 token output limit for the move
+executor, the same model with medium reasoning effort and an 8,000 token output limit for the
 background proposer and for topic extraction, and `typesafe-ai/jev` for shortlisting.
-Configuration can be overridden with
-`PROOF_AI_FORMALIZER_MODEL`, `PROOF_AI_FORMALIZER_REASONING_EFFORT`,
-`PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`, `PROOF_AI_SHORTLISTER_MODEL`,
+Configuration can be overridden with `PROOF_AI_FORMALIZER_MODEL`,
+`PROOF_AI_FORMALIZER_REASONING_EFFORT`, `PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`,
+`PROOF_AI_EXECUTOR_MODEL`, `PROOF_AI_EXECUTOR_REASONING_EFFORT`,
+`PROOF_AI_EXECUTOR_MAX_OUTPUT_TOKENS`, `PROOF_AI_SHORTLISTER_MODEL`,
 `PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, `PROOF_AI_BACKGROUND_MODEL`,
 `PROOF_AI_BACKGROUND_REASONING_EFFORT`, `PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS`,
-`PROOF_AI_TOPIC_MODEL`, `PROOF_AI_TOPIC_REASONING_EFFORT`,
-`PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS`, `PROOF_AI_TIMEOUT_MS`, and `PROOF_AI_FORMALIZER_TIMEOUT_MS`
-(the formalizer's total budget; defaults to `PROOF_AI_TIMEOUT_MS`, itself 120000 ms; raise it for
-long high-effort generations). The confidence threshold defaults
+`PROOF_AI_TOPIC_MODEL`, `PROOF_AI_TOPIC_REASONING_EFFORT`, `PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS`,
+`PROOF_AI_TIMEOUT_MS`, and `PROOF_AI_FORMALIZER_TIMEOUT_MS` (the formalizer's total budget;
+defaults to `PROOF_AI_TIMEOUT_MS`, itself 120000 ms; raise it for long high-effort generations;
+the executor shares `PROOF_AI_TIMEOUT_MS`). The confidence threshold defaults
 to `0.55`; Jev's native confidence and candidate probabilities are included in the stored structured
 evidence. Missing credentials disable these routes. No model fallback is silently selected.
 
 ## Cost guard and status codes
 
-The background, topic, formalizer and shortlist routes can trigger paid provider calls, so they
-share an in-process limiter: a global cap on
+The background, topic, formalizer, shortlist and move-executor preview routes can trigger paid
+provider calls, so they share an in-process limiter: a global cap on
 concurrent provider calls (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token bucket
 (`PROOF_AI_RATE_PER_MINUTE`, default 20; it is also the burst size). A request over budget gets
 `429` with a `Retry-After` header (seconds) and a stable diagnostic code: `ai-rate-limited` or
@@ -61,10 +66,12 @@ worker is still trusted.
 |        | not exist for that construction                                                  |
 | 409    | stale session or suggestion set; decision ID reused or not reviewable; revision  |
 |        | of a call that is not a validated background proposal; approved constant clash   |
-|        | with the operator registry; approved background decision that was rejected       |
+|        | with the operator registry; approved background decision that was rejected; a    |
+|        | move-executor plan that is stale, read-only, or not an applicable plan           |
 | 413    | request body over 256 KiB                                                        |
 | 415    | `Content-Type` is not `application/json`                                         |
 | 422    | the model output was rejected or the draft failed admission; nothing was created |
+|        | (applying a plan: the kernel rejected a step, `plan-step-failed`)                |
 | 429    | cost guard (`Retry-After`)                                                       |
 | 503    | `ai-disabled` (no provider configured), transport failure, or uncertain call     |
 
@@ -73,8 +80,9 @@ Unknown `/ai/*` paths are ordinary unknown routes.
 ## Capabilities
 
 `GET /ai/capabilities` answers `{ "roles": { "topic-extractor": bool, "background-proposer": bool,
-"proof-state-formalizer": bool, "move-shortlister": bool } }`. A role is `true` only when it has a
-configured transport and evidence storage. No model name, endpoint or credential is disclosed. The web application reads it to
+"proof-state-formalizer": bool, "move-shortlister": bool, "move-executor": bool } }`. A role is
+`true` only when it has a configured transport and evidence storage. No model name, endpoint or
+credential is disclosed. The web application reads it to
 decide which AI controls to enable.
 
 ## Propose a background
@@ -355,12 +363,100 @@ Shortlist evidence is session-owned and included in exported session artifacts u
 Construction-owned formalizer evidence is available through its construction evidence route; it is
 not implicitly attached to a later proof-session artifact.
 
+## Describe a step (move executor)
+
+The move executor turns a step described in words into a plan of kernel operations. Two routes,
+both session-scoped, keep it from ever changing the proof on its own (architecture §5).
+
+### Preview
+
+`POST /proof-sessions/:sessionId/ai/execute` accepts:
+
+```json
+{
+  "id": "llm-call:execute-example",
+  "expectedCurrentNodeId": "node:current",
+  "instruction": "Assume p, split the conjunction and close the p half.",
+  "source": "user-instruction",
+  "target": { "kind": "goal", "id": "goal:main" },
+  "selections": [
+    {
+      "kind": "exact",
+      "anchor": {
+        "stateId": "state:current",
+        "target": { "kind": "goal", "id": "goal:main" },
+        "statement": { "kind": "conclusion" }
+      },
+      "path": []
+    }
+  ]
+}
+```
+
+`source` is `user-instruction` (the user's own words) or `shortlisted-technique` (a technique another
+service suggested). `selections` is optional and uses the same descriptors as a suggestion request,
+without an abstraction. The instruction is trimmed and limited to 2,000 characters.
+
+The worker builds the model's context deterministically (design plan §15.3) before any call: the
+instruction, the source, the selections as fragments with their positions, the **target sequent
+only** (its conclusion, its hypotheses with their statement IDs, and the declarations those
+statements use), the session's active operator declarations, and up to 32 approved library results
+that share operators with the selection (or the conclusion, when nothing is selected). The original
+problem, other goals and obligations, history, branches and alternative suggestions are never sent.
+A stale node, a read-only session, and a target outside the state are refused before a provider call
+(`409`, `409`, `400`); a missing provider is `503 ai-disabled`; an exhausted budget is `429` with
+`Retry-After`. A replay of a stored call costs nothing and returns the stored plan again.
+
+The model answers with one of: a **plan** of 1 to 16 kernel operations (the kernel's operation
+schema minus `expectedStateId` and `resultStateId`), `insufficient-context`, or `declined`. A plan
+never contains `mark-sorry` or `close-by-accepted-inference`, no unknown operation kind, no state
+IDs, and cites only supplied library results; anything else is recorded and answered `422`
+(`status: "rejected"`). The model names every new statement, hypothesis, obligation, declaration or
+assumption with a short **label**; the worker makes labels globally unique by prefixing the call
+ID, and a later step refers to an earlier label by the same text. State IDs are chained by the
+worker (`state:<callId>:<n>`).
+
+The worker runs the plan with `planMoveSequence` against the current state and answers `200`:
+
+- `status: "previewed"`: `provenance` (`user-proposal` or `minimal-context-llm`, role
+  `move-executor`), `callId`, `replayed`, `nodeId`, the model's short `explanation`, the composed
+  `transitionClass` and most caveated `evidence`, the `steps` (each concrete kernel operation with
+  its own class and evidence), and `preview`: `{ transitionClass, evidence, beforeState, afterState,
+delta }`, the same before/after/delta the move preview uses. Nothing was committed.
+- `status: "plan-failed"`: the kernel rejected a step. `failure` is `{ stepIndex, stepCount, code,
+message }` with the kernel's own sentence; nothing was committed.
+- `status: "insufficient-context"` or `"declined"`, with the model's `result`.
+
+The call is session-owned evidence (`GET /proof-sessions/:sessionId/llm-calls`) and is exported
+with the session artifact under `llmCalls`, exactly like shortlist evidence.
+
+### Apply
+
+`POST /proof-sessions/:sessionId/ai/execute/apply` accepts `{ "callId", "expectedCurrentNodeId" }`
+and nothing else. The worker reads the plan from the **stored call**, never from the request; a
+call that does not exist is `404`, one that produced no validated plan is `409 plan-not-applicable`,
+and a call previewed at a different node, or a session that moved on since, is `409` (stale). It
+then commits the steps as ordinary raw `apply-kernel-operation` commands in one transaction, the way
+a macro's steps are committed: step `i` is command `command:<callId>:step:<i>`, validated by the
+kernel against the node the previous step created, with the acting human `actor:web`. A step the
+kernel rejects at this point is `422 plan-step-failed` and records nothing. `201` carries
+`status: "applied"`, the final `nodeId`, the composed class and the committed steps; a retry replays
+the recorded commands (`200`, `replayed: true`).
+
+Every committed command, and the edge it creates, carries a **proposal link**
+`{ source: "user-proposal" | "minimal-context-llm", role: "move-executor", callId, stepIndex,
+stepCount }`, so history and the exported artifact name the stored call that proposed the step.
+`user-proposal` marks a plan from the user's own description; `minimal-context-llm` one from a
+suggested technique. The link is part of the protocol (`proposalLinkSchema`); artifact import
+replays each command with it, so stripping it from an edge is detected.
+
 ## Web interface
 
 The web application relays these routes through same-origin proxies (`/api/ai/background`,
-`/api/ai/background/decisions`, `/api/ai/formalize` and
-`/api/proof-sessions/:sessionId/ai-shortlist`), keeping the worker's status codes, including `429`.
-`/api/problem-drafts/validate` and `/api/proof-sessions` also pass the optional
+`/api/ai/background/decisions`, `/api/ai/formalize`,
+`/api/proof-sessions/:sessionId/ai-shortlist`, `/api/proof-sessions/:sessionId/ai-execute` and
+`/api/proof-sessions/:sessionId/ai-execute/apply`), keeping the worker's status codes, including
+`429`. `/api/problem-drafts/validate` and `/api/proof-sessions` also pass the optional
 `approvedBackground` reference. The topic routes are no longer relayed.
 
 - **New problem.** An optional "AI assistance" section starts with "Propose background", enabled
@@ -389,10 +485,31 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
   an unreachable service) shows nothing and leaves the deterministic list; an explicit run reports
   the fallback in place. A none-relevant answer shows "None of these suggestions look relevant to
   your selection." above the unchanged list, with "Describe a move" and "Find more results" buttons
-  that appear only when the host provides the matching callbacks (they are not wired yet). The empty
-  suggestions state offers the same optional "Find more results". Read-only sessions, and
-  deployments without a configured shortlister, show no AI controls and send no AI requests.
-- When a role is not configured, its control is disabled with an explanation.
+  that appear only when the host provides the matching callbacks. The workspace wires "Describe a
+  move" to the move-instruction box (below) whenever that box can take a description; "Find more
+  results" has no backend yet and stays unwired. The empty suggestions state offers the same
+  optional "Find more results". Read-only sessions, and deployments without a configured
+  shortlister, show no ranking controls and send no ranking requests.
+- **Move instructions.** A panel beside the proof state (below it on narrower screens) with a text
+  box, "Describe a step, e.g. 'split into cases on whether n is even'", and a **Preview** button.
+  It is always shown; when the move executor is not configured, the session is read-only, another
+  step is being applied, the box is empty, the selections span several goals, or nothing is left to
+  prove, the control is disabled and says why in place. The step is about the current selection
+  when there is one, otherwise the first open goal. The preview card leads with the composed
+  transition class (equivalence, strengthening or weakening) and what that means in plain
+  language, then the model's short explanation, the ordered steps with their own classes, and the
+  resulting goals, hypotheses and new obligations in the same form as a move preview. **Apply**
+  commits the plan (the request names only the stored call); **Discard** drops it. A plan the
+  kernel rejects shows the failing step and the kernel's reason and says nothing changed; a model
+  that asks for more detail or declines shows its own words. A preview belongs to one proof node
+  and is dropped when the proof moves on.
+- A role that is not configured shows its control disabled with an explanation.
+
+Not yet available: "Save as reusable move" after an applied one-off step (architecture §5). The
+authoring flow derives a move from steps picked from displayed suggestions (their recorded
+selections and menu choices), and a plan applied here is a sequence of raw kernel operations with
+neither, so it cannot be turned into an authored-move draft without inventing selections and menu
+choices. Recording such plans as macros is a separate change.
 
 ## Transport behaviour
 

@@ -12,6 +12,8 @@ import { POST as background } from "./background/route";
 import { POST as decisions } from "./background/decisions/route";
 import { POST as formalize } from "./formalize/route";
 import { POST as shortlist } from "../proof-sessions/[sessionId]/ai-shortlist/route";
+import { POST as execute } from "../proof-sessions/[sessionId]/ai-execute/route";
+import { POST as executeApply } from "../proof-sessions/[sessionId]/ai-execute/apply/route";
 
 const ORIGIN = "http://proof.test";
 
@@ -40,6 +42,8 @@ describe("AI relay routes", () => {
       await decisions(request({ id: "x" })),
       await formalize(request({ id: "x" })),
       await shortlist(request({ id: "x" }), context),
+      await execute(request({ id: "x" }), context),
+      await executeApply(request({ callId: "x" }), context),
     ]) {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ ok: true, data: body });
@@ -49,7 +53,21 @@ describe("AI relay routes", () => {
       { kind: "background-decisions" },
       { kind: "formalize" },
       { kind: "shortlist", sessionId: "session:a" },
+      { kind: "execute", sessionId: "session:a" },
+      { kind: "execute-apply", sessionId: "session:a" },
     ]);
+  });
+
+  it("keeps a rate-limited move-instruction answer", async () => {
+    mocks.relayAiRequest.mockResolvedValue({
+      ok: false,
+      status: 429,
+      code: "ai-rate-limited",
+      message: "Retry later.",
+      body: { status: "rate-limited" },
+    });
+    const context = { params: Promise.resolve({ sessionId: "session:a" }) };
+    expect((await execute(request({ id: "x" }), context)).status).toBe(429);
   });
 
   it("keeps a rate-limited answer and its diagnostics", async () => {

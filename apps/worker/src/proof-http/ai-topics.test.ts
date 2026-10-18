@@ -89,6 +89,7 @@ describe("AI capabilities endpoint", () => {
         "background-proposer": false,
         "proof-state-formalizer": false,
         "move-shortlister": false,
+        "move-executor": false,
       },
     });
   });
@@ -102,6 +103,7 @@ describe("AI capabilities endpoint", () => {
         "background-proposer": false,
         "proof-state-formalizer": false,
         "move-shortlister": false,
+        "move-executor": false,
       },
     });
     const unstored = await running({ ai: topicRuntime(transport), calls: null });
