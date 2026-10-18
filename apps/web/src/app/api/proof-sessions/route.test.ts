@@ -75,8 +75,29 @@ describe("POST /api/proof-sessions", () => {
     );
   });
 
+  it("relays the approved library reference with the approval", async () => {
+    mocks.createProblemSession.mockResolvedValue({ ok: true, status: 201, body: {} });
+    const approvedBackground = { constructionId: "construction:web-1", decisionId: "decision:1" };
+    const approvedLibrary = { constructionId: "construction:web-1", decisionId: "library:1" };
+    const incoming = request({ ...approval, approvedBackground, approvedLibrary });
+    expect((await POST(incoming)).status).toBe(201);
+    expect(mocks.createProblemSession).toHaveBeenCalledExactlyOnceWith(
+      { ...approval, approvedBackground, approvedLibrary },
+      { signal: incoming.signal },
+    );
+  });
+
   it.each([
     ["a missing digest", { sessionId: "session:new", draft: {} }, {}],
+    [
+      "client-supplied library artifacts",
+      {
+        ...approval,
+        approvedLibrary: { constructionId: "c", decisionId: "d", results: [{ id: "result:x" }] },
+      },
+      {},
+    ],
+    ["an incomplete library reference", { ...approval, approvedLibrary: { decisionId: "d" } }, {}],
     ["extra authority", { ...approval, actor: "admin" }, {}],
     [
       "client-supplied constants",

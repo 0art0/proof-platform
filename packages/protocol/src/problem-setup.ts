@@ -192,6 +192,7 @@ export const PROBLEM_SETUP_DIAGNOSTIC_CODES = [
   "undeclared-symbol",
   "not-a-proposition",
   "invalid-root-state",
+  "approved-library-invalid",
 ] as const;
 export const problemSetupDiagnosticCodeSchema = z.enum(PROBLEM_SETUP_DIAGNOSTIC_CODES);
 export type ProblemSetupDiagnosticCode = z.infer<typeof problemSetupDiagnosticCodeSchema>;
@@ -209,6 +210,34 @@ export type ProblemSetupDiagnostic = z.infer<typeof problemSetupDiagnosticSchema
 export const problemSetupDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
 /**
+ * The results of an approved initial library, as the review shows them. Approval records these
+ * results (and their generated variants) as setup additions to the `initial-problem` layer of the
+ * new session; the review's digest covers the full artifacts, not just this summary.
+ */
+export const problemSetupInitialLibrarySchema = z
+  .object({
+    results: z
+      .array(
+        z
+          .object({
+            id: stableIdentifierSchema,
+            name: z.string().min(1),
+            description: z.string().min(1),
+            statement: plainMathJsonSchema,
+            premises: z.array(plainMathJsonSchema),
+          })
+          .strict(),
+      )
+      .max(40),
+    /** Equivalent reshapings generated from the results; added with them. */
+    variantCount: z.number().int().nonnegative(),
+    /** Symbols of operators the results add to the session beyond the packs and the background. */
+    addedOperatorSymbols: z.array(z.string().min(1)),
+  })
+  .strict();
+export type ProblemSetupInitialLibrary = z.infer<typeof problemSetupInitialLibrarySchema>;
+
+/**
  * What approval would store. `rootNode` is validated by consumers with
  * `createProofNodeSchema({ operators })`, since its schema depends on the operators.
  */
@@ -219,6 +248,8 @@ export const problemSetupReviewSchema = z
     metadata: proofSessionMetadataSchema,
     /** Every pack the catalog offers for these operators, including always-active packs. */
     activePackIds: z.array(problemSetupPackIdSchema),
+    /** Present when an approved initial library is part of the setup. */
+    initialLibrary: problemSetupInitialLibrarySchema.optional(),
     digest: problemSetupDigestSchema,
   })
   .strict();

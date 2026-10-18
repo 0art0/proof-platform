@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@proof/library": "*",
     "@proof/protocol": "*",
     "zod": "^4.5.4"
   }

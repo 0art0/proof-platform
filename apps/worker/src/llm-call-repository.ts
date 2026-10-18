@@ -1,4 +1,5 @@
 import {
+  MAX_LIBRARIAN_RESULTS,
   backgroundProposalSchema,
   llmCallEvidenceSchema,
   llmCallIdSchema,
@@ -6,6 +7,8 @@ import {
   topicManifestProposalSchema,
   executePreparedLlmCall,
   type BackgroundProposal,
+  type LibrarianContext,
+  type LibrarianProposal,
   type LlmCallId,
   type LlmTransport,
 } from "@proof/llm";
@@ -106,7 +109,30 @@ export const backgroundProposalDecisionSchema = z.discriminatedUnion("decision",
   z.object({ ...backgroundReviewBase, decision: z.literal("rejected") }).strict(),
 ]);
 export type BackgroundProposalDecision = z.infer<typeof backgroundProposalDecisionSchema>;
-export type ProposalDecision = TopicProposalDecision | BackgroundProposalDecision;
+
+/**
+ * A person's bulk approval of results of a librarian proposal. Its row shares
+ * `llm_topic_decisions` with the other reviews and references the stored call. It names the kept
+ * result IDs and nothing else: the artifacts are always read from the stored call, so a decision
+ * can never carry mathematics the model did not return. A person who keeps nothing records no
+ * decision. The approval's own ID is kept in the table's `approved_manifest_id` column.
+ */
+export const libraryProposalDecisionSchema = z
+  .object({
+    ...reviewFields,
+    decision: z.literal("approved"),
+    approvedManifestId: stableStorageIdentifierSchema,
+    approvedResultIds: z
+      .array(stableStorageIdentifierSchema)
+      .min(1)
+      .max(MAX_LIBRARIAN_RESULTS)
+      .refine((ids) => new Set(ids).size === ids.length, "Approved result IDs must be unique."),
+  })
+  .strict();
+export type LibraryProposalDecision = z.infer<typeof libraryProposalDecisionSchema>;
+/** A review of a proposal that is stored with the exact proposal it reviewed. */
+type ProposalReview = TopicProposalDecision | BackgroundProposalDecision;
+export type ProposalDecision = ProposalReview | LibraryProposalDecision;
 
 export const approvedTopicManifestSchema = z
   .object({
@@ -448,6 +474,146 @@ export async function readApprovedBackground(
   }
 }
 
+/** The validated proposal of a completed librarian call, with the context it was made from. */
+export type StoredLibraryProposal = Readonly<{
+  callId: LlmCallId;
+  context: Extract<LibrarianContext, { kind: "initial" }>;
+  proposal: LibrarianProposal;
+}>;
+
+/** The library proposal a stored call holds, or undefined when it holds none (yet). */
+export function libraryProposalOf(record: StoredLlmCall): StoredLibraryProposal | undefined {
+  if (
+    record.status !== "completed" ||
+    record.role !== "librarian" ||
+    record.evidence.status !== "validated"
+  ) {
+    return undefined;
+  }
+  const output = record.evidence.output;
+  const envelope = record.preparedCall.envelope;
+  if (
+    output?.kind !== "library-proposal" ||
+    envelope.role !== "librarian" ||
+    envelope.context.kind !== "initial"
+  ) {
+    return undefined;
+  }
+  return freezeDetached({ callId: record.id, context: envelope.context, proposal: output });
+}
+
+export type RecordLibraryDecisionResult =
+  | Readonly<{ status: "recorded"; decision: LibraryProposalDecision; replayed: boolean }>
+  | RepositoryFailure;
+
+/**
+ * Record a person's bulk approval of results of the library proposal of a stored call. A retried
+ * decision with the same ID and content replays; the same ID for another review is a conflict.
+ * That the named results were admitted is the caller's check (it needs the admission gate); the
+ * approval is checked again whenever it is resolved.
+ */
+export async function recordLibraryProposalDecision(
+  store: LlmCallStore,
+  input: unknown,
+): Promise<RecordLibraryDecisionResult> {
+  const decision = safeParse(libraryProposalDecisionSchema, input);
+  if (decision === undefined) {
+    return failure("rejected", "invalid-request", "The library decision is invalid.");
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const existingInput = await transaction.readDecisionForUpdate(decision.owner, decision.id);
+      let existing: LibraryProposalDecision | undefined;
+      if (existingInput !== undefined) {
+        existing = safeParse(libraryProposalDecisionSchema, existingInput);
+        if (existing === undefined || !sameJson(existing, decision)) {
+          return failure(
+            "rejected",
+            "decision-id-conflict",
+            "The decision ID is already bound to a different review.",
+          );
+        }
+      }
+      const callInput = await transaction.readCallForUpdate(decision.owner, decision.callId);
+      const call =
+        callInput === undefined
+          ? undefined
+          : parseStoredCall(callInput, decision.owner, decision.callId);
+      if (call === undefined || libraryProposalOf(call) === undefined) {
+        return failure(
+          "rejected",
+          "proposal-not-reviewable",
+          "The decision must reference the validated library proposal of this call.",
+        );
+      }
+      if (existing !== undefined) {
+        return { status: "recorded" as const, decision: existing, replayed: true };
+      }
+      await transaction.insertDecision(freezeDetached(decision));
+      return { status: "recorded" as const, decision, replayed: false };
+    });
+  } catch (error: unknown) {
+    return storageFailure(error, "The library decision could not be recorded.");
+  }
+}
+
+export type ReadLibraryDecisionResult =
+  | Readonly<{
+      status: "found";
+      decision: LibraryProposalDecision;
+      proposal: StoredLibraryProposal;
+    }>
+  | RepositoryFailure;
+
+/**
+ * Resolve a library approval from storage: the decision and the proposal of the call it
+ * references. Nothing a request carries takes part, so a client cannot name artifacts.
+ */
+export async function readLibraryProposalDecision(
+  store: LlmCallStore,
+  ownerInput: unknown,
+  decisionIdInput: unknown,
+): Promise<ReadLibraryDecisionResult> {
+  const owner = safeParse(llmCallOwnerSchema, ownerInput);
+  const decisionId = safeParse(stableStorageIdentifierSchema, decisionIdInput);
+  if (owner === undefined || decisionId === undefined) {
+    return failure("rejected", "invalid-request", "The library decision lookup is invalid.");
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const notFound = () =>
+        failure(
+          "rejected",
+          "decision-not-found",
+          "The library decision does not exist for this construction.",
+        );
+      const recordInput = await transaction.readDecisionForUpdate(owner, decisionId);
+      if (recordInput === undefined) return notFound();
+      const decision = safeParse(libraryProposalDecisionSchema, recordInput);
+      if (
+        decision === undefined ||
+        decision.id !== decisionId ||
+        !sameJson(decision.owner, owner)
+      ) {
+        return notFound();
+      }
+      const callInput = await transaction.readCallForUpdate(owner, decision.callId);
+      const call =
+        callInput === undefined ? undefined : parseStoredCall(callInput, owner, decision.callId);
+      const proposal = call === undefined ? undefined : libraryProposalOf(call);
+      return proposal === undefined
+        ? failure(
+            "rejected",
+            "proposal-not-reviewable",
+            "The library decision does not reference a validated library proposal.",
+          )
+        : { status: "found" as const, decision, proposal };
+    });
+  } catch (error: unknown) {
+    return storageFailure(error, "The library decision could not be read.");
+  }
+}
+
 function approvedBackgroundOf(
   decision: BackgroundProposalDecision,
 ): ApprovedBackground | undefined {
@@ -462,7 +628,7 @@ function approvedBackgroundOf(
     : undefined;
 }
 
-type DecisionSpec<Decision extends ProposalDecision> = Readonly<{
+type DecisionSpec<Decision extends ProposalReview> = Readonly<{
   schema: z.ZodType<Decision>;
   role: StoredLlmCall["role"];
   outputKind: "topic-manifest" | "background-proposal";
@@ -474,7 +640,7 @@ type DecisionSpec<Decision extends ProposalDecision> = Readonly<{
  * same ID and content replays; the same ID for another review, or for the other kind of proposal,
  * is a conflict.
  */
-async function recordProposalDecision<Decision extends ProposalDecision>(
+async function recordProposalDecision<Decision extends ProposalReview>(
   store: LlmCallStore,
   input: unknown,
   spec: DecisionSpec<Decision>,

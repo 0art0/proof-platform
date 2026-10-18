@@ -166,6 +166,25 @@ export type AcceptedBackground = Readonly<{
   constants: readonly Readonly<{ operator: OperatorDeclaration; rationale: string }>[];
 }>;
 
+/**
+ * A library the user approved: the decision through which the worker resolves the kept results
+ * from the stored librarian call. The browser holds the names, the variant count and the new
+ * constants only to show them and to preview LaTeX; requests name the decision and never carry
+ * artifacts.
+ */
+export type ApprovedLibrary = Readonly<{
+  decisionId: string;
+  /** The stored librarian call the decision approved results of. */
+  callId: string;
+  /** The accepted background the library was built for. */
+  backgroundDecisionId: string;
+  results: readonly Readonly<{ id: string; name: string }>[];
+  /** Equivalent reshapings generated from the kept results; they are added with them. */
+  variantCount: number;
+  /** Operators the kept results add beyond the packs and the accepted background. */
+  constants: readonly OperatorDeclaration[];
+}>;
+
 /** The background fields of the form for an accepted profile; they stay editable by hand. */
 export function withBackgroundProfile(
   profile: BackgroundProfile,

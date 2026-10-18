@@ -1,10 +1,11 @@
 # AI endpoints
 
-The worker exposes four single-call AI roles: the background proposer, the topic extractor, the
-proof-state formalizer and the move shortlister. All use the Vercel AI Gateway and persist a
-validated call record before returning a proposal. AI responses never execute proof commands or
-change a proof session directly. The other roles of design plan §15.2 (initial librarian, move
-executor, attestor, background gatekeeper, generality reviewer, stateful proof agent) are not
+The worker exposes five single-call AI roles: the background proposer, the librarian (initial
+library only), the topic extractor, the proof-state formalizer and the move shortlister. All use
+the Vercel AI Gateway and persist a validated call record before returning a proposal. AI
+responses never execute proof commands or change a proof session directly. The other roles of
+design plan §15.2 (move executor, attestor, background gatekeeper, generality reviewer, stateful
+proof agent) and the librarian's top-up requests (`new-constants`, `no-relevant-results`) are not
 implemented. The agent architecture is specified in `docs/ai-agents-architecture.md`.
 
 The background proposer supersedes the topic extractor in the new-problem page: the web
@@ -20,21 +21,23 @@ files itself. For local development with Node 24 and the repository's `tsx` depe
 PROOF_STORE=memory node --env-file=.env.local --import tsx apps/worker/src/main.ts
 ```
 
-For an existing PostgreSQL database, apply migrations `0013_llm_formalizer_role.sql` and
-`0015_llm_background_proposer_role.sql` before starting the updated worker (0015 widens the
-`llm_calls` role constraint; background decisions reuse the `llm_topic_decisions` table). A
-single-instance deployment can use `PROOF_AUTO_MIGRATE=true`; the normal migration runner is
-`npm run migrate`.
+For an existing PostgreSQL database, apply migrations `0013_llm_formalizer_role.sql`,
+`0015_llm_background_proposer_role.sql` and `0016_llm_librarian_role.sql` before starting the
+updated worker (each widens the `llm_calls` role constraint; background and library decisions reuse
+the `llm_topic_decisions` table). A single-instance deployment can use `PROOF_AUTO_MIGRATE=true`;
+the normal migration runner is `npm run migrate`.
 
 Defaults are `openai/gpt-6-luna` with high reasoning effort and a 32,000 token output limit for the
-formalizer, the same model with medium reasoning effort and an 8,000 token output limit for the
-background proposer and for topic extraction, and `typesafe-ai/jev` for shortlisting.
+formalizer and for the librarian, the same model with medium reasoning effort and an 8,000 token
+output limit for the background proposer and for topic extraction, and `typesafe-ai/jev` for
+shortlisting.
 Configuration can be overridden with
 `PROOF_AI_FORMALIZER_MODEL`, `PROOF_AI_FORMALIZER_REASONING_EFFORT`,
 `PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`, `PROOF_AI_SHORTLISTER_MODEL`,
 `PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, `PROOF_AI_BACKGROUND_MODEL`,
 `PROOF_AI_BACKGROUND_REASONING_EFFORT`, `PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS`,
-`PROOF_AI_TOPIC_MODEL`, `PROOF_AI_TOPIC_REASONING_EFFORT`,
+`PROOF_AI_LIBRARIAN_MODEL`, `PROOF_AI_LIBRARIAN_REASONING_EFFORT`,
+`PROOF_AI_LIBRARIAN_MAX_OUTPUT_TOKENS`, `PROOF_AI_TOPIC_MODEL`, `PROOF_AI_TOPIC_REASONING_EFFORT`,
 `PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS`, `PROOF_AI_TIMEOUT_MS`, and `PROOF_AI_FORMALIZER_TIMEOUT_MS`
 (the formalizer's total budget; defaults to `PROOF_AI_TIMEOUT_MS`, itself 120000 ms; raise it for
 long high-effort generations). The confidence threshold defaults
@@ -43,7 +46,7 @@ evidence. Missing credentials disable these routes. No model fallback is silentl
 
 ## Cost guard and status codes
 
-The background, topic, formalizer and shortlist routes can trigger paid provider calls, so they
+The background, library, topic, formalizer and shortlist routes can trigger paid provider calls, so they
 share an in-process limiter: a global cap on
 concurrent provider calls (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token bucket
 (`PROOF_AI_RATE_PER_MINUTE`, default 20; it is also the burst size). A request over budget gets
@@ -73,7 +76,7 @@ Unknown `/ai/*` paths are ordinary unknown routes.
 ## Capabilities
 
 `GET /ai/capabilities` answers `{ "roles": { "topic-extractor": bool, "background-proposer": bool,
-"proof-state-formalizer": bool, "move-shortlister": bool } }`. A role is `true` only when it has a
+"librarian": bool, "proof-state-formalizer": bool, "move-shortlister": bool } }`. A role is `true` only when it has a
 configured transport and evidence storage. No model name, endpoint or credential is disclosed. The web application reads it to
 decide which AI controls to enable.
 
@@ -102,6 +105,14 @@ role: "background-proposer" }`, the `callId`, and the `proposal`:
 - `constants`: a list of `{ operator, rationale }`, where `operator` is a full `OperatorDeclaration`
   (ID, symbol, signature, LaTeX and natural-language presentation) and `rationale` is a one-line
   reason.
+
+The role's context also lists the operators that already exist (the packs' operators, i.e. the
+global registry) as `operators`: symbol, display name and signature in the sort names. The system
+message tells the model to reference an existing operator with exactly its symbol and signature
+instead of clashing with it, which the worker resolves as described under "Record a background
+decision". Calls stored before the list was offered have no `operators` field and still read; the
+system message and prompt version (`background-proposer-v2`) changed with it, and the earlier
+message is still accepted when stored evidence is read.
 
 The provider is asked for a strict, flat encoding (nullable fields instead of optional ones, and a
 signature written with the problem setup's sort names), which the worker converts to full
@@ -163,6 +174,109 @@ the client. An unknown decision, or one of another construction, is `404 decisio
 rejected decision is `409 decision-not-approved`. The steps are the formalizer (`approvedBackground:
 { decisionId }`, below), the setup check and the session approval (`approvedBackground: {
 constructionId, decisionId }`, below).
+
+## Build a library
+
+`POST /ai/library` asks the librarian for general library results about an approved background
+and its constants (`docs/ai-agents-architecture.md` section 2, request kind `initial`). The
+librarian never sees the problem statement: its context is `{ kind: "initial", background,
+constants, existingResults }`, where `background` and `constants` are resolved from the approved
+background decision in storage (the constants are the approved constants followed by the operators
+of the selected packs) and `existingResults` lists the id, name and statement of the results
+already in the library for those packs, so that it does not repeat them. The context is a union
+discriminated by `kind` so that the later request kinds can extend it.
+
+```json
+{
+  "constructionId": "construction:example",
+  "id": "llm-call:library-example",
+  "approvedBackground": { "decisionId": "background-decision:example" },
+  "packs": ["pack:divisibility"]
+}
+```
+
+A request with any other field (a problem, a background, constants, existing results) is `400`.
+An unknown, foreign or rejected background decision is `404` or `409`, as for the formalizer.
+
+The provider returns up to 40 results in a strict flat encoding: a slug, a name, a description, a
+classification (domains and a level), parameters (a symbol and a sort name), premises, a statement
+and patterns (recursive plain MathJSON formulas), application directions, and optionally new
+constants (operator declarations with a rationale) that the results need. The worker normalizes
+each result to the library's result shape (deterministic identifiers `result:library-<slug>`,
+`declaration:library-<slug>-<symbol>` and `pattern:library-<slug>-<n>`). New constants are checked
+like a background proposal's constants, and one that repeats or clashes with a constant of the
+context rejects the output (`422`). A result that cannot be read as a result (a formula that is not
+plain MathJSON or is too large, a parameter named like an operator, inconsistent directions) is set
+aside as `unusable` with a reason and does not affect the others. More than 40 results is an invalid
+output. A context request (`requestedCategories` of `background-detail` or `constant-detail`) or a
+refusal answers `status: "insufficient-context"` or `"declined"` with the model's `result`.
+
+Everything after validation is deterministic and a function of the stored call alone, so a replay
+answers identically:
+
+- each result is assembled into a library result (kind, renderings from the language package,
+  `generated` provenance naming the librarian and the call, layer `initial-problem`, priority 50)
+  and run through `admitLibraryArtifact` in the construction's operator environment (the context's
+  constants plus the accepted new constants) and background profile. The gate admits the
+  `initial-problem` layer on approval alone, so a result is judged in the form in which it would be
+  recorded (approved by the web reviewer) and shown as a draft; the worker additionally rejects a
+  result whose classification is outside the profile's declared domains or above its maximum level
+  (an undeclared domain list or maximum level constrains nothing);
+- a new constant is resolved against the operator registry like a background constant: a repeat of a
+  registry operator's symbol and signature becomes that registry operator, and a clash is set aside
+  with its reason (the results that need it then fail the gate);
+- `generateVariants` runs on each admitted result, and each variant passes the gate as well.
+
+The answer is `status: "proposed"` with `provenance: { kind: "minimal-context-llm", role:
+"librarian" }`, the `callId`, `requestKind`, and
+
+- `results`: `{ artifact, variants, newConstantSymbols }` for each admitted result, in the
+  proposal's order. The artifact is a draft (`approval.status: "draft"`) tagged with its variant
+  family when it has variants;
+- `rejected`: `{ id, name, reasons, codes }` for each result that did not pass, with plain reasons
+  (an unknown operator, an ill-sorted statement, a domain outside the background) and the admission
+  code, or `unreadable` or `outside-background`;
+- `newConstants`: `{ operator, rationale, usedBy }` for each accepted new constant;
+- `rejectedConstants`: `{ symbol, reason }` for each one set aside.
+
+Nothing is written to any library scope. The cost guard, replay by call ID and the `503`/`422`
+outcomes are as for the other roles.
+
+### Record a library decision
+
+`POST /ai/library/decisions` records which admitted results the user kept:
+
+```json
+{
+  "constructionId": "construction:example",
+  "decisionId": "library-decision:example",
+  "callId": "llm-call:library-example",
+  "approvedResultIds": ["result:library-coprime-symmetry"],
+  "decidedAt": "2026-10-15T12:30:00.000Z",
+  "rationale": "Kept in the problem setup form."
+}
+```
+
+The request names result IDs only (`rationale` is optional); an artifact, a statement or any other
+field is `400`. The worker reads the stored call, evaluates it again and refuses (`409
+result-not-admitted`) any ID the gate did not admit; the call must be a validated library
+proposal of the same construction (`404` for an unknown call, `409 proposal-not-reviewable` for
+another role's call). The decision is stored in `llm_topic_decisions` beside the other decisions
+(no new table): the row holds the IDs, in the proposal's order whatever order the client sent them
+in, and no artifact. The client chooses `decisionId` and `decidedAt` once, so a retried decision
+replays (`200`, `replayed: true`), and reusing the ID for another selection is `409
+decision-id-conflict`. An approval answers `201 { status: "recorded", decision, approvedLibrary }`;
+`approvedLibrary.id` is `library-approval:<decisionId>`. Keeping nothing records nothing.
+
+### Approved library
+
+The results of an approved library reach later steps only by naming the decision. The worker
+resolves the decision and its call from storage, runs the gate again and keeps the named results
+with their variants (approved by the reviewer `actor:web`); if a stored decision no longer passes
+the gate the answer is `409 approved-library-stale`. The new constants that the kept results apply
+(and only those) join the session's operators after the approved background constants. The
+formalizer takes `approvedLibrary: { decisionId }`, the setup check and the session approval take
+`approvedLibrary: { constructionId, decisionId }` (below).
 
 ## Suggest topics
 
@@ -226,6 +340,14 @@ an operator definition instead of inventing one. The decision must be an approva
 construction (`404` otherwise; `409` for a rejected decision or a constant that clashes with the
 registry).
 
+With `"approvedLibrary": { "decisionId": "..." }` the formalizer's `approvedLibrary.results` also
+include the approved initial library's results and then their variants, after the selected packs'
+results, and `approvedLibrary.operators` also include the new constants that the kept results
+apply. The context holds at most 64 results. Within that cap everything is shown; beyond it
+originals come before variants and the user's approved results before the packs' own, and the rest
+are left out. A draft is checked against the same operators, and the approved library is checked
+against the draft's setup like at "Check setup" (below).
+
 ```json
 {
   "constructionId": "construction:example",
@@ -273,15 +395,15 @@ replays its stored outcome; reusing it for different input or dispatch settings 
 changed context should use a new call ID. The strengthened formalizer system message has the
 prompt version `proof-state-formalizer-v2`; calls stored with the earlier message remain readable.
 
-## Check and approve a setup with approved constants
+## Check and approve a setup with approved constants and library
 
 A drafted (or hand-entered) setup that applies approved constants can only be checked and approved
 when the request names the approval:
 
 - `POST /problem-drafts/validate` accepts `{ "draft": ..., "approvedBackground": { "constructionId":
-"...", "decisionId": "..." } }`;
-- `POST /proof-sessions` accepts the same optional `approvedBackground` beside `sessionId`, `draft`
-  and `reviewedDigest`.
+"...", "decisionId": "..." }, "approvedLibrary": { "constructionId": "...", "decisionId": "..." } }`;
+- `POST /proof-sessions` accepts the same optional `approvedBackground` and `approvedLibrary` beside
+  `sessionId`, `draft` and `reviewedDigest`.
 
 The worker resolves the constants from storage and adds them to the session's operators after the
 selected packs' operators; the stored session therefore declares them like any pack operator. The
@@ -289,6 +411,29 @@ reviewed digest covers the operators, so approving with other constants than the
 stale review (`409`). A missing decision is `404`, a rejected one `409`, and a field other than
 `constructionId` and `decisionId` in the reference is `400`. Without the reference, the constants
 are unknown to the setup, and a draft that uses them is invalid (`422`).
+
+An `approvedLibrary` reference is resolved the same way (`404` for an unknown decision or one of
+another construction or role, `409 approved-library-stale`, `503 library-unavailable` when the
+worker has no library store). The check also runs the library gate for every kept result and
+variant in the session's operators and the draft's background, and requires the draft to include the
+layer `layer:initial-problem`; anything the gate would reject is a `422` with an
+`approved-library-invalid` diagnostic (path `["approvedLibrary"]` or `["libraryLayerIds"]`) naming
+the result, so no result is rejected silently at approval. The review gains `initialLibrary`
+(`{ results, variantCount, addedOperatorSymbols }`, with each result's id, name, description,
+statement and premises) and its digest covers the kept results and their variants in full; a setup
+without a library hashes as before.
+
+A `201` records the kept results and then their variants as library additions of the new session,
+layer `initial-problem`, origin `{ kind: "setup", actorId: "actor:web" }`, occurring at the
+decision's `decidedAt`, approved by `actor:web`, through the library repository's gate. The
+session and its additions cannot share one transaction: the proof store and the library store have
+separate transaction interfaces (separate connections in PostgreSQL). Recording is therefore
+idempotent instead: each addition has the deterministic event ID
+`library-addition:<sessionId>:<decisionId>:<artifactId>`, so repeating it replays the stored event.
+The approval runs it after creating the session and again for a replay of the same approval (`200`).
+If recording is interrupted the answer is `503 initial-library-incomplete` (the session exists,
+with part of its library), and approving again with the same request finishes it, adding each
+result exactly once.
 
 ## Shortlist displayed moves
 
@@ -326,10 +471,11 @@ not implicitly attached to a later proof-session artifact.
 ## Web interface
 
 The web application relays these routes through same-origin proxies (`/api/ai/background`,
-`/api/ai/background/decisions`, `/api/ai/formalize` and
-`/api/proof-sessions/:sessionId/ai-shortlist`), keeping the worker's status codes, including `429`.
-`/api/problem-drafts/validate` and `/api/proof-sessions` also pass the optional
-`approvedBackground` reference. The topic routes are no longer relayed.
+`/api/ai/background/decisions`, `/api/ai/library`, `/api/ai/library/decisions`,
+`/api/ai/formalize` and `/api/proof-sessions/:sessionId/ai-shortlist`), keeping the worker's status
+codes, including `429`. `/api/problem-drafts/validate` and `/api/proof-sessions` also pass the
+optional `approvedBackground` and `approvedLibrary` references (and refuse any other field in
+them). The topic routes are no longer relayed.
 
 - **New problem.** An optional "AI assistance" section starts with "Propose background", enabled
   once the problem statement is filled in (the background fields need not be filled first). The
@@ -345,6 +491,17 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
   the variables, hypotheses and goals only through an explicit button, and then goes through the
   usual "Check setup" and "Start exploring". The review marks a setup that started from an AI
   draft. Every call from one form shares a construction ID.
+- **Build library.** Once a background is accepted, "Build library" asks the librarian for general
+  results for that background (the button is disabled, with the reason beside it, until a
+  background is accepted or when the role is not configured). The result is a list with each
+  result's name, its statement rendered in LaTeX and in words, its premises and its description,
+  and a "Remove"/"Restore" toggle; a count says how many results are kept and how many generated
+  variants come with them. Results that did not pass the checks are collapsed under "N proposed
+  results did not pass checks" with plain reasons. "Approve library" records the kept result IDs
+  and nothing else; the library is then named by decision in the formalizer call, "Check setup" and
+  "Start exploring", listed in the review, and added to the new problem's library when the
+  session starts. Changing the selection, building again, or forgetting the background asks for a
+  new approval. Notation that kept results add is listed and previewed in the LaTeX fields.
 - **Workspace.** When a displayed suggestion list has two or more entries, "Ask AI to rank these"
   sends its first 32 candidates with the `explicit-user` trigger. The ranked picks appear above the
   unchanged list, and any fallback is reported in place. Read-only sessions do not offer it.

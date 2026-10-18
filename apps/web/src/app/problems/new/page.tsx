@@ -34,6 +34,7 @@ export default async function NewProblemPage() {
           options={options}
           ai={{
             background: capabilities["background-proposer"],
+            library: capabilities.librarian,
             formalizer: capabilities["proof-state-formalizer"],
           }}
         />

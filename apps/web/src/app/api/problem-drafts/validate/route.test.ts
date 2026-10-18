@@ -78,8 +78,29 @@ describe("POST /api/problem-drafts/validate", () => {
     );
   });
 
+  it("relays the approved library reference with the draft", async () => {
+    mocks.validateProblemDraftRequest.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { ok: true, review: { digest: "sha256:x" } },
+    });
+    const approvedLibrary = { constructionId: "construction:web-1", decisionId: "library:1" };
+    const incoming = request({ draft, approvedLibrary });
+    expect((await POST(incoming)).status).toBe(200);
+    expect(mocks.validateProblemDraftRequest).toHaveBeenCalledExactlyOnceWith(
+      { draft, approvedLibrary },
+      { signal: incoming.signal },
+    );
+  });
+
   it.each([
     ["no draft", {}, {}],
+    [
+      "client-supplied library artifacts",
+      { draft, approvedLibrary: { constructionId: "c", decisionId: "d", artifacts: [] } },
+      {},
+    ],
+    ["an incomplete library reference", { draft, approvedLibrary: { decisionId: "d" } }, {}],
     ["extra fields", { draft, sessionId: "session:x" }, {}],
     [
       "client-supplied constants",

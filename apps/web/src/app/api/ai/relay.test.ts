@@ -11,6 +11,8 @@ vi.mock("../../../server/proof-service", async (importOriginal) => {
 import { POST as background } from "./background/route";
 import { POST as decisions } from "./background/decisions/route";
 import { POST as formalize } from "./formalize/route";
+import { POST as library } from "./library/route";
+import { POST as libraryDecisions } from "./library/decisions/route";
 import { POST as shortlist } from "../proof-sessions/[sessionId]/ai-shortlist/route";
 
 const ORIGIN = "http://proof.test";
@@ -38,6 +40,8 @@ describe("AI relay routes", () => {
     for (const response of [
       await background(request({ id: "x" })),
       await decisions(request({ id: "x" })),
+      await library(request({ id: "x" })),
+      await libraryDecisions(request({ id: "x" })),
       await formalize(request({ id: "x" })),
       await shortlist(request({ id: "x" }), context),
     ]) {
@@ -47,6 +51,8 @@ describe("AI relay routes", () => {
     expect(mocks.relayAiRequest.mock.calls.map(([endpoint]) => endpoint)).toEqual([
       { kind: "background" },
       { kind: "background-decisions" },
+      { kind: "library" },
+      { kind: "library-decisions" },
       { kind: "formalize" },
       { kind: "shortlist", sessionId: "session:a" },
     ]);
@@ -76,6 +82,8 @@ describe("AI relay routes", () => {
   it("refuses cross-origin requests and non-object bodies without contacting the worker", async () => {
     expect((await background(request({}, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
     expect((await background(request([1, 2]))).status).toBe(400);
+    expect((await library(request({}, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
+    expect((await libraryDecisions(request([1, 2]))).status).toBe(400);
     expect(mocks.relayAiRequest).not.toHaveBeenCalled();
   });
 });

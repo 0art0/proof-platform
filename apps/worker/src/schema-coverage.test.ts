@@ -80,11 +80,11 @@ describe("migration schema", () => {
     expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
   });
 
-  it("admits every supported LLM role in the latest llm_calls role constraint (0015)", () => {
+  it("admits every supported LLM role in the latest llm_calls role constraint (0016)", () => {
     const latest = [...migrations]
       .reverse()
       .find((migration) => migration.sql.includes("ADD CONSTRAINT llm_calls_role_check"));
-    expect(latest?.name).toBe("0015_llm_background_proposer_role.sql");
+    expect(latest?.name).toBe("0016_llm_librarian_role.sql");
     const list = /CHECK \(role IN \(([^)]*)\)\)/.exec(latest?.sql ?? "")?.[1] ?? "";
     const roles = [...list.matchAll(/'([a-z-]+)'/g)].map((match) => match[1]);
     expect(roles.sort()).toEqual([...SUPPORTED_LLM_ROLES].sort());

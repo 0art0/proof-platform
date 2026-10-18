@@ -7,6 +7,9 @@ import {
   DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   DEFAULT_FORMALIZER_MODEL,
   DEFAULT_FORMALIZER_REASONING_EFFORT,
+  DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS,
+  DEFAULT_LIBRARIAN_MODEL,
+  DEFAULT_LIBRARIAN_REASONING_EFFORT,
   DEFAULT_LLM_TIMEOUT_MS,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   DEFAULT_SHORTLISTER_MODEL,
@@ -67,6 +70,16 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_BACKGROUND_REASONING_EFFORT,
     DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
   );
+  const librarianModel = nonEmpty(env.PROOF_AI_LIBRARIAN_MODEL) ?? DEFAULT_LIBRARIAN_MODEL;
+  const librarianTokens = positiveInteger(
+    env.PROOF_AI_LIBRARIAN_MAX_OUTPUT_TOKENS,
+    DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS,
+  );
+  const librarianReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_LIBRARIAN_REASONING_EFFORT",
+    env.PROOF_AI_LIBRARIAN_REASONING_EFFORT,
+    DEFAULT_LIBRARIAN_REASONING_EFFORT,
+  );
   const shortlisterModel = nonEmpty(env.PROOF_AI_SHORTLISTER_MODEL) ?? DEFAULT_SHORTLISTER_MODEL;
   const minimumConfidence = boundedNumber(
     env.PROOF_AI_SHORTLISTER_MIN_CONFIDENCE,
@@ -101,9 +114,25 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: backgroundModel,
-        promptVersion: "background-proposer-v1",
+        promptVersion: "background-proposer-v2",
         maxOutputTokens: backgroundTokens,
         reasoningEffort: backgroundReasoningEffort,
+      }),
+    },
+    librarian: {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: librarianModel,
+        reasoningEffort: librarianReasoningEffort,
+        maxOutputTokens: librarianTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: librarianModel,
+        promptVersion: "librarian-v1",
+        maxOutputTokens: librarianTokens,
+        reasoningEffort: librarianReasoningEffort,
       }),
     },
     "proof-state-formalizer": {

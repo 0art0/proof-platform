@@ -87,6 +87,7 @@ describe("AI capabilities endpoint", () => {
       roles: {
         "topic-extractor": false,
         "background-proposer": false,
+        librarian: false,
         "proof-state-formalizer": false,
         "move-shortlister": false,
       },
@@ -100,6 +101,7 @@ describe("AI capabilities endpoint", () => {
       roles: {
         "topic-extractor": true,
         "background-proposer": false,
+        librarian: false,
         "proof-state-formalizer": false,
         "move-shortlister": false,
       },

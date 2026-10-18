@@ -27,6 +27,7 @@ import {
   missingSetupFields,
   withBackgroundProfile,
   type AcceptedBackground,
+  type ApprovedLibrary,
   type DeclarationRow,
   type FormProblem,
   type ProblemForm,
@@ -46,6 +47,8 @@ type Reviewed = Readonly<{
   sessionId: string;
   /** The accepted background whose constants the review used; approval names the same one. */
   accepted: AcceptedBackground | undefined;
+  /** The approved library whose results the review showed; approval names the same one. */
+  library: ApprovedLibrary | undefined;
 }>;
 
 type TextField =
@@ -108,6 +111,8 @@ export function ProblemEntryForm({
   const [aiDraftCallId, setAiDraftCallId] = useState<string>();
   // The background the user accepted; its constants are named by decision, never sent as text.
   const [accepted, setAccepted] = useState<AcceptedBackground>();
+  // The library the user approved; its results are named by decision, never sent as artifacts.
+  const [approvedLibrary, setApprovedLibrary] = useState<ApprovedLibrary>();
 
   const packOperators = useMemo(() => operatorsByPack(options), [options]);
   const selectedOperators = useMemo(
@@ -117,25 +122,37 @@ export function ProblemEntryForm({
       ),
     [form.packIds, options.packs, packOperators],
   );
-  // LaTeX previews know the accepted constants' notation as well as the selected packs'.
+  // The operators LaTeX previews and library results know: the selected packs', the accepted
+  // constants' and the notation that the approved library adds.
+  const previewOperators = useMemo(() => {
+    const operators = [...selectedOperators];
+    const known = new Set(operators.map(({ symbol }) => symbol));
+    for (const operator of [
+      ...(accepted?.constants ?? []).map((constant) => constant.operator),
+      ...(approvedLibrary?.constants ?? []),
+    ]) {
+      if (!known.has(operator.symbol)) {
+        known.add(operator.symbol);
+        operators.push(operator);
+      }
+    }
+    return operators;
+  }, [selectedOperators, accepted, approvedLibrary]);
   const latex = useMemo(() => {
-    const known = new Set(selectedOperators.map(({ symbol }) => symbol));
-    const constants = (accepted?.constants ?? [])
-      .map(({ operator }) => operator)
-      .filter(({ symbol }) => !known.has(symbol));
     try {
-      return createLatexRenderer({ operators: [...selectedOperators, ...constants] });
+      return createLatexRenderer({ operators: previewOperators });
     } catch {
       return createLatexRenderer({ operators: selectedOperators });
     }
-  }, [selectedOperators, accepted]);
+  }, [previewOperators, selectedOperators]);
 
   const current = useMemo(() => formToDraft(form, options), [form, options]);
   const approvable =
     reviewed !== undefined &&
     current.ok &&
     JSON.stringify(current.draft) === reviewed.draftKey &&
-    reviewed.accepted?.decisionId === accepted?.decisionId;
+    reviewed.accepted?.decisionId === accepted?.decisionId &&
+    reviewed.library?.decisionId === approvedLibrary?.decisionId;
 
   /** Every edit goes through here, and every edit invalidates the review. */
   const update = (change: (previous: ProblemForm) => ProblemForm) => {
@@ -167,7 +184,7 @@ export function ProblemEntryForm({
     try {
       const response = await postJson("/api/problem-drafts/validate", {
         draft,
-        ...backgroundReference(constructionId, accepted),
+        ...approvalReferences(constructionId, accepted, approvedLibrary),
       });
       if (response.ok) {
         const parsed = z
@@ -196,6 +213,7 @@ export function ProblemEntryForm({
           operators,
           sessionId: createSessionId(),
           accepted,
+          library: approvedLibrary,
         });
         return;
       }
@@ -216,7 +234,7 @@ export function ProblemEntryForm({
         sessionId: reviewed.sessionId,
         draft: reviewed.draft,
         reviewedDigest: reviewed.review.digest,
-        ...backgroundReference(constructionId, reviewed.accepted),
+        ...approvalReferences(constructionId, reviewed.accepted, reviewed.library),
       });
       if (response.ok) {
         recordRecentSession({
@@ -371,11 +389,26 @@ export function ProblemEntryForm({
         onAcceptBackground={(background) => {
           update((f) => ({ ...f, ...withBackgroundProfile(background.profile) }));
           setAccepted(background);
+          // A library is built for one accepted background.
+          setApprovedLibrary(undefined);
         }}
         onForgetBackground={() => {
           setReviewed(undefined);
           setNotice(undefined);
           setAccepted(undefined);
+          setApprovedLibrary(undefined);
+        }}
+        operators={previewOperators}
+        approvedLibrary={approvedLibrary}
+        onApproveLibrary={(library) => {
+          setReviewed(undefined);
+          setNotice(undefined);
+          setApprovedLibrary(library);
+        }}
+        onForgetLibrary={() => {
+          setReviewed(undefined);
+          setNotice(undefined);
+          setApprovedLibrary(undefined);
         }}
         onUseDraft={(draft, callId) => {
           update((f) => ({ ...f, ...draftStatementRows(draft, key) }));
@@ -530,6 +563,7 @@ function ReviewPanel({
   );
   const [goal] = reviewed.node.state.goals;
   const context = goal?.sequent.context;
+  const library = reviewed.review.initialLibrary;
   return (
     <section className={styles.review} aria-label="Review">
       <h2>Review your setup</h2>
@@ -583,6 +617,45 @@ function ReviewPanel({
                   {operator.symbol}
                 </code>
               ))}
+            </dd>
+          </>
+        )}
+        {library === undefined ? null : (
+          <>
+            <dt>Initial library</dt>
+            <dd>
+              <em className={styles.hint}>
+                Results added to this problem&apos;s library when you start exploring.
+              </em>
+              <ol>
+                {library.results.map((result) => (
+                  <li key={result.id}>
+                    <strong>{result.name}</strong>
+                    <Rendered presentation={presentation} expression={result.statement} />
+                    {result.premises.length === 0 ? null : (
+                      <span className={styles.hint}>
+                        Assuming:{" "}
+                        {result.premises.map((premise, index) => (
+                          <code key={index} className={styles.token}>
+                            {presentation.latex(premise)}
+                          </code>
+                        ))}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {library.variantCount === 0 ? null : (
+                <em className={styles.hint}>
+                  Plus {library.variantCount} generated{" "}
+                  {library.variantCount === 1 ? "variant" : "variants"} of these results.{" "}
+                </em>
+              )}
+              {library.addedOperatorSymbols.length === 0 ? null : (
+                <em className={styles.hint}>
+                  Adds notation: {library.addedOperatorSymbols.join(", ")}.
+                </em>
+              )}
             </dd>
           </>
         )}
@@ -769,14 +842,23 @@ async function postJson(
   return { ok: response.ok, status: response.status, body: parsed };
 }
 
-/** The reference through which the worker resolves the accepted constants; none if not accepted. */
-function backgroundReference(
+/**
+ * The references through which the worker resolves the accepted constants and the approved
+ * library; none if nothing was accepted or approved. Declarations and artifacts are never sent.
+ */
+function approvalReferences(
   constructionId: string,
   accepted: AcceptedBackground | undefined,
+  library: ApprovedLibrary | undefined,
 ): Record<string, unknown> {
-  return accepted === undefined
-    ? {}
-    : { approvedBackground: { constructionId, decisionId: accepted.decisionId } };
+  return {
+    ...(accepted === undefined
+      ? {}
+      : { approvedBackground: { constructionId, decisionId: accepted.decisionId } }),
+    ...(library === undefined
+      ? {}
+      : { approvedLibrary: { constructionId, decisionId: library.decisionId } }),
+  };
 }
 
 function failureNotice(body: unknown): Notice {

@@ -30,6 +30,7 @@ describe("readAiCapabilities", () => {
         roles: {
           "topic-extractor": true,
           "background-proposer": true,
+          librarian: true,
           "proof-state-formalizer": false,
           "move-shortlister": true,
           attestor: true,
@@ -39,6 +40,7 @@ describe("readAiCapabilities", () => {
     );
     expect(await readAiCapabilities()).toEqual({
       "background-proposer": true,
+      librarian: true,
       "proof-state-formalizer": false,
       "move-shortlister": true,
     });
@@ -83,6 +85,32 @@ describe("relayAiRequest", () => {
       message: "Some message.",
       body,
     });
+  });
+
+  it.each([
+    [{ kind: "library" } as const, "http://proof-worker.test/ai/library"],
+    [{ kind: "library-decisions" } as const, "http://proof-worker.test/ai/library/decisions"],
+  ])("posts %j to its worker endpoint", async (endpoint, url) => {
+    const fetchMock = stubWorker({ status: "proposed", results: [] }, 200);
+    await relayAiRequest(endpoint, { id: "llm-call:library" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(url);
+  });
+
+  it("accepts a library proposal larger than an ordinary AI answer, but not an unbounded one", async () => {
+    const results = Array.from({ length: 40 }, (_, index) => ({
+      artifact: { id: `result:library-r${index}`, note: "x".repeat(60_000) },
+      variants: [],
+    }));
+    stubWorker({ status: "proposed", callId: "llm-call:library", results }, 200);
+    expect(await relayAiRequest({ kind: "library" }, {})).toMatchObject({
+      ok: true,
+      status: 200,
+    });
+    // The same size is refused for the other endpoints, whose answers are small.
+    stubWorker({ status: "proposed", callId: "llm-call:x", results }, 200);
+    await expect(relayAiRequest({ kind: "background" }, {})).rejects.toBeInstanceOf(
+      ProofServiceError,
+    );
   });
 
   it("refuses non-object requests and failures without diagnostics", async () => {
