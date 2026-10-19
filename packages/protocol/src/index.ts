@@ -58,6 +58,7 @@ export {
   retrievalWildcardSchema,
   sortSchema,
   stableIdentifierSchema,
+  substituteMathJson,
 } from "@proof/mathjson-model";
 export type { OperatorDeclaration, PlainMathJson, Sort } from "@proof/mathjson-model";
 export * from "./session-metadata";

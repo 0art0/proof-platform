@@ -9,9 +9,13 @@ import {
   problemSetupSort,
   problemSetupSortIdSchema,
   problemSetupSymbolSchema,
+  sortSchema,
   stableIdentifierSchema,
+  substituteMathJson,
+  freeSymbolNames,
   type OperatorDeclaration,
   type PlainMathJson,
+  type Sort,
 } from "@proof/protocol";
 import { applicationDirectionSchema, applicationRequirementSchema } from "@proof/library";
 import { z } from "zod";
@@ -32,8 +36,10 @@ import {
  * can be fitted to a particular problem. Its proposal is evidence only; the worker runs every
  * result through the deterministic admission gate, and a person approves what is kept.
  *
- * The context is a union discriminated by `kind`. Only `initial` (the results a problem starts
- * with) exists today; the later request kinds extend the union without reshaping the proposal.
+ * The context is a union discriminated by `kind`: `initial` (the results a problem starts with),
+ * `new-constants` (a proof activated constants that the library has no results about yet) and
+ * `no-relevant-results` (nothing in the library helped with a local situation). The request
+ * kinds differ in their context only; the proposal is the same for all of them.
  *
  * Like `background-proposer.ts`, this module is self-contained: `index.ts` composes these schemas
  * into the role's envelope, output validation and evidence.
@@ -68,35 +74,135 @@ const existingResultSchema = z
   .strict();
 export type LibrarianExistingResult = z.infer<typeof existingResultSchema>;
 
+/** At most this many newly activated constants per `new-constants` request. */
+export const MAX_LIBRARIAN_ACTIVATED_CONSTANTS = 16;
+/** At most this many selection fragments describe a local situation. */
+export const MAX_LIBRARIAN_SITUATION_SELECTIONS = 16;
+const MAX_SITUATION_VARIABLES = 32;
+
+const contextBaseShape = {
+  /** The background the results are classified against. */
+  background: backgroundProfileSchema,
+  /** The operators the results may use besides the built-in symbols. */
+  constants: z.array(operatorDeclarationSchema).max(MAX_LIBRARIAN_CONTEXT_CONSTANTS),
+  /** What the session library already holds (name and statement), so as not to repeat it. */
+  existingResults: z.array(existingResultSchema).max(MAX_LIBRARIAN_CONTEXT_RESULTS),
+};
+
+function addContextIssues(
+  context: Readonly<{
+    constants: readonly OperatorDeclaration[];
+    existingResults: readonly LibrarianExistingResult[];
+  }>,
+  refinement: z.RefinementCtx,
+): void {
+  addDuplicates(
+    context.constants.map(({ symbol }) => symbol),
+    "constant symbol",
+    refinement,
+    ["constants"],
+  );
+  addDuplicates(
+    context.existingResults.map(({ id }) => id),
+    "existing result ID",
+    refinement,
+    ["existingResults"],
+  );
+}
+
 const initialContextSchema = z
+  .object({ kind: z.literal("initial"), ...contextBaseShape })
+  .strict()
+  .superRefine(addContextIssues);
+
+/**
+ * The constants a proof has just activated: operators that were declared from the start but that
+ * no step had used until now. `constants` are the ones that were already active.
+ */
+const newConstantsContextSchema = z
   .object({
-    kind: z.literal("initial"),
-    /** The background the results are classified against. */
-    background: backgroundProfileSchema,
-    /** The operators the results may use besides the built-in symbols. */
-    constants: z.array(operatorDeclarationSchema).max(MAX_LIBRARIAN_CONTEXT_CONSTANTS),
-    existingResults: z.array(existingResultSchema).max(MAX_LIBRARIAN_CONTEXT_RESULTS),
+    kind: z.literal("new-constants"),
+    ...contextBaseShape,
+    newConstants: z.array(operatorDeclarationSchema).min(1).max(MAX_LIBRARIAN_ACTIVATED_CONSTANTS),
   })
   .strict()
   .superRefine((context, refinement) => {
+    addContextIssues(context, refinement);
     addDuplicates(
-      context.constants.map(({ symbol }) => symbol),
-      "constant symbol",
+      context.newConstants.map(({ symbol }) => symbol),
+      "activated constant symbol",
       refinement,
-      ["constants"],
+      ["newConstants"],
     );
-    addDuplicates(
-      context.existingResults.map(({ id }) => id),
-      "existing result ID",
-      refinement,
-      ["existingResults"],
-    );
+    const old = new Set(context.constants.map(({ symbol }) => symbol));
+    context.newConstants.forEach(({ symbol }, index) => {
+      if (old.has(symbol)) {
+        refinement.addIssue({
+          code: "custom",
+          message: "An activated constant is not also an already active constant.",
+          path: ["newConstants", index],
+        });
+      }
+    });
   });
 
+/** A free variable of a selected fragment, under a neutral name, with its sort. */
+const situationVariableSchema = z
+  .object({ symbol: z.string().min(1).max(200), sort: sortSchema })
+  .strict();
+/**
+ * One selected fragment as the librarian sees it (design plan §15.3): the fragment itself with its
+ * problem-specific variable names replaced by neutral ones, the sorts of those variables, and
+ * whether it sits in a positive or negative position. There is no location, statement,
+ * identifier, hypothesis or goal: only the shape of the local situation.
+ */
+const situationSelectionSchema = z
+  .object({
+    expression: plainMathJsonSchema,
+    variables: z.array(situationVariableSchema).max(MAX_SITUATION_VARIABLES),
+    position: z
+      .object({
+        polarity: z.enum(["positive", "negative", "mixed", "neutral"]),
+        role: z.enum(["proposition", "term", "binder"]),
+      })
+      .strict(),
+  })
+  .strict();
+export const librarianSituationSchema = z
+  .object({
+    selections: z.array(situationSelectionSchema).min(1).max(MAX_LIBRARIAN_SITUATION_SELECTIONS),
+  })
+  .strict();
+export type LibrarianSituation = z.infer<typeof librarianSituationSchema>;
+
+const noRelevantResultsContextSchema = z
+  .object({
+    kind: z.literal("no-relevant-results"),
+    ...contextBaseShape,
+    situation: librarianSituationSchema,
+  })
+  .strict()
+  .superRefine(addContextIssues);
+
 /** The librarian's context, by request kind. The problem statement is deliberately not a field. */
-export const librarianContextSchema = z.discriminatedUnion("kind", [initialContextSchema]);
+export const librarianContextSchema = z.discriminatedUnion("kind", [
+  initialContextSchema,
+  newConstantsContextSchema,
+  noRelevantResultsContextSchema,
+]);
 export type LibrarianContext = z.infer<typeof librarianContextSchema>;
 export type LibrarianRequestKind = LibrarianContext["kind"];
+export type LibrarianTopUpKind = Exclude<LibrarianRequestKind, "initial">;
+export type LibrarianTopUpContext = Extract<LibrarianContext, { kind: LibrarianTopUpKind }>;
+
+/** Every constant a result of this request may use: the context's, and any just activated. */
+export function librarianContextConstants(
+  context: LibrarianContext,
+): readonly OperatorDeclaration[] {
+  return context.kind === "new-constants"
+    ? [...context.constants, ...context.newConstants]
+    : context.constants;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Validated output
@@ -315,11 +421,12 @@ export function normalizeLibrarianWireResult(
     operator: wireOperatorToDeclarationInput(operator),
     rationale,
   }));
+  const available = librarianContextConstants(context);
   const taken = {
-    symbols: new Set(context.constants.map(({ symbol }) => symbol)),
-    ids: new Set<string>(context.constants.map(({ id }) => id)),
+    symbols: new Set(available.map(({ symbol }) => symbol)),
+    ids: new Set<string>(available.map(({ id }) => id)),
     triggers: new Set(
-      context.constants.flatMap((operator) => {
+      available.flatMap((operator) => {
         const trigger = operator.presentation?.latex?.parse?.trigger;
         return trigger === undefined ? [] : [trigger];
       }),
@@ -451,6 +558,100 @@ function addDuplicates(
 }
 
 // ---------------------------------------------------------------------------------------------
+// The abstracted local situation
+// ---------------------------------------------------------------------------------------------
+
+/** The parts of a resolved selection that the situation reads; everything else is ignored. */
+const resolvedSelectionShapeSchema = z.looseObject({
+  fragment: plainMathJsonSchema,
+  declarations: z.array(declarationSchema),
+  position: situationSelectionSchema.shape.position,
+});
+
+/**
+ * Describe selected fragments to the librarian and nothing else (design plan §15.3). Each resolved
+ * selection contributes its fragment, with the variables it mentions renamed to neutral names
+ * (`x1`, `x2`, ... in order of first appearance, one mapping for all fragments so that related
+ * fragments stay related), the sorts of those variables, and its position. Locations, statement
+ * and goal identifiers, hypotheses and the declarations a fragment does not mention are never
+ * included. Undefined when a selection is not a resolved selection or there are none or too many.
+ */
+export function buildLibrarianSituation(
+  selections: readonly unknown[],
+  operators: readonly OperatorDeclaration[],
+): LibrarianSituation | undefined {
+  if (selections.length === 0 || selections.length > MAX_LIBRARIAN_SITUATION_SELECTIONS) {
+    return undefined;
+  }
+  const parsed = selections.map((selection) => resolvedSelectionShapeSchema.safeParse(selection));
+  if (parsed.some((result) => !result.success)) return undefined;
+  const resolved = parsed.flatMap((result) => (result.success ? [result.data] : []));
+
+  // Which declared variables each fragment mentions freely, in order of first appearance.
+  const mentioned = resolved.map(({ fragment, declarations }) => {
+    const declared = new Map<string, Sort>(declarations.map(({ symbol, sort }) => [symbol, sort]));
+    const free = new Set(freeSymbolNames(fragment, { operators }));
+    const order: string[] = [];
+    visitSymbols(fragment, (symbol) => {
+      if (free.has(symbol) && declared.has(symbol) && !order.includes(symbol)) order.push(symbol);
+    });
+    return order.map((symbol) => ({ symbol, sort: declared.get(symbol) as Sort }));
+  });
+
+  const neutral = new Map<string, string>();
+  const used = new Set<string>(operators.map(({ symbol }) => symbol));
+  resolved.forEach(({ fragment }) => visitSymbols(fragment, (symbol) => used.add(symbol)));
+  let counter = 0;
+  const nextName = (): string => {
+    do counter += 1;
+    while (used.has(`x${counter}`));
+    used.add(`x${counter}`);
+    return `x${counter}`;
+  };
+  mentioned.flat().forEach(({ symbol }) => {
+    if (!neutral.has(symbol)) neutral.set(symbol, nextName());
+  });
+
+  const described = resolved.map(({ fragment, position }, index) => {
+    const variables = mentioned[index] ?? [];
+    const renamed = substituteMathJson(
+      fragment,
+      variables.map(({ symbol }) => ({ symbol, replacement: neutral.get(symbol) as string })),
+      { operators },
+    );
+    // A fragment that cannot be renamed safely is described with its own names.
+    const renamedOk = renamed.ok;
+    return {
+      expression: renamedOk ? renamed.expression : fragment,
+      variables: variables.map(({ symbol, sort }) => ({
+        symbol: renamedOk ? (neutral.get(symbol) as string) : symbol,
+        sort,
+      })),
+      position,
+    };
+  });
+  const situation = librarianSituationSchema.safeParse({ selections: described });
+  return situation.success ? situation.data : undefined;
+}
+
+function visitSymbols(expression: PlainMathJson, visit: (symbol: string) => void): void {
+  if (typeof expression === "string") {
+    visit(expression);
+    return;
+  }
+  if (Array.isArray(expression)) {
+    expression.forEach((child) => visitSymbols(child as PlainMathJson, visit));
+    return;
+  }
+  if (typeof expression === "object" && expression !== null) {
+    if ("sym" in expression && typeof expression.sym === "string") visit(expression.sym);
+    if ("fn" in expression) {
+      (expression.fn as readonly PlainMathJson[]).forEach((child) => visitSymbols(child, visit));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // System message
 // ---------------------------------------------------------------------------------------------
 
@@ -459,8 +660,11 @@ export function librarianNewConstants(proposal: LibrarianProposal): readonly Ope
   return proposal.newConstants.map(({ operator }) => operator);
 }
 
-/** The role's fixed system message; stored calls are checked against it. */
-export const LIBRARIAN_SYSTEM_MESSAGE =
+/**
+ * The role's system message before the top-up request kinds existed. Calls stored with it (every
+ * `initial` call of the first librarian release) stay readable; new calls use the current one.
+ */
+export const LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE =
   "Propose general library results for the supplied background and constants. Return only a library proposal, a permitted context request, or a refusal. " +
   "You are given no problem and must not try to guess one: do not solve, prove or hint at any particular problem. " +
   "A library result is a standard, general fact that a reader at this background level would cite without proof: a statement over named parameters, with optional premises. " +
@@ -480,3 +684,17 @@ export const LIBRARIAN_SYSTEM_MESSAGE =
   "If your results need an operator that is not in context.constants, declare it in newConstants with a one-line rationale; declare only operators that your results use, and never redeclare an operator from context.constants or a built-in symbol. " +
   OPERATOR_DECLARATION_GUIDANCE +
   "If the background or the constants are too thin to propose results, return a context request instead.";
+
+/**
+ * What `context.kind` asks for. The text is appended to the original message, so the guidance for
+ * the initial library is unchanged.
+ */
+const LIBRARIAN_REQUEST_KINDS_GUIDANCE =
+  "The request kind is context.kind. `initial` is the request described above. " +
+  "`new-constants` is a top-up during a proof: context.newConstants are constants that the proof has just started to use, and context.constants are the constants that were already active; treat context.newConstants as available operators too. Propose standard results that involve the new constants together with the old ones, and standard results about the new constants alone, and make every result apply at least one new constant. " +
+  "`no-relevant-results` is a top-up during a proof: nothing in the library helped with a local situation, given in context.situation as selected formula fragments, each with the sorts of its variables (renamed to neutral names) and whether it sits in a positive or negative position. Propose standard results over context.constants and the built-in symbols that a mathematician could use on a fragment of that shape. Stay general: do not guess, solve or hint at the problem a fragment came from, and do not state a result about a fragment's variable names. " +
+  "In a top-up the proof's constants are fixed: return an empty newConstants list and propose only results that use the supplied constants and built-in symbols; a result that needs another operator is rejected. " +
+  "In every kind, context.existingResults are the names and statements of the results the session library already holds.";
+
+/** The role's fixed system message; stored calls are checked against it. */
+export const LIBRARIAN_SYSTEM_MESSAGE = `${LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE} ${LIBRARIAN_REQUEST_KINDS_GUIDANCE}`;

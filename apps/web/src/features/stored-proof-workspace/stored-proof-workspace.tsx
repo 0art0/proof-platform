@@ -54,6 +54,7 @@ import {
 } from "./api-contract";
 import { toDescriptor } from "./selection-descriptor";
 import { createInteractionRecorder } from "./interaction-recorder";
+import { useLibraryTopUp } from "./library-top-up";
 import { MoveInstructions } from "./move-instructions";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
@@ -85,6 +86,8 @@ export type StoredProofWorkspaceProps = Readonly<{
   aiShortlist?: boolean | undefined;
   /** Whether the proof service can turn a described step into kernel steps with a model. */
   aiExecutor?: boolean | undefined;
+  /** Whether the proof service can add library results during a proof with a model. */
+  aiLibrarian?: boolean | undefined;
 }>;
 type HistoryState =
   | Readonly<{ kind: "loading" }>
@@ -109,6 +112,7 @@ function StatefulStoredWorkspace({
   node: initialNode,
   aiShortlist = false,
   aiExecutor = false,
+  aiLibrarian = false,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -611,6 +615,22 @@ function StatefulStoredWorkspace({
     [loadHistory, rejectShownPreview, resetTransientState, session.id],
   );
 
+  // Library top-ups (architecture §2): "Find more results" for the current selections, and the
+  // automatic request after a committed step first used a constant the library had no results for.
+  const topUp = useLibraryTopUp({
+    sessionId: session.id,
+    nodeId: node.id,
+    enabled: aiLibrarian && !readOnly,
+  });
+  const findMoreResults = useCallback(() => {
+    void topUp.findMoreResults(selections);
+  }, [selections, topUp]);
+  const findMoreDisabledReason = readOnly
+    ? "This session is read-only, so its library cannot grow."
+    : aiLibrarian
+      ? undefined
+      : "The library assistant is not set up for this service, so it cannot look for more results.";
+
   /** "Describe a move" on the shortlist's none-relevant notice: go to the description box. */
   const focusInstructions = useCallback(() => {
     const box = instructionsRef.current;
@@ -811,9 +831,9 @@ function StatefulStoredWorkspace({
           {READ_ONLY_REASON}: suggestions can be viewed but not applied.
         </p>
       ) : null}
-      {/* onFindMoreResults (library top-up) is deliberately unwired until its backend exists: see
-          docs/ai-agents-architecture.md §2. Without it the panel shows no such button. "Describe a
-          move" is offered only when the move-instruction box can take a description. */}
+      {/* "Find more results" is a library top-up (docs/ai-agents-architecture.md §2); where it is
+          unavailable the button is disabled and says why. "Describe a move" is offered only when
+          the move-instruction box can take a description. */}
       <SuggestionPanel
         suggestions={suggestions}
         move={moveState}
@@ -826,6 +846,10 @@ function StatefulStoredWorkspace({
           aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
         }
         onDescribeMove={aiExecutor && !readOnly ? focusInstructions : undefined}
+        onFindMoreResults={findMoreResults}
+        findMoreDisabledReason={findMoreDisabledReason}
+        findMoreStatus={topUp.status}
+        onAskAgain={() => handleSelectionChange(selections)}
         {...panelActions}
       />
       <InquiryPanel

@@ -15,7 +15,12 @@
  * approval will get, and no result claims approval before it has one.
  */
 import { createPresentation, type Presentation } from "@proof/language";
-import type { LibrarianContext, LibrarianProposal, LibrarianResult } from "@proof/llm";
+import type {
+  LibrarianContext,
+  LibrarianProposal,
+  LibrarianResult,
+  LibrarianTopUpContext,
+} from "@proof/llm";
 import {
   admitLibraryArtifact,
   checkBackgroundAdmission,
@@ -27,6 +32,7 @@ import {
 import {
   freeSymbolNames,
   parseStatementView,
+  substituteMathJson,
   type OperatorDeclaration,
   type PlainMathJson,
 } from "@proof/mathjson-model";
@@ -125,9 +131,222 @@ export function evaluateLibraryProposal(
   });
 }
 
+/**
+ * The name a proof-time top-up's recorded approval carries. No person reviews a top-up: the
+ * deterministic admission gate admits it, and this actor says so honestly instead of claiming
+ * a human or the model approved it.
+ */
+export const TOP_UP_REVIEWER_ID = "service:library-gate";
+const TOP_UP_JUDGEMENT: Judgement = {
+  layer: "proof-time-background",
+  reviewerId: TOP_UP_REVIEWER_ID,
+};
+
+/** Why a top-up cannot take a constant the librarian declares. */
+export const TOP_UP_CONSTANT_REASON =
+  "A proof in progress cannot declare new constants: its operators were fixed when the session was approved.";
+
+/** The verdict on a top-up proposal: what the gate admitted (in recordable form) and what it did not. */
+export type TopUpEvaluation = Readonly<{
+  /**
+   * Admitted results with their variants, approved by `TOP_UP_REVIEWER_ID` in the
+   * `proof-time-background` layer, exactly as they are recorded.
+   */
+  results: readonly EvaluatedLibraryResult[];
+  rejected: readonly RejectedLibraryResult[];
+  rejectedConstants: readonly Readonly<{ symbol: string; reason: string }>[];
+}>;
+
+/**
+ * Judge a top-up proposal (`new-constants` or `no-relevant-results`) for a session in progress.
+ * Pure: the same stored call, operators, profile and library always give the same verdict.
+ *
+ * - Results are judged in the session's own operators. The librarian may declare constants, but a
+ *   session's operators cannot change after approval, so none is accepted and a result that
+ *   applies one is rejected with that reason.
+ * - A result whose identifier or (alpha-renamed) statement and premises repeat one already in the
+ *   library, or one admitted earlier in the proposal, is rejected as a duplicate.
+ * - A `new-constants` result must apply at least one newly activated constant.
+ */
+export function evaluateTopUpProposal(
+  input: Readonly<{
+    callId: string;
+    context: LibrarianTopUpContext;
+    proposal: LibrarianProposal;
+    /** The session's complete operator environment. */
+    operators: readonly OperatorDeclaration[];
+    /** The session's current background profile. */
+    profile: BackgroundProfile;
+    /** The results the session library already holds, other than the ones this call adds. */
+    existing: readonly LibraryResult[];
+  }>,
+): TopUpEvaluation {
+  const { callId, context, proposal, operators, profile } = input;
+  const presentation = presentationFor(operators);
+  const declared = new Set(proposal.newConstants.map(({ operator }) => operator.symbol));
+  const activated =
+    context.kind === "new-constants"
+      ? new Set(context.newConstants.map(({ symbol }) => symbol))
+      : undefined;
+  const takenIds = new Set<string>(input.existing.map(({ id }) => id));
+  const takenStatements = new Map<string, string>(
+    input.existing.map((result) => [statementKey(result), result.name]),
+  );
+
+  const results: EvaluatedLibraryResult[] = [];
+  const rejected: RejectedLibraryResult[] = proposal.unusable.map(({ id, reason }) => ({
+    id,
+    name: id,
+    reasons: [reason],
+    codes: ["unreadable"],
+  }));
+  const reject = (proposed: LibrarianResult, code: string, reason: string) =>
+    rejected.push({ id: proposed.id, name: proposed.name, reasons: [reason], codes: [code] });
+
+  for (const proposed of proposal.results) {
+    if (takenIds.has(proposed.id)) {
+      reject(
+        proposed,
+        "duplicate-id",
+        `The identifier ${proposed.id} is already used in the library.`,
+      );
+      continue;
+    }
+    const heads = proposedHeads(proposed);
+    const needed = [...declared].filter((symbol) => heads.has(symbol)).sort();
+    if (needed.length > 0) {
+      reject(
+        proposed,
+        "needs-new-constant",
+        `This result needs the new constant ${needed.join(", ")}. ${TOP_UP_CONSTANT_REASON}`,
+      );
+      continue;
+    }
+    const outcome = evaluateResult(
+      proposed,
+      callId,
+      profile,
+      operators,
+      presentation,
+      TOP_UP_JUDGEMENT,
+    );
+    if (!outcome.ok) {
+      rejected.push({
+        id: proposed.id,
+        name: proposed.name,
+        reasons: outcome.reasons,
+        codes: outcome.codes,
+      });
+      continue;
+    }
+    if (activated !== undefined && ![...activated].some((symbol) => heads.has(symbol))) {
+      reject(
+        proposed,
+        "not-about-new-constants",
+        `This result applies none of the newly activated constants (${[...activated].sort().join(", ")}), which this request asked for.`,
+      );
+      continue;
+    }
+    const repeats = takenStatements.get(statementKey(outcome.artifact));
+    if (repeats !== undefined) {
+      reject(proposed, "duplicate-statement", `This repeats the library result "${repeats}".`);
+      continue;
+    }
+    takenIds.add(outcome.artifact.id);
+    takenStatements.set(statementKey(outcome.artifact), outcome.artifact.name);
+    // A variant that repeats a library statement (or an earlier variant) is left out quietly.
+    const variants = outcome.variants.filter((variant) => {
+      const key = statementKey(variant);
+      if (takenStatements.has(key)) return false;
+      takenStatements.set(key, variant.name);
+      takenIds.add(variant.id);
+      return true;
+    });
+    results.push({
+      artifact: withApproval(outcome.artifact, TOP_UP_REVIEWER_ID),
+      variants: variants.map((variant) => withApproval(variant, TOP_UP_REVIEWER_ID)),
+      newConstantSymbols: [],
+    });
+  }
+  return Object.freeze({
+    results,
+    rejected,
+    rejectedConstants: proposal.newConstants.map(({ operator }) => ({
+      symbol: operator.symbol,
+      reason: TOP_UP_CONSTANT_REASON,
+    })),
+  });
+}
+
+/** Every function head in a proposed result's statement, premises and patterns. */
+function proposedHeads(proposed: LibrarianResult): Set<string> {
+  const heads = new Set<string>();
+  collectHeads(proposed.statement.expression, heads);
+  proposed.premises.forEach(({ expression }) => collectHeads(expression, heads));
+  proposed.patterns.forEach(({ expression }) => collectHeads(expression, heads));
+  return heads;
+}
+
+/**
+ * A key under which two results with the same premises and statement, up to the names of their
+ * parameters, coincide. Parameters are renamed in order of first appearance.
+ */
+export function statementKey(
+  result: Pick<LibraryResult, "parameters" | "premises" | "statement">,
+): string {
+  const parameters = new Set(result.parameters.map(({ symbol }) => symbol));
+  const formulas = [
+    ...result.premises.map(({ expression }) => expression),
+    result.statement.expression,
+  ];
+  const order: string[] = [];
+  formulas.forEach((formula) => orderedParameters(formula, parameters, order));
+  const substitutions = order.map((symbol, index) => ({
+    symbol,
+    replacement: `parameter_${index + 1}`,
+  }));
+  const renamed = formulas.map((formula) => {
+    const substituted = safely(() => substituteMathJson(formula, substitutions), undefined);
+    return substituted?.ok === true ? substituted.expression : formula;
+  });
+  return JSON.stringify(renamed);
+}
+
+function orderedParameters(
+  expression: PlainMathJson,
+  parameters: ReadonlySet<string>,
+  order: string[],
+): void {
+  if (typeof expression === "string") {
+    if (parameters.has(expression) && !order.includes(expression)) order.push(expression);
+    return;
+  }
+  if (Array.isArray(expression)) {
+    expression.forEach((child) => orderedParameters(child as PlainMathJson, parameters, order));
+    return;
+  }
+  if (typeof expression === "object" && expression !== null) {
+    if ("sym" in expression && typeof expression.sym === "string") {
+      orderedParameters(expression.sym, parameters, order);
+    }
+    if ("fn" in expression) {
+      (expression.fn as readonly PlainMathJson[]).forEach((child) =>
+        orderedParameters(child, parameters, order),
+      );
+    }
+  }
+}
+
 type ResultOutcome =
   | Readonly<{ ok: true; artifact: LibraryResult; variants: readonly LibraryResult[] }>
   | Readonly<{ ok: false; reasons: readonly string[]; codes: readonly string[] }>;
+
+/** How a proposal's results are judged: in which layer, and who the recorded approval names. */
+type Judgement = Readonly<{
+  layer: "initial-problem" | "proof-time-background";
+  reviewerId: string;
+}>;
+const INITIAL_JUDGEMENT: Judgement = { layer: "initial-problem", reviewerId: LIBRARY_REVIEWER_ID };
 
 function evaluateResult(
   proposed: LibrarianResult,
@@ -135,15 +354,17 @@ function evaluateResult(
   profile: BackgroundProfile,
   operators: readonly OperatorDeclaration[],
   presentation: Presentation,
+  judgement: Judgement = INITIAL_JUDGEMENT,
 ): ResultOutcome {
+  const { layer, reviewerId } = judgement;
   const reasons: string[] = [];
   const codes: string[] = [];
   const gate = admitLibraryArtifact({
-    artifact: assembleArtifact(proposed, callId, presentation, {
+    artifact: assembleArtifact(proposed, callId, presentation, layer, {
       status: "approved",
-      reviewerId: LIBRARY_REVIEWER_ID,
+      reviewerId,
     }),
-    layer: "initial-problem",
+    layer,
     sessionId: GATE_SESSION_ID,
     profile,
     environment: { operators },
@@ -159,16 +380,19 @@ function evaluateResult(
     }
   }
   // The gate admits the initial-problem layer on approval alone; the profile's declared domains
-  // and level still bound what the librarian may classify a result as.
-  const background = checkBackgroundAdmission(proposed.classification, profile);
-  if (!background.ok) {
-    for (const diagnostic of background.diagnostics) {
-      if (
-        diagnostic.code === "domain-outside-background" ||
-        diagnostic.code === "level-above-background"
-      ) {
-        codes.push("outside-background");
-        reasons.push(diagnostic.message);
+  // and level still bound what the librarian may classify a result as. The proof-time layer
+  // checks the classification against the profile itself.
+  if (layer === "initial-problem") {
+    const background = checkBackgroundAdmission(proposed.classification, profile);
+    if (!background.ok) {
+      for (const diagnostic of background.diagnostics) {
+        if (
+          diagnostic.code === "domain-outside-background" ||
+          diagnostic.code === "level-above-background"
+        ) {
+          codes.push("outside-background");
+          reasons.push(diagnostic.message);
+        }
       }
     }
   }
@@ -186,8 +410,8 @@ function evaluateResult(
   const variants = generated.variants.filter(
     (variant) =>
       admitLibraryArtifact({
-        artifact: withApproval(variant, LIBRARY_REVIEWER_ID),
-        layer: "initial-problem",
+        artifact: withApproval(variant, reviewerId),
+        layer,
         sessionId: GATE_SESSION_ID,
         profile,
         environment: { operators },
@@ -201,6 +425,7 @@ function assembleArtifact(
   proposed: LibrarianResult,
   callId: string,
   presentation: Presentation,
+  layer: Judgement["layer"],
   approval: LibraryResult["approval"],
 ): unknown {
   return {
@@ -216,7 +441,7 @@ function assembleArtifact(
     classification: proposed.classification,
     provenance: { kind: "generated", role: "librarian", contextId: callId },
     approval,
-    layer: "initial-problem",
+    layer,
     related: [],
     priority: LIBRARIAN_RESULT_PRIORITY,
     parameters: proposed.parameters,

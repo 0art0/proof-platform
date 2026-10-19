@@ -63,6 +63,10 @@ import {
   type SuggestionTransitionClass,
 } from "../../features/stored-proof-workspace/api-contract";
 import {
+  libraryConstantsSchema,
+  type LibraryConstants,
+} from "../../features/stored-proof-workspace/library-top-up-contract";
+import {
   sessionLibraryEventsSchema,
   sessionLibrarySchema,
   type SessionLibrary,
@@ -1396,6 +1400,17 @@ export async function readSessionLibraryEvents(
   return readLibraryView(sessionIdInput, "library/events", sessionLibraryEventsSchema, options);
 }
 
+/**
+ * Which constants of a session are active, dormant or newly activated by a committed step, and
+ * which activations a recorded library top-up already covered. Read-only.
+ */
+export async function readSessionLibraryConstants(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<LibraryConstants> {
+  return readLibraryView(sessionIdInput, "library/constants", libraryConstantsSchema, options);
+}
+
 async function readLibraryView<View extends { sessionId: string }>(
   sessionIdInput: unknown,
   path: string,
@@ -1702,7 +1717,8 @@ export type AiEndpoint =
   | Readonly<{ kind: "formalize" }>
   | Readonly<{ kind: "shortlist"; sessionId: string }>
   | Readonly<{ kind: "execute"; sessionId: string }>
-  | Readonly<{ kind: "execute-apply"; sessionId: string }>;
+  | Readonly<{ kind: "execute-apply"; sessionId: string }>
+  | Readonly<{ kind: "library-top-up"; sessionId: string }>;
 
 function aiEndpointPath(endpoint: AiEndpoint): string {
   if (endpoint.kind === "background") return "/ai/background";
@@ -1714,6 +1730,7 @@ function aiEndpointPath(endpoint: AiEndpoint): string {
   const base = `/proof-sessions/${encodeURIComponent(sessionId)}/ai`;
   if (endpoint.kind === "execute") return `${base}/execute`;
   if (endpoint.kind === "execute-apply") return `${base}/execute/apply`;
+  if (endpoint.kind === "library-top-up") return `${base}/library/top-up`;
   return `${base}/shortlist`;
 }
 

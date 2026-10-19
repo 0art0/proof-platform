@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPresentation } from "@proof/language";
 import { displayedSuggestionSetSchema, type DisplayedSuggestionSet } from "@proof/protocol";
 import { AUTO_RANK_KEY, writeAutoRankPreference } from "./ai-ranking-preference";
+import type { TopUpStatus } from "./library-top-up";
 import { SuggestionPanel } from "./suggestion-panel";
 
 beforeEach(() => {
@@ -87,6 +88,9 @@ type PanelExtras = Readonly<{
   mutationPending?: boolean;
   onDescribeMove?: () => void;
   onFindMoreResults?: () => void;
+  findMoreDisabledReason?: string;
+  findMoreStatus?: TopUpStatus;
+  onAskAgain?: () => void;
 }>;
 const SESSION = { sessionId: "session:a", nodeId: "node:test" };
 
@@ -110,6 +114,9 @@ function panel(
       aiShortlist={aiShortlist ?? undefined}
       onDescribeMove={extras.onDescribeMove}
       onFindMoreResults={extras.onFindMoreResults}
+      findMoreDisabledReason={extras.findMoreDisabledReason}
+      findMoreStatus={extras.findMoreStatus}
+      onAskAgain={extras.onAskAgain}
       onPreview={noop}
       onChooseInputs={noop}
       onSubmitChoices={noop}
@@ -655,5 +662,74 @@ describe("the empty suggestions state", () => {
     renderPanel(suggestionSet([]), SESSION, { onFindMoreResults });
     fireEvent.click(screen.getByRole("button", { name: "Find more results" }));
     expect(onFindMoreResults).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("find more results states", () => {
+  it("disables the button in the empty state and says why", () => {
+    const onFindMoreResults = vi.fn();
+    renderPanel(suggestionSet([]), SESSION, {
+      onFindMoreResults,
+      findMoreDisabledReason: "This session is read-only, so its library cannot grow.",
+    });
+    const button = screen.getByRole("button", { name: "Find more results" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/read-only/);
+    fireEvent.click(button);
+    expect(onFindMoreResults).not.toHaveBeenCalled();
+  });
+
+  it("shows the running request and disables the button while it runs", () => {
+    renderPanel(suggestionSet([]), SESSION, {
+      onFindMoreResults: vi.fn(),
+      findMoreStatus: { kind: "working" },
+    });
+    expect(screen.getByTestId("library-top-up-status")).toHaveTextContent(
+      "Looking for more results…",
+    );
+    expect(screen.getByRole("button", { name: "Find more results" })).toBeDisabled();
+  });
+
+  it("offers to ask for suggestions again once results were added, and not otherwise", () => {
+    const onAskAgain = vi.fn();
+    const { rerender } = render(
+      panel(suggestionSet([]), SESSION, {
+        onFindMoreResults: vi.fn(),
+        onAskAgain,
+        findMoreStatus: {
+          kind: "done",
+          added: 2,
+          message: "Added 2 results to the library. Ask for suggestions again to use them.",
+        },
+      }),
+    );
+    expect(screen.getByTestId("library-top-up-status")).toHaveTextContent(
+      "Added 2 results to the library. Ask for suggestions again to use them.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Ask for suggestions again" }));
+    expect(onAskAgain).toHaveBeenCalledTimes(1);
+    rerender(
+      panel(suggestionSet([]), SESSION, {
+        onFindMoreResults: vi.fn(),
+        onAskAgain,
+        findMoreStatus: { kind: "done", added: 0, message: "No new results were added." },
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Ask for suggestions again" })).toBeNull();
+    rerender(panel(suggestionSet([]), SESSION, { onFindMoreResults: vi.fn() }));
+    expect(screen.queryByTestId("library-top-up-status")).toBeNull();
+  });
+
+  it("disables the none-relevant notice's button too, with the same reason", async () => {
+    vi.useFakeTimers();
+    stubFetch(200, noneRelevant(TWO));
+    renderPanel(TWO, SESSION, {
+      onFindMoreResults: vi.fn(),
+      findMoreDisabledReason: "The library assistant is not set up for this service.",
+    });
+    await elapse();
+    const button = screen.getByRole("button", { name: "Find more results" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(/not set up/);
   });
 });

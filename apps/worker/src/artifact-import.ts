@@ -39,6 +39,7 @@ import {
   type BackgroundProfile,
   type LibraryAdditionEvent,
   type LibraryArtifact,
+  type LibraryResult,
 } from "@proof/library";
 import {
   LEGACY_ARTIFACT_VERSION,
@@ -78,7 +79,9 @@ import {
   type DefinitionCatalog,
   type MacroDefinition,
 } from "./approved-catalog";
+import { approvedDerivedResults } from "./conditional-lemmas";
 import { approvedAuthoredMacros, approvedAuthoredMoves } from "./move-authoring";
+import { sessionLibraryResults, withSessionResults } from "./session-results";
 import { artifactDigest } from "./artifact-export";
 import { storedLlmCallSchema } from "./llm-call-repository";
 import {
@@ -290,6 +293,13 @@ function fail(code: string, message: string, path: Path): never {
   throw new ArtifactRejection({ code, message, path: [...path] });
 }
 
+/** The results an artifact's own final library offers its session's catalog (see `session-results`). */
+function artifactSessionResults(
+  finalLibrary: readonly LibraryArtifact[],
+): readonly LibraryResult[] {
+  return [...approvedDerivedResults(finalLibrary), ...sessionLibraryResults(finalLibrary)];
+}
+
 /**
  * The authored moves an artifact's own library section approves: the latest approved `move`
  * review of each move in its admitted `move-discovery-draft` addition events, whose recorded
@@ -346,8 +356,16 @@ class ArtifactValidator {
 
   constructor(
     private readonly artifact: ProofArtifact,
-    baseDefinitions: DefinitionCatalog,
+    importerDefinitions: DefinitionCatalog,
   ) {
+    // The importing server's catalog plus the results THIS artifact's own library section holds:
+    // the session's initial-problem and proof-time-background results and its approved lemmas.
+    // A step that applied one of them replays only if the artifact carries it (and the library
+    // check below still gates every one of them).
+    const baseDefinitions = withSessionResults(
+      importerDefinitions,
+      artifactSessionResults(artifact.library.finalLibrary as readonly LibraryArtifact[]),
+    );
     this.definitions = baseDefinitions;
     const operators = artifact.initialState.operators;
     let results: ProtocolEnvironment["results"];

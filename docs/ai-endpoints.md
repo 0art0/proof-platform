@@ -1,13 +1,12 @@
 # AI endpoints
 
-The worker exposes six single-call AI roles: the background proposer, the librarian (initial
-library only), the topic extractor, the proof-state formalizer, the move shortlister and the move
+The worker exposes six single-call AI roles: the background proposer, the librarian (the initial
+library and top-ups during a proof), the topic extractor, the proof-state formalizer, the move shortlister and the move
 executor. All use the Vercel AI Gateway and persist a validated call record before returning a
 proposal. AI responses never execute proof commands or change a proof session directly; the move
 executor's plan is committed only by a separate apply request that the user makes after reading a
 kernel preview. The other roles of design plan §15.2 (attestor, background gatekeeper, generality
-reviewer, stateful proof agent) and the librarian's top-up requests (`new-constants`,
-`no-relevant-results`) are not implemented. The agent architecture is specified in
+reviewer, stateful proof agent) are not implemented. The agent architecture is specified in
 `docs/ai-agents-architecture.md`.
 
 The background proposer supersedes the topic extractor in the new-problem page: the web
@@ -51,7 +50,8 @@ evidence. Missing credentials disable these routes. No model fallback is silentl
 
 ## Cost guard and status codes
 
-The background, library, topic, formalizer, shortlist and move-executor preview routes can
+The background, library, library top-up, topic, formalizer, shortlist and move-executor preview
+routes can
 trigger paid provider calls, so they share an in-process limiter: a global cap on
 concurrent provider calls (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token bucket
 (`PROOF_AI_RATE_PER_MINUTE`, default 20; it is also the burst size). A request over budget gets
@@ -192,7 +192,8 @@ constants, existingResults }`, where `background` and `constants` are resolved f
 background decision in storage (the constants are the approved constants followed by the operators
 of the selected packs) and `existingResults` lists the id, name and statement of the results
 already in the library for those packs, so that it does not repeat them. The context is a union
-discriminated by `kind` so that the later request kinds can extend it.
+discriminated by `kind`; the top-up kinds (below) extend it. The system message gained guidance for the
+top-up kinds (prompt version `librarian-v2`); calls stored with the earlier message remain readable.
 
 ```json
 {
@@ -499,14 +500,125 @@ stores the output `{ "kind": "none-relevant", "confidence", "reason" }`. The out
 when its confidence reaches the configured threshold (`PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`). A
 none-relevant answer below it is stored as `declined` (Jev) or answered as an ordinary
 `deterministic-fallback`, exactly like any other low-confidence answer. A client uses the outcome to
-offer "Describe a move" and "Find more results" (`docs/ai-agents-architecture.md` §4); neither
-action exists on the worker yet.
+offer "Describe a move" (the move executor, below) and "Find more results" (a library top-up,
+below; `docs/ai-agents-architecture.md` §4).
 
 This endpoint records an immutable LLM call record but does not preview or apply any move. Human or
 agent actions still go through the existing proof command protocol.
 Shortlist evidence is session-owned and included in exported session artifacts under `llmCalls`.
 Construction-owned formalizer evidence is available through its construction evidence route; it is
 not implicitly attached to a later proof-session artifact.
+
+## Top up the library during a proof
+
+`POST /proof-sessions/:sessionId/ai/library/top-up` asks the librarian for more results while a
+proof is in progress (`docs/ai-agents-architecture.md` section 2). There is no review step: the
+worker judges every returned result with the admission gate and records the admitted ones, with
+their generated variants, as library additions of the session. The route never touches proof
+state, and the suggestion sets that were displayed before it are stored exactly as they were; the
+next suggestion request sees the larger library.
+
+```json
+{ "id": "llm-call:find-more-1", "kind": "no-relevant-results",
+  "expectedCurrentNodeId": "node:current", "selections": [ { "kind": "exact", "anchor": { ... }, "path": [0] } ] }
+{ "id": "llm-call:new-constants-1", "kind": "new-constants", "constants": ["Gcd"] }
+```
+
+- `kind: "no-relevant-results"` is user-initiated ("Find more results"). `selections` (1 to 16
+  descriptors, as for a suggestion request but without an abstraction) are resolved against the
+  current node, and the librarian is given an abstracted description of them (design plan §15.3):
+  each selected fragment with its problem variables renamed to neutral names (`x1`, `x2`, ... in
+  order of first appearance, one mapping for all fragments), the sorts of those variables and
+  whether it sits in a positive or negative position. It is never given the problem, the proof's
+  identifiers, hypotheses, other goals, history or any suggestion. Its context is `{ kind,
+background, constants, existingResults, situation }`, where `constants` are the session's active
+  constants.
+- `kind: "new-constants"` is requested automatically by the web application after a committed step
+  activated constants (below). Its context is `{ kind, background, constants, existingResults,
+newConstants }`: the old active constants and the newly activated ones, and the librarian is asked
+  for results that involve the new constants together with the old ones and the new ones alone. The
+  optional `constants` lists symbols only, never declarations: the worker finds the activated
+  constants itself, and a symbol that no committed step has activated is `409
+constant-not-activated`. Without `constants`, every activated constant that no recorded top-up
+  covers is requested. Nothing waiting is `409 no-new-constants`.
+- In both kinds `existingResults` are the id, name and statement of the results the session
+  library already holds (the catalog below), most relevant first and capped at 128. `expectedCurrentNodeId`
+  is optional; when given, a proof that moved on is `409 stale-evidence`.
+
+Before a call is paid for, the worker refuses a read-only session (`409 session-read-only`), a
+session without a background profile (`409 background-missing`) or whose profile does not declare
+its domains and maximum level (`409 background-undeclared`: the gate would admit nothing), and a
+stale or unresolvable selection. A missing provider is `503 ai-disabled` (also without evidence or
+library storage), an exhausted budget is `429` with `Retry-After`, and a failed or malformed call
+is `503` or `422`, recorded as session-owned evidence like the executor's calls
+(`GET /proof-sessions/:id/llm-calls`, and `llmCalls` of the exported artifact).
+
+Admission is deterministic and a function of the stored call, the session's operators and
+background, and its library:
+
+- Results are judged in the session's own operators and recorded in the `proof-time-background`
+  layer, approved by `service:library-gate` (the gate, not a person or the model), with origin
+  `{ "kind": "service", "actorId": "llm-call:<id>" }`. Each addition has the event ID
+  `library-addition:<sessionId>:top-up:<callId>:<artifactId>`, so doing it again records nothing
+  twice. The library drawer lists them as ordinary additions, without a badge; the provenance is in
+  the event and the exported artifact.
+- **New constants are not accepted.** A session's operators are fixed when it is approved, and no
+  recorded mechanism extends a live session's operators (the operator registry is global and is not
+  read by retrieval or the kernel). Any `newConstants` the librarian returns are reported in
+  `rejectedConstants`, and a result that applies one is rejected (`needs-new-constant`) rather
+  than silently changing the session.
+- Other rejections carry plain reasons and codes: the gate's own (`invalid-artifact`, an unknown
+  operator or ill-sorted statement; `domain-outside-background`, `level-above-background`),
+  `duplicate-id`, `duplicate-statement` (the same premises and statement as a library result, up to
+  the names of parameters), `unreadable`, and for `new-constants` `not-about-new-constants` (a result
+  must apply at least one newly activated constant). A variant that repeats a library statement
+  is left out quietly.
+- Replay by call ID: an `id` that is already stored is answered from the stored call, after
+  checking it is the same kind of request (`409 call-id-conflict` otherwise; for a situation request
+  the selections are compared with the stored situation while they still resolve). The context a
+  replay would rebuild differs from the stored one (the library grew), which is why the stored call
+  is used. A run interrupted part-way (`503`, `status: "incomplete"`) is finished by repeating the
+  request with the same ID.
+
+The answer is `201` (something was recorded) or `200` with `status: "topped-up"`, `provenance`,
+`admittedBy`, `callId`, `replayed`, `requestKind`, `added` (`{ id, name, description, renderings,
+variantIds, eventId }` per result), `addedCount`, `rejected` (`{ id, name, reasons, codes }`),
+`rejectedConstants`, and for `new-constants` `coveredConstants`. A context request or refusal is
+`200` with its `status` and `result` and adds nothing.
+
+### Active constants
+
+The constants of a session are its operator declarations. Those of the accepted background and of
+the starter packs are active from the start. An operator that joined the session only because an
+approved initial-library result applies it (`libraryConstants` in the session metadata, recorded at
+approval) is declared but dormant: no step has used it and the library has no results written about
+it. It becomes active when a committed step first applies a library result that mentions it.
+
+Activation is not a new record. The committed step already is the append-only record: its edge names
+the library result it applied (an `apply-result-*` operation, or a rewrite whose source is a result)
+and carries the session's transition sequence, so activation is a deterministic read of the retained
+history in sequence order. Backtracking does not undo it; deleting the step that activated a
+constant does. No migration was needed. The library call is a separate request made after the step
+committed, never inside the command transaction.
+
+`GET /proof-sessions/:sessionId/library/constants` answers `{ sessionId, readOnly, active,
+dormant, activated }`: symbols of the operators in play and of the dormant ones, and for each
+activation `{ symbol, edgeId, nodeId, resultId, sequence, topUp }`, where `topUp` is `{ callId }` of
+the recorded `new-constants` call that covered it (a session-owned librarian call with a validated
+output; a failed or rejected call covers nothing) or `null`. The web application reads it after
+every change of the current node and requests the missing top-ups.
+
+### The session library in retrieval
+
+The results a session records join its retrieval and application catalog (design plan §12.4): the
+admitted results of its `initial-problem` layer (the approved initial library) and of its
+`proof-time-background` layer, with their generated variants and variant families, beside the
+approved conditional lemmas. It is one catalog for retrieval, materialization, apply, replay, the
+move executor's context and the library view. A result the kernel cannot instantiate in the
+session's operators (for example one whose operator the session does not declare) is not offered,
+and never fails the session. An imported artifact is revalidated with the results of its own
+library section, so a step that applied one replays. A result added during the session is available
+from then on, including after backtracking.
 
 ## Describe a step (move executor)
 
@@ -600,8 +712,9 @@ replays each command with it, so stripping it from an edge is detected.
 The web application relays these routes through same-origin proxies (`/api/ai/background`,
 `/api/ai/background/decisions`, `/api/ai/library`, `/api/ai/library/decisions`,
 `/api/ai/formalize`, `/api/proof-sessions/:sessionId/ai-shortlist`,
-`/api/proof-sessions/:sessionId/ai-execute` and `/api/proof-sessions/:sessionId/ai-execute/apply`),
-keeping the worker's status codes, including `429`. `/api/problem-drafts/validate` and
+`/api/proof-sessions/:sessionId/ai-execute`, `/api/proof-sessions/:sessionId/ai-execute/apply` and
+`/api/proof-sessions/:sessionId/ai-library-top-up`), keeping the worker's status codes, including
+`429`; `GET /api/proof-sessions/:sessionId/library/constants` reads the activated constants. `/api/problem-drafts/validate` and
 `/api/proof-sessions` also pass the optional `approvedBackground` and `approvedLibrary` references
 (and refuse any other field in them). The topic routes are no longer relayed.
 
@@ -643,10 +756,10 @@ keeping the worker's status codes, including `429`. `/api/problem-drafts/validat
   the fallback in place. A none-relevant answer shows "None of these suggestions look relevant to
   your selection." above the unchanged list, with "Describe a move" and "Find more results" buttons
   that appear only when the host provides the matching callbacks. The workspace wires "Describe a
-  move" to the move-instruction box (below) whenever that box can take a description; "Find more
-  results" has no backend yet and stays unwired. The empty suggestions state offers the same
-  optional "Find more results". Read-only sessions, and deployments without a configured
-  shortlister, show no ranking controls and send no ranking requests.
+  move" to the move-instruction box (below) whenever that box can take a description, and "Find more
+  results" to the library top-up (below). The empty suggestions state offers the same "Find more
+  results". Read-only sessions, and deployments without a configured shortlister, show no ranking
+  controls and send no ranking requests.
 - **Move instructions.** A panel beside the proof state (below it on narrower screens) with a text
   box, "Describe a step, e.g. 'split into cases on whether n is even'", and a **Preview** button.
   It is always shown; when the move executor is not configured, the session is read-only, another
@@ -660,6 +773,16 @@ keeping the worker's status codes, including `429`. `/api/problem-drafts/validat
   kernel rejects shows the failing step and the kernel's reason and says nothing changed; a model
   that asks for more detail or declines shows its own words. A preview belongs to one proof node
   and is dropped when the proof moves on.
+- **Find more results.** The none-relevant notice and the empty suggestions state send the current
+  selections as a `no-relevant-results` top-up. The request is announced inline ("Looking for more
+  results…"), then answered inline ("Added N results to the library. Ask for suggestions again to
+  use them." with an "Ask for suggestions again" button, or the plain reason nothing was added or why
+  it failed). Where it cannot work the button is disabled and says why: the library assistant is
+  not configured, or the session is read-only. After every change of the current node the workspace
+  reads `GET …/library/constants` and requests a `new-constants` top-up, once per constant and page
+  load, without review; a rate limit, a disabled role, a stale or empty answer is silent, and only a
+  top-up that added results leaves a brief note. Top-ups appear in the library drawer as ordinary
+  additions (origin `service`), with no AI badge.
 - A role that is not configured shows its control disabled with an explanation.
 
 Not yet available: "Save as reusable move" after an applied one-off step (architecture §5). The

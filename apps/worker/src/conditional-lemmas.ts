@@ -13,7 +13,9 @@
  *   `<draft>.review.<commandId>` restating the lemma with its review (the N35 pattern). Only an
  *   approved review makes the lemma retrievable.
  * - `approvedDerivedResults` / `sessionDefinitions` add approved lemmas to a session's retrieval
- *   catalog beside the reviewed packs. Drafts, rejections and other sessions' lemmas never join it.
+ *   catalog beside the reviewed packs (`session-results.ts` builds the catalog; it also adds the
+ *   session's initial-library and proof-time-background results). Drafts, rejections and other
+ *   sessions' lemmas never join it.
  */
 import {
   extractDerivedResult,
@@ -24,14 +26,13 @@ import {
 } from "@proof/library";
 import { createPresentation } from "@proof/language";
 import type { PlainMathJson, ProofContext, StatementView } from "@proof/mathjson-model";
-import { approvedKernelResults } from "@proof/moves";
 import {
   planConditionalLemma,
   type ConditionalLemmaPlan,
   type ConservativeHypothesisUse,
   type ProofNode,
 } from "@proof/protocol";
-import { adaptApprovedCatalog, type DefinitionCatalog } from "./approved-catalog";
+import type { DefinitionCatalog } from "./approved-catalog";
 import {
   addLibraryArtifact,
   listLibrary,
@@ -40,6 +41,7 @@ import {
   type LibraryStore,
 } from "./library-repository";
 import type { ProofSession } from "./proof-repository";
+import { withSessionResults } from "./session-results";
 
 export type LemmaFailureCode =
   | "lemma-target-not-found"
@@ -484,30 +486,5 @@ export function withApprovedLemmas(
   base: DefinitionCatalog,
   lemmas: readonly LibraryResult[],
 ): DefinitionCatalog {
-  if (lemmas.length === 0) return base;
-  const cache = new Map<string, ReturnType<DefinitionCatalog["catalog"]>>();
-  return Object.freeze({
-    ...base,
-    catalog(operators: Parameters<DefinitionCatalog["catalog"]>[0]) {
-      const key = JSON.stringify(operators);
-      const cached = cache.get(key);
-      if (cached !== undefined) return cached;
-      const approved = base.catalog(operators);
-      const taken = new Set(approved.results.map(({ id }) => id));
-      // A lemma the kernel cannot instantiate in this environment is not offered.
-      const usable = lemmas.filter(
-        (lemma) => !taken.has(lemma.id) && approvedKernelResults([lemma], { operators }).ok,
-      );
-      const catalog =
-        usable.length === 0
-          ? approved
-          : adaptApprovedCatalog(
-              operators,
-              [...approved.results, ...usable],
-              approved.variantFamilies,
-            );
-      cache.set(key, catalog);
-      return catalog;
-    },
-  });
+  return withSessionResults(base, lemmas);
 }

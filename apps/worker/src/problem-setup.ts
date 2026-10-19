@@ -386,6 +386,11 @@ export function validateProblemDraft(
     background: draft.background,
     ...(Object.keys(preferences).length === 0 ? {} : { preferences }),
     libraryLayerIds: draft.libraryLayerIds,
+    // Operators that only the approved initial library introduced stay dormant until a step
+    // applies a result that uses them (see `active-constants.ts`).
+    ...(options.library === undefined || options.library.constants.length === 0
+      ? {}
+      : { libraryConstants: options.library.constants.map(({ symbol }) => symbol) }),
   });
   if (!metadata.success) {
     metadata.error.issues.forEach((issue) =>

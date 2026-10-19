@@ -74,6 +74,7 @@ describe("relayAiRequest", () => {
   it.each([
     ["execute", "/proof-sessions/session%3Aa/ai/execute"],
     ["execute-apply", "/proof-sessions/session%3Aa/ai/execute/apply"],
+    ["library-top-up", "/proof-sessions/session%3Aa/ai/library/top-up"],
   ] as const)("posts a %s request to its worker path", async (kind, path) => {
     const fetchMock = stubWorker({ status: "previewed", callId: "llm-call:x" }, 200);
     await relayAiRequest({ kind, sessionId: "session:a" }, { id: 1 });

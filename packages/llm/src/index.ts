@@ -33,6 +33,7 @@ import {
   normalizeBackgroundProposerWireResult,
 } from "./background-proposer";
 import {
+  LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE,
   LIBRARIAN_SYSTEM_MESSAGE,
   librarianContextSchema,
   librarianOutputSchema,
@@ -104,21 +105,29 @@ export {
   type ExistingOperator,
 } from "./background-proposer";
 export {
+  MAX_LIBRARIAN_ACTIVATED_CONSTANTS,
   MAX_LIBRARIAN_CONTEXT_CONSTANTS,
   MAX_LIBRARIAN_CONTEXT_RESULTS,
   MAX_LIBRARIAN_NEW_CONSTANTS,
   MAX_LIBRARIAN_RESULTS,
+  MAX_LIBRARIAN_SITUATION_SELECTIONS,
+  buildLibrarianSituation,
+  librarianContextConstants,
   librarianContextSchema,
   librarianNewConstants,
   librarianOutputSchema,
   librarianProposalSchema,
   librarianResultSchema,
+  librarianSituationSchema,
   type LibrarianContext,
   type LibrarianExistingResult,
   type LibrarianOutput,
   type LibrarianProposal,
   type LibrarianRequestKind,
   type LibrarianResult,
+  type LibrarianSituation,
+  type LibrarianTopUpContext,
+  type LibrarianTopUpKind,
   type LibrarianUnusableResult,
 } from "./librarian";
 
@@ -1204,17 +1213,18 @@ const SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE =
 
 /**
  * System messages a stored call may carry. Formalizer calls recorded before the approved-constants
- * instruction was added, shortlister calls recorded before the none-relevant outcome, and
- * background-proposer calls recorded before existing operators were offered, keep their
- * original message, so existing evidence stays readable; new calls are always prepared with
- * the current message.
+ * instruction was added, shortlister calls recorded before the none-relevant outcome,
+ * background-proposer calls recorded before existing operators were offered, and librarian calls
+ * recorded before the top-up request kinds keep their original message, so existing evidence
+ * stays readable; new calls are always prepared with the current message.
  */
 function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean {
   return (
     content === expectedSystemMessage(role) ||
     (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE) ||
     (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE) ||
-    (role === "background-proposer" && content === BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE)
+    (role === "background-proposer" && content === BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "librarian" && content === LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE)
   );
 }
 

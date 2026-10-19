@@ -1,307 +1,50 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { LlmTransport, PreparedLlmCall } from "@proof/llm";
 import { starterLibraryPacks } from "@proof/library";
+import { problemSetupSort } from "@proof/protocol";
 import { setDraft } from "../problem-setup.testing";
-import { MemoryLibraryStore } from "../memory-library-store";
-import { MemoryLlmCallStore } from "../memory-llm-call-store";
 import { readLibraryProposalDecision } from "../llm-call-repository";
-import { ProofStoreTransactionError } from "../proof-repository";
-import type { LibraryStoreTransaction } from "../library-repository";
-import { createProofHttpService, type ProofHttpService } from ".";
-import { createAiLimiter, type AiLimiter } from "./ai-rate-limit";
-import type { AiRuntime } from "../ai-runtime";
+import { addLibraryArtifact, registerLibraryOperator } from "../library-repository";
+import { createAiLimiter } from "./ai-rate-limit";
+import {
+  ANY_PROPOSITION,
+  BACKGROUND_REF,
+  BACKGROUND_REFERENCE,
+  CANCELLATION,
+  CONSTRUCTION,
+  GCD_SYMMETRY,
+  LIBRARY_REFERENCE,
+  NOT_A_PROPOSITION,
+  OUTSIDE_BACKGROUND,
+  PROBLEM,
+  SYMMETRY,
+  UNREADABLE,
+  USES_UNKNOWN_OPERATOR,
+  approveBackground,
+  backgroundRuntime,
+  check,
+  closeServices,
+  dispatch,
+  draft,
+  events,
+  gcd,
+  json,
+  libraryDecision,
+  libraryOutput,
+  libraryRequest,
+  librarianScenario,
+  post,
+  running,
+  scenario,
+  startSession,
+  suggest,
+  wireOperator,
+  wireResult,
+  type DisplayedSet,
+  type ProposedBody,
+} from "./ai-library.testing";
 
-const services: ProofHttpService[] = [];
-const dispatch = {
-  provider: "test-provider",
-  model: "test-model",
-  promptVersion: "library-test-v1",
-} as const;
-
-const CONSTRUCTION = "construction:library";
-const PROBLEM = {
-  title: "Consecutive integers",
-  statement: "Show that m and n are coprime when m = n + 1.",
-};
-
-/** A store whose Nth library transaction (counted from `armFailure`) fails with an unknown outcome. */
-class FlakyLibraryStore extends MemoryLibraryStore {
-  private failIn: number | undefined;
-  transactions = 0;
-  armFailure(afterSuccessfulTransactions: number): void {
-    this.failIn = afterSuccessfulTransactions + 1;
-    this.transactions = 0;
-  }
-  override async libraryTransaction<Result>(
-    work: (transaction: LibraryStoreTransaction) => Promise<Result>,
-  ): Promise<Result> {
-    this.transactions += 1;
-    if (this.failIn === this.transactions) {
-      this.failIn = undefined;
-      throw new ProofStoreTransactionError("commit-unknown", "Injected commit failure.");
-    }
-    return super.libraryTransaction(work);
-  }
-}
-
-type Running = { origin: string; store: FlakyLibraryStore; calls: MemoryLlmCallStore };
-
-async function running(
-  options: {
-    ai?: AiRuntime;
-    calls?: MemoryLlmCallStore | null;
-    aiLimiter?: AiLimiter;
-    library?: boolean;
-  } = {},
-): Promise<Running> {
-  const store = new FlakyLibraryStore();
-  const calls = options.calls ?? new MemoryLlmCallStore();
-  const service = createProofHttpService(store, {
-    ...(options.library === false ? {} : { library: store }),
-    ...(options.calls === null ? {} : { llmCalls: calls }),
-    ...(options.ai === undefined ? {} : { ai: options.ai }),
-    ...(options.aiLimiter === undefined ? {} : { aiLimiter: options.aiLimiter }),
-  });
-  services.push(service);
-  return { origin: (await service.listen()).origin, store, calls };
-}
-
-async function post(origin: string, path: string, body: unknown) {
-  return fetch(`${origin}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-async function json<Body>(response: Response): Promise<Body> {
-  return (await response.json()) as Body;
-}
-
-afterEach(async () => {
-  await Promise.all(services.splice(0).map((service) => service.close()));
-});
-
-// ---------------------------------------------------------------------------------------------
-// Fixtures: an approved background with the constant Coprime, and librarian output
-// ---------------------------------------------------------------------------------------------
-
-function wireOperator(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "operator:coprime",
-    symbol: "Coprime",
-    displayName: "coprime",
-    parameters: ["integer", "integer"],
-    result: "proposition",
-    latex: {
-      template: String.raw`#1\perp #2`,
-      precedence: "relation",
-      parse: { trigger: String.raw`\perp`, notation: "infix" },
-    },
-    naturalLanguage: { template: "#1 and #2 are coprime", negated: "#1 and #2 are not coprime" },
-    ...overrides,
-  };
-}
-
-function backgroundOutput() {
-  return {
-    result: {
-      kind: "background-proposal",
-      background: {
-        level: "first-year undergraduate",
-        summary: "Elementary number theory.",
-        assumptions: ["Divisibility of integers"],
-        domains: ["number theory"],
-        maximumLevel: "undergraduate",
-      },
-      constants: [{ operator: wireOperator(), rationale: "The goal uses it." }],
-    },
-  };
-}
-
-const ANY_PROPOSITION = {
-  section: "any",
-  polarity: "any",
-  role: "proposition",
-} as const;
-
-function wireResult(slug: string, overrides: Record<string, unknown> = {}) {
-  return {
-    slug,
-    name: `Result ${slug}`,
-    description: `The general result ${slug}.`,
-    domains: ["number theory"],
-    level: "foundational",
-    parameters: [
-      { symbol: "a", sort: "integer" },
-      { symbol: "b", sort: "integer" },
-      { symbol: "c", sort: "integer" },
-    ],
-    premises: [],
-    statement: ["Equivalent", ["Coprime", "a", "b"], ["Coprime", "b", "a"]],
-    applicationDirections: ["forward", "backward"],
-    patterns: [{ expression: ["Coprime", "a", "b"], direction: "forward", ...ANY_PROPOSITION }],
-    ...overrides,
-  };
-}
-
-/** Coprimality is symmetric: an equivalence, which gets a converse variant. */
-const SYMMETRY = wireResult("coprime-symmetry");
-/** Needs Divides, so it is admitted only when the divisibility pack is selected. */
-const CANCELLATION = wireResult("coprime-cancellation", {
-  premises: [
-    ["Coprime", "a", "b"],
-    ["Divides", "a", ["Multiply", "b", "c"]],
-  ],
-  statement: ["Divides", "a", "c"],
-  patterns: [
-    {
-      expression: ["Coprime", "a", "b"],
-      direction: "forward",
-      section: "hypothesis",
-      polarity: "negative",
-      role: "proposition",
-    },
-    {
-      expression: ["Divides", "a", "c"],
-      direction: "backward",
-      section: "goal",
-      polarity: "positive",
-      role: "proposition",
-    },
-  ],
-});
-const USES_UNKNOWN_OPERATOR = wireResult("uses-gcd", {
-  statement: ["Equal", ["Gcd", "a", "b"], 1],
-  patterns: [
-    { expression: ["Gcd", "a", "b"], direction: "forward", ...ANY_PROPOSITION, role: "term" },
-  ],
-});
-const NOT_A_PROPOSITION = wireResult("not-a-proposition", {
-  statement: ["Add", "a", "b"],
-  patterns: [
-    { expression: ["Add", "a", "b"], direction: "forward", ...ANY_PROPOSITION, role: "term" },
-  ],
-});
-const OUTSIDE_BACKGROUND = wireResult("graduate-result", {
-  domains: ["topology"],
-  level: "graduate",
-});
-const UNREADABLE = wireResult("unreadable", { statement: [1, "a"] });
-
-function libraryOutput(
-  results: readonly unknown[] = [SYMMETRY],
-  newConstants: readonly unknown[] = [],
-) {
-  return { result: { kind: "library-proposal", results, newConstants } };
-}
-
-function gcd(overrides: Record<string, unknown> = {}) {
-  return {
-    operator: wireOperator({
-      id: "operator:gcd",
-      symbol: "Gcd",
-      displayName: "greatest common divisor",
-      result: "integer",
-      latex: {
-        template: String.raw`\gcd\left(#1, #2\right)`,
-        precedence: "atom",
-        parse: { trigger: String.raw`\gcd`, notation: "function" },
-      },
-      naturalLanguage: { template: "the gcd of #1 and #2", negated: null },
-      ...overrides,
-    }),
-    rationale: "Results are stated with the greatest common divisor.",
-  };
-}
-
-const GCD_SYMMETRY = wireResult("gcd-symmetry", {
-  statement: ["Equal", ["Gcd", "a", "b"], ["Gcd", "b", "a"]],
-  patterns: [
-    { expression: ["Gcd", "a", "b"], direction: "forward", ...ANY_PROPOSITION, role: "term" },
-  ],
-});
-
-function backgroundRuntime(librarian?: LlmTransport): AiRuntime {
-  return {
-    "background-proposer": { transport: async () => backgroundOutput(), dispatch },
-    ...(librarian === undefined ? {} : { librarian: { transport: librarian, dispatch } }),
-  };
-}
-
-const BACKGROUND_REFERENCE = { decisionId: "background-decision:1" };
-
-function libraryRequest(overrides: Record<string, unknown> = {}) {
-  return {
-    constructionId: CONSTRUCTION,
-    id: "llm-call:library",
-    approvedBackground: BACKGROUND_REFERENCE,
-    packs: ["pack:divisibility"],
-    ...overrides,
-  };
-}
-
-function libraryDecision(overrides: Record<string, unknown> = {}) {
-  return {
-    constructionId: CONSTRUCTION,
-    decisionId: "library-decision:1",
-    callId: "llm-call:library",
-    approvedResultIds: ["result:library-coprime-symmetry", "result:library-coprime-cancellation"],
-    decidedAt: "2026-10-15T12:30:00.000Z",
-    ...overrides,
-  };
-}
-
-/** Run the background steps so that the construction has an approved background. */
-async function approveBackground(origin: string) {
-  const proposed = await post(origin, "/ai/background", {
-    constructionId: CONSTRUCTION,
-    id: "llm-call:background",
-    problem: PROBLEM,
-  });
-  expect(proposed.status).toBe(200);
-  const decided = await post(origin, "/ai/background/decisions", {
-    constructionId: CONSTRUCTION,
-    decisionId: BACKGROUND_REFERENCE.decisionId,
-    callId: "llm-call:background",
-    decision: "approved",
-    rationale: "Matches the problem.",
-    decidedAt: "2026-10-15T12:00:00.000Z",
-  });
-  expect(decided.status).toBe(201);
-}
-
-async function librarianScenario(
-  librarian: LlmTransport,
-  options: Parameters<typeof running>[0] = {},
-) {
-  const scenario = await running({ ...options, ai: backgroundRuntime(librarian) });
-  await approveBackground(scenario.origin);
-  return scenario;
-}
-
-type ProposedBody = {
-  status: string;
-  provenance: unknown;
-  callId: string;
-  replayed: boolean;
-  requestKind: string;
-  results: {
-    artifact: {
-      id: string;
-      layer: string;
-      approval: { status: string };
-      provenance: { kind: string; role: string; contextId: string };
-      renderings: { latex: string; naturalLanguage: string };
-      variantFamilyId?: string;
-    };
-    variants: { id: string; approval: { status: string } }[];
-    newConstantSymbols: string[];
-  }[];
-  rejected: { id: string; name: string; reasons: string[]; codes: string[] }[];
-  newConstants: { operator: { symbol: string }; rationale: string; usedBy: string[] }[];
-  rejectedConstants: { symbol: string; reason: string }[];
-};
+afterEach(closeServices);
 
 // ---------------------------------------------------------------------------------------------
 // POST /ai/library
@@ -1023,88 +766,6 @@ describe("formalizer with an approved library", () => {
 // ---------------------------------------------------------------------------------------------
 
 describe("problem setup with an approved library", () => {
-  const LIBRARY_REFERENCE = { constructionId: CONSTRUCTION, decisionId: "library-decision:1" };
-  const BACKGROUND_REF = { constructionId: CONSTRUCTION, decisionId: "background-decision:1" };
-
-  function draft(overrides: Record<string, unknown> = {}) {
-    return setDraft({
-      background: {
-        level: "first-year undergraduate",
-        summary: "Elementary number theory.",
-        assumptions: [],
-        domains: ["number theory"],
-        maximumLevel: "undergraduate",
-      },
-      preferences: undefined,
-      packs: ["pack:divisibility"],
-      declarations: [
-        { symbol: "m", sort: "integer" },
-        { symbol: "n", sort: "integer" },
-      ],
-      hypotheses: [],
-      goals: [{ format: "latex", latex: String.raw`m \perp n` }],
-      ...overrides,
-    });
-  }
-
-  async function scenario(
-    results: readonly unknown[] = [SYMMETRY, CANCELLATION],
-    newConstants: readonly unknown[] = [],
-    approved: readonly string[] = [
-      "result:library-coprime-symmetry",
-      "result:library-coprime-cancellation",
-    ],
-  ) {
-    const started = await librarianScenario(async () => libraryOutput(results, newConstants));
-    await post(started.origin, "/ai/library", libraryRequest());
-    expect(
-      (
-        await post(
-          started.origin,
-          "/ai/library/decisions",
-          libraryDecision({ approvedResultIds: approved }),
-        )
-      ).status,
-    ).toBe(201);
-    return started;
-  }
-
-  type Review = {
-    digest: string;
-    operators: { symbol: string }[];
-    initialLibrary?: {
-      results: { id: string; name: string; statement: unknown; premises: unknown[] }[];
-      variantCount: number;
-      addedOperatorSymbols: string[];
-    };
-  };
-
-  async function check(origin: string, body: Record<string, unknown>) {
-    const response = await post(origin, "/problem-drafts/validate", { draft: draft(), ...body });
-    return { response, body: await json<{ review?: Review; diagnostics?: unknown[] }>(response) };
-  }
-
-  async function events(origin: string, sessionId: string) {
-    const response = await fetch(
-      `${origin}/proof-sessions/${encodeURIComponent(sessionId)}/library/events`,
-    );
-    expect(response.status).toBe(200);
-    return (
-      await json<{
-        events: {
-          id: string;
-          sequence: number;
-          layer: string;
-          sessionId: string;
-          occurredAt: string;
-          origin: { kind: string; actorId?: string };
-          admission: { decision: string };
-          artifact: { id: string; approval: { status: string; reviewerId?: string } };
-        }[];
-      }>(response)
-    ).events;
-  }
-
   it("shows the approved results in the review and covers them with its digest", async () => {
     const { origin, store } = await scenario();
     const withoutLibrary = await check(origin, { approvedBackground: BACKGROUND_REF });
@@ -1437,6 +1098,154 @@ describe("problem setup with an approved library", () => {
         JSON.stringify(malformed),
       ).toBe(400);
     }
+  });
+
+  it("offers the approved initial library's results and variants on a matching selection", async () => {
+    const { origin } = await scenario();
+    await startSession(origin, "session:retrieval");
+    const set = await suggest(origin, "session:retrieval", "suggestion-set:retrieval");
+    const results = set.suggestions.filter(({ source }) => source === "result");
+    expect(results.map(({ artifactId }) => artifactId)).toEqual([
+      "result:library-coprime-symmetry",
+      "result:library-coprime-symmetry/converse",
+      "result:library-coprime-symmetry/converse",
+    ]);
+    // The generated variants form one family with their source, as for the packs' results.
+    expect(set.variantGroups).toEqual([
+      {
+        familyId: "variant-family:result:library-coprime-symmetry",
+        name: "Result coprime-symmetry variants",
+        suggestionIds: results.map(({ id }) => id),
+      },
+    ]);
+    // The same catalog serves the library view, once per result.
+    const library = await json<{
+      entries: { source: string; artifact: { id: string } }[];
+      variantFamilies: { id: string; memberIds: string[] }[];
+    }>(await fetch(`${origin}/proof-sessions/session%3Aretrieval/library`));
+    expect(
+      library.entries.filter(({ artifact }) => artifact.id === "result:library-coprime-symmetry"),
+    ).toEqual([expect.objectContaining({ source: "stored-library" })]);
+    expect(library.variantFamilies).toContainEqual({
+      id: "variant-family:result:library-coprime-symmetry",
+      name: "Result coprime-symmetry variants",
+      memberIds: ["result:library-coprime-symmetry", "result:library-coprime-symmetry/converse"],
+    });
+  });
+
+  it("applies an approved library result and exports, imports and replays the session", async () => {
+    const { origin } = await scenario();
+    await startSession(origin, "session:applied");
+    const set = await suggest(origin, "session:applied", "suggestion-set:applied");
+    const chosen = set.suggestions.find(
+      ({ artifactId, patternId }) =>
+        artifactId === "result:library-coprime-symmetry" &&
+        patternId === "pattern:library-coprime-symmetry-1",
+    );
+    expect(chosen).toBeDefined();
+    const apply = {
+      commandId: "command:apply-library-result",
+      suggestionSetId: set.id,
+      chosenSuggestionId: chosen!.id,
+    };
+    const applied = await post(origin, "/proof-sessions/session%3Aapplied/commands", apply);
+    expect(applied.status, JSON.stringify(await applied.clone().json())).toBe(201);
+    expect((await post(origin, "/proof-sessions/session%3Aapplied/commands", apply)).status).toBe(
+      200,
+    );
+
+    // A suggestion request made after the step still offers the library; the earlier set is stored as it was.
+    const stored = await json<{ suggestionSet: DisplayedSet }>(
+      await fetch(
+        `${origin}/proof-sessions/session%3Aapplied/suggestion-sets/${encodeURIComponent(set.id)}`,
+      ),
+    );
+    expect(stored.suggestionSet).toEqual(set);
+
+    // The artifact carries the library section, so the importing side replays the step through
+    // the kernel with the same result; the import is read-only.
+    const exported = await fetch(
+      `${origin}/proof-sessions/session%3Aapplied/export?confirmPrivateExport=true`,
+    );
+    expect(exported.status).toBe(200);
+    const artifact = await json<{ library: { finalLibrary: { id: string }[] } }>(exported);
+    expect(artifact.library.finalLibrary.map(({ id }) => id)).toContain(
+      "result:library-coprime-symmetry",
+    );
+    const imported = await post(origin, "/artifacts", artifact);
+    expect(imported.status, JSON.stringify(await imported.clone().json())).toBe(201);
+    const importedBody = await json<{ sessionId: string; readOnly: boolean }>(imported);
+    expect(importedBody.readOnly).toBe(true);
+    expect((await post(origin, "/artifacts", artifact)).status).toBe(200);
+    // The imported session exports again to the same library.
+    const again = await fetch(
+      `${origin}/proof-sessions/${encodeURIComponent(importedBody.sessionId)}/export?confirmPrivateExport=true`,
+    );
+    expect(again.status).toBe(200);
+  });
+
+  it("does not offer a stored result whose operators the session does not declare, and does not crash", async () => {
+    const { origin, store } = await scenario();
+    await startSession(origin, "session:undeclared");
+    const integer = problemSetupSort("integer");
+    // Registered globally, so the library accepts a result that applies it; the session does not
+    // declare it, so the kernel cannot instantiate the result there.
+    expect(
+      await registerLibraryOperator(store, {
+        operator: {
+          id: "operator:gcd",
+          symbol: "Gcd",
+          signature: { parameters: [integer, integer], result: integer },
+        },
+        reviewerId: "actor:web",
+        registeredAt: "2026-10-15T12:00:00.000Z",
+      }),
+    ).toMatchObject({ status: "registered" });
+    const added = await addLibraryArtifact(store, {
+      id: "library-addition:session:undeclared:direct",
+      sessionId: "session:undeclared",
+      occurredAt: "2026-10-15T12:31:00.000Z",
+      layer: "initial-problem",
+      origin: { kind: "setup", actorId: "actor:web" },
+      artifact: {
+        kind: "result",
+        id: "result:undeclared-gcd",
+        name: "Gcd symmetry",
+        description: "A result about an operator the session lacks.",
+        renderings: { latex: "gcd", naturalLanguage: "gcd" },
+        classification: { domains: ["number theory"], level: "foundational" },
+        provenance: { kind: "curated", source: "test" },
+        approval: { status: "approved", reviewerId: "actor:web" },
+        layer: "initial-problem",
+        related: [],
+        priority: 50,
+        parameters: ["a", "b"].map((symbol) => ({
+          id: `declaration:undeclared-${symbol}`,
+          symbol,
+          sort: integer,
+          role: "universal-parameter",
+        })),
+        statement: { expression: ["Equal", ["Gcd", "a", "b"], ["Gcd", "b", "a"]] },
+        premises: [],
+        sideConditions: [],
+        applicationDirections: ["forward"],
+        patterns: [
+          {
+            id: "pattern:undeclared-1",
+            expression: ["Gcd", "a", "b"],
+            direction: "forward",
+            requirement: { section: "any", polarity: "any", role: "term" },
+          },
+        ],
+      },
+    });
+    expect(added).toMatchObject({ status: "recorded", admitted: true });
+
+    const set = await suggest(origin, "session:undeclared", "suggestion-set:undeclared");
+    const offered = set.suggestions.map(({ artifactId }) => artifactId);
+    expect(offered).toContain("result:library-coprime-symmetry");
+    expect(offered).not.toContain("result:undeclared-gcd");
+    expect((await fetch(`${origin}/proof-sessions/session%3Aundeclared`)).status).toBe(200);
   });
 
   it("answers 503 on the setup routes when library or evidence storage is not available", async () => {

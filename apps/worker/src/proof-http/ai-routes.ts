@@ -58,6 +58,7 @@ import {
   writeJson,
 } from "./ai-http";
 import { decideLibrary, proposeLibrary } from "./ai-library-routes";
+import { topUpLibrary } from "./ai-library-top-up-routes";
 import {
   approvedLibraryReferenceSchema,
   formalizerLibraryResults,
@@ -209,6 +210,11 @@ export async function handleAiRoute(
     if (path.length === 4 && path[2] === "ai" && path[3] === "shortlist") {
       if (request.method !== "POST") return methodNotAllowed(response, "POST");
       await shortlist(context, parsedSessionId.data, request, response);
+      return true;
+    }
+    if (path.length === 5 && path[2] === "ai" && path[3] === "library" && path[4] === "top-up") {
+      if (request.method !== "POST") return methodNotAllowed(response, "POST");
+      await topUpLibrary(context, parsedSessionId.data, request, response);
       return true;
     }
     if (path[2] === "ai" && path[3] === "execute" && (path.length === 4 || path.length === 5)) {

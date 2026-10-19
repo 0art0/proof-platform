@@ -23,6 +23,10 @@ export type AiShortlistProps = Readonly<{
   onDescribeMove?: (() => void) | undefined;
   /** "Find more results" on the none-relevant notice; shown only when provided. */
   onFindMoreResults?: (() => void) | undefined;
+  /** A top-up is already running; "Find more results" waits for it. */
+  findMoreBusy?: boolean | undefined;
+  /** Why "Find more results" is unavailable; the button is then disabled and says so. */
+  findMoreDisabledReason?: string | undefined;
 }>;
 
 const answerSchema = z.union([
@@ -83,6 +87,8 @@ export function AiShortlist({
   autoDelayMs = DEFAULT_AUTO_DELAY_MS,
   onDescribeMove,
   onFindMoreResults,
+  findMoreBusy = false,
+  findMoreDisabledReason,
 }: AiShortlistProps) {
   const [state, setState] = useState<ShortlistState>(IDLE);
   const [automatic, setAutomatic] = useState(readAutoRankPreference);
@@ -241,12 +247,21 @@ export function AiShortlist({
                 <button
                   type="button"
                   className={styles.aiShortlistButton}
+                  disabled={findMoreBusy || findMoreDisabledReason !== undefined}
+                  aria-describedby={
+                    findMoreDisabledReason === undefined ? undefined : `${hintId}-find-more`
+                  }
                   onClick={onFindMoreResults}
                 >
                   Find more results
                 </button>
               ) : null}
             </div>
+          ) : null}
+          {onFindMoreResults !== undefined && findMoreDisabledReason !== undefined ? (
+            <p id={`${hintId}-find-more`} className={styles.aiShortlistHint}>
+              {findMoreDisabledReason}
+            </p>
           ) : null}
         </div>
       ) : null}

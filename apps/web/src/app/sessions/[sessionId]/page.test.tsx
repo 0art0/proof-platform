@@ -48,6 +48,7 @@ async function workspaceProps() {
       session: Record<string, unknown>;
       aiShortlist: boolean;
       aiExecutor: boolean;
+      aiLibrarian: boolean;
     }>;
   }>;
   expect(isValidElement(page)).toBe(true);
@@ -58,6 +59,7 @@ describe("the session page", () => {
   it("passes the stored problem title, statement and background summary to the workspace", async () => {
     readAiCapabilities.mockResolvedValue({
       "background-proposer": false,
+      librarian: true,
       "proof-state-formalizer": false,
       "move-shortlister": true,
       "move-executor": true,
@@ -78,11 +80,13 @@ describe("the session page", () => {
     });
     expect(props.aiShortlist).toBe(true);
     expect(props.aiExecutor).toBe(true);
+    expect(props.aiLibrarian).toBe(true);
   });
 
   it("opens a session without stored metadata under its id", async () => {
     readAiCapabilities.mockResolvedValue({
       "background-proposer": false,
+      librarian: false,
       "proof-state-formalizer": false,
       "move-shortlister": false,
       "move-executor": false,
@@ -93,5 +97,6 @@ describe("the session page", () => {
     expect(props.session).toEqual(session);
     expect(props.aiShortlist).toBe(false);
     expect(props.aiExecutor).toBe(false);
+    expect(props.aiLibrarian).toBe(false);
   });
 });
