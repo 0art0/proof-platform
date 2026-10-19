@@ -153,3 +153,40 @@ These numbers are pre-assigned so that parallel work does not collide. Each migr
 Because the lanes are developed in parallel, each migration's role list must include every role
 that exists on its own branch. The final merge reconciles the lists, so the last-applied migration
 lists all roles.
+
+## Implementation status
+
+All five agents are implemented; `docs/ai-endpoints.md` documents the shipped routes. Differences
+from the sections above:
+
+- **Constants (§1, §2).** Constants are always full operator declarations. A constant with an
+  existing operator's symbol and signature is treated as a reference to it; the proposer is shown
+  the registry's operators so it can reuse them. A constant that clashes with the registry is
+  refused when the background is accepted.
+- **Setup wiring (§1–§3).** The accepted background and the approved library are passed to the
+  formalizer, the setup check and the session approval as references (`approvedBackground`,
+  `approvedLibrary`); the worker resolves them from stored decisions.
+- **Initial library (§2).** Approved results are recorded as `layer:initial-problem` additions
+  right after the session is created, with deterministic event IDs, rather than in the same
+  transaction; repeating the approval completes an interrupted recording. Session results from
+  `initial-problem` and `proof-time-background` join the session's single retrieval and
+  application catalog.
+- **Top-ups (§2).** A live session's operators are fixed. A top-up result that needs a constant
+  the session does not declare is rejected (`needs-new-constant`), not registered. Constants that
+  only the approved initial library introduced are recorded as dormant library constants. One
+  becomes active when a committed step first applies a result that mentions it; this is derived
+  from the retained proof edges, so deleting that step removes the activation. The web then
+  requests one `new-constants` top-up per newly active constant.
+- **Shortlister (§4).** Jev answers a choice question, so "none relevant" is a reserved option
+  next to the candidates. Automatic ranking uses its own `automatic` trigger.
+- **Move performer (§5).** The worker assigns commands from the call (`command:<callId>:step:<i>`),
+  and each command carries a `proposal` link to the executor call. Its `source`
+  (`user-instruction` or `shortlisted-technique`) is claimed by the client.
+- **Not yet built: "Save as reusable move" (§5).** Authored moves are derived from steps picked
+  from displayed suggestions, with recorded selections and menu choices. An executor plan is a
+  sequence of raw kernel operations with neither. Turning one into a general template needs the
+  prose move-authoring workflow (refinement §7.1, a move-author/generality-review role), which is a
+  separate change.
+- **Stored evidence.** Prompts changed for the formalizer, shortlister, background proposer and
+  librarian; each still accepts its previous system message on read, so earlier call records stay
+  readable.
