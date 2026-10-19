@@ -1,21 +1,39 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  buildBackgroundProposerContext,
   buildMoveShortlisterContext,
   buildProofStateFormalizerContext,
+  buildTopicExtractorContext,
   prepareLlmCall,
+  shortlisterTriggerSchema,
+  SUPPORTED_LLM_ROLES,
+  type BackgroundProposal,
 } from "@proof/llm";
 import {
   PROBLEM_SETUP_SORT_CHOICES,
+  problemDraftSchema,
+  type OperatorDeclaration,
   stableIdentifierSchema,
   suggestionSetIdSchema,
 } from "@proof/protocol";
 import { createExecutableProofStateSchema, type ExecutableProofState } from "@proof/mathjson-model";
 import { starterLibraryPacks } from "@proof/library";
 import { z } from "zod";
-import { validateProblemDraft } from "../problem-setup";
+import {
+  resolveSessionOperators,
+  unapprovedConstantDiagnostics,
+  validateProblemDraft,
+} from "../problem-setup";
+import {
+  approvedBackgroundReferenceSchema,
+  loadApprovedConstants,
+  resolveAgainstRegistry,
+} from "../approved-background";
 import {
   listLlmCalls,
   readLlmCall,
+  recordBackgroundProposalDecision,
+  recordTopicProposalDecision,
   runDurableLlmCall,
   storedLlmCallSchema,
   type LlmCallOwner,
@@ -26,9 +44,28 @@ import {
   proofSessionIdSchema,
   readDisplayedSuggestionSet,
 } from "../proof-repository";
+import { applyExecutedMove, executeMove } from "./ai-execute-routes";
 import { type ServiceContext } from "./shared";
+import {
+  LIMIT_MESSAGE,
+  WEB_REVIEWER_ID,
+  admitProviderCall,
+  methodNotAllowed,
+  pathSegments,
+  problem,
+  readBody,
+  repositoryStatus,
+  writeJson,
+} from "./ai-http";
+import { decideLibrary, proposeLibrary } from "./ai-library-routes";
+import { topUpLibrary } from "./ai-library-top-up-routes";
+import {
+  approvedLibraryReferenceSchema,
+  formalizerLibraryResults,
+  loadApprovedLibrary,
+} from "../approved-library";
+import type { ApprovedInitialLibrary } from "../library-proposal";
 
-const MAX_AI_REQUEST_BYTES = 256 * 1024;
 const formalizeRequestSchema = z
   .object({
     constructionId: stableIdentifierSchema,
@@ -40,6 +77,46 @@ const formalizeRequestSchema = z
     preferences: z.unknown().optional(),
     libraryLayerIds: z.array(stableIdentifierSchema).max(4),
     packs: z.array(stableIdentifierSchema).max(7),
+    /** The approved background whose constants the formalizer may use; resolved from storage. */
+    approvedBackground: approvedBackgroundReferenceSchema.optional(),
+    /** The approved initial library whose results the formalizer is shown; resolved from storage. */
+    approvedLibrary: approvedLibraryReferenceSchema.optional(),
+  })
+  .strict();
+const backgroundRequestSchema = z
+  .object({
+    constructionId: stableIdentifierSchema,
+    id: stableIdentifierSchema,
+    problem: formalizeRequestSchema.shape.problem,
+    preferences: z.unknown().optional(),
+    /** A revision names a stored call of this construction; its proposal is read from storage. */
+    revision: z
+      .object({
+        previousCallId: stableIdentifierSchema,
+        feedback: z.string().trim().min(1).max(4_000),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+const topicRequestSchema = z
+  .object({
+    constructionId: stableIdentifierSchema,
+    id: stableIdentifierSchema,
+    problem: formalizeRequestSchema.shape.problem,
+    background: z.unknown(),
+    preferences: z.unknown().optional(),
+  })
+  .strict();
+const proposalDecisionRequestSchema = z
+  .object({
+    constructionId: stableIdentifierSchema,
+    decisionId: stableIdentifierSchema,
+    callId: stableIdentifierSchema,
+    decision: z.enum(["approved", "rejected"]),
+    rationale: z.string().trim().min(1).max(2_000),
+    /** Chosen once by the reviewer's client, so a retried decision is idempotent. */
+    decidedAt: z.string().datetime({ offset: true }),
   })
   .strict();
 const shortlistRequestSchema = z
@@ -48,7 +125,7 @@ const shortlistRequestSchema = z
     expectedCurrentNodeId: stableIdentifierSchema,
     suggestionSetId: suggestionSetIdSchema,
     candidateIds: z.array(stableIdentifierSchema).min(1).max(32),
-    trigger: z.enum(["deterministic-empty", "explicit-user"]),
+    trigger: shortlisterTriggerSchema,
     maxChoices: z.number().int().min(1).max(8).optional(),
   })
   .strict()
@@ -74,6 +151,53 @@ export async function handleAiRoute(
   const path = pathSegments(request.url);
   if (path === undefined) return false;
 
+  if (path.length === 2 && path[0] === "ai" && path[1] === "capabilities") {
+    if (request.method !== "GET") return methodNotAllowed(response, "GET");
+    writeJson(response, 200, capabilities(context));
+    return true;
+  }
+
+  if (path.length === 2 && path[0] === "ai" && path[1] === "topics") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await extractTopics(context, request, response);
+    return true;
+  }
+
+  if (path.length === 3 && path[0] === "ai" && path[1] === "topics" && path[2] === "decisions") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await decideTopics(context, request, response);
+    return true;
+  }
+
+  if (path.length === 2 && path[0] === "ai" && path[1] === "background") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await proposeBackground(context, request, response);
+    return true;
+  }
+
+  if (
+    path.length === 3 &&
+    path[0] === "ai" &&
+    path[1] === "background" &&
+    path[2] === "decisions"
+  ) {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await decideBackground(context, request, response);
+    return true;
+  }
+
+  if (path.length === 2 && path[0] === "ai" && path[1] === "library") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await proposeLibrary(context, request, response);
+    return true;
+  }
+
+  if (path.length === 3 && path[0] === "ai" && path[1] === "library" && path[2] === "decisions") {
+    if (request.method !== "POST") return methodNotAllowed(response, "POST");
+    await decideLibrary(context, request, response);
+    return true;
+  }
+
   if (path.length === 2 && path[0] === "ai" && path[1] === "formalize") {
     if (request.method !== "POST") return methodNotAllowed(response, "POST");
     await formalize(context, request, response);
@@ -86,6 +210,22 @@ export async function handleAiRoute(
     if (path.length === 4 && path[2] === "ai" && path[3] === "shortlist") {
       if (request.method !== "POST") return methodNotAllowed(response, "POST");
       await shortlist(context, parsedSessionId.data, request, response);
+      return true;
+    }
+    if (path.length === 5 && path[2] === "ai" && path[3] === "library" && path[4] === "top-up") {
+      if (request.method !== "POST") return methodNotAllowed(response, "POST");
+      await topUpLibrary(context, parsedSessionId.data, request, response);
+      return true;
+    }
+    if (path[2] === "ai" && path[3] === "execute" && (path.length === 4 || path.length === 5)) {
+      if (path.length === 5 && path[4] !== "apply") return false;
+      if (request.method !== "POST") return methodNotAllowed(response, "POST");
+      await (path.length === 4 ? executeMove : applyExecutedMove)(
+        context,
+        parsedSessionId.data,
+        request,
+        response,
+      );
       return true;
     }
     if (path[2] === "llm-calls" && (path.length === 3 || path.length === 4)) {
@@ -112,6 +252,425 @@ export async function handleAiRoute(
   return false;
 }
 
+/** Which roles can reach a provider; no configuration detail or credential is disclosed. */
+function capabilities(context: ServiceContext) {
+  return {
+    roles: Object.fromEntries(
+      SUPPORTED_LLM_ROLES.map((role) => [
+        role,
+        context.ai?.[role] !== undefined && context.llmCalls !== undefined,
+      ]),
+    ),
+  };
+}
+
+/**
+ * Propose a topic and vocabulary manifest (design plan §4.2). The manifest is recorded evidence
+ * only: it changes no proof state and no library until a human records a decision on it.
+ */
+async function extractTopics(
+  context: ServiceContext,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const body = await readBody(request);
+  if (!body.ok) return writeJson(response, body.status, problem(body.message));
+  const requestData = topicRequestSchema.safeParse(body.value);
+  if (!requestData.success)
+    return writeJson(response, 400, problem("The topic request is invalid."));
+  const preferences =
+    requestData.data.preferences === undefined
+      ? undefined
+      : problemDraftSchema.shape.preferences.safeParse(requestData.data.preferences);
+  if (preferences !== undefined && !preferences.success) {
+    return writeJson(response, 400, problem("The topic request preferences are invalid."));
+  }
+  const configured = context.ai?.["topic-extractor"];
+  if (configured === undefined || context.llmCalls === undefined) {
+    return writeJson(response, 503, {
+      status: "disabled",
+      diagnostics: [
+        {
+          code: "ai-disabled",
+          message: "Topic suggestions are unavailable because their provider is not configured.",
+        },
+      ],
+    });
+  }
+  const { constructionId, id, problem: problemText, background } = requestData.data;
+  const built = buildTopicExtractorContext({
+    id,
+    problem: `${problemText.title}\n\n${problemText.statement}`,
+    background,
+    ...(preferences?.data === undefined
+      ? {}
+      : {
+          preferences: {
+            domains: preferences.data.domains ?? [],
+            notation: preferences.data.notation ?? [],
+          },
+        }),
+  });
+  if (!built.ok) return writeJson(response, 400, { diagnostics: built.diagnostics });
+  const prepared = prepareLlmCall(built.envelope);
+  if (!prepared.ok) return writeJson(response, 400, { diagnostics: prepared.diagnostics });
+  const owner: LlmCallOwner = { kind: "construction", id: constructionId };
+  const limited = await admitProviderCall(context, owner, prepared.call.id);
+  if (!limited.ok) {
+    response.setHeader("retry-after", String(limited.retryAfterSeconds));
+    return writeJson(response, 429, {
+      status: "rate-limited",
+      diagnostics: [{ code: limited.code, message: LIMIT_MESSAGE }],
+    });
+  }
+  let result;
+  try {
+    result = await runDurableLlmCall(
+      context.llmCalls,
+      { owner, call: prepared.call, dispatch: configured.dispatch },
+      configured.transport,
+    );
+  } finally {
+    limited.release();
+  }
+  if (result.status !== "completed") {
+    return writeJson(response, repositoryStatus(result), { diagnostics: result.diagnostics });
+  }
+  if (result.record.status !== "completed") {
+    return writeJson(response, 503, problem("The topic call outcome is uncertain."));
+  }
+  const evidence = result.record.evidence;
+  if (evidence.status !== "validated" || evidence.output === undefined) {
+    return writeJson(response, evidence.status === "transport-failed" ? 503 : 422, {
+      status: evidence.status,
+      callId: result.record.id,
+      replayed: result.replayed,
+      diagnostics: evidence.diagnostics,
+    });
+  }
+  if (evidence.output.kind !== "topic-manifest") {
+    return writeJson(response, 200, {
+      status: evidence.output.kind,
+      callId: result.record.id,
+      replayed: result.replayed,
+      result: evidence.output,
+    });
+  }
+  return writeJson(response, 200, {
+    status: "proposed",
+    provenance: { kind: "minimal-context-llm", role: "topic-extractor" },
+    callId: result.record.id,
+    replayed: result.replayed,
+    proposal: evidence.output,
+  });
+}
+
+/**
+ * Record the human decision on a proposed manifest. The proposal is read from the stored call,
+ * never from the request, so a client cannot approve text the model did not return.
+ */
+async function decideTopics(
+  context: ServiceContext,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const body = await readBody(request);
+  if (!body.ok) return writeJson(response, body.status, problem(body.message));
+  const requestData = proposalDecisionRequestSchema.safeParse(body.value);
+  if (!requestData.success)
+    return writeJson(response, 400, problem("The topic decision request is invalid."));
+  if (context.llmCalls === undefined) {
+    return writeJson(response, 503, {
+      diagnostics: [{ code: "ai-disabled", message: "LLM evidence storage is unavailable." }],
+    });
+  }
+  const { constructionId, decisionId, callId, decision, rationale, decidedAt } = requestData.data;
+  const owner: LlmCallOwner = { kind: "construction", id: constructionId };
+  const stored = await readLlmCall(context.llmCalls, owner, callId);
+  if (stored.status !== "found") {
+    return writeJson(response, repositoryStatus(stored), { diagnostics: stored.diagnostics });
+  }
+  const record = stored.record;
+  if (
+    record.status !== "completed" ||
+    record.role !== "topic-extractor" ||
+    record.evidence.status !== "validated" ||
+    record.evidence.output?.kind !== "topic-manifest"
+  ) {
+    return writeJson(response, 409, {
+      diagnostics: [
+        {
+          code: "proposal-not-reviewable",
+          message: "Only a validated topic proposal can be approved or rejected.",
+        },
+      ],
+    });
+  }
+  const recorded = await recordTopicProposalDecision(context.llmCalls, {
+    id: decisionId,
+    owner,
+    callId,
+    reviewerId: WEB_REVIEWER_ID,
+    decidedAt,
+    proposal: record.evidence.output,
+    rationale,
+    decision,
+    ...(decision === "approved" ? { approvedManifestId: `topic-manifest:${decisionId}` } : {}),
+  });
+  if (recorded.status !== "recorded") {
+    const code = recorded.diagnostics[0].code;
+    const status =
+      recorded.status === "uncertain"
+        ? 503
+        : code === "decision-id-conflict" || code === "proposal-not-reviewable"
+          ? 409
+          : 400;
+    return writeJson(response, status, { diagnostics: recorded.diagnostics });
+  }
+  return writeJson(response, recorded.replayed ? 200 : 201, {
+    status: "recorded",
+    replayed: recorded.replayed,
+    decision: recorded.decision,
+    ...(recorded.approvedManifest === undefined
+      ? {}
+      : { approvedManifest: recorded.approvedManifest }),
+  });
+}
+
+/**
+ * Propose the background of a problem and the constants that suffice to formalize it
+ * (`docs/ai-agents-architecture.md` section 1), or revise an earlier proposal of this
+ * construction with the user's feedback. The proposal is recorded evidence only: it changes no
+ * proof state until a human records a decision on it, and the previous proposal of a revision is
+ * read from storage, never from the request.
+ */
+async function proposeBackground(
+  context: ServiceContext,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const body = await readBody(request);
+  if (!body.ok) return writeJson(response, body.status, problem(body.message));
+  const requestData = backgroundRequestSchema.safeParse(body.value);
+  if (!requestData.success) {
+    return writeJson(response, 400, problem("The background request is invalid."));
+  }
+  const preferences =
+    requestData.data.preferences === undefined
+      ? undefined
+      : problemDraftSchema.shape.preferences.safeParse(requestData.data.preferences);
+  if (preferences !== undefined && !preferences.success) {
+    return writeJson(response, 400, problem("The background request preferences are invalid."));
+  }
+  const configured = context.ai?.["background-proposer"];
+  if (configured === undefined || context.llmCalls === undefined) {
+    return writeJson(response, 503, {
+      status: "disabled",
+      diagnostics: [
+        {
+          code: "ai-disabled",
+          message: "Background proposals are unavailable because their provider is not configured.",
+        },
+      ],
+    });
+  }
+  const { constructionId, id, problem: problemText, revision } = requestData.data;
+  const owner: LlmCallOwner = { kind: "construction", id: constructionId };
+
+  let previous:
+    | Readonly<{
+        previousCallId: string;
+        previousProposal: BackgroundProposal;
+        feedback: string;
+      }>
+    | undefined;
+  if (revision !== undefined) {
+    const stored = await readLlmCall(context.llmCalls, owner, revision.previousCallId);
+    if (stored.status !== "found") {
+      return writeJson(response, repositoryStatus(stored), { diagnostics: stored.diagnostics });
+    }
+    const record = stored.record;
+    if (
+      record.status !== "completed" ||
+      record.role !== "background-proposer" ||
+      record.evidence.status !== "validated" ||
+      record.evidence.output?.kind !== "background-proposal"
+    ) {
+      return writeJson(response, 409, {
+        diagnostics: [
+          {
+            code: "proposal-not-revisable",
+            message: "Only a validated background proposal of this construction can be revised.",
+          },
+        ],
+      });
+    }
+    previous = {
+      previousCallId: revision.previousCallId,
+      previousProposal: record.evidence.output,
+      feedback: revision.feedback,
+    };
+  }
+
+  const built = buildBackgroundProposerContext({
+    id,
+    problem: `${problemText.title}\n\n${problemText.statement}`,
+    ...(preferences?.data === undefined
+      ? {}
+      : {
+          preferences: {
+            domains: preferences.data.domains ?? [],
+            notation: preferences.data.notation ?? [],
+          },
+        }),
+    // The global operator registry (the packs' operators), so that a constant can reference an
+    // existing operator with its exact signature instead of clashing with it.
+    operators: starterLibraryPacks().flatMap((pack) => pack.operators),
+    ...(previous === undefined ? {} : { revision: previous }),
+  });
+  if (!built.ok) return writeJson(response, 400, { diagnostics: built.diagnostics });
+  const prepared = prepareLlmCall(built.envelope);
+  if (!prepared.ok) return writeJson(response, 400, { diagnostics: prepared.diagnostics });
+  const limited = await admitProviderCall(context, owner, prepared.call.id);
+  if (!limited.ok) {
+    response.setHeader("retry-after", String(limited.retryAfterSeconds));
+    return writeJson(response, 429, {
+      status: "rate-limited",
+      diagnostics: [{ code: limited.code, message: LIMIT_MESSAGE }],
+    });
+  }
+  let result;
+  try {
+    result = await runDurableLlmCall(
+      context.llmCalls,
+      { owner, call: prepared.call, dispatch: configured.dispatch },
+      configured.transport,
+    );
+  } finally {
+    limited.release();
+  }
+  if (result.status !== "completed") {
+    return writeJson(response, repositoryStatus(result), { diagnostics: result.diagnostics });
+  }
+  if (result.record.status !== "completed") {
+    return writeJson(response, 503, problem("The background call outcome is uncertain."));
+  }
+  const evidence = result.record.evidence;
+  if (evidence.status !== "validated" || evidence.output === undefined) {
+    return writeJson(response, evidence.status === "transport-failed" ? 503 : 422, {
+      status: evidence.status,
+      callId: result.record.id,
+      replayed: result.replayed,
+      diagnostics: evidence.diagnostics,
+    });
+  }
+  if (evidence.output.kind !== "background-proposal") {
+    return writeJson(response, 200, {
+      status: evidence.output.kind,
+      callId: result.record.id,
+      replayed: result.replayed,
+      result: evidence.output,
+    });
+  }
+  return writeJson(response, 200, {
+    status: "proposed",
+    provenance: { kind: "minimal-context-llm", role: "background-proposer" },
+    callId: result.record.id,
+    replayed: result.replayed,
+    ...(previous === undefined ? {} : { revisedCallId: previous.previousCallId }),
+    proposal: evidence.output,
+  });
+}
+
+/**
+ * Record the human decision on a proposed background. The proposal is read from the stored call,
+ * never from the request. An approval is refused when a constant clashes with the global
+ * operator registry, so a clash is found when the user accepts, not when the setup is checked.
+ */
+async function decideBackground(
+  context: ServiceContext,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const body = await readBody(request);
+  if (!body.ok) return writeJson(response, body.status, problem(body.message));
+  const requestData = proposalDecisionRequestSchema.safeParse(body.value);
+  if (!requestData.success) {
+    return writeJson(response, 400, problem("The background decision request is invalid."));
+  }
+  if (context.llmCalls === undefined) {
+    return writeJson(response, 503, {
+      diagnostics: [{ code: "ai-disabled", message: "LLM evidence storage is unavailable." }],
+    });
+  }
+  const { constructionId, decisionId, callId, decision, rationale, decidedAt } = requestData.data;
+  const owner: LlmCallOwner = { kind: "construction", id: constructionId };
+  const stored = await readLlmCall(context.llmCalls, owner, callId);
+  if (stored.status !== "found") {
+    return writeJson(response, repositoryStatus(stored), { diagnostics: stored.diagnostics });
+  }
+  const record = stored.record;
+  if (
+    record.status !== "completed" ||
+    record.role !== "background-proposer" ||
+    record.evidence.status !== "validated" ||
+    record.evidence.output?.kind !== "background-proposal"
+  ) {
+    return writeJson(response, 409, {
+      diagnostics: [
+        {
+          code: "proposal-not-reviewable",
+          message: "Only a validated background proposal can be approved or rejected.",
+        },
+      ],
+    });
+  }
+  if (decision === "approved") {
+    const { conflicts } = resolveAgainstRegistry(
+      record.evidence.output.constants.map(({ operator }) => operator),
+    );
+    if (conflicts.length > 0) {
+      return writeJson(response, 409, {
+        diagnostics: [
+          {
+            code: "approved-constant-conflict",
+            message: `${conflicts.join(" ")} Revise the background so the constant keeps the existing signature, or renames it.`,
+          },
+        ],
+      });
+    }
+  }
+  const recorded = await recordBackgroundProposalDecision(context.llmCalls, {
+    id: decisionId,
+    owner,
+    callId,
+    reviewerId: WEB_REVIEWER_ID,
+    decidedAt,
+    proposal: record.evidence.output,
+    rationale,
+    decision,
+    ...(decision === "approved" ? { approvedManifestId: `background-approval:${decisionId}` } : {}),
+  });
+  if (recorded.status !== "recorded") {
+    const code = recorded.diagnostics[0].code;
+    const status =
+      recorded.status === "uncertain"
+        ? 503
+        : code === "decision-id-conflict" || code === "proposal-not-reviewable"
+          ? 409
+          : 400;
+    return writeJson(response, status, { diagnostics: recorded.diagnostics });
+  }
+  return writeJson(response, recorded.replayed ? 200 : 201, {
+    status: "recorded",
+    replayed: recorded.replayed,
+    decision: recorded.decision,
+    ...(recorded.approvedBackground === undefined
+      ? {}
+      : { approvedBackground: recorded.approvedBackground }),
+  });
+}
+
 async function formalize(
   context: ServiceContext,
   request: IncomingMessage,
@@ -134,26 +693,60 @@ async function formalize(
       ],
     });
   }
-  const { constructionId, ...formalizerInput } = requestData.data;
-  const selectedPacks = starterLibraryPacks().filter((pack) =>
-    formalizerInput.packs.includes(pack.id),
-  );
+  const { constructionId, approvedBackground, approvedLibrary, ...formalizerInput } =
+    requestData.data;
+  const packs = starterLibraryPacks();
+  const selectedPacks = packs.filter((pack) => formalizerInput.packs.includes(pack.id));
   if (selectedPacks.length !== formalizerInput.packs.length) {
     return writeJson(response, 400, problem("A selected library pack is not available."));
+  }
+  // The approved constants are resolved from storage by decision ID; the request cannot carry
+  // declarations of its own.
+  let constants: readonly OperatorDeclaration[] = [];
+  if (approvedBackground !== undefined) {
+    const loaded = await loadApprovedConstants(
+      context.llmCalls,
+      constructionId,
+      approvedBackground.decisionId,
+    );
+    if (!loaded.ok) return writeJson(response, loaded.status, { diagnostics: loaded.diagnostics });
+    constants = loaded.constants;
+  }
+  // The same holds for the approved initial library: the decision names result IDs, and the
+  // artifacts (and the new constants they apply) are read from the stored librarian call.
+  let library: ApprovedInitialLibrary | undefined;
+  if (approvedLibrary !== undefined) {
+    const loaded = await loadApprovedLibrary(
+      context.llmCalls,
+      constructionId,
+      approvedLibrary.decisionId,
+    );
+    if (!loaded.ok) return writeJson(response, loaded.status, { diagnostics: loaded.diagnostics });
+    library = loaded.library;
+  }
+  const constantConflicts: string[] = [];
+  const { operators: approvedOperators } = resolveSessionOperators(
+    formalizerInput.packs,
+    packs,
+    constants,
+    (_code, message, path) => {
+      if (path[0] === "approvedBackground" || path[0] === "approvedLibrary") {
+        constantConflicts.push(message);
+      }
+    },
+    ["packs"],
+    library?.constants ?? [],
+  );
+  if (constantConflicts.length > 0) {
+    return writeJson(response, 409, {
+      diagnostics: [{ code: "approved-constant-conflict", message: constantConflicts[0] }],
+    });
   }
   const built = buildProofStateFormalizerContext({
     ...formalizerInput,
     approvedLibrary: {
-      results: selectedPacks.flatMap((pack) =>
-        pack.results.map(({ id, name, description, statement, premises }) => ({
-          id,
-          name,
-          description,
-          statement: statement.expression,
-          premises: premises.map((premise) => premise.expression),
-        })),
-      ),
-      operators: selectedPacks.flatMap((pack) => pack.operators),
+      results: formalizerLibraryResults(selectedPacks, library),
+      operators: approvedOperators,
       sorts: PROBLEM_SETUP_SORT_CHOICES.map(({ id }) => id),
     },
   });
@@ -229,7 +822,19 @@ async function formalize(
       ],
     });
   }
-  const admission = validateProblemDraft(draft);
+  // Any operator outside the approved set (the selected packs, the approved constants and the
+  // built-in symbols) is reported precisely and returns the draft for review.
+  const unapproved = unapprovedConstantDiagnostics(draft, packs, { constants, library });
+  if (unapproved.length > 0) {
+    return writeJson(response, 422, {
+      status: "needs-review",
+      callId: result.record.id,
+      replayed: result.replayed,
+      draft,
+      diagnostics: unapproved,
+    });
+  }
+  const admission = validateProblemDraft(draft, packs, { constants, library });
   if (!admission.ok) {
     return writeJson(response, 422, {
       status: "needs-review",
@@ -398,6 +1003,27 @@ async function shortlist(
     );
   }
   const evidence = result.record.evidence;
+  const output = evidence.status === "validated" ? evidence.output : undefined;
+  if (
+    output?.kind === "none-relevant" &&
+    output.confidence >= (result.record.dispatch.minimumConfidence ?? 0)
+  ) {
+    // A validated, confident "nothing here is relevant". The deterministic list is still returned
+    // so the client can keep showing it; the outcome is distinct from every fallback below.
+    return writeJson(response, 200, {
+      status: "none-relevant",
+      provenance: "minimal-context-llm",
+      callId: result.record.id,
+      replayed: result.replayed,
+      suggestionSetId: stored.suggestionSet.id,
+      nodeId: loaded.node.id,
+      choices: [],
+      confidence: output.confidence,
+      reason: output.reason,
+      fallbackCandidateIds,
+      diagnostics: [],
+    });
+  }
   if (evidence.status !== "validated" || evidence.output?.kind !== "move-shortlist") {
     return respondWithFallback(
       200,
@@ -405,7 +1031,9 @@ async function shortlist(
         ? "The Jev request failed; deterministic suggestions remain available."
         : evidence.output?.kind === "declined"
           ? evidence.output.reason
-          : (evidence.diagnostics[0]?.message ?? "Jev did not return an admissible shortlist."),
+          : evidence.output?.kind === "none-relevant"
+            ? "Jev's no-relevant-suggestion answer was below the confidence threshold."
+            : (evidence.diagnostics[0]?.message ?? "Jev did not return an admissible shortlist."),
       false,
       result.record.id,
       result.replayed,
@@ -422,30 +1050,6 @@ async function shortlist(
     fallbackCandidateIds,
     diagnostics: [],
   });
-}
-
-const LIMIT_MESSAGE = "The AI request budget is exhausted; retry later.";
-
-type ProviderAdmission =
-  | Readonly<{ ok: true; release: () => void }>
-  | Readonly<{ ok: false; code: string; retryAfterSeconds: number }>;
-
-/**
- * Reserve limiter budget only when a provider call will really be dispatched: a stored call with
- * the same owner and ID is a replay or conflict and never reaches the provider.
- */
-async function admitProviderCall(
-  context: ServiceContext,
-  owner: LlmCallOwner,
-  callId: string,
-): Promise<ProviderAdmission> {
-  const limiter = context.aiLimiter;
-  if (limiter === undefined) return { ok: true, release: () => undefined };
-  if (context.llmCalls !== undefined) {
-    const existing = await readLlmCall(context.llmCalls, owner, callId);
-    if (existing.status === "found") return { ok: true, release: () => undefined };
-  }
-  return limiter.tryAcquire();
 }
 
 async function readEvidence(
@@ -470,68 +1074,4 @@ async function readEvidence(
   return result.status === "found"
     ? writeJson(response, 200, aiCallReadSchema.parse({ record: result.record }))
     : writeJson(response, repositoryStatus(result), { diagnostics: result.diagnostics });
-}
-
-type BodyResult =
-  | Readonly<{ ok: true; value: unknown }>
-  | Readonly<{ ok: false; status: 400 | 413 | 415; message: string }>;
-
-async function readBody(request: IncomingMessage): Promise<BodyResult> {
-  if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
-    return { ok: false, status: 415, message: "Content-Type must be application/json." };
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.byteLength;
-    if (size > MAX_AI_REQUEST_BYTES) {
-      return { ok: false, status: 413, message: "The AI request is too large." };
-    }
-    chunks.push(bytes);
-  }
-  try {
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "The request body is not valid JSON." };
-  }
-}
-
-function pathSegments(requestTarget: string | undefined): string[] | undefined {
-  try {
-    return new URL(requestTarget ?? "/", "http://proof.local").pathname
-      .split("/")
-      .filter(Boolean)
-      .map(decodeURIComponent);
-  } catch {
-    return undefined;
-  }
-}
-
-function methodNotAllowed(response: ServerResponse, method: string): true {
-  writeJson(response, 405, {
-    diagnostics: [{ code: "method-not-allowed", message: `Use ${method} for this resource.` }],
-  });
-  return true;
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(body));
-}
-
-function problem(message: string) {
-  return { diagnostics: [{ code: "invalid-request", message }] };
-}
-
-function repositoryStatus(result: {
-  status: "rejected" | "uncertain";
-  diagnostics: readonly [{ code: string }];
-}): number {
-  if (result.status === "uncertain") return 503;
-  if (result.diagnostics[0].code === "call-not-found") return 404;
-  if (result.diagnostics[0].code === "call-id-conflict") return 409;
-  if (result.diagnostics[0].code === "call-in-progress-or-uncertain") return 503;
-  return 400;
 }

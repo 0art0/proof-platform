@@ -10,15 +10,19 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
-const { readCurrentProofSession, readProofSessionMetadata } = vi.hoisted(() => ({
-  readCurrentProofSession: vi.fn(),
-  readProofSessionMetadata: vi.fn(),
-}));
+const { readAiCapabilities, readCurrentProofSession, readProofSessionMetadata } = vi.hoisted(
+  () => ({
+    readAiCapabilities: vi.fn(),
+    readCurrentProofSession: vi.fn(),
+    readProofSessionMetadata: vi.fn(),
+  }),
+);
 vi.mock("../../../server/proof-service", () => ({
   ProofServiceError: class extends Error {
     status = 500;
     code = "x";
   },
+  readAiCapabilities,
   readCurrentProofSession,
   readProofSessionMetadata,
 }));
@@ -39,13 +43,27 @@ const session = {
 async function workspaceProps() {
   const page = (await SessionPage({
     params: Promise.resolve({ sessionId: "session%3Atest" }),
-  })) as ReactElement<{ children: ReactElement<{ session: Record<string, unknown> }> }>;
+  })) as ReactElement<{
+    children: ReactElement<{
+      session: Record<string, unknown>;
+      aiShortlist: boolean;
+      aiExecutor: boolean;
+      aiLibrarian: boolean;
+    }>;
+  }>;
   expect(isValidElement(page)).toBe(true);
   return page.props.children.props;
 }
 
 describe("the session page", () => {
   it("passes the stored problem title, statement and background summary to the workspace", async () => {
+    readAiCapabilities.mockResolvedValue({
+      "background-proposer": false,
+      librarian: true,
+      "proof-state-formalizer": false,
+      "move-shortlister": true,
+      "move-executor": true,
+    });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue({
       problem: { title: "Commute a conjunction", statement: "Show that p and q implies q and p." },
@@ -60,12 +78,25 @@ describe("the session page", () => {
       statement: "Show that p and q implies q and p.",
       background: "Natural deduction.",
     });
+    expect(props.aiShortlist).toBe(true);
+    expect(props.aiExecutor).toBe(true);
+    expect(props.aiLibrarian).toBe(true);
   });
 
   it("opens a session without stored metadata under its id", async () => {
+    readAiCapabilities.mockResolvedValue({
+      "background-proposer": false,
+      librarian: false,
+      "proof-state-formalizer": false,
+      "move-shortlister": false,
+      "move-executor": false,
+    });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue(undefined);
     const props = await workspaceProps();
     expect(props.session).toEqual(session);
+    expect(props.aiShortlist).toBe(false);
+    expect(props.aiExecutor).toBe(false);
+    expect(props.aiLibrarian).toBe(false);
   });
 });

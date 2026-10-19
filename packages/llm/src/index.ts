@@ -6,6 +6,7 @@ import {
   operatorDeclarationSchema,
   plainMathJsonSchema,
   retrievalWildcardSchema,
+  sortSchema,
   stableIdentifierSchema,
   type OperatorDeclaration,
   type PlainMathJson,
@@ -21,9 +22,40 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
+import {
+  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
+  BACKGROUND_PROPOSER_SYSTEM_MESSAGE,
+  MAX_EXISTING_OPERATORS,
+  backgroundProposerContextSchema,
+  backgroundProposerOutputSchema,
+  backgroundProposerWireResultSchema,
+  describeExistingOperators,
+  normalizeBackgroundProposerWireResult,
+} from "./background-proposer";
+import {
+  LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE,
+  LIBRARIAN_SYSTEM_MESSAGE,
+  librarianContextSchema,
+  librarianOutputSchema,
+  librarianWireResultSchema,
+  normalizeLibrarianWireResult,
+} from "./librarian";
+import {
+  MAX_PLAN_STEPS,
+  executorInsufficientContextSchema,
+  executorPlanProposalSchema,
+  executorWirePlanSchema,
+  normalizeWireStep,
+  planUsesForbiddenOperation,
+  stepResultIds,
+  type ExecutorPlanProposal,
+} from "./move-executor-plan";
+
+export * from "./move-executor-plan";
 
 export const LLM_ROLES = [
   "topic-extractor",
+  "background-proposer",
   "librarian",
   "proof-state-formalizer",
   "move-shortlister",
@@ -40,6 +72,9 @@ export const SUPPORTED_LLM_ROLES = [
   "topic-extractor",
   "proof-state-formalizer",
   "move-shortlister",
+  "background-proposer",
+  "move-executor",
+  "librarian",
 ] as const;
 export const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
@@ -57,6 +92,44 @@ const uniqueShortTextsSchema = z
 
 export { backgroundProfileSchema, type BackgroundProfile } from "@proof/protocol";
 export * from "./transport";
+export {
+  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
+  MAX_BACKGROUND_CONSTANTS,
+  MAX_EXISTING_OPERATORS,
+  backgroundProposalSchema,
+  backgroundProposerOutputSchema,
+  type BackgroundConstant,
+  type BackgroundProposal,
+  type BackgroundProposerContext,
+  type BackgroundProposerOutput,
+  type ExistingOperator,
+} from "./background-proposer";
+export {
+  MAX_LIBRARIAN_ACTIVATED_CONSTANTS,
+  MAX_LIBRARIAN_CONTEXT_CONSTANTS,
+  MAX_LIBRARIAN_CONTEXT_RESULTS,
+  MAX_LIBRARIAN_NEW_CONSTANTS,
+  MAX_LIBRARIAN_RESULTS,
+  MAX_LIBRARIAN_SITUATION_SELECTIONS,
+  buildLibrarianSituation,
+  librarianContextConstants,
+  librarianContextSchema,
+  librarianNewConstants,
+  librarianOutputSchema,
+  librarianProposalSchema,
+  librarianResultSchema,
+  librarianSituationSchema,
+  type LibrarianContext,
+  type LibrarianExistingResult,
+  type LibrarianOutput,
+  type LibrarianProposal,
+  type LibrarianRequestKind,
+  type LibrarianResult,
+  type LibrarianSituation,
+  type LibrarianTopUpContext,
+  type LibrarianTopUpKind,
+  type LibrarianUnusableResult,
+} from "./librarian";
 
 const topicExtractorContextSchema = z
   .object({
@@ -93,16 +166,18 @@ const selectionLocationSchema = z
   })
   .strict();
 
+const selectionPositionSchema = z
+  .object({
+    polarity: z.enum(["positive", "negative", "mixed", "neutral"]),
+    role: z.enum(["proposition", "term", "binder"]),
+  })
+  .strict();
+
 const shortlisterSelectionSchema = z
   .object({
     id: stableIdentifierSchema,
     location: selectionLocationSchema,
-    position: z
-      .object({
-        polarity: z.enum(["positive", "negative", "mixed", "neutral"]),
-        role: z.enum(["proposition", "term", "binder"]),
-      })
-      .strict(),
+    position: selectionPositionSchema,
     expression: plainMathJsonSchema.optional(),
     abstraction: retrievalWildcardSchema.optional(),
     declarations: z.array(declarationSchema),
@@ -142,18 +217,129 @@ const candidateCardSchema = z
   .strict();
 export type CandidateCard = z.infer<typeof candidateCardSchema>;
 
+/**
+ * Why a shortlist was requested: the user pressed the button (`explicit-user`), the user's
+ * selections produced a list and automatic ranking was on (`automatic`), or the deterministic
+ * list was empty (`deterministic-empty`).
+ */
+export const SHORTLISTER_TRIGGERS = ["deterministic-empty", "explicit-user", "automatic"] as const;
+export const shortlisterTriggerSchema = z.enum(SHORTLISTER_TRIGGERS);
+export type ShortlisterTrigger = z.infer<typeof shortlisterTriggerSchema>;
+
+/**
+ * The reserved Jev option meaning "no displayed candidate is relevant to the selections". It is
+ * added to the Choice question next to the candidates and can never be a candidate ID.
+ */
+export const NONE_RELEVANT_CHOICE_ID = "outcome:none-relevant";
+export const NONE_RELEVANT_CRITERION =
+  "None of the displayed suggestions is relevant to the selected fragment.";
+
 const moveShortlisterContextSchema = z
   .object({
     nodeId: stableIdentifierSchema,
     stateId: stableIdentifierSchema,
     suggestionSetId: stableIdentifierSchema,
-    trigger: z.enum(["deterministic-empty", "explicit-user"]),
+    trigger: shortlisterTriggerSchema,
     selections: z.array(shortlisterSelectionSchema).min(1).max(16),
     candidates: z.array(candidateCardSchema).min(1).max(32),
     maxChoices: z.number().int().min(1).max(8),
   })
-  .strict();
+  .strict()
+  .superRefine((context, refinement) => {
+    if (context.candidates.some(({ id }) => id === NONE_RELEVANT_CHOICE_ID)) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["candidates"],
+        message: "A candidate cannot use the reserved none-relevant ID.",
+      });
+    }
+  });
 export type MoveShortlisterContext = z.infer<typeof moveShortlisterContextSchema>;
+
+/**
+ * Where a move description came from: the user's own instruction box, or a technique another
+ * service suggested (for example the shortlister's pick) that the user asked to carry out.
+ */
+export const EXECUTOR_SOURCES = ["user-instruction", "shortlisted-technique"] as const;
+export const executorSourceSchema = z.enum(EXECUTOR_SOURCES);
+export type ExecutorSource = z.infer<typeof executorSourceSchema>;
+
+/** The longest move description the executor is given. */
+export const MAX_EXECUTOR_INSTRUCTION_LENGTH = 2_000;
+/** The most approved results the executor is shown. */
+export const MAX_EXECUTOR_RESULTS = 32;
+const MAX_EXECUTOR_HYPOTHESES = 64;
+const MAX_EXECUTOR_DECLARATIONS = 256;
+const MAX_EXECUTOR_OPERATORS = 128;
+
+const executorTargetSchema = z
+  .object({ kind: z.enum(["goal", "obligation"]), id: stableIdentifierSchema })
+  .strict();
+
+/** A selection as the executor sees it: where it is, its role, and the selected fragment. */
+const executorSelectionSchema = z
+  .object({
+    id: stableIdentifierSchema,
+    location: selectionLocationSchema,
+    position: selectionPositionSchema,
+    expression: plainMathJsonSchema,
+  })
+  .strict();
+export type ExecutorSelection = z.infer<typeof executorSelectionSchema>;
+
+const executorResultCardSchema = z
+  .object({
+    id: stableIdentifierSchema,
+    name: shortTextSchema.optional(),
+    parameters: z
+      .array(z.object({ symbol: z.string().min(1).max(200), sort: sortSchema }).strict())
+      .max(32),
+    premises: z.array(plainMathJsonSchema).max(32),
+    conclusion: plainMathJsonSchema,
+    directions: z
+      .array(z.enum(["forward", "backward"]))
+      .min(1)
+      .max(2),
+  })
+  .strict();
+export type ExecutorResultCard = z.infer<typeof executorResultCardSchema>;
+
+const moveExecutorContextSchema = z
+  .object({
+    nodeId: stableIdentifierSchema,
+    stateId: stableIdentifierSchema,
+    instruction: z.string().min(1).max(MAX_EXECUTOR_INSTRUCTION_LENGTH),
+    source: executorSourceSchema,
+    target: executorTargetSchema,
+    selections: z.array(executorSelectionSchema).max(16),
+    /** The target sequent only, restricted to the declarations its statements use. */
+    sequent: z
+      .object({
+        declarations: z.array(declarationSchema).max(MAX_EXECUTOR_DECLARATIONS),
+        hypotheses: z
+          .array(z.object({ id: stableIdentifierSchema, expression: plainMathJsonSchema }).strict())
+          .max(MAX_EXECUTOR_HYPOTHESES),
+        conclusion: plainMathJsonSchema,
+      })
+      .strict(),
+    /** Active operator declarations: the vocabulary a proposition may use. */
+    operators: z.array(operatorDeclarationSchema).max(MAX_EXECUTOR_OPERATORS),
+    /** Approved results relevant to the selections. */
+    results: z.array(executorResultCardSchema).max(MAX_EXECUTOR_RESULTS),
+    maxSteps: z.literal(MAX_PLAN_STEPS),
+  })
+  .strict()
+  .superRefine((context, refinement) => {
+    addDuplicateIssues(
+      context.results.map(({ id }) => id),
+      refinement,
+    );
+    addDuplicateIssues(
+      context.sequent.hypotheses.map(({ id }) => id),
+      refinement,
+    );
+  });
+export type MoveExecutorContext = z.infer<typeof moveExecutorContextSchema>;
 
 const envelopeBaseShape = {
   id: llmCallIdSchema,
@@ -166,6 +352,8 @@ const topicExtractorEnvelopeSchema = z
     context: topicExtractorContextSchema,
   })
   .strict();
+/** The formalizer is shown at most this many library results. */
+export const MAX_FORMALIZER_LIBRARY_RESULTS = 64;
 const formalizerLibraryResultSchema = z
   .object({
     id: stableIdentifierSchema,
@@ -184,7 +372,7 @@ const formalizerContextSchema = z
     packs: z.array(problemSetupPackIdSchema).max(7),
     approvedLibrary: z
       .object({
-        results: z.array(formalizerLibraryResultSchema).max(64),
+        results: z.array(formalizerLibraryResultSchema).max(MAX_FORMALIZER_LIBRARY_RESULTS),
         operators: z.array(operatorDeclarationSchema).max(128),
         sorts: z.array(problemSetupSortIdSchema).max(11),
       })
@@ -215,10 +403,34 @@ const proofStateFormalizerEnvelopeSchema = z
     context: formalizerContextSchema,
   })
   .strict();
+const backgroundProposerEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("background-proposer"),
+    context: backgroundProposerContextSchema,
+  })
+  .strict();
+const moveExecutorEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("move-executor"),
+    context: moveExecutorContextSchema,
+  })
+  .strict();
+const librarianEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("librarian"),
+    context: librarianContextSchema,
+  })
+  .strict();
 export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   topicExtractorEnvelopeSchema,
   proofStateFormalizerEnvelopeSchema,
   moveShortlisterEnvelopeSchema,
+  backgroundProposerEnvelopeSchema,
+  moveExecutorEnvelopeSchema,
+  librarianEnvelopeSchema,
 ]);
 export type LlmContextEnvelope = z.infer<typeof llmContextEnvelopeSchema>;
 
@@ -314,6 +526,69 @@ export function buildTopicExtractorContext(input: unknown): BuildLlmContextResul
   });
 }
 
+const backgroundProposerRequestSchema = z
+  .object({
+    id: llmCallIdSchema,
+    problem: backgroundProposerContextSchema.shape.problem,
+    preferences: backgroundProposerContextSchema.shape.preferences,
+    /** The operators that already exist (the global registry), which constants may reference. */
+    operators: z.array(operatorDeclarationSchema).max(MAX_EXISTING_OPERATORS).optional(),
+    revision: backgroundProposerContextSchema.shape.revision,
+  })
+  .strict();
+
+/**
+ * Project the problem statement (and, on a revision, the previous proposal and the user's
+ * feedback) into a background-proposer envelope. The previous proposal is validated like any
+ * proposal, so a forged one is refused. The existing operators, when supplied, appear in the
+ * context as symbol, display name and signature, so that a constant can reference one.
+ */
+export function buildBackgroundProposerContext(
+  input: unknown,
+): RoleLlmContextResult<"background-proposer"> {
+  const request = safeParsePlain(backgroundProposerRequestSchema, input);
+  if (request === undefined) {
+    return failure("invalid-request", "The background proposer request is invalid.");
+  }
+  return envelopeSuccess({
+    id: request.id,
+    schemaVersion: "llm-context/v1",
+    role: "background-proposer",
+    context: {
+      problem: request.problem,
+      ...(request.preferences === undefined ? {} : { preferences: request.preferences }),
+      ...(request.operators === undefined
+        ? {}
+        : { operators: describeExistingOperators(request.operators) }),
+      ...(request.revision === undefined ? {} : { revision: request.revision }),
+    },
+  }) as RoleLlmContextResult<"background-proposer">;
+}
+
+const librarianRequestIdSchema = z.looseObject({ id: llmCallIdSchema });
+
+/**
+ * Build a librarian envelope. The request is the call ID plus the context: the request kind with
+ * the background, the constants to cover and the results already in the library. There is no
+ * problem statement in a librarian's context, and a request that carries one (or any other field)
+ * is refused.
+ */
+export function buildLibrarianContext(input: unknown): RoleLlmContextResult<"librarian"> {
+  const identified = safeParsePlain(librarianRequestIdSchema, input);
+  if (identified === undefined) {
+    return failure("invalid-request", "The librarian request is invalid.");
+  }
+  const { id, ...candidate } = identified;
+  const context = safeParsePlain(librarianContextSchema, candidate);
+  if (context === undefined) return failure("invalid-request", "The librarian request is invalid.");
+  return envelopeSuccess({
+    id,
+    schemaVersion: "llm-context/v1",
+    role: "librarian",
+    context,
+  }) as RoleLlmContextResult<"librarian">;
+}
+
 const proofStateFormalizerRequestSchema = z
   .object({
     id: llmCallIdSchema,
@@ -355,7 +630,7 @@ const moveShortlisterRequestSchema = z
     node: z.unknown(),
     suggestionSet: z.unknown(),
     candidateIds: z.array(stableIdentifierSchema).min(1).max(32),
-    trigger: z.enum(["deterministic-empty", "explicit-user"]),
+    trigger: shortlisterTriggerSchema,
     maxChoices: z.number().int().min(1).max(8).default(5),
     operators: z.array(operatorDeclarationSchema).default([]),
   })
@@ -407,6 +682,236 @@ export function buildMoveShortlisterContext(input: unknown): BuildLlmContextResu
       maxChoices: Math.min(request.maxChoices, candidates.length),
     },
   });
+}
+
+const executorResultInputSchema = z
+  .object({
+    id: stableIdentifierSchema,
+    parameters: z.array(z.object({ symbol: z.string().min(1), sort: sortSchema }).strict()),
+    premises: z.array(z.looseObject({ expression: plainMathJsonSchema })),
+    conclusion: z.looseObject({ expression: plainMathJsonSchema }),
+    directions: z
+      .array(z.enum(["forward", "backward"]))
+      .min(1)
+      .max(2),
+  })
+  .strict();
+
+const moveExecutorRequestSchema = z
+  .object({
+    id: llmCallIdSchema,
+    node: z.unknown(),
+    instruction: z.string(),
+    source: executorSourceSchema,
+    target: executorTargetSchema,
+    /** Resolved selections (the worker resolves the client's descriptors against the node). */
+    selections: z.array(z.unknown()).max(16).default([]),
+    operators: z.array(operatorDeclarationSchema).default([]),
+    /** The approved kernel results; the builder keeps the ones relevant to the selections. */
+    results: z.array(z.unknown()).default([]),
+    resultNames: z.record(z.string(), z.string()).default({}),
+  })
+  .strict();
+
+/**
+ * Build the move executor's minimal context (design plan §15.3): the described step, the
+ * selections, the target sequent (its hypotheses with their IDs, the declarations they use), the
+ * active operators and the approved results relevant to the selections. Never the original
+ * problem, other goals, history, or other suggestions.
+ */
+export function buildMoveExecutorContext(input: unknown): RoleLlmContextResult<"move-executor"> {
+  const request = safeParsePlain(moveExecutorRequestSchema, input);
+  if (request === undefined)
+    return failure("invalid-request", "The move-executor request is invalid.");
+  const instruction = request.instruction.trim();
+  if (instruction.length === 0 || instruction.length > MAX_EXECUTOR_INSTRUCTION_LENGTH) {
+    return failure(
+      "invalid-request",
+      `The move description must be between 1 and ${MAX_EXECUTOR_INSTRUCTION_LENGTH} characters.`,
+    );
+  }
+  const node = safeParsePlain(
+    createProofNodeSchema({ operators: request.operators }),
+    request.node,
+  );
+  if (node === undefined) return failure("invalid-request", "The proof node is invalid.");
+  const entry = (request.target.kind === "goal" ? node.state.goals : node.state.obligations).find(
+    ({ id }) => id === request.target.id,
+  );
+  if (entry === undefined) {
+    return failure("invalid-request", "The target is not in the current proof state.");
+  }
+  const operators = request.operators;
+  const selections: ExecutorSelection[] = [];
+  for (const [position, value] of request.selections.entries()) {
+    const projected = projectExecutorSelection(`selection:${position + 1}`, value, request.target);
+    if (projected === undefined) {
+      return failure("invalid-request", "A selection is invalid or does not belong to the target.");
+    }
+    selections.push(projected);
+  }
+  const { context } = entry.sequent;
+  if (
+    context.hypotheses.length > MAX_EXECUTOR_HYPOTHESES ||
+    context.declarations.length > MAX_EXECUTOR_DECLARATIONS ||
+    operators.length > MAX_EXECUTOR_OPERATORS
+  ) {
+    return failure("invalid-request", "The target sequent is too large to describe a step on.");
+  }
+  const statements: PlainMathJson[] = [
+    entry.sequent.conclusion.expression,
+    ...context.hypotheses.map(({ statement }) => statement.expression),
+    ...selections.map(({ expression }) => expression),
+  ];
+  const used = new Set(
+    statements.flatMap((expression) => freeSymbolNames(expression, { operators })),
+  );
+  const results = relevantExecutorResults(
+    request.results,
+    request.resultNames,
+    selections.length === 0
+      ? [entry.sequent.conclusion.expression]
+      : selections.map(({ expression }) => expression),
+  );
+  if (results === undefined) {
+    return failure("invalid-request", "An approved result could not be described.");
+  }
+  return envelopeSuccess({
+    id: request.id,
+    schemaVersion: "llm-context/v1",
+    role: "move-executor",
+    context: {
+      nodeId: node.id,
+      stateId: node.state.id,
+      instruction,
+      source: request.source,
+      target: request.target,
+      selections,
+      sequent: {
+        declarations: context.declarations.filter(({ symbol }) => used.has(symbol)),
+        hypotheses: context.hypotheses.map(({ id, statement }) => ({
+          id,
+          expression: statement.expression,
+        })),
+        conclusion: entry.sequent.conclusion.expression,
+      },
+      operators,
+      results,
+      maxSteps: MAX_PLAN_STEPS,
+    },
+  }) as RoleLlmContextResult<"move-executor">;
+}
+
+/** A resolved selection in the executor's shape; undefined if it is invalid or elsewhere. */
+function projectExecutorSelection(
+  id: string,
+  value: unknown,
+  target: Readonly<{ kind: string; id: string }>,
+): ExecutorSelection | undefined {
+  const parsed = safeParsePlain(resolvedSelectionShapeSchema, value);
+  if (parsed === undefined) return undefined;
+  const { anchor } = parsed;
+  if (anchor.target.kind !== target.kind || anchor.target.id !== target.id) return undefined;
+  return safeParsePlain(executorSelectionSchema, {
+    id,
+    location: {
+      target: anchor.target,
+      statement: anchor.statement,
+      occurrence:
+        parsed.kind === "exact"
+          ? { kind: "exact", path: parsed.path }
+          : {
+              kind: "associative",
+              containerPath: parsed.containerPath,
+              startOperand: parsed.startOperand,
+              endOperand: parsed.endOperand,
+            },
+    },
+    position: parsed.position,
+    expression: parsed.fragment,
+  });
+}
+
+/** The parts of a resolved selection that the executor's projection reads. */
+const resolvedSelectionShapeSchema = z.discriminatedUnion("kind", [
+  z.looseObject({
+    kind: z.literal("exact"),
+    anchor: z.looseObject({
+      target: executorTargetSchema,
+      statement: selectionLocationSchema.shape.statement,
+    }),
+    path: z.array(z.number().int().nonnegative()),
+    fragment: plainMathJsonSchema,
+    position: selectionPositionSchema,
+  }),
+  z.looseObject({
+    kind: z.literal("associative"),
+    anchor: z.looseObject({
+      target: executorTargetSchema,
+      statement: selectionLocationSchema.shape.statement,
+    }),
+    containerPath: z.array(z.number().int().nonnegative()),
+    startOperand: z.number().int().nonnegative(),
+    endOperand: z.number().int().nonnegative(),
+    fragment: plainMathJsonSchema,
+    position: selectionPositionSchema,
+  }),
+]);
+
+/**
+ * The approved results whose statements share operators with the focus expressions, best first
+ * (most shared operators, then ID), capped. Undefined if a result is malformed.
+ */
+function relevantExecutorResults(
+  inputs: readonly unknown[],
+  names: Readonly<Record<string, string>>,
+  focus: readonly PlainMathJson[],
+): ExecutorResultCard[] | undefined {
+  const wanted = new Set(focus.flatMap((expression) => [...operatorHeads(expression)]));
+  const scored: { card: ExecutorResultCard; score: number }[] = [];
+  for (const input of inputs) {
+    const result = safeParsePlain(executorResultInputSchema, input);
+    if (result === undefined) return undefined;
+    const heads = new Set(
+      [
+        result.conclusion.expression,
+        ...result.premises.map(({ expression }) => expression),
+      ].flatMap((expression) => [...operatorHeads(expression)]),
+    );
+    const score = [...heads].filter((head) => wanted.has(head)).length;
+    if (score === 0) continue;
+    const name = names[result.id];
+    scored.push({
+      score,
+      card: {
+        id: result.id,
+        ...(name === undefined || name.length === 0 || name.length > 500 ? {} : { name }),
+        parameters: result.parameters,
+        premises: result.premises.map(({ expression }) => expression),
+        conclusion: result.conclusion.expression,
+        directions: result.directions,
+      },
+    });
+  }
+  scored.sort((left, right) =>
+    left.score !== right.score
+      ? right.score - left.score
+      : left.card.id < right.card.id
+        ? -1
+        : left.card.id > right.card.id
+          ? 1
+          : 0,
+  );
+  return scored.slice(0, MAX_EXECUTOR_RESULTS).map(({ card }) => card);
+}
+
+/** The operator heads of every application in an expression. */
+function operatorHeads(expression: PlainMathJson, heads = new Set<string>()): Set<string> {
+  const parts = functionParts(expression);
+  if (parts === undefined) return heads;
+  heads.add(parts.operator);
+  parts.operands.forEach((operand) => operatorHeads(operand, heads));
+  return heads;
 }
 
 const notationProposalSchema = z
@@ -464,6 +969,20 @@ export const moveShortlistProposalSchema = z
   .strict();
 export type MoveShortlistProposal = z.infer<typeof moveShortlistProposalSchema>;
 
+/**
+ * The shortlister judged that no displayed candidate is relevant to the selections. It is a
+ * validated outcome, distinct from a refusal and from a low-confidence answer (which is kept as a
+ * `declined` output and falls back to the deterministic list).
+ */
+export const moveShortlistNoneRelevantSchema = z
+  .object({
+    kind: z.literal("none-relevant"),
+    confidence: z.number().finite().min(0).max(1),
+    reason: shortTextSchema,
+  })
+  .strict();
+export type MoveShortlistNoneRelevant = z.infer<typeof moveShortlistNoneRelevantSchema>;
+
 const topicOutputSchema = z.union([
   topicManifestProposalSchema,
   topicInsufficientContextSchema,
@@ -471,7 +990,19 @@ const topicOutputSchema = z.union([
 ]);
 const shortlisterOutputSchema = z.union([
   moveShortlistProposalSchema,
+  moveShortlistNoneRelevantSchema,
   shortlisterInsufficientContextSchema,
+  declinedSchema,
+]);
+const executorOutputSchema = z.union([
+  executorPlanProposalSchema,
+  executorInsufficientContextSchema,
+  declinedSchema,
+]);
+export type { ExecutorPlanProposal };
+const executorWireResultSchema = z.union([
+  executorWirePlanSchema,
+  executorInsufficientContextSchema,
   declinedSchema,
 ]);
 const formalizerInsufficientContextSchema = z
@@ -553,11 +1084,17 @@ const formalizerWireResultSchema = z.union([
 export type ValidatedLlmOutput =
   | z.infer<typeof topicOutputSchema>
   | z.infer<typeof shortlisterOutputSchema>
-  | z.infer<typeof formalizerOutputSchema>;
+  | z.infer<typeof formalizerOutputSchema>
+  | z.infer<typeof backgroundProposerOutputSchema>
+  | z.infer<typeof executorOutputSchema>
+  | z.infer<typeof librarianOutputSchema>;
 
 const topicWireSchema = z.object({ result: topicOutputSchema }).strict();
+const backgroundWireSchema = z.object({ result: backgroundProposerWireResultSchema }).strict();
+const librarianWireSchema = z.object({ result: librarianWireResultSchema }).strict();
 const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).strict();
 const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
+const executorWireSchema = z.object({ result: executorWireResultSchema }).strict();
 
 const jevChoiceResultSchema = z
   .object({
@@ -595,6 +1132,9 @@ const jevChoiceResultSchema = z
 export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
   if (role === "topic-extractor") return topicWireSchema;
   if (role === "proof-state-formalizer") return formalizerWireSchema;
+  if (role === "background-proposer") return backgroundWireSchema;
+  if (role === "move-executor") return executorWireSchema;
+  if (role === "librarian") return librarianWireSchema;
   return shortlisterWireSchema;
 }
 
@@ -617,7 +1157,7 @@ export const preparedLlmCallSchema = z
     if (call.messages[0].role !== "system" || call.messages[1].role !== "user") {
       context.addIssue({ code: "custom", message: "Calls require system and user messages." });
     }
-    if (call.messages[0].content !== expectedSystemMessage(call.role)) {
+    if (!acceptsSystemMessage(call.role, call.messages[0].content)) {
       context.addIssue({ code: "custom", message: "The system message must match the role." });
     }
     if (call.messages[1].content !== JSON.stringify(call.envelope)) {
@@ -649,14 +1189,43 @@ export function prepareLlmCall(
     : { ok: true, call: freezeDetached(candidate), diagnostics: [] };
 }
 
+const FORMALIZER_BASE_SYSTEM_MESSAGE =
+  "Return one structured N26 problem draft, a permitted context request, or a refusal. Mirror the existing proof-state model in the draft: use the supplied problem, background, preferences, library layers, and selected packs exactly; use declarations with admitted sorts; express hypotheses and goals as LaTeX inputs. Do not add a separate presentation AST, a library result, proof steps, or unsupported variable kinds. The worker validates and parses the draft into authoritative plain MathJSON, then presents it for human review. The draft is a proposal, never an approved proof state.";
+const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. If the problem needs an operator that is not listed, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
+
 function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "topic-extractor") {
     return "Return only a topic manifest, a permitted context request, or a refusal. Do not solve the problem.";
   }
-  if (role === "proof-state-formalizer") {
-    return "Return one structured N26 problem draft, a permitted context request, or a refusal. Mirror the existing proof-state model in the draft: use the supplied problem, background, preferences, library layers, and selected packs exactly; use declarations with admitted sorts; express hypotheses and goals as LaTeX inputs. Do not add a separate presentation AST, a library result, proof steps, or unsupported variable kinds. The worker validates and parses the draft into authoritative plain MathJSON, then presents it for human review. The draft is a proposal, never an approved proof state.";
-  }
-  return "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
+  if (role === "proof-state-formalizer") return FORMALIZER_SYSTEM_MESSAGE;
+  if (role === "background-proposer") return BACKGROUND_PROPOSER_SYSTEM_MESSAGE;
+  if (role === "librarian") return LIBRARIAN_SYSTEM_MESSAGE;
+  if (role === "move-executor") return MOVE_EXECUTOR_SYSTEM_MESSAGE;
+  return SHORTLISTER_SYSTEM_MESSAGE;
+}
+
+const MOVE_EXECUTOR_SYSTEM_MESSAGE = `Return one plan of kernel operations that carries out the described step on the supplied target sequent, a permitted context request, or a refusal. Use only the supplied target, hypotheses, declarations, operators and approved results, and refer to existing goals, obligations and hypotheses by their exact supplied IDs. A plan has between 1 and ${MAX_PLAN_STEPS} operations; the kernel applies each to the state the previous one produced, and rejects any step that is not valid. Give every new statement, hypothesis, obligation, declaration or assumption you introduce a short unique label of letters, digits, dots, underscores and hyphens: the platform makes labels globally unique, and later operations refer to the same label. Write every expression as MathJSON: a symbol or number as a plain string or number, an application as [Operator, ...operands]. Operations that mark a sorry or accept an attested inference do not exist for you. The platform previews the plan and a person confirms it; nothing is applied before that. If the description cannot be carried out with the supplied context, return an insufficient-context request or a refusal instead of guessing.`;
+const SHORTLISTER_SYSTEM_MESSAGE =
+  "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics. If every supplied candidate is clearly unrelated to the selected fragment, return a none-relevant outcome with your confidence and a short reason instead of forcing a choice; use it only when no candidate is a plausible next step for the selection, not when the best candidate is merely a weak fit.";
+/** The shortlister message before the none-relevant outcome existed. */
+const SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE =
+  "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics.";
+
+/**
+ * System messages a stored call may carry. Formalizer calls recorded before the approved-constants
+ * instruction was added, shortlister calls recorded before the none-relevant outcome,
+ * background-proposer calls recorded before existing operators were offered, and librarian calls
+ * recorded before the top-up request kinds keep their original message, so existing evidence
+ * stays readable; new calls are always prepared with the current message.
+ */
+function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean {
+  return (
+    content === expectedSystemMessage(role) ||
+    (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE) ||
+    (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "background-proposer" && content === BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "librarian" && content === LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE)
+  );
 }
 
 export function validateLlmOutput(
@@ -673,6 +1242,26 @@ export function validateLlmOutput(
     const output = safeParsePlain(topicOutputSchema, candidate);
     return output === undefined
       ? failure("invalid-output", "The LLM output is malformed.")
+      : { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  if (call.role === "background-proposer") {
+    const wireOutput = safeParsePlain(backgroundProposerWireResultSchema, candidate);
+    const output =
+      wireOutput === undefined ? undefined : normalizeBackgroundProposerWireResult(wireOutput);
+    return output === undefined
+      ? failure("invalid-output", "The LLM output is malformed or breaks a background rule.")
+      : { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  if (call.role === "librarian") {
+    const wireOutput = safeParsePlain(librarianWireResultSchema, candidate);
+    const output =
+      wireOutput === undefined || call.envelope.role !== "librarian"
+        ? undefined
+        : normalizeLibrarianWireResult(wireOutput, call.envelope.context);
+    return output === undefined
+      ? failure("invalid-output", "The LLM output is malformed or breaks a library rule.")
       : { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 
@@ -697,16 +1286,46 @@ export function validateLlmOutput(
     return { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 
+  if (call.role === "move-executor") {
+    const wireOutput = safeParsePlain(executorWireResultSchema, candidate);
+    const output =
+      (wireOutput === undefined ? undefined : normalizeExecutorWireOutput(wireOutput)) ??
+      safeParsePlain(executorOutputSchema, candidate);
+    if (output === undefined) {
+      return failure(
+        "invalid-output",
+        planUsesForbiddenOperation(candidate) ||
+          planUsesForbiddenOperation((candidate as { result?: unknown } | null)?.result)
+          ? "The plan uses an operation the move executor may not propose."
+          : "The LLM output is malformed.",
+      );
+    }
+    if (
+      call.envelope.role !== "move-executor" ||
+      (output.kind === "plan" && !executorPlanFitsContext(output, call.envelope.context))
+    ) {
+      return failure(
+        "invalid-output",
+        "The plan cites a result that was not supplied or exceeds its bounds.",
+      );
+    }
+    return { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
   const jevResult = safeParsePlain(jevChoiceResultSchema, candidate);
   if (jevResult !== undefined) {
     if (call.envelope.role !== "move-shortlister") {
       return failure("invalid-output", "Jev output is only valid for a move-shortlister call.");
     }
     const candidates = call.envelope.context.candidates;
-    const expectedIds = candidates.map(({ id }) => id).sort();
+    // The Choice question offers every displayed candidate plus the reserved none-relevant option.
+    const expectedIds = [...candidates.map(({ id }) => id), NONE_RELEVANT_CHOICE_ID].sort();
     const probabilityIds = Object.keys(jevResult.providerOutput.probabilities).sort();
     const criteria = jevResult.providerRequest.questions.shortlist.criteria;
-    const expectedCriteria = Object.fromEntries(candidates.map(({ id, name }) => [id, name]));
+    const expectedCriteria = {
+      ...Object.fromEntries(candidates.map(({ id, name }) => [id, name])),
+      [NONE_RELEVANT_CHOICE_ID]: NONE_RELEVANT_CRITERION,
+    };
     const probabilities = jevResult.providerOutput.probabilities;
     const probabilityTotal = Object.values(probabilities).reduce((sum, value) => sum + value, 0);
     const highestProbability = Math.max(...Object.values(probabilities));
@@ -722,22 +1341,30 @@ export function validateLlmOutput(
         "Jev probabilities or request context do not match the shortlist.",
       );
     }
+    const { choice, confidence } = jevResult.providerOutput;
     const output =
-      jevResult.providerOutput.confidence < jevResult.minimumConfidence
+      confidence < jevResult.minimumConfidence
         ? {
             kind: "declined" as const,
             reason: "Jev shortlist confidence is below the configured threshold.",
           }
-        : {
-            kind: "move-shortlist" as const,
-            choices: [
-              {
-                suggestionId: jevResult.providerOutput.choice,
-                rationale:
-                  "This candidate had the highest Jev probability and met the confidence threshold.",
-              },
-            ],
-          };
+        : choice === NONE_RELEVANT_CHOICE_ID
+          ? {
+              kind: "none-relevant" as const,
+              confidence,
+              reason:
+                "Jev judged that none of the displayed suggestions is relevant to the selection.",
+            }
+          : {
+              kind: "move-shortlist" as const,
+              choices: [
+                {
+                  suggestionId: choice,
+                  rationale:
+                    "This candidate had the highest Jev probability and met the confidence threshold.",
+                },
+              ],
+            };
     return { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 
@@ -760,6 +1387,30 @@ export function validateLlmOutput(
     }
   }
   return { ok: true, output: freezeDetached(output), diagnostics: [] };
+}
+
+/** A wire plan as a stored plan (kernel operations without state IDs); other outputs unchanged. */
+function normalizeExecutorWireOutput(
+  output: z.infer<typeof executorWireResultSchema>,
+): z.infer<typeof executorOutputSchema> | undefined {
+  if (output.kind !== "plan") return output;
+  return safeParsePlain(executorPlanProposalSchema, {
+    kind: "plan",
+    steps: output.steps.map((step) => normalizeWireStep(step as Record<string, unknown>)),
+    explanation: output.explanation,
+  });
+}
+
+/** Only results the context supplied may be cited, and the plan stays within its step bound. */
+function executorPlanFitsContext(
+  plan: ExecutorPlanProposal,
+  context: MoveExecutorContext,
+): boolean {
+  const supplied = new Set(context.results.map(({ id }) => id));
+  return (
+    plan.steps.length <= context.maxSteps &&
+    plan.steps.every((step) => stepResultIds(step).every((id) => supplied.has(id)))
+  );
 }
 
 function normalizeFormalizerWireOutput(
@@ -855,7 +1506,14 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
     status: z.enum(["validated", "rejected", "transport-failed"]),
     rawResponse: z.unknown(),
     output: z
-      .union([topicOutputSchema, formalizerOutputSchema, shortlisterOutputSchema])
+      .union([
+        topicOutputSchema,
+        formalizerOutputSchema,
+        shortlisterOutputSchema,
+        backgroundProposerOutputSchema,
+        executorOutputSchema,
+        librarianOutputSchema,
+      ])
       .optional(),
     diagnostics: z.array(llmBoundaryDiagnosticSchema),
   })
@@ -895,7 +1553,13 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         (evidence.role === "proof-state-formalizer" &&
           !formalizerOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "move-shortlister" &&
-          !shortlisterOutputSchema.safeParse(evidence.output).success))
+          !shortlisterOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "background-proposer" &&
+          !backgroundProposerOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "move-executor" &&
+          !executorOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "librarian" &&
+          !librarianOutputSchema.safeParse(evidence.output).success))
     ) {
       context.addIssue({ code: "custom", message: "Evidence output must match the call role." });
     }

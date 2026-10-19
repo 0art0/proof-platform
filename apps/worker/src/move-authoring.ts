@@ -34,7 +34,7 @@ import {
 } from "@proof/moves/authoring";
 import type { MoveDefinition } from "@proof/moves";
 import { definitionHash, type DefinitionCatalog, type MacroDefinition } from "./approved-catalog";
-import { approvedDerivedResults, withApprovedLemmas } from "./conditional-lemmas";
+import { approvedDerivedResults } from "./conditional-lemmas";
 import {
   addLibraryArtifact,
   listLibrary,
@@ -42,6 +42,11 @@ import {
   type LibraryRepositoryFailure,
   type LibraryStore,
 } from "./library-repository";
+import {
+  SESSION_RESULT_LAYERS,
+  sessionLibraryResults,
+  withSessionResults,
+} from "./session-results";
 
 export type AuthoringFailure =
   | LibraryRepositoryFailure
@@ -211,7 +216,8 @@ export function approvedAuthoredMacros(
 
 /**
  * The definitions a session retrieves and applies with: the base catalog plus the session's
- * approved authored moves and approved conditional lemmas. Drafts, rejections and change requests
+ * approved authored moves, approved conditional lemmas, and the admitted results of its
+ * `initial-problem` and `proof-time-background` layers. Drafts, rejections and change requests
  * contribute nothing.
  */
 export async function sessionDefinitions(
@@ -222,14 +228,18 @@ export async function sessionDefinitions(
   if (library === undefined) return base;
   const listed = await listLibrary(library, {
     sessionId,
-    layers: ["move-discovery-draft", "derived"],
+    layers: ["move-discovery-draft", "derived", ...SESSION_RESULT_LAYERS],
   });
   if (listed.status !== "found") return base;
   const taken = (id: string) => base.moves.some((move) => move.id === id);
   const authored = approvedAuthoredMoves(listed.artifacts).filter((move) => !taken(move.id));
   const macros = approvedAuthoredMacros(listed.artifacts).filter(({ move }) => !taken(move.id));
-  // Approved conditional lemmas (N44) join the result catalog; drafts and rejections do not.
-  const withLemmas = withApprovedLemmas(base, approvedDerivedResults(listed.artifacts));
+  // Approved conditional lemmas (N44) and the session's own library results join the result
+  // catalog; drafts and rejections do not.
+  const withLemmas = withSessionResults(base, [
+    ...approvedDerivedResults(listed.artifacts),
+    ...sessionLibraryResults(listed.artifacts),
+  ]);
   if (authored.length === 0 && macros.length === 0) return withLemmas;
   return Object.freeze({
     moves: [...base.moves, ...authored],

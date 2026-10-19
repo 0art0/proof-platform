@@ -3,14 +3,14 @@ import type {
   LlmCallStore,
   LlmCallStoreTransaction,
   StoredLlmCall,
-  TopicProposalDecision,
+  ProposalDecision,
 } from "./llm-call-repository";
 import type { LlmCallId } from "@proof/llm";
 
 /** In-process owner-scoped LLM evidence store for local development and tests. */
 export class MemoryLlmCallStore implements LlmCallStore {
   private calls = new Map<string, StoredLlmCall>();
-  private decisions = new Map<string, TopicProposalDecision>();
+  private decisions = new Map<string, ProposalDecision>();
   private queue: Promise<void> = Promise.resolve();
 
   async transaction<Result>(

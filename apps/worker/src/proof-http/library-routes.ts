@@ -7,8 +7,11 @@
  *   and session layers follows (`source: "stored-library"`), in the store's listing order.
  * - `GET /proof-sessions/:id/library/events`: the session's addition events in sequence order,
  *   admitted and rejected, each with its admission diagnostics.
+ * - `GET /proof-sessions/:id/library/constants`: which constants are active or dormant, which a
+ *   committed step activated, and which activations a recorded top-up already covered
+ *   (`ai-library-top-up-routes.ts`).
  *
- * Both routes only read what is stored or approved; admission and variant generation are never
+ * These routes only read what is stored or approved; admission and variant generation are never
  * re-run to answer them.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -22,6 +25,7 @@ import {
   transactionFailure,
   type ProofSessionId,
 } from "../proof-repository";
+import { readSessionConstants } from "./ai-library-top-up-routes";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 export type LibraryEntrySource = "approved-catalog" | "stored-library";
@@ -57,7 +61,8 @@ export async function handleLibraryRoute(
     return false;
   }
   const events = segments.length === 4 && segments[3] === "events";
-  if (segments.length !== 3 && !events) return false;
+  const constants = segments.length === 4 && segments[3] === "constants";
+  if (segments.length !== 3 && !events && !constants) return false;
   const sessionId = proofSessionIdSchema.safeParse(segments[1]);
   if (!sessionId.success) return false;
   if (request.method !== "GET") {
@@ -67,9 +72,11 @@ export async function handleLibraryRoute(
     });
     return true;
   }
-  const result = events
-    ? await readEvents(context, sessionId.data)
-    : await readLibrary(context, sessionId.data);
+  const result = constants
+    ? await readSessionConstants(context, sessionId.data)
+    : events
+      ? await readEvents(context, sessionId.data)
+      : await readLibrary(context, sessionId.data);
   if ("diagnostics" in result) {
     writeJson(response, repositoryFailureStatus(result), { diagnostics: result.diagnostics });
   } else {

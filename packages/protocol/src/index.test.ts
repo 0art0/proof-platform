@@ -1059,3 +1059,105 @@ describe("proof command preparation", () => {
     ).toMatchObject({ ok: false, diagnostics: [{ code: "invalid-command" }] });
   });
 });
+
+describe("proposal provenance on a raw kernel step", () => {
+  const link = {
+    source: "user-proposal",
+    role: "move-executor",
+    callId: "llm-call:execute-one",
+    stepIndex: 1,
+    stepCount: 2,
+  } as const;
+
+  it("is recorded on the command and its edge and survives the prepared-record checks", () => {
+    const prepared = prepareProofCommand(
+      node(),
+      { ...command(), proposal: link },
+      { trustedActor: human },
+    );
+    expect(prepared).toMatchObject({ ok: true });
+    if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+    expect(prepared.prepared.command.proposal).toEqual(link);
+    expect(prepared.prepared.edge.proposal).toEqual(link);
+    expect(prepared.prepared.edge.moveId).toBeUndefined();
+    expect(
+      createPreparedProofCommandSchema().safeParse(JSON.parse(JSON.stringify(prepared.prepared)))
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts both provenance sources and no other", () => {
+    for (const source of ["user-proposal", "minimal-context-llm"]) {
+      expect(command(human, undefined, { proposal: { ...link, source } }).proposal?.source).toBe(
+        source,
+      );
+    }
+    expect(
+      applyKernelCommandSchema.safeParse({
+        ...command(),
+        proposal: { ...link, source: "deterministic" },
+      }).success,
+    ).toBe(false);
+    expect(
+      applyKernelCommandSchema.safeParse({ ...command(), proposal: { ...link, role: "attestor" } })
+        .success,
+    ).toBe(false);
+    expect(
+      applyKernelCommandSchema.safeParse({ ...command(), proposal: { ...link, extra: true } })
+        .success,
+    ).toBe(false);
+  });
+
+  it("requires a consistent step position", () => {
+    for (const [stepIndex, stepCount] of [
+      [0, 2],
+      [3, 2],
+      [1, 17],
+    ]) {
+      expect(
+        applyKernelCommandSchema.safeParse({
+          ...command(),
+          proposal: { ...link, stepIndex, stepCount },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("cannot be combined with move, macro or suggestion evidence", () => {
+    expect(
+      applyKernelCommandSchema.safeParse({
+        ...command(),
+        proposal: link,
+        moveId: "move:close-true",
+      }).success,
+    ).toBe(false);
+    expect(
+      applyKernelCommandSchema.safeParse({
+        ...command(),
+        proposal: link,
+        macro: {
+          moveId: "authored:macro",
+          previewId: "preview:one",
+          stepIndex: 1,
+          stepCount: 2,
+          stepId: "step-1",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a retried command whose proposal differs", () => {
+    const first = prepareProofCommand(
+      node(),
+      { ...command(), proposal: link },
+      { trustedActor: human },
+    );
+    if (!first.ok) throw new Error(first.diagnostics[0].message);
+    const changed = prepareProofCommand(
+      node(),
+      { ...command(), proposal: { ...link, callId: "llm-call:execute-two" } },
+      { trustedActor: human, previous: first },
+    );
+    expect(changed).toMatchObject({ ok: false, diagnostics: [{ code: "command-id-conflict" }] });
+  });
+});

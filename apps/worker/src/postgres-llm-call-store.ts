@@ -4,7 +4,7 @@ import {
   type LlmCallStore,
   type LlmCallStoreTransaction,
   type StoredLlmCall,
-  type TopicProposalDecision,
+  type ProposalDecision,
 } from "./llm-call-repository";
 import { ProofStoreTransactionError } from "./proof-repository";
 import type { LlmCallId } from "@proof/llm";
@@ -143,7 +143,7 @@ class PostgresLlmCallStoreTransaction implements LlmCallStoreTransaction {
     return result.rows[0]?.record;
   }
 
-  async insertDecision(decision: TopicProposalDecision): Promise<void> {
+  async insertDecision(decision: ProposalDecision): Promise<void> {
     await this.client.query(
       `INSERT INTO llm_topic_decisions
          (owner_kind, owner_id, id, call_id, decision, approved_manifest_id, record)

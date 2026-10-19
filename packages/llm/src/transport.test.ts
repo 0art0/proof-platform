@@ -5,11 +5,16 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import {
+  buildMoveExecutorContext,
   buildMoveShortlisterContext,
   buildProofStateFormalizerContext,
+  DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_EXECUTOR_MODEL,
+  DEFAULT_EXECUTOR_REASONING_EFFORT,
   createVercelJevShortlisterTransport,
   createVercelStructuredOutputTransport,
   executePreparedLlmCall,
+  NONE_RELEVANT_CHOICE_ID,
   prepareLlmCall,
   validateLlmOutput,
   type PreparedLlmCall,
@@ -234,7 +239,11 @@ describe("Vercel Jev shortlist transport", () => {
             shortlist: {
               type: "choice",
               choice: "suggestion:two",
-              probabilities: { "suggestion:one": 0.2, "suggestion:two": 0.8 },
+              probabilities: {
+                "suggestion:one": 0.2,
+                "suggestion:two": 0.8,
+                [NONE_RELEVANT_CHOICE_ID]: 0,
+              },
               confidence: 0.91,
             },
           },
@@ -254,6 +263,7 @@ describe("Vercel Jev shortlist transport", () => {
           criteria: {
             "suggestion:one": "Candidate one",
             "suggestion:two": "Candidate two",
+            [NONE_RELEVANT_CHOICE_ID]: expect.stringContaining("None of the displayed"),
           },
         },
       },
@@ -277,7 +287,11 @@ describe("Vercel Jev shortlist transport", () => {
             shortlist: {
               type: "choice",
               choice: "suggestion:two",
-              probabilities: { "suggestion:one": 0.2, "suggestion:two": 0.8 },
+              probabilities: {
+                "suggestion:one": 0.2,
+                "suggestion:two": 0.8,
+                [NONE_RELEVANT_CHOICE_ID]: 0,
+              },
               confidence: 0.4,
             },
           },
@@ -325,6 +339,53 @@ describe("Vercel Jev shortlist transport", () => {
     expect(validateLlmOutput(call, forgedState)).toMatchObject({
       ok: false,
       diagnostics: [{ code: "invalid-output" }],
+    });
+  });
+
+  describe("none-relevant answers", () => {
+    const noneProbabilities = {
+      "suggestion:one": 0.05,
+      "suggestion:two": 0.05,
+      [NONE_RELEVANT_CHOICE_ID]: 0.9,
+    };
+    function noneWith(confidence: number | undefined, minimumConfidence = 0.55) {
+      return createVercelJevShortlisterTransport({
+        apiKey: "test-key",
+        minimumConfidence,
+        fetch: async () =>
+          response({
+            answers: {
+              shortlist: {
+                type: "choice",
+                choice: NONE_RELEVANT_CHOICE_ID,
+                probabilities: noneProbabilities,
+                ...(confidence === undefined ? {} : { confidence }),
+              },
+            },
+          }),
+      });
+    }
+
+    it("turns a confident none-relevant answer into a stored, validated outcome", async () => {
+      const evidence = await executePreparedLlmCall(shortlistCall(), noneWith(0.82));
+      expect(evidence).toMatchObject({
+        status: "validated",
+        rawResponse: { providerOutput: { choice: NONE_RELEVANT_CHOICE_ID, confidence: 0.82 } },
+        output: { kind: "none-relevant", confidence: 0.82 },
+      });
+    });
+
+    it("falls back like any other low-confidence answer", async () => {
+      const evidence = await executePreparedLlmCall(shortlistCall(), noneWith(0.2));
+      expect(evidence).toMatchObject({ status: "validated", output: { kind: "declined" } });
+    });
+
+    it("still requires a confidence for the none-relevant choice", async () => {
+      const evidence = await executePreparedLlmCall(shortlistCall(), noneWith(undefined));
+      expect(evidence).toMatchObject({
+        status: "transport-failed",
+        diagnostics: [{ subcode: "missing-confidence" }],
+      });
     });
   });
 });
@@ -536,7 +597,11 @@ describe("transport failure classification and retries", () => {
 });
 
 describe("Jev confidence extraction", () => {
-  const probabilities = { "suggestion:one": 0.2, "suggestion:two": 0.8 };
+  const probabilities = {
+    "suggestion:one": 0.2,
+    "suggestion:two": 0.8,
+    [NONE_RELEVANT_CHOICE_ID]: 0,
+  };
   function jevWith(answerExtras: object, top: object) {
     return createVercelJevShortlisterTransport({
       apiKey: "test-key",
@@ -583,6 +648,91 @@ describe("Jev confidence extraction", () => {
     expect(evidence).toMatchObject({
       status: "transport-failed",
       diagnostics: [{ code: "transport-failed", subcode: "missing-confidence" }],
+    });
+  });
+});
+
+describe("Vercel structured move-executor transport", () => {
+  function executorCall(): PreparedLlmCall {
+    const node: ProofNode = createProofNodeSchema().parse({
+      id: "node:current",
+      state: {
+        id: "state:current",
+        goals: [
+          {
+            id: "goal:main",
+            sequent: {
+              context: {
+                declarations: ["p"].map((symbol, index) => ({
+                  id: `declaration:${index}`,
+                  symbol,
+                  sort: { kind: "proposition" },
+                  role: "universal-parameter",
+                })),
+                hypotheses: [],
+              },
+              conclusion: { expression: ["Implies", "p", "p"] },
+            },
+          },
+        ],
+        obligations: [],
+      },
+    });
+    const built = buildMoveExecutorContext({
+      id: "llm-call:executor-transport",
+      node,
+      instruction: "assume the antecedent",
+      source: "user-instruction",
+      target: { kind: "goal", id: "goal:main" },
+    });
+    if (!built.ok) throw new Error(built.diagnostics[0].message);
+    const prepared = prepareLlmCall(built.envelope);
+    if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+    return prepared.call;
+  }
+
+  it("sends the executor defaults and the strict plan schema, and its wire plan validates", async () => {
+    const call = executorCall();
+    let requestBody: Record<string, unknown> | undefined;
+    const wirePlan = {
+      result: {
+        kind: "plan",
+        steps: [
+          {
+            kind: "introduce-implication",
+            target: { kind: "goal", id: "goal:main" },
+            hypothesisId: "assume-p",
+          },
+        ],
+        explanation: "Assume the antecedent.",
+      },
+    };
+    const transport = createVercelStructuredOutputTransport({
+      apiKey: "test-key",
+      model: DEFAULT_EXECUTOR_MODEL,
+      reasoningEffort: DEFAULT_EXECUTOR_REASONING_EFFORT,
+      maxOutputTokens: DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return response({
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify(wirePlan) } }],
+        });
+      },
+    });
+    const output = await transport(call);
+    expect(requestBody).toMatchObject({
+      model: "openai/gpt-6-luna",
+      max_completion_tokens: 16_000,
+      reasoning_effort: "high",
+      response_format: {
+        type: "json_schema",
+        json_schema: { strict: true, name: "proof_move_executor_output" },
+      },
+    });
+    expect(output).toEqual(wirePlan);
+    expect(validateLlmOutput(call, output)).toMatchObject({
+      ok: true,
+      output: { kind: "plan", steps: [{ kind: "introduce-implication" }] },
     });
   });
 });

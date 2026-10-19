@@ -172,7 +172,7 @@ export function repositoryFailureStatus(
   if (code === "backtrack-symbols-unavailable") return 422;
   if (MOVE_AUTHORING_INVALID.has(code)) return 422;
   // A later macro step failed to re-match or apply: the request is well-formed, nothing was written.
-  if (code === "macro-step-failed") return 422;
+  if (code === "macro-step-failed" || code === "plan-step-failed") return 422;
   if (REJECTED.has(code)) return 400;
   return 500;
 }

@@ -7,6 +7,7 @@ import { MenuItemLabel } from "./parameter-menu";
 import {
   previewDiff,
   transitionEvidenceOf,
+  type PreviewDiff,
   type PreviewTarget,
   type StatementChange,
 } from "./preview-diff";
@@ -25,12 +26,6 @@ export function PreviewDetails({
   view,
 }: ViewProps & Readonly<{ preview: MovePreview }>) {
   const diff = previewDiff(preview);
-  const isNewObligation = (
-    change: StatementChange,
-  ): change is Extract<StatementChange, { kind: "added" }> =>
-    change.kind === "added" && change.collection === "obligation";
-  const newObligations = diff.changes.filter(isNewObligation);
-  const otherChanges = diff.changes.filter((change) => !isNewObligation(change));
   const chosen = preview.menuSelection === undefined ? [] : chosenItems(preview.menuSelection);
   return (
     <section className={styles.previewPanel} aria-label="Move preview">
@@ -65,6 +60,28 @@ export function PreviewDetails({
           </ul>
         </div>
       ) : null}
+      <StateChangeSections diff={diff} presentation={presentation} view={view} />
+    </section>
+  );
+}
+
+/**
+ * The goals and hypotheses a step changed, the obligations it created and the assumptions it
+ * added, as the preview panel shows them. The move executor's preview card reuses it.
+ */
+export function StateChangeSections({
+  diff,
+  presentation,
+  view,
+}: ViewProps & Readonly<{ diff: PreviewDiff }>) {
+  const isNewObligation = (
+    change: StatementChange,
+  ): change is Extract<StatementChange, { kind: "added" }> =>
+    change.kind === "added" && change.collection === "obligation";
+  const newObligations = diff.changes.filter(isNewObligation);
+  const otherChanges = diff.changes.filter((change) => !isNewObligation(change));
+  return (
+    <>
       <div>
         <strong>State changes</strong>
         {otherChanges.length === 0 ? (
@@ -119,8 +136,13 @@ export function PreviewDetails({
           </ul>
         </div>
       ) : null}
-    </section>
+    </>
   );
+}
+
+/** The goal/obligation delta line, `+1 −1 ~0`, exactly as the preview panel writes it. */
+export function deltaText(delta: MovePreview["delta"]["goals"]): string {
+  return `+${delta.added.length} −${delta.removed.length} ~${delta.updated.length}`;
 }
 
 /** What one macro step changed, in words: counts only, since the final state is shown below. */
@@ -311,8 +333,4 @@ function chosenItems(selection: NonNullable<MovePreview["menuSelection"]>) {
     const item = menu?.items.find(({ id }) => id === itemId);
     return menu === undefined || item === undefined ? [] : [{ label: menu.label, item }];
   });
-}
-
-function deltaText(delta: MovePreview["delta"]["goals"]): string {
-  return `+${delta.added.length} −${delta.removed.length} ~${delta.updated.length}`;
 }

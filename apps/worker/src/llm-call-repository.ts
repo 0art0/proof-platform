@@ -1,9 +1,14 @@
 import {
+  MAX_LIBRARIAN_RESULTS,
+  backgroundProposalSchema,
   llmCallEvidenceSchema,
   llmCallIdSchema,
   preparedLlmCallSchema,
   topicManifestProposalSchema,
   executePreparedLlmCall,
+  type BackgroundProposal,
+  type LibrarianContext,
+  type LibrarianProposal,
   type LlmCallId,
   type LlmTransport,
 } from "@proof/llm";
@@ -66,15 +71,15 @@ export const storedLlmCallSchema = z
   });
 export type StoredLlmCall = z.infer<typeof storedLlmCallSchema>;
 
-const reviewBase = {
+const reviewFields = {
   id: stableStorageIdentifierSchema,
   owner: llmCallOwnerSchema,
   callId: llmCallIdSchema,
   reviewerId: stableStorageIdentifierSchema,
   decidedAt: z.string().datetime({ offset: true }),
-  proposal: topicManifestProposalSchema,
   rationale: z.string().min(1).max(2_000),
 };
+const reviewBase = { ...reviewFields, proposal: topicManifestProposalSchema };
 export const topicProposalDecisionSchema = z.discriminatedUnion("decision", [
   z
     .object({
@@ -87,6 +92,48 @@ export const topicProposalDecisionSchema = z.discriminatedUnion("decision", [
 ]);
 export type TopicProposalDecision = z.infer<typeof topicProposalDecisionSchema>;
 
+/**
+ * Review of a background proposal. Its rows share `llm_topic_decisions` with topic reviews (both
+ * are keyed by owner and decision ID, and reference a stored call); the approved item's ID is kept
+ * in the table's `approved_manifest_id` column, which the record mirrors.
+ */
+const backgroundReviewBase = { ...reviewFields, proposal: backgroundProposalSchema };
+export const backgroundProposalDecisionSchema = z.discriminatedUnion("decision", [
+  z
+    .object({
+      ...backgroundReviewBase,
+      decision: z.literal("approved"),
+      approvedManifestId: stableStorageIdentifierSchema,
+    })
+    .strict(),
+  z.object({ ...backgroundReviewBase, decision: z.literal("rejected") }).strict(),
+]);
+export type BackgroundProposalDecision = z.infer<typeof backgroundProposalDecisionSchema>;
+
+/**
+ * A person's bulk approval of results of a librarian proposal. Its row shares
+ * `llm_topic_decisions` with the other reviews and references the stored call. It names the kept
+ * result IDs and nothing else: the artifacts are always read from the stored call, so a decision
+ * can never carry mathematics the model did not return. A person who keeps nothing records no
+ * decision. The approval's own ID is kept in the table's `approved_manifest_id` column.
+ */
+export const libraryProposalDecisionSchema = z
+  .object({
+    ...reviewFields,
+    decision: z.literal("approved"),
+    approvedManifestId: stableStorageIdentifierSchema,
+    approvedResultIds: z
+      .array(stableStorageIdentifierSchema)
+      .min(1)
+      .max(MAX_LIBRARIAN_RESULTS)
+      .refine((ids) => new Set(ids).size === ids.length, "Approved result IDs must be unique."),
+  })
+  .strict();
+export type LibraryProposalDecision = z.infer<typeof libraryProposalDecisionSchema>;
+/** A review of a proposal that is stored with the exact proposal it reviewed. */
+type ProposalReview = TopicProposalDecision | BackgroundProposalDecision;
+export type ProposalDecision = ProposalReview | LibraryProposalDecision;
+
 export const approvedTopicManifestSchema = z
   .object({
     id: stableStorageIdentifierSchema,
@@ -98,12 +145,21 @@ export const approvedTopicManifestSchema = z
   .strict();
 export type ApprovedTopicManifest = z.infer<typeof approvedTopicManifestSchema>;
 
+/** What an approved background decision makes available: the profile and its constants. */
+export type ApprovedBackground = Readonly<{
+  id: string;
+  owner: LlmCallOwner;
+  sourceCallId: LlmCallId;
+  decisionId: string;
+  proposal: BackgroundProposal;
+}>;
+
 export interface LlmCallStoreTransaction {
   readCallForUpdate(owner: LlmCallOwner, callId: LlmCallId): Promise<unknown | undefined>;
   insertCall(record: StoredLlmCall): Promise<void>;
   completeCall(record: StoredLlmCall): Promise<boolean>;
   readDecisionForUpdate(owner: LlmCallOwner, decisionId: string): Promise<unknown | undefined>;
-  insertDecision(decision: TopicProposalDecision): Promise<void>;
+  insertDecision(decision: ProposalDecision): Promise<void>;
 }
 
 export interface LlmCallStore {
@@ -120,6 +176,8 @@ export type LlmCallRepositoryDiagnosticCode =
   | "call-in-progress-or-uncertain"
   | "call-not-found"
   | "decision-id-conflict"
+  | "decision-not-found"
+  | "decision-not-approved"
   | "proposal-not-reviewable"
   | "storage-failure"
   | "commit-unknown";
@@ -326,16 +384,283 @@ export async function recordTopicProposalDecision(
   store: LlmCallStore,
   input: unknown,
 ): Promise<RecordTopicProposalDecisionResult> {
-  const decision = safeParse(topicProposalDecisionSchema, input);
+  const recorded = await recordProposalDecision(store, input, {
+    schema: topicProposalDecisionSchema,
+    role: "topic-extractor",
+    outputKind: "topic-manifest",
+    label: "topic",
+  });
+  return recorded.status === "recorded"
+    ? decisionResult(recorded.decision, recorded.replayed)
+    : recorded;
+}
+
+export type RecordBackgroundProposalDecisionResult =
+  | Readonly<{
+      status: "recorded";
+      decision: BackgroundProposalDecision;
+      approvedBackground?: ApprovedBackground | undefined;
+      replayed: boolean;
+    }>
+  | RepositoryFailure;
+
+/** Record human review of the exact background proposal; this has no proof-state capability. */
+export async function recordBackgroundProposalDecision(
+  store: LlmCallStore,
+  input: unknown,
+): Promise<RecordBackgroundProposalDecisionResult> {
+  const recorded = await recordProposalDecision(store, input, {
+    schema: backgroundProposalDecisionSchema,
+    role: "background-proposer",
+    outputKind: "background-proposal",
+    label: "background",
+  });
+  if (recorded.status !== "recorded") return recorded;
+  const approvedBackground = approvedBackgroundOf(recorded.decision);
+  return freezeDetached({
+    status: "recorded" as const,
+    decision: recorded.decision,
+    ...(approvedBackground === undefined ? {} : { approvedBackground }),
+    replayed: recorded.replayed,
+  });
+}
+
+export type ReadApprovedBackgroundResult =
+  Readonly<{ status: "found"; approved: ApprovedBackground }> | RepositoryFailure;
+
+/**
+ * Resolve an approved background decision from storage. The constants an approved background
+ * contributes are only ever read here, never taken from a request.
+ */
+export async function readApprovedBackground(
+  store: LlmCallStore,
+  ownerInput: unknown,
+  decisionIdInput: unknown,
+): Promise<ReadApprovedBackgroundResult> {
+  const owner = safeParse(llmCallOwnerSchema, ownerInput);
+  const decisionId = safeParse(stableStorageIdentifierSchema, decisionIdInput);
+  if (owner === undefined || decisionId === undefined) {
+    return failure("rejected", "invalid-request", "The background decision lookup is invalid.");
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const recordInput = await transaction.readDecisionForUpdate(owner, decisionId);
+      if (recordInput === undefined) {
+        return failure(
+          "rejected",
+          "decision-not-found",
+          "The background decision does not exist for this construction.",
+        );
+      }
+      const decision = safeParse(backgroundProposalDecisionSchema, recordInput);
+      if (
+        decision === undefined ||
+        decision.id !== decisionId ||
+        !sameJson(decision.owner, owner)
+      ) {
+        return failure(
+          "rejected",
+          "decision-not-found",
+          "The background decision does not exist for this construction.",
+        );
+      }
+      const approved = approvedBackgroundOf(decision);
+      return approved === undefined
+        ? failure("rejected", "decision-not-approved", "The background decision was rejected.")
+        : { status: "found" as const, approved };
+    });
+  } catch (error: unknown) {
+    return storageFailure(error, "The background decision could not be read.");
+  }
+}
+
+/** The validated proposal of a completed librarian call, with the context it was made from. */
+export type StoredLibraryProposal = Readonly<{
+  callId: LlmCallId;
+  context: Extract<LibrarianContext, { kind: "initial" }>;
+  proposal: LibrarianProposal;
+}>;
+
+/** The library proposal a stored call holds, or undefined when it holds none (yet). */
+export function libraryProposalOf(record: StoredLlmCall): StoredLibraryProposal | undefined {
+  if (
+    record.status !== "completed" ||
+    record.role !== "librarian" ||
+    record.evidence.status !== "validated"
+  ) {
+    return undefined;
+  }
+  const output = record.evidence.output;
+  const envelope = record.preparedCall.envelope;
+  if (
+    output?.kind !== "library-proposal" ||
+    envelope.role !== "librarian" ||
+    envelope.context.kind !== "initial"
+  ) {
+    return undefined;
+  }
+  return freezeDetached({ callId: record.id, context: envelope.context, proposal: output });
+}
+
+export type RecordLibraryDecisionResult =
+  | Readonly<{ status: "recorded"; decision: LibraryProposalDecision; replayed: boolean }>
+  | RepositoryFailure;
+
+/**
+ * Record a person's bulk approval of results of the library proposal of a stored call. A retried
+ * decision with the same ID and content replays; the same ID for another review is a conflict.
+ * That the named results were admitted is the caller's check (it needs the admission gate); the
+ * approval is checked again whenever it is resolved.
+ */
+export async function recordLibraryProposalDecision(
+  store: LlmCallStore,
+  input: unknown,
+): Promise<RecordLibraryDecisionResult> {
+  const decision = safeParse(libraryProposalDecisionSchema, input);
   if (decision === undefined) {
-    return failure("rejected", "invalid-request", "The topic proposal decision is invalid.");
+    return failure("rejected", "invalid-request", "The library decision is invalid.");
   }
   try {
     return await store.transaction(async (transaction) => {
       const existingInput = await transaction.readDecisionForUpdate(decision.owner, decision.id);
-      let existing: TopicProposalDecision | undefined;
+      let existing: LibraryProposalDecision | undefined;
       if (existingInput !== undefined) {
-        existing = safeParse(topicProposalDecisionSchema, existingInput);
+        existing = safeParse(libraryProposalDecisionSchema, existingInput);
+        if (existing === undefined || !sameJson(existing, decision)) {
+          return failure(
+            "rejected",
+            "decision-id-conflict",
+            "The decision ID is already bound to a different review.",
+          );
+        }
+      }
+      const callInput = await transaction.readCallForUpdate(decision.owner, decision.callId);
+      const call =
+        callInput === undefined
+          ? undefined
+          : parseStoredCall(callInput, decision.owner, decision.callId);
+      if (call === undefined || libraryProposalOf(call) === undefined) {
+        return failure(
+          "rejected",
+          "proposal-not-reviewable",
+          "The decision must reference the validated library proposal of this call.",
+        );
+      }
+      if (existing !== undefined) {
+        return { status: "recorded" as const, decision: existing, replayed: true };
+      }
+      await transaction.insertDecision(freezeDetached(decision));
+      return { status: "recorded" as const, decision, replayed: false };
+    });
+  } catch (error: unknown) {
+    return storageFailure(error, "The library decision could not be recorded.");
+  }
+}
+
+export type ReadLibraryDecisionResult =
+  | Readonly<{
+      status: "found";
+      decision: LibraryProposalDecision;
+      proposal: StoredLibraryProposal;
+    }>
+  | RepositoryFailure;
+
+/**
+ * Resolve a library approval from storage: the decision and the proposal of the call it
+ * references. Nothing a request carries takes part, so a client cannot name artifacts.
+ */
+export async function readLibraryProposalDecision(
+  store: LlmCallStore,
+  ownerInput: unknown,
+  decisionIdInput: unknown,
+): Promise<ReadLibraryDecisionResult> {
+  const owner = safeParse(llmCallOwnerSchema, ownerInput);
+  const decisionId = safeParse(stableStorageIdentifierSchema, decisionIdInput);
+  if (owner === undefined || decisionId === undefined) {
+    return failure("rejected", "invalid-request", "The library decision lookup is invalid.");
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const notFound = () =>
+        failure(
+          "rejected",
+          "decision-not-found",
+          "The library decision does not exist for this construction.",
+        );
+      const recordInput = await transaction.readDecisionForUpdate(owner, decisionId);
+      if (recordInput === undefined) return notFound();
+      const decision = safeParse(libraryProposalDecisionSchema, recordInput);
+      if (
+        decision === undefined ||
+        decision.id !== decisionId ||
+        !sameJson(decision.owner, owner)
+      ) {
+        return notFound();
+      }
+      const callInput = await transaction.readCallForUpdate(owner, decision.callId);
+      const call =
+        callInput === undefined ? undefined : parseStoredCall(callInput, owner, decision.callId);
+      const proposal = call === undefined ? undefined : libraryProposalOf(call);
+      return proposal === undefined
+        ? failure(
+            "rejected",
+            "proposal-not-reviewable",
+            "The library decision does not reference a validated library proposal.",
+          )
+        : { status: "found" as const, decision, proposal };
+    });
+  } catch (error: unknown) {
+    return storageFailure(error, "The library decision could not be read.");
+  }
+}
+
+function approvedBackgroundOf(
+  decision: BackgroundProposalDecision,
+): ApprovedBackground | undefined {
+  return decision.decision === "approved"
+    ? freezeDetached({
+        id: decision.approvedManifestId,
+        owner: decision.owner,
+        sourceCallId: decision.callId,
+        decisionId: decision.id,
+        proposal: decision.proposal,
+      })
+    : undefined;
+}
+
+type DecisionSpec<Decision extends ProposalReview> = Readonly<{
+  schema: z.ZodType<Decision>;
+  role: StoredLlmCall["role"];
+  outputKind: "topic-manifest" | "background-proposal";
+  label: string;
+}>;
+
+/**
+ * Record one review of the exact validated proposal of a stored call. A retried decision with the
+ * same ID and content replays; the same ID for another review, or for the other kind of proposal,
+ * is a conflict.
+ */
+async function recordProposalDecision<Decision extends ProposalReview>(
+  store: LlmCallStore,
+  input: unknown,
+  spec: DecisionSpec<Decision>,
+): Promise<
+  Readonly<{ status: "recorded"; decision: Decision; replayed: boolean }> | RepositoryFailure
+> {
+  const decision = safeParse(spec.schema, input);
+  if (decision === undefined) {
+    return failure(
+      "rejected",
+      "invalid-request",
+      `The ${spec.label} proposal decision is invalid.`,
+    );
+  }
+  try {
+    return await store.transaction(async (transaction) => {
+      const existingInput = await transaction.readDecisionForUpdate(decision.owner, decision.id);
+      let existing: Decision | undefined;
+      if (existingInput !== undefined) {
+        existing = safeParse(spec.schema, existingInput);
         if (existing === undefined || !sameJson(existing, decision)) {
           return failure(
             "rejected",
@@ -351,23 +676,25 @@ export async function recordTopicProposalDecision(
           : parseStoredCall(callInput, decision.owner, decision.callId);
       if (
         call?.status !== "completed" ||
-        call.role !== "topic-extractor" ||
+        call.role !== spec.role ||
         call.evidence.status !== "validated" ||
-        call.evidence.output?.kind !== "topic-manifest" ||
+        call.evidence.output?.kind !== spec.outputKind ||
         !sameJson(call.evidence.output, decision.proposal)
       ) {
         return failure(
           "rejected",
           "proposal-not-reviewable",
-          "The decision must reference the exact validated topic proposal for this call.",
+          `The decision must reference the exact validated ${spec.label} proposal for this call.`,
         );
       }
-      if (existing !== undefined) return decisionResult(existing, true);
+      if (existing !== undefined) {
+        return { status: "recorded" as const, decision: existing, replayed: true };
+      }
       await transaction.insertDecision(freezeDetached(decision));
-      return decisionResult(decision, false);
+      return { status: "recorded" as const, decision, replayed: false };
     });
   } catch (error: unknown) {
-    return storageFailure(error, "The topic proposal decision could not be recorded.");
+    return storageFailure(error, `The ${spec.label} proposal decision could not be recorded.`);
   }
 }
 

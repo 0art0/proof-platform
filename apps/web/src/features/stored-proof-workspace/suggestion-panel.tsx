@@ -5,6 +5,8 @@ import Link from "next/link";
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, ProofEdge } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
+import { AiShortlist } from "./ai-shortlist";
+import { TopUpNotice, type TopUpStatus } from "./library-top-up";
 import { NO_MACROS, type MacroInfoMap } from "./macro-info";
 import { layoutSuggestions, type SuggestionLayoutEntry } from "./preview-diff";
 import { suggestionQualifiers } from "./suggestion-qualifiers";
@@ -46,6 +48,8 @@ export type SuggestionPanelActions = Readonly<{
   onInputSummaryExpanded: (set: DisplayedSuggestionSet, suggestionId: string) => void;
 }>;
 
+const FIND_MORE_REASON_ID = "find-more-results-reason";
+
 /** The fragment that links to the panel (the active-selections card points here). */
 export const SUGGESTION_PANEL_ID = "suggestion-panel";
 
@@ -59,6 +63,27 @@ export type SuggestionPanelProps = SuggestionPanelActions &
     authorMovesHref?: string | undefined;
     /** Approved multi-step macros of the session, by move ID. */
     macros?: MacroInfoMap | undefined;
+    /** Where AI ranking may be requested; absent when it is unavailable or read-only. */
+    aiShortlist?: Readonly<{ sessionId: string; nodeId: string }> | undefined;
+    /**
+     * "Describe a move" on the none-relevant notice (architecture §5: it focuses the move
+     * instructions box). The button is shown only when this is provided.
+     */
+    onDescribeMove?: (() => void) | undefined;
+    /**
+     * "Find more results" on the none-relevant notice and on the empty-suggestions state
+     * (architecture §2: a library top-up). The button is shown only when this is provided.
+     */
+    onFindMoreResults?: (() => void) | undefined;
+    /**
+     * Why "Find more results" cannot be used (a read-only session, or the library assistant is
+     * not configured). The buttons are then disabled and the reason is shown beside them.
+     */
+    findMoreDisabledReason?: string | undefined;
+    /** The inline status of a library top-up: working, done, or why it did not happen. */
+    findMoreStatus?: TopUpStatus | undefined;
+    /** Asks for suggestions again once a top-up added results. */
+    onAskAgain?: (() => void) | undefined;
   }>;
 
 /**
@@ -73,8 +98,15 @@ export function SuggestionPanel({
   view,
   authorMovesHref,
   macros = NO_MACROS,
+  aiShortlist,
+  onDescribeMove,
+  onFindMoreResults,
+  findMoreDisabledReason,
+  findMoreStatus,
+  onAskAgain,
   ...actions
 }: SuggestionPanelProps) {
+  const findMoreBusy = findMoreStatus?.kind === "working";
   const displayedSet =
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.suggestionSet
@@ -175,6 +207,9 @@ export function SuggestionPanel({
       <p className={styles.status} data-state={suggestions.kind} role="status">
         {suggestionStatusText(suggestions)}
       </p>
+      {findMoreStatus === undefined ? null : (
+        <TopUpNotice status={findMoreStatus} onAskAgain={onAskAgain} />
+      )}
       {suggestions.kind === "empty" ? (
         <p className={styles.emptyGuide}>
           Try selecting a different part of the statement.
@@ -184,7 +219,44 @@ export function SuggestionPanel({
               <Link href={authorMovesHref}>Create a reusable move</Link>
             </>
           )}
+          {onFindMoreResults === undefined ? null : (
+            <>
+              {" "}
+              <button
+                type="button"
+                className={styles.emptyGuideButton}
+                disabled={findMoreBusy || findMoreDisabledReason !== undefined}
+                aria-describedby={
+                  findMoreDisabledReason === undefined ? undefined : FIND_MORE_REASON_ID
+                }
+                onClick={onFindMoreResults}
+              >
+                Find more results
+              </button>
+              {findMoreDisabledReason === undefined ? null : (
+                <span id={FIND_MORE_REASON_ID} className={styles.findMoreReason}>
+                  {" "}
+                  {findMoreDisabledReason}
+                </span>
+              )}
+            </>
+          )}
         </p>
+      ) : null}
+      {suggestions.kind === "ready" &&
+      aiShortlist !== undefined &&
+      suggestions.suggestionSet.suggestions.length > 1 ? (
+        <AiShortlist
+          key={suggestions.suggestionSet.id}
+          sessionId={aiShortlist.sessionId}
+          nodeId={aiShortlist.nodeId}
+          suggestionSet={suggestions.suggestionSet}
+          disabled={mutationPending}
+          onDescribeMove={onDescribeMove}
+          onFindMoreResults={onFindMoreResults}
+          findMoreBusy={findMoreBusy}
+          findMoreDisabledReason={findMoreDisabledReason}
+        />
       ) : null}
       {suggestions.kind === "ready" ? (
         <ol className={styles.suggestions} data-testid="suggestion-list">

@@ -1,12 +1,24 @@
 import {
   createVercelJevShortlisterTransport,
   createVercelStructuredOutputTransport,
+  DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
+  DEFAULT_BACKGROUND_PROPOSER_MODEL,
+  DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
+  DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_EXECUTOR_MODEL,
+  DEFAULT_EXECUTOR_REASONING_EFFORT,
   DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   DEFAULT_FORMALIZER_MODEL,
   DEFAULT_FORMALIZER_REASONING_EFFORT,
+  DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS,
+  DEFAULT_LIBRARIAN_MODEL,
+  DEFAULT_LIBRARIAN_REASONING_EFFORT,
   DEFAULT_LLM_TIMEOUT_MS,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   DEFAULT_SHORTLISTER_MODEL,
+  DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_TOPIC_EXTRACTOR_MODEL,
+  DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
   configuredVercelApiKey,
   type LlmTransport,
   type SupportedLlmRole,
@@ -35,7 +47,52 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS,
     DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
   );
-  const reasoningEffort = parseReasoningEffort(env.PROOF_AI_FORMALIZER_REASONING_EFFORT);
+  const reasoningEffort = parseReasoningEffort(
+    "PROOF_AI_FORMALIZER_REASONING_EFFORT",
+    env.PROOF_AI_FORMALIZER_REASONING_EFFORT,
+    DEFAULT_FORMALIZER_REASONING_EFFORT,
+  );
+  const topicModel = nonEmpty(env.PROOF_AI_TOPIC_MODEL) ?? DEFAULT_TOPIC_EXTRACTOR_MODEL;
+  const topicTokens = positiveInteger(
+    env.PROOF_AI_TOPIC_MAX_OUTPUT_TOKENS,
+    DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
+  );
+  const topicReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_TOPIC_REASONING_EFFORT",
+    env.PROOF_AI_TOPIC_REASONING_EFFORT,
+    DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
+  );
+  const backgroundModel =
+    nonEmpty(env.PROOF_AI_BACKGROUND_MODEL) ?? DEFAULT_BACKGROUND_PROPOSER_MODEL;
+  const backgroundTokens = positiveInteger(
+    env.PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS,
+    DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
+  );
+  const backgroundReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_BACKGROUND_REASONING_EFFORT",
+    env.PROOF_AI_BACKGROUND_REASONING_EFFORT,
+    DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
+  );
+  const executorModel = nonEmpty(env.PROOF_AI_EXECUTOR_MODEL) ?? DEFAULT_EXECUTOR_MODEL;
+  const executorTokens = positiveInteger(
+    env.PROOF_AI_EXECUTOR_MAX_OUTPUT_TOKENS,
+    DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
+  );
+  const executorReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_EXECUTOR_REASONING_EFFORT",
+    env.PROOF_AI_EXECUTOR_REASONING_EFFORT,
+    DEFAULT_EXECUTOR_REASONING_EFFORT,
+  );
+  const librarianModel = nonEmpty(env.PROOF_AI_LIBRARIAN_MODEL) ?? DEFAULT_LIBRARIAN_MODEL;
+  const librarianTokens = positiveInteger(
+    env.PROOF_AI_LIBRARIAN_MAX_OUTPUT_TOKENS,
+    DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS,
+  );
+  const librarianReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_LIBRARIAN_REASONING_EFFORT",
+    env.PROOF_AI_LIBRARIAN_REASONING_EFFORT,
+    DEFAULT_LIBRARIAN_REASONING_EFFORT,
+  );
   const shortlisterModel = nonEmpty(env.PROOF_AI_SHORTLISTER_MODEL) ?? DEFAULT_SHORTLISTER_MODEL;
   const minimumConfidence = boundedNumber(
     env.PROOF_AI_SHORTLISTER_MIN_CONFIDENCE,
@@ -43,6 +100,54 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
   );
 
   return Object.freeze({
+    "topic-extractor": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: topicModel,
+        reasoningEffort: topicReasoningEffort,
+        maxOutputTokens: topicTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: topicModel,
+        promptVersion: "topic-extractor-v1",
+        maxOutputTokens: topicTokens,
+        reasoningEffort: topicReasoningEffort,
+      }),
+    },
+    "background-proposer": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: backgroundModel,
+        reasoningEffort: backgroundReasoningEffort,
+        maxOutputTokens: backgroundTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: backgroundModel,
+        promptVersion: "background-proposer-v2",
+        maxOutputTokens: backgroundTokens,
+        reasoningEffort: backgroundReasoningEffort,
+      }),
+    },
+    librarian: {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: librarianModel,
+        reasoningEffort: librarianReasoningEffort,
+        maxOutputTokens: librarianTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: librarianModel,
+        promptVersion: "librarian-v2",
+        maxOutputTokens: librarianTokens,
+        reasoningEffort: librarianReasoningEffort,
+      }),
+    },
     "proof-state-formalizer": {
       transport: createVercelStructuredOutputTransport({
         apiKey: key.apiKey,
@@ -54,9 +159,25 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: formalizerModel,
-        promptVersion: "proof-state-formalizer-v1",
+        promptVersion: "proof-state-formalizer-v2",
         maxOutputTokens: formalizerTokens,
         reasoningEffort,
+      }),
+    },
+    "move-executor": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: executorModel,
+        reasoningEffort: executorReasoningEffort,
+        maxOutputTokens: executorTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: executorModel,
+        promptVersion: "move-executor-v1",
+        maxOutputTokens: executorTokens,
+        reasoningEffort: executorReasoningEffort,
       }),
     },
     "move-shortlister": {
@@ -69,7 +190,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway-evaluation",
         model: shortlisterModel,
-        promptVersion: "move-shortlister-jev-v1",
+        promptVersion: "move-shortlister-jev-v2",
         minimumConfidence,
       }),
     },
@@ -108,10 +229,16 @@ function boundedNumber(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
-function parseReasoningEffort(value: string | undefined): "low" | "medium" | "high" | "xhigh" {
-  if (value === undefined || value.trim() === "") return DEFAULT_FORMALIZER_REASONING_EFFORT;
+type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+function parseReasoningEffort(
+  name: string,
+  value: string | undefined,
+  fallback: ReasoningEffort,
+): ReasoningEffort {
+  if (value === undefined || value.trim() === "") return fallback;
   if (value === "low" || value === "medium" || value === "high" || value === "xhigh") {
     return value;
   }
-  throw new Error("PROOF_AI_FORMALIZER_REASONING_EFFORT must be low, medium, high, or xhigh.");
+  throw new Error(`${name} must be low, medium, high, or xhigh.`);
 }

@@ -115,6 +115,21 @@ test("an empty check lists every missing required field", async ({ page }) => {
   await expect(alert).toContainText("Goal 1");
 });
 
+test("optional AI assistance is visible, explains that it is not configured, and sends nothing", async ({
+  page,
+}) => {
+  await page.goto("/problems/new");
+  const ai = page.getByRole("region", { name: "AI assistance" });
+  await expect(ai).toContainText("nothing changes until you accept them");
+  await expect(ai).toContainText("not configured on this proof service");
+  await expect(ai.getByRole("button", { name: "Propose background" })).toBeDisabled();
+  await expect(ai.getByRole("button", { name: "Draft the setup" })).toBeDisabled();
+  // The workers of the browser suite have no provider, so entering the statement cannot enable it.
+  await page.getByLabel("Problem statement").fill("Show that p implies p.");
+  await expect(ai.getByRole("button", { name: "Propose background" })).toBeDisabled();
+  await expect(ai.getByText("Not configured.").first()).toBeVisible();
+});
+
 test("an unknown proof shows a page with a way back", async ({ page }) => {
   await page.goto("/sessions/session%3Adoes-not-exist");
   await expect(page.getByRole("heading", { name: "Proof not found" })).toBeVisible();

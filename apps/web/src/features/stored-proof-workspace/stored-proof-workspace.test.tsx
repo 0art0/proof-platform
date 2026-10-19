@@ -1035,3 +1035,626 @@ describe("StoredProofWorkspace", () => {
     );
   });
 });
+
+describe("StoredProofWorkspace AI ranking", () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => window.localStorage.clear());
+
+  function twoSuggestions(id: string): DisplayedSuggestionSet {
+    const set = suggestionSet(id, "First idea", "result:first");
+    const second = {
+      ...set.suggestions[0],
+      id: "suggestion:second",
+      artifactId: "result:second",
+      patternId: "pattern:second",
+      name: "Second idea",
+      selectionMatches: [{ selectionId: "selection:primary", patternId: "pattern:second" }],
+    };
+    return displayedSuggestionSetSchema.parse({
+      ...set,
+      suggestions: [set.suggestions[0], second],
+    });
+  }
+
+  function aiFetch(set: DisplayedSuggestionSet, shortlistAnswer: () => Response) {
+    const shortlistBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = mockWithHistory(async (input, init) => {
+      if (String(input).endsWith("/ai-shortlist")) {
+        shortlistBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return shortlistAnswer();
+      }
+      return jsonResponse({
+        ok: true,
+        data: { suggestionSet: set, replayed: false, transitionClasses: [] },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return shortlistBodies;
+  }
+
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("ranks a displayed list automatically once, with the automatic trigger", async () => {
+    const set = twoSuggestions("suggestion-set:auto");
+    const bodies = aiFetch(set, () =>
+      jsonResponse({
+        ok: true,
+        data: {
+          status: "shortlisted",
+          provenance: "minimal-context-llm",
+          suggestionSetId: set.id,
+          nodeId: node.id,
+          choices: [{ suggestionId: "suggestion:second", rationale: "Fits best." }],
+          fallbackCandidateIds: [],
+          diagnostics: [],
+        },
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+
+    const picks = await screen.findByRole("list", { name: "AI picks" }, { timeout: 4_000 });
+    expect(picks).toHaveTextContent("Second idea — Fits best.");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
+      trigger: "automatic",
+      expectedCurrentNodeId: node.id,
+      suggestionSetId: set.id,
+      candidateIds: ["suggestion:result:first", "suggestion:second"],
+    });
+  });
+
+  it("falls back silently to the list on a rate limit and leaves the next-step buttons unwired", async () => {
+    const set = twoSuggestions("suggestion-set:limited");
+    const bodies = aiFetch(set, () =>
+      jsonResponse({ ok: false, error: { code: "ai-rate-limited", message: "Retry later." } }, 429),
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await screen.findByTestId("suggestion-list");
+    await waitFor(() => expect(bodies).toHaveLength(1), { timeout: 4_000 });
+    await wait(50);
+    expect(screen.queryByText(/No AI ranking:/)).toBeNull();
+    expect(screen.getByTestId("suggestion-list").children).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Describe a move" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find more results" })).toBeNull();
+  });
+
+  it("makes no AI request, and shows no AI control, when the shortlister is not configured", async () => {
+    const set = twoSuggestions("suggestion-set:off");
+    const bodies = aiFetch(set, () => jsonResponse({ ok: false }, 500));
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await screen.findByTestId("suggestion-list");
+    await wait(900);
+    expect(bodies).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: "AI ranking" })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("makes no AI request for a read-only session", async () => {
+    const set = twoSuggestions("suggestion-set:read-only");
+    const bodies = aiFetch(set, () => jsonResponse({ ok: false }, 500));
+    render(
+      <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiShortlist />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    await screen.findByTestId("suggestion-list");
+    await wait(900);
+    expect(bodies).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: "AI ranking" })).toBeNull();
+  });
+});
+
+describe("StoredProofWorkspace move instructions", () => {
+  const afterNode = createProofNodeSchema().parse({
+    id: "node:after-instruction",
+    state: { id: "state:after-instruction", goals: [], obligations: [] },
+  });
+
+  const previewAnswer = {
+    ok: true,
+    data: {
+      status: "previewed",
+      provenance: { kind: "user-proposal", role: "move-executor" },
+      callId: "llm-call:execute-00000000-0000-4000-8000-000000000001",
+      replayed: false,
+      nodeId: node.id,
+      explanation: "Close the goal.",
+      transitionClass: "equivalence",
+      evidence: "structural",
+      steps: [
+        {
+          index: 1,
+          operation: { kind: "close-true" },
+          transitionClass: "equivalence",
+          evidence: "structural",
+        },
+      ],
+      preview: {
+        transitionClass: "equivalence",
+        evidence: "structural",
+        beforeState: node.state,
+        afterState: afterNode.state,
+        delta: {
+          goals: { added: [], removed: ["goal:test"], updated: [] },
+          obligations: { added: [], removed: [], updated: [] },
+        },
+      },
+      diagnostics: [],
+    },
+  };
+
+  /** Two displayed suggestions, so the shortlister has something to rank. */
+  function twoMoves(id: string): DisplayedSuggestionSet {
+    const set = suggestionSet(id, "First idea", "result:first");
+    const first = set.suggestions[0]!;
+    return displayedSuggestionSetSchema.parse({
+      ...set,
+      suggestions: [
+        first,
+        {
+          ...first,
+          id: "suggestion:second",
+          artifactId: "result:second",
+          patternId: "pattern:second",
+          name: "Second idea",
+          selectionMatches: [{ selectionId: "selection:primary", patternId: "pattern:second" }],
+        },
+      ],
+    });
+  }
+
+  function instructionFetch(onRequest: (url: string, body: unknown) => Response | undefined) {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    let moved = false;
+    const fetchMock = mockWithHistory(async (input, init) => {
+      const url = String(input);
+      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      calls.push({ url, body });
+      const answer = onRequest(url, body);
+      if (answer !== undefined) {
+        moved = moved || url.endsWith("/ai-execute/apply");
+        return answer;
+      }
+      if (url.endsWith("/api/proof-sessions/session%3Atest")) {
+        const current = moved ? afterNode : node;
+        return jsonResponse({
+          ok: true,
+          data: { session: { ...session, currentNodeId: current.id }, node: current },
+        });
+      }
+      return jsonResponse({ ok: false, error: { code: "unexpected", message: url } }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { calls, fetchMock };
+  }
+
+  it("marks a step a model proposed in the history, with where it came from", async () => {
+    const edge = {
+      id: "edge:ai-1",
+      commandId: "command:ai-1",
+      parentNodeId: node.id,
+      childNodeId: afterNode.id,
+      operation: {
+        kind: "close-true",
+        expectedStateId: node.state.id,
+        resultStateId: afterNode.state.id,
+        target: { kind: "goal", id: "goal:test" },
+      },
+      transitionClass: "equivalence",
+      proposal: {
+        source: "user-proposal",
+        role: "move-executor",
+        callId: "llm-call:execute-1",
+        stepIndex: 1,
+        stepCount: 2,
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) =>
+        String(input).endsWith("/history")
+          ? jsonResponse({
+              ok: true,
+              data: {
+                session,
+                nodes: [node, afterNode],
+                edges: [{ edge, name: "close-true" }],
+              },
+            })
+          : jsonResponse({ ok: true, data: { records: [] } }),
+      ),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    expect(await screen.findByText(/AI step 1 of 2 from your description/)).toBeVisible();
+  });
+
+  it("shows the box beside the proof, disabled with a reason when the model is not configured", () => {
+    render(<StoredProofWorkspace session={session} node={node} />);
+    const panel = screen.getByRole("region", { name: "Move instructions" });
+    expect(within(panel).getByRole("textbox", { name: "Describe a step" })).toBeDisabled();
+    const preview = within(panel).getByRole("button", { name: "Preview" });
+    expect(preview).toBeDisabled();
+    expect(preview).toHaveAccessibleDescription(/no AI provider is configured/);
+  });
+
+  it("is disabled with the read-only reason in an imported session", () => {
+    render(
+      <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiExecutor />,
+    );
+    const panel = screen.getByRole("region", { name: "Move instructions" });
+    expect(within(panel).getByRole("button", { name: "Preview" })).toHaveAccessibleDescription(
+      /read-only/,
+    );
+  });
+
+  it("previews a described step for the selection, applies it, and moves to the new proof state", async () => {
+    const { calls, fetchMock } = instructionFetch((url) =>
+      url.endsWith("/ai-execute")
+        ? jsonResponse(previewAnswer)
+        : url.endsWith("/ai-execute/apply")
+          ? jsonResponse(
+              {
+                ok: true,
+                data: {
+                  status: "applied",
+                  callId: previewAnswer.data.callId,
+                  replayed: false,
+                  nodeId: afterNode.id,
+                  transitionClass: "equivalence",
+                  steps: [{ index: 1 }],
+                },
+              },
+              201,
+            )
+          : undefined,
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiExecutor />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const panel = screen.getByRole("region", { name: "Move instructions" });
+    fireEvent.change(within(panel).getByRole("textbox", { name: "Describe a step" }), {
+      target: { value: "close it" },
+    });
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "Preview" }));
+    });
+
+    const previewCall = calls.find(({ url }) => url.endsWith("/ai-execute"));
+    expect(previewCall?.body).toMatchObject({
+      expectedCurrentNodeId: node.id,
+      instruction: "close it",
+      source: "user-instruction",
+      target: { kind: "goal", id: "goal:test" },
+      selections: [{ kind: "exact", path: [0] }],
+    });
+    expect(screen.getByRole("region", { name: "Proposed steps" })).toBeVisible();
+    // Nothing is applied by a preview.
+    expect(calls.some(({ url }) => url.endsWith("/ai-execute/apply"))).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    });
+    const applyCall = calls.find(({ url }) => url.endsWith("/ai-execute/apply"));
+    expect(applyCall?.body).toEqual({
+      callId: previewAnswer.data.callId,
+      expectedCurrentNodeId: node.id,
+    });
+    expect(await screen.findByText(/Applied 1 step from your description/)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Proposed steps" })).toBeNull();
+    // The history is read again for the new current node.
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/history")).length,
+    ).toBeGreaterThan(1);
+  });
+
+  it("wires 'Describe a move' on the none-relevant notice to the description box", async () => {
+    const twoCandidates = twoMoves("suggestion-set:none-relevant");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(async (input) =>
+        String(input).endsWith("/ai-shortlist")
+          ? jsonResponse({
+              ok: true,
+              data: {
+                status: "none-relevant",
+                suggestionSetId: twoCandidates.id,
+                reason: "Nothing fits.",
+              },
+            })
+          : jsonResponse({
+              ok: true,
+              data: { suggestionSet: twoCandidates, replayed: false, transitionClasses: [] },
+            }),
+      ),
+    );
+    window.localStorage.clear();
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist aiExecutor />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask AI to rank these" }));
+    const describe = await screen.findByRole("button", { name: "Describe a move" });
+    fireEvent.click(describe);
+    expect(screen.getByRole("textbox", { name: "Describe a step" })).toHaveFocus();
+    // Without a configured librarian the button is there, disabled, and says why.
+    const findMore = screen.getByRole("button", { name: "Find more results" });
+    expect(findMore).toBeDisabled();
+    expect(findMore).toHaveAccessibleDescription(/library assistant is not set up/);
+  });
+
+  it("offers 'Describe a move' only when the box can take a description", async () => {
+    const twoCandidates = twoMoves("suggestion-set:none-relevant-off");
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(async (input) =>
+        String(input).endsWith("/ai-shortlist")
+          ? jsonResponse({
+              ok: true,
+              data: {
+                status: "none-relevant",
+                suggestionSetId: twoCandidates.id,
+                reason: "Nothing fits.",
+              },
+            })
+          : jsonResponse({
+              ok: true,
+              data: { suggestionSet: twoCandidates, replayed: false, transitionClasses: [] },
+            }),
+      ),
+    );
+    window.localStorage.clear();
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask AI to rank these" }));
+    await screen.findByText(/None of these suggestions look relevant/);
+    expect(screen.queryByRole("button", { name: "Describe a move" })).toBeNull();
+  });
+});
+
+describe("StoredProofWorkspace library top-ups", () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => window.localStorage.clear());
+
+  const emptySet = (id: string) =>
+    displayedSuggestionSetSchema.parse({
+      ...suggestionSet(id, "Unused", "result:unused"),
+      suggestions: [],
+    });
+
+  function twoCandidates(id: string): DisplayedSuggestionSet {
+    const set = suggestionSet(id, "First idea", "result:first");
+    const first = set.suggestions[0]!;
+    return displayedSuggestionSetSchema.parse({
+      ...set,
+      suggestions: [
+        first,
+        {
+          ...first,
+          id: "suggestion:second",
+          artifactId: "result:second",
+          patternId: "pattern:second",
+          name: "Second idea",
+          selectionMatches: [{ selectionId: "selection:primary", patternId: "pattern:second" }],
+        },
+      ],
+    });
+  }
+
+  const TOPPED_UP = {
+    ok: true,
+    data: {
+      status: "topped-up",
+      requestKind: "no-relevant-results",
+      addedCount: 2,
+      added: [
+        { id: "result:one", name: "One" },
+        { id: "result:two", name: "Two" },
+      ],
+      rejected: [],
+    },
+  };
+  const ACTIVATION = {
+    symbol: "Gcd",
+    edgeId: "edge:1",
+    nodeId: "node:1",
+    resultId: "result:library-gcd",
+    sequence: 1,
+    topUp: null,
+  };
+
+  type TopUpCall = { url: string; body: Record<string, unknown> | undefined };
+  function topUpFetch(options: {
+    sets: () => DisplayedSuggestionSet;
+    topUp?: () => Response | Promise<Response>;
+    activated?: readonly unknown[];
+    shortlist?: Response;
+  }) {
+    const calls: TopUpCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(async (input, init) => {
+        const url = String(input);
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        calls.push({ url, body });
+        if (url.endsWith("/library/constants")) {
+          return jsonResponse({
+            ok: true,
+            data: {
+              sessionId: session.id,
+              readOnly: false,
+              active: [],
+              dormant: [],
+              activated: options.activated ?? [],
+            },
+          });
+        }
+        if (url.endsWith("/ai-library-top-up")) {
+          return options.topUp?.() ?? jsonResponse(TOPPED_UP);
+        }
+        if (url.endsWith("/ai-shortlist") && options.shortlist !== undefined) {
+          return options.shortlist;
+        }
+        return jsonResponse({
+          ok: true,
+          data: { suggestionSet: options.sets(), replayed: false, transitionClasses: [] },
+        });
+      }),
+    );
+    return calls;
+  }
+  const topUps = (calls: readonly TopUpCall[]) =>
+    calls.filter(({ url }) => url.endsWith("/ai-library-top-up"));
+  const suggestionRequests = (calls: readonly TopUpCall[]) =>
+    calls.filter(({ url }) => url.endsWith("/suggestion-sets"));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+  it("finds more results from the empty suggestions state with the current selection", async () => {
+    let release: (response: Response) => void = () => undefined;
+    const calls = topUpFetch({
+      sets: () => emptySet("suggestion-set:empty"),
+      topUp: () => new Promise<Response>((resolve) => (release = resolve)),
+    });
+    render(<StoredProofWorkspace session={session} node={node} aiLibrarian />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const find = await screen.findByRole("button", { name: "Find more results" });
+    expect(find).toBeEnabled();
+    fireEvent.click(find);
+
+    expect(await screen.findByText("Looking for more results…")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Find more results" })).toBeDisabled();
+    expect(topUps(calls)).toHaveLength(1);
+    expect(topUps(calls)[0]?.body).toEqual({
+      id: expect.stringMatching(/^llm-call:find-more-/),
+      kind: "no-relevant-results",
+      expectedCurrentNodeId: node.id,
+      selections: [{ kind: "exact", anchor: anchor(), path: [0] }],
+    });
+
+    release(jsonResponse(TOPPED_UP));
+    expect(
+      await screen.findByText(
+        "Added 2 results to the library. Ask for suggestions again to use them.",
+      ),
+    ).toBeVisible();
+
+    // Asking again requests suggestions for the same selection, now from the enlarged library.
+    const before = suggestionRequests(calls).length;
+    fireEvent.click(screen.getByRole("button", { name: "Ask for suggestions again" }));
+    await waitFor(() => expect(suggestionRequests(calls)).toHaveLength(before + 1));
+  });
+
+  it("finds more results from the shortlister's none-relevant notice", async () => {
+    const set = twoCandidates("suggestion-set:none-relevant-more");
+    const calls = topUpFetch({
+      sets: () => set,
+      shortlist: jsonResponse({
+        ok: true,
+        data: { status: "none-relevant", suggestionSetId: set.id, reason: "Nothing fits." },
+      }),
+    });
+    render(<StoredProofWorkspace session={session} node={node} aiShortlist aiLibrarian />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask AI to rank these" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Find more results" }));
+    expect(await screen.findByText(/Added 2 results to the library/)).toBeVisible();
+    expect(topUps(calls)[0]?.body).toMatchObject({ kind: "no-relevant-results" });
+  });
+
+  it("explains why the button is disabled, and sends nothing, without a librarian or when read-only", async () => {
+    const calls = topUpFetch({ sets: () => emptySet("suggestion-set:disabled") });
+    const unconfigured = render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const find = await screen.findByRole("button", { name: "Find more results" });
+    expect(find).toBeDisabled();
+    expect(find).toHaveAccessibleDescription(/library assistant is not set up/);
+    fireEvent.click(find);
+    unconfigured.unmount();
+
+    render(
+      <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiLibrarian />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const readOnly = await screen.findByRole("button", { name: "Find more results" });
+    expect(readOnly).toBeDisabled();
+    expect(readOnly).toHaveAccessibleDescription(/read-only/);
+    await settle();
+    expect(topUps(calls)).toHaveLength(0);
+    expect(calls.some(({ url }) => url.endsWith("/library/constants"))).toBe(false);
+  });
+
+  it("reports a rate limit and a refusal in place, and lets the user try again", async () => {
+    let attempt = 0;
+    const calls = topUpFetch({
+      sets: () => emptySet("suggestion-set:retry"),
+      topUp: () => {
+        attempt += 1;
+        return attempt === 1
+          ? jsonResponse({ ok: false, error: { code: "ai-rate-limited", message: "Later." } }, 429)
+          : jsonResponse({
+              ok: true,
+              data: { status: "declined", result: { reason: "The library already covers this." } },
+            });
+      },
+    });
+    render(<StoredProofWorkspace session={session} node={node} aiLibrarian />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Find more results" }));
+    expect(
+      await screen.findByText("Too many AI requests right now. Wait a minute and try again."),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Find more results" }));
+    expect(
+      await screen.findByText("No new results were added: the library already covers this."),
+    ).toBeVisible();
+    expect(topUps(calls)).toHaveLength(2);
+    // The two requests are separate recorded calls.
+    expect(topUps(calls)[0]?.body?.["id"]).not.toBe(topUps(calls)[1]?.body?.["id"]);
+  });
+
+  it("asks once for a newly activated constant, automatically, and says nothing about a failure", async () => {
+    const calls = topUpFetch({
+      sets: () => emptySet("suggestion-set:auto-top-up"),
+      activated: [
+        ACTIVATION,
+        { ...ACTIVATION, symbol: "Lcm", topUp: { callId: "llm-call:earlier" } },
+      ],
+      topUp: () =>
+        jsonResponse({ ok: false, error: { code: "ai-rate-limited", message: "Later." } }, 429),
+    });
+    render(<StoredProofWorkspace session={session} node={node} aiLibrarian />);
+    await waitFor(() => expect(topUps(calls)).toHaveLength(1));
+    expect(topUps(calls)[0]?.body).toMatchObject({ kind: "new-constants", constants: ["Gcd"] });
+    await settle();
+    // The failure is silent: no notice, and the page is otherwise as it was.
+    expect(screen.queryByTestId("library-top-up-status")).toBeNull();
+    expect(screen.queryByText(/Too many AI requests/)).toBeNull();
+  });
+
+  it("notes briefly what an automatic top-up added", async () => {
+    topUpFetch({
+      sets: () => emptySet("suggestion-set:auto-note"),
+      activated: [ACTIVATION],
+      topUp: () =>
+        jsonResponse({ ok: true, data: { ...TOPPED_UP.data, requestKind: "new-constants" } }),
+    });
+    render(<StoredProofWorkspace session={session} node={node} aiLibrarian />);
+    expect(
+      await screen.findByText("The library now has 2 results about Gcd, added automatically."),
+    ).toBeVisible();
+  });
+
+  it("makes no automatic request when the librarian is not configured or the session is read-only", async () => {
+    const calls = topUpFetch({
+      sets: () => emptySet("suggestion-set:no-auto"),
+      activated: [ACTIVATION],
+    });
+    const plain = render(<StoredProofWorkspace session={session} node={node} />);
+    await settle();
+    plain.unmount();
+    render(
+      <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiLibrarian />,
+    );
+    await settle();
+    expect(topUps(calls)).toHaveLength(0);
+    expect(calls.some(({ url }) => url.endsWith("/library/constants"))).toBe(false);
+  });
+});

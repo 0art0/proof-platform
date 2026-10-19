@@ -50,14 +50,17 @@ import { definitionReferencesSchema, type DefinitionReference } from "./interact
 
 export {
   BUILTIN_BINDER_SPECIFICATIONS,
+  RESERVED_BUILTIN_SYMBOLS,
   declarationSchema,
   freeSymbolNames,
   operatorDeclarationSchema,
   plainMathJsonSchema,
   retrievalWildcardSchema,
+  sortSchema,
   stableIdentifierSchema,
+  substituteMathJson,
 } from "@proof/mathjson-model";
-export type { OperatorDeclaration, PlainMathJson } from "@proof/mathjson-model";
+export type { OperatorDeclaration, PlainMathJson, Sort } from "@proof/mathjson-model";
 export * from "./session-metadata";
 export * from "./discovery-tree";
 export * from "./move-deletion";
@@ -506,6 +509,32 @@ export const macroLinkSchema = z
   });
 export type MacroLink = z.infer<typeof macroLinkSchema>;
 
+/**
+ * Who stands behind the mathematical content of a step the move executor proposed. A step the
+ * user asked for in their own words is a `user-proposal`; a step taken from a technique another
+ * service suggested is `minimal-context-llm`. In both cases the user saw the whole previewed plan
+ * and confirmed it before any step was committed. The link only labels the commands of one
+ * confirmed plan: each is an ordinary raw kernel operation validated against its own parent.
+ * `callId` is the stored LLM call that proposed the plan, in the session's evidence.
+ */
+export const PROPOSAL_SOURCES = ["user-proposal", "minimal-context-llm"] as const;
+export const proposalLinkSchema = z
+  .object({
+    source: z.enum(PROPOSAL_SOURCES),
+    role: z.literal("move-executor"),
+    callId: stableIdentifierSchema,
+    /** 1-based position of this step in the confirmed plan. */
+    stepIndex: z.number().int().min(1).max(16),
+    stepCount: z.number().int().min(1).max(16),
+  })
+  .strict()
+  .superRefine((link, context) => {
+    if (link.stepIndex > link.stepCount) {
+      addLinkIssue(context, "A proposal step index cannot exceed the step count.");
+    }
+  });
+export type ProposalLink = z.infer<typeof proposalLinkSchema>;
+
 export const applyKernelCommandSchema = z
   .object({
     commandId: commandIdSchema,
@@ -524,9 +553,25 @@ export const applyKernelCommandSchema = z
     menuSelection: moveMenuSelectionSchema.optional(),
     /** Present only on a step of a macro application; such a step carries no suggestion evidence. */
     macro: macroLinkSchema.optional(),
+    /** Present only on a step of a confirmed move-executor plan (see `proposalLinkSchema`). */
+    proposal: proposalLinkSchema.optional(),
   })
   .strict()
   .superRefine((command, context) => {
+    if (
+      command.proposal !== undefined &&
+      (command.macro !== undefined ||
+        command.moveId !== undefined ||
+        command.suggestionSetId !== undefined ||
+        command.chosenSuggestionId !== undefined ||
+        command.previewId !== undefined ||
+        command.menuSelection !== undefined)
+    ) {
+      addLinkIssue(
+        context,
+        "A proposal step is a raw kernel operation: it carries no move, macro or suggestion evidence.",
+      );
+    }
     if (
       command.macro !== undefined &&
       (command.suggestionSetId !== undefined ||
@@ -682,9 +727,16 @@ export const proofEdgeSchema = z
     menuSelection: moveMenuSelectionSchema.optional(),
     /** Present only on a step of a macro application (see `macroLinkSchema`). */
     macro: macroLinkSchema.optional(),
+    /** Present only on a step of a confirmed move-executor plan (see `proposalLinkSchema`). */
+    proposal: proposalLinkSchema.optional(),
   })
   .strict()
-  .superRefine((edge, context) => addSuggestionReferenceIssues(edge, context));
+  .superRefine((edge, context) => {
+    addSuggestionReferenceIssues(edge, context);
+    if (edge.proposal !== undefined && (edge.macro !== undefined || edge.moveId !== undefined)) {
+      addLinkIssue(context, "A proposal step is a raw kernel operation, not a move or macro step.");
+    }
+  });
 export type ProofEdge = z.infer<typeof proofEdgeSchema>;
 
 export function createProofEdgeSchema(
@@ -1471,6 +1523,7 @@ function prepareProofCommandInternal(
     evidence: transition.evidence,
     ...(command.menuSelection === undefined ? {} : { menuSelection: command.menuSelection }),
     ...(command.macro === undefined ? {} : { macro: command.macro }),
+    ...(command.proposal === undefined ? {} : { proposal: command.proposal }),
   };
   const event: TransitionEvent = {
     id: command.eventId,
@@ -1630,6 +1683,7 @@ function addPreparedLinkIssues(prepared: PreparedProofCommand, context: z.Refine
     command.operation.expectedStateId !== parent.state.id ||
     !jsonEquals(command.operation, edge.operation) ||
     !jsonEquals(command.menuSelection, edge.menuSelection) ||
+    !jsonEquals(command.proposal, edge.proposal) ||
     !jsonEquals(command.operation, event.operation) ||
     !jsonEquals(parent.state, event.beforeState) ||
     !jsonEquals(node.state, event.afterState)
@@ -1821,7 +1875,11 @@ function previewEvidenceMatchesCommand(
   );
 }
 
-function computeDelta(before: ExecutableProofState, after: ExecutableProofState): ProofStateDelta {
+/** What a transition changed: the goal and obligation IDs it added, removed and updated. */
+export function computeDelta(
+  before: ExecutableProofState,
+  after: ExecutableProofState,
+): ProofStateDelta {
   return {
     goals: collectionDelta(before.goals, after.goals),
     obligations: collectionDelta(before.obligations, after.obligations),

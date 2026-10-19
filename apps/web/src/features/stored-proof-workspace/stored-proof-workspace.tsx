@@ -51,9 +51,11 @@ import {
   suggestionApiResponseSchema,
   suggestionRequestSchema,
   type MoveChoiceRequest,
-  type ProofSelectionDescriptor,
 } from "./api-contract";
+import { toDescriptor } from "./selection-descriptor";
 import { createInteractionRecorder } from "./interaction-recorder";
+import { useLibraryTopUp } from "./library-top-up";
+import { MoveInstructions } from "./move-instructions";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
@@ -77,7 +79,16 @@ export type StoredProofSession = Readonly<{
   background?: string | undefined;
 }>;
 
-export type StoredProofWorkspaceProps = Readonly<{ session: StoredProofSession; node: ProofNode }>;
+export type StoredProofWorkspaceProps = Readonly<{
+  session: StoredProofSession;
+  node: ProofNode;
+  /** Whether the proof service can rank suggestions with a model. */
+  aiShortlist?: boolean | undefined;
+  /** Whether the proof service can turn a described step into kernel steps with a model. */
+  aiExecutor?: boolean | undefined;
+  /** Whether the proof service can add library results during a proof with a model. */
+  aiLibrarian?: boolean | undefined;
+}>;
 type HistoryState =
   | Readonly<{ kind: "loading" }>
   | Readonly<{ kind: "ready"; nodes: readonly ProofNode[]; edges: readonly HistoryEdge[] }>
@@ -99,6 +110,9 @@ export function StoredProofWorkspace(props: StoredProofWorkspaceProps) {
 function StatefulStoredWorkspace({
   session: initialSession,
   node: initialNode,
+  aiShortlist = false,
+  aiExecutor = false,
+  aiLibrarian = false,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -122,6 +136,7 @@ function StatefulStoredWorkspace({
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const commandIds = useRef(new Map<string, MoveChoiceRequest["commandId"]>());
   const mutationPendingRef = useRef(false);
+  const instructionsRef = useRef<HTMLTextAreaElement | null>(null);
   // Whether the last reported selection was empty. A snapshot starts with no selection.
   const selectionEmpty = useRef(true);
   const recordInteraction = useMemo(() => createInteractionRecorder(session.id), [session.id]);
@@ -600,6 +615,67 @@ function StatefulStoredWorkspace({
     [loadHistory, rejectShownPreview, resetTransientState, session.id],
   );
 
+  // Library top-ups (architecture §2): "Find more results" for the current selections, and the
+  // automatic request after a committed step first used a constant the library had no results for.
+  const topUp = useLibraryTopUp({
+    sessionId: session.id,
+    nodeId: node.id,
+    enabled: aiLibrarian && !readOnly,
+  });
+  const findMoreResults = useCallback(() => {
+    void topUp.findMoreResults(selections);
+  }, [selections, topUp]);
+  const findMoreDisabledReason = readOnly
+    ? "This session is read-only, so its library cannot grow."
+    : aiLibrarian
+      ? undefined
+      : "The library assistant is not set up for this service, so it cannot look for more results.";
+
+  /** "Describe a move" on the shortlist's none-relevant notice: go to the description box. */
+  const focusInstructions = useCallback(() => {
+    const box = instructionsRef.current;
+    if (box === null) return;
+    box.scrollIntoView?.({ block: "center" });
+    box.focus();
+  }, []);
+
+  /** The move-instruction box commits a plan like any other proof command: one at a time. */
+  const beginExecutorApply = useCallback(() => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    actionGeneration.current += 1;
+    return true;
+  }, []);
+  const endExecutorApply = useCallback(() => {
+    mutationPendingRef.current = false;
+    setMutationPending(false);
+  }, []);
+  const adoptExecutorResult = useCallback(
+    async ({ nodeId, stepCount }: Readonly<{ nodeId: string; stepCount: number }>) => {
+      const current = await readCurrentSession(session.id);
+      if (!current.ok || current.value.node.id !== nodeId) {
+        setNotice({
+          state: "rejected",
+          message:
+            "The steps were applied, but the new current node could not be loaded; reload the page.",
+        });
+        void loadHistory();
+        return;
+      }
+      rejectShownPreview("superseded");
+      setSession(current.value.session);
+      setNode(current.value.node);
+      resetTransientState();
+      setNotice({
+        state: "committed",
+        message: `Applied ${stepCount} step${stepCount === 1 ? "" : "s"} from your description; now at ${nodeId}.`,
+      });
+      void loadHistory();
+    },
+    [loadHistory, rejectShownPreview, resetTransientState, session.id],
+  );
+
   const breadcrumb = useMemo(() => {
     if (history.kind === "loading") return { kind: "loading" } as const;
     const crumbs =
@@ -716,20 +792,37 @@ function StatefulStoredWorkspace({
         view={view}
         abstraction={abstraction}
       />
-      <div
-        className={styles.interactionShell}
-        data-busy={mutationPending}
-        aria-busy={mutationPending}
-      >
-        <ProofWorkspace
-          key={node.id}
+      <div className={styles.stateRow}>
+        <div
+          className={styles.interactionShell}
+          data-busy={mutationPending}
+          aria-busy={mutationPending}
+        >
+          <ProofWorkspace
+            key={node.id}
+            node={node}
+            operators={session.operators}
+            view={view}
+            onSelectionChange={handleSelectionChange}
+            gestures={drag.bindings}
+            selectionRequest={drag.selectionRequest}
+            suggestionsLink={suggestionsLink}
+          />
+        </div>
+        <MoveInstructions
+          sessionId={session.id}
           node={node}
           operators={session.operators}
+          selections={selections}
+          presentation={presentation}
           view={view}
-          onSelectionChange={handleSelectionChange}
-          gestures={drag.bindings}
-          selectionRequest={drag.selectionRequest}
-          suggestionsLink={suggestionsLink}
+          enabled={aiExecutor}
+          readOnly={readOnly}
+          busy={mutationPending}
+          textareaRef={instructionsRef}
+          onApplyStart={beginExecutorApply}
+          onApplyEnd={endExecutorApply}
+          onApplied={adoptExecutorResult}
         />
       </div>
 
@@ -738,6 +831,9 @@ function StatefulStoredWorkspace({
           {READ_ONLY_REASON}: suggestions can be viewed but not applied.
         </p>
       ) : null}
+      {/* "Find more results" is a library top-up (docs/ai-agents-architecture.md §2); where it is
+          unavailable the button is disabled and says why. "Describe a move" is offered only when
+          the move-instruction box can take a description. */}
       <SuggestionPanel
         suggestions={suggestions}
         move={moveState}
@@ -746,6 +842,14 @@ function StatefulStoredWorkspace({
         macros={macros}
         presentation={presentation}
         view={view}
+        aiShortlist={
+          aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
+        }
+        onDescribeMove={aiExecutor && !readOnly ? focusInstructions : undefined}
+        onFindMoreResults={findMoreResults}
+        findMoreDisabledReason={findMoreDisabledReason}
+        findMoreStatus={topUp.status}
+        onAskAgain={() => handleSelectionChange(selections)}
         {...panelActions}
       />
       <InquiryPanel
@@ -851,7 +955,7 @@ function HistoryView({
                       {incoming === undefined
                         ? `Root · ${node.id}`
                         : link === undefined
-                          ? `${incoming.name} · ${incoming.edge.transitionClass} · ${node.id}`
+                          ? `${incoming.name} · ${incoming.edge.transitionClass}${proposalNote(incoming.edge)} · ${node.id}`
                           : `${macroStepLabel(link, macroNames(macros))} · ${humanizeMoveId(incoming.name)} · ${incoming.edge.transitionClass} · ${node.id}`}
                     </small>
                   </button>
@@ -863,6 +967,16 @@ function HistoryView({
       ) : null}
     </section>
   );
+}
+
+/** A step a model proposed and the user confirmed says so in the history. */
+function proposalNote(edge: ProofEdge): string {
+  if (edge.proposal === undefined) return "";
+  const origin =
+    edge.proposal.source === "user-proposal"
+      ? "from your description"
+      : "from a suggested technique";
+  return ` · AI step ${edge.proposal.stepIndex} of ${edge.proposal.stepCount} ${origin}`;
 }
 
 function orderedHistory(nodes: readonly ProofNode[], edges: readonly HistoryEdge[]) {
@@ -917,26 +1031,6 @@ function selectionRole(
 ): "proposition" | "term" | "binder" | undefined {
   const resolved = resolveProofSelection(state, selection, { operators });
   return resolved.ok ? resolved.selection.position.role : undefined;
-}
-
-function toDescriptor(
-  selection: AnchoredProofSelection,
-  abstraction?: ProofSelectionDescriptor["abstraction"],
-): ProofSelectionDescriptor {
-  const retrievalOnly = abstraction === undefined ? {} : { abstraction };
-  return selection.kind === "exact"
-    ? { kind: "exact", anchor: selection.anchor, path: [...selection.path], ...retrievalOnly }
-    : {
-        ...retrievalOnly,
-        kind: "associative",
-        anchor: selection.anchor,
-        containerPath: [...selection.containerPath],
-        startOperand: selection.startOperand,
-        endOperand: selection.endOperand,
-        ...(selection.displayRange === undefined
-          ? {}
-          : { displayRange: [...selection.displayRange] as [number, number] }),
-      };
 }
 
 function suggestionSetId(stateId: string, generation: number): string {

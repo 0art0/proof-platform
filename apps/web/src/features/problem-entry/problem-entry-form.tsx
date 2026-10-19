@@ -16,11 +16,18 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
+import { AiAssist, NO_AI_SETUP, type AiSetupCapabilities } from "./ai-assist";
 import {
   draftPathLabel,
+  draftStatementRows,
   emptyProblemForm,
+  formSetupContext,
   formToDraft,
   missingRequiredFields,
+  missingSetupFields,
+  withBackgroundProfile,
+  type AcceptedBackground,
+  type ApprovedLibrary,
   type DeclarationRow,
   type FormProblem,
   type ProblemForm,
@@ -38,6 +45,10 @@ type Reviewed = Readonly<{
   operators: readonly OperatorDeclaration[];
   /** Chosen once per review, so a retried approval is idempotent. */
   sessionId: string;
+  /** The accepted background whose constants the review used; approval names the same one. */
+  accepted: AcceptedBackground | undefined;
+  /** The approved library whose results the review showed; approval names the same one. */
+  library: ApprovedLibrary | undefined;
 }>;
 
 type TextField =
@@ -61,6 +72,9 @@ export type ProblemEntryFormProps = Readonly<{
   /** Navigate to the created session; defaults to a full navigation. */
   navigate?: (url: string) => void;
   createSessionId?: () => string;
+  /** Which AI setup roles the proof service offers; none by default. */
+  ai?: AiSetupCapabilities;
+  createAiId?: (prefix: string) => string;
 }>;
 
 const apiFailureSchema = z
@@ -72,7 +86,10 @@ const apiFailureSchema = z
   .strict();
 
 /**
- * New problem (design plan §4.1, §4.4 without the formalizer). The draft stays in the browser.
+ * New problem (design plan §4.1, §4.2, §4.4). The draft stays in the browser. Optional AI help
+ * proposes a background with its constants, and a drafted setup; accepting a background fills in
+ * the background fields and makes its constants available to the setup, and a draft is loaded
+ * into the form only on request.
  * "Check setup" asks the worker to validate it and shows the mathematical content; only
  * "Start exploring" on an unchanged reviewed draft creates the session and root node.
  * Any edit after review discards the review.
@@ -81,12 +98,21 @@ export function ProblemEntryForm({
   options,
   navigate = (url) => window.location.assign(url),
   createSessionId = () => `session:${crypto.randomUUID()}`,
+  ai = NO_AI_SETUP,
+  createAiId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
 }: ProblemEntryFormProps) {
   const [form, setForm] = useState<ProblemForm>(emptyProblemForm);
   const [reviewed, setReviewed] = useState<Reviewed>();
   const [notice, setNotice] = useState<Notice>();
   const [busy, setBusy] = useState<"review" | "approve">();
   const nextKey = useRef(100);
+  // Owner of this form's AI calls, so a background proposal and a draft keep their evidence together.
+  const [constructionId] = useState(() => createAiId("construction:web"));
+  const [aiDraftCallId, setAiDraftCallId] = useState<string>();
+  // The background the user accepted; its constants are named by decision, never sent as text.
+  const [accepted, setAccepted] = useState<AcceptedBackground>();
+  // The library the user approved; its results are named by decision, never sent as artifacts.
+  const [approvedLibrary, setApprovedLibrary] = useState<ApprovedLibrary>();
 
   const packOperators = useMemo(() => operatorsByPack(options), [options]);
   const selectedOperators = useMemo(
@@ -96,14 +122,37 @@ export function ProblemEntryForm({
       ),
     [form.packIds, options.packs, packOperators],
   );
-  const latex = useMemo(
-    () => createLatexRenderer({ operators: selectedOperators }),
-    [selectedOperators],
-  );
+  // The operators LaTeX previews and library results know: the selected packs', the accepted
+  // constants' and the notation that the approved library adds.
+  const previewOperators = useMemo(() => {
+    const operators = [...selectedOperators];
+    const known = new Set(operators.map(({ symbol }) => symbol));
+    for (const operator of [
+      ...(accepted?.constants ?? []).map((constant) => constant.operator),
+      ...(approvedLibrary?.constants ?? []),
+    ]) {
+      if (!known.has(operator.symbol)) {
+        known.add(operator.symbol);
+        operators.push(operator);
+      }
+    }
+    return operators;
+  }, [selectedOperators, accepted, approvedLibrary]);
+  const latex = useMemo(() => {
+    try {
+      return createLatexRenderer({ operators: previewOperators });
+    } catch {
+      return createLatexRenderer({ operators: selectedOperators });
+    }
+  }, [previewOperators, selectedOperators]);
 
   const current = useMemo(() => formToDraft(form, options), [form, options]);
   const approvable =
-    reviewed !== undefined && current.ok && JSON.stringify(current.draft) === reviewed.draftKey;
+    reviewed !== undefined &&
+    current.ok &&
+    JSON.stringify(current.draft) === reviewed.draftKey &&
+    reviewed.accepted?.decisionId === accepted?.decisionId &&
+    reviewed.library?.decisionId === approvedLibrary?.decisionId;
 
   /** Every edit goes through here, and every edit invalidates the review. */
   const update = (change: (previous: ProblemForm) => ProblemForm) => {
@@ -133,7 +182,10 @@ export function ProblemEntryForm({
     setBusy("review");
     setNotice(undefined);
     try {
-      const response = await postJson("/api/problem-drafts/validate", { draft });
+      const response = await postJson("/api/problem-drafts/validate", {
+        draft,
+        ...approvalReferences(constructionId, accepted, approvedLibrary),
+      });
       if (response.ok) {
         const parsed = z
           .object({
@@ -160,6 +212,8 @@ export function ProblemEntryForm({
           node: node.data,
           operators,
           sessionId: createSessionId(),
+          accepted,
+          library: approvedLibrary,
         });
         return;
       }
@@ -180,6 +234,7 @@ export function ProblemEntryForm({
         sessionId: reviewed.sessionId,
         draft: reviewed.draft,
         reviewedDigest: reviewed.review.digest,
+        ...approvalReferences(constructionId, reviewed.accepted, reviewed.library),
       });
       if (response.ok) {
         recordRecentSession({
@@ -324,6 +379,43 @@ export function ProblemEntryForm({
         </fieldset>
       </details>
 
+      <AiAssist
+        capabilities={ai}
+        context={formSetupContext(form, options)}
+        missing={missingSetupFields(form)}
+        constructionId={constructionId}
+        createId={createAiId}
+        accepted={accepted}
+        onAcceptBackground={(background) => {
+          update((f) => ({ ...f, ...withBackgroundProfile(background.profile) }));
+          setAccepted(background);
+          // A library is built for one accepted background.
+          setApprovedLibrary(undefined);
+        }}
+        onForgetBackground={() => {
+          setReviewed(undefined);
+          setNotice(undefined);
+          setAccepted(undefined);
+          setApprovedLibrary(undefined);
+        }}
+        operators={previewOperators}
+        approvedLibrary={approvedLibrary}
+        onApproveLibrary={(library) => {
+          setReviewed(undefined);
+          setNotice(undefined);
+          setApprovedLibrary(library);
+        }}
+        onForgetLibrary={() => {
+          setReviewed(undefined);
+          setNotice(undefined);
+          setApprovedLibrary(undefined);
+        }}
+        onUseDraft={(draft, callId) => {
+          update((f) => ({ ...f, ...draftStatementRows(draft, key) }));
+          setAiDraftCallId(callId);
+        }}
+      />
+
       <Section title="What is known and what to prove">
         <p className={styles.sectionIntro}>
           Enter any assumptions and a goal. Add variables or objects if they appear in these
@@ -433,6 +525,7 @@ export function ProblemEntryForm({
       ) : (
         <ReviewPanel
           reviewed={reviewed}
+          aiDraftCallId={aiDraftCallId}
           sorts={options.sorts}
           approvable={approvable}
           busy={busy === "approve"}
@@ -447,6 +540,7 @@ export function ProblemEntryForm({
 
 function ReviewPanel({
   reviewed,
+  aiDraftCallId,
   sorts,
   approvable,
   busy,
@@ -455,6 +549,7 @@ function ReviewPanel({
   onApprove,
 }: Readonly<{
   reviewed: Reviewed;
+  aiDraftCallId: string | undefined;
   sorts: ProblemSetupOptions["sorts"];
   approvable: boolean;
   busy: boolean;
@@ -468,10 +563,17 @@ function ReviewPanel({
   );
   const [goal] = reviewed.node.state.goals;
   const context = goal?.sequent.context;
+  const library = reviewed.review.initialLibrary;
   return (
     <section className={styles.review} aria-label="Review">
       <h2>Review your setup</h2>
       <p>Check that the problem, assumptions, and goal are represented as you intend.</p>
+      {aiDraftCallId === undefined ? null : (
+        <p className={styles.provenance} role="note">
+          The variables, hypotheses and goals started from an AI draft ({aiDraftCallId}). Check them
+          carefully.
+        </p>
+      )}
       <dl className={styles.reviewList}>
         <dt>Problem</dt>
         <dd>
@@ -506,6 +608,57 @@ function ReviewPanel({
             .filter((name): name is string => name !== undefined)
             .join(", ") || "None selected"}
         </dd>
+        {reviewed.accepted === undefined || reviewed.accepted.constants.length === 0 ? null : (
+          <>
+            <dt>Accepted constants</dt>
+            <dd>
+              {reviewed.accepted.constants.map(({ operator }) => (
+                <code key={operator.id} className={styles.token}>
+                  {operator.symbol}
+                </code>
+              ))}
+            </dd>
+          </>
+        )}
+        {library === undefined ? null : (
+          <>
+            <dt>Initial library</dt>
+            <dd>
+              <em className={styles.hint}>
+                Results added to this problem&apos;s library when you start exploring.
+              </em>
+              <ol>
+                {library.results.map((result) => (
+                  <li key={result.id}>
+                    <strong>{result.name}</strong>
+                    <Rendered presentation={presentation} expression={result.statement} />
+                    {result.premises.length === 0 ? null : (
+                      <span className={styles.hint}>
+                        Assuming:{" "}
+                        {result.premises.map((premise, index) => (
+                          <code key={index} className={styles.token}>
+                            {presentation.latex(premise)}
+                          </code>
+                        ))}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {library.variantCount === 0 ? null : (
+                <em className={styles.hint}>
+                  Plus {library.variantCount} generated{" "}
+                  {library.variantCount === 1 ? "variant" : "variants"} of these results.{" "}
+                </em>
+              )}
+              {library.addedOperatorSymbols.length === 0 ? null : (
+                <em className={styles.hint}>
+                  Adds notation: {library.addedOperatorSymbols.join(", ")}.
+                </em>
+              )}
+            </dd>
+          </>
+        )}
         <dt>Variables and objects</dt>
         <dd>
           {context === undefined || context.declarations.length === 0
@@ -687,6 +840,25 @@ async function postJson(
     parsed = undefined;
   }
   return { ok: response.ok, status: response.status, body: parsed };
+}
+
+/**
+ * The references through which the worker resolves the accepted constants and the approved
+ * library; none if nothing was accepted or approved. Declarations and artifacts are never sent.
+ */
+function approvalReferences(
+  constructionId: string,
+  accepted: AcceptedBackground | undefined,
+  library: ApprovedLibrary | undefined,
+): Record<string, unknown> {
+  return {
+    ...(accepted === undefined
+      ? {}
+      : { approvedBackground: { constructionId, decisionId: accepted.decisionId } }),
+    ...(library === undefined
+      ? {}
+      : { approvedLibrary: { constructionId, decisionId: library.decisionId } }),
+  };
 }
 
 function failureNotice(body: unknown): Notice {

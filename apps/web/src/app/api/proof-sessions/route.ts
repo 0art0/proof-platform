@@ -1,5 +1,4 @@
-import { problemApprovalRequestSchema } from "@proof/protocol";
-import { createProblemSession } from "../../../server/proof-service";
+import { createProblemSession, problemApprovalBodySchema } from "../../../server/proof-service";
 import {
   proofApiFailure,
   proofProtocolAnswer,
@@ -30,7 +29,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     return proofApiFailure("invalid_request", "The JSON request body is invalid.", 400);
   }
-  const parsed = problemApprovalRequestSchema.safeParse(body);
+  const parsed = problemApprovalBodySchema.safeParse(body);
   if (!parsed.success) {
     return proofApiFailure("invalid_request", "The approval request is invalid.", 400);
   }

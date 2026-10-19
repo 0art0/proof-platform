@@ -1,6 +1,8 @@
 import { isPlainMathJson } from "@proof/mathjson-model";
 import type {
   BackgroundLevel,
+  BackgroundProfile,
+  OperatorDeclaration,
   PlainMathJson,
   ProblemDraft,
   ProblemSetupOptions,
@@ -79,6 +81,22 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
       return { format: "mathjson", expression: expression.ok ? expression.expression : 0 };
     });
 
+  const draft = {
+    ...formSetupContext(form, options),
+    declarations: form.declarations.map(({ symbol, sort }) => ({ symbol: symbol.trim(), sort })),
+    hypotheses: statements(form.hypotheses, "Hypothesis"),
+    goals: statements(form.goals, "Goal"),
+  } as ProblemDraft;
+  return problems.length === 0 ? { ok: true, draft } : { ok: false, problems };
+}
+
+/** The part of a draft the AI roles may see: everything except declarations and statements. */
+export type SetupContext = Pick<
+  ProblemDraft,
+  "problem" | "background" | "preferences" | "libraryLayerIds" | "packs"
+>;
+
+export function formSetupContext(form: ProblemForm, options: ProblemSetupOptions): SetupContext {
   const optionalPacks = new Set(
     options.packs.filter((pack) => !pack.alwaysActive).map((pack) => pack.id),
   );
@@ -86,7 +104,7 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
   const backgroundDomains = commaList(form.backgroundDomains);
   const preferredDomains = commaList(form.preferredDomains);
   const notation = lines(form.notation);
-  const draft = {
+  return {
     problem: { title: form.title.trim(), statement: form.statement.trim() },
     background: {
       level: form.backgroundLevel.trim(),
@@ -109,11 +127,82 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
     packs: options.packs
       .map((pack) => pack.id)
       .filter((id) => optionalPacks.has(id) && form.packIds.includes(id)),
-    declarations: form.declarations.map(({ symbol, sort }) => ({ symbol: symbol.trim(), sort })),
-    hypotheses: statements(form.hypotheses, "Hypothesis"),
-    goals: statements(form.goals, "Goal"),
-  } as ProblemDraft;
-  return problems.length === 0 ? { ok: true, draft } : { ok: false, problems };
+  } as SetupContext;
+}
+
+/** The required fields the AI roles need: the problem and the background, not the statements. */
+export function missingSetupFields(form: ProblemForm): readonly FormProblem[] {
+  return missingRequiredFields(form).filter(
+    ({ field }) => !field.startsWith("Variable or object") && !field.startsWith("Goal"),
+  );
+}
+
+/** Editable rows for the declarations and statements of a draft (an AI draft, for example). */
+export function draftStatementRows(
+  draft: Pick<ProblemDraft, "declarations" | "hypotheses" | "goals">,
+  nextKey: () => number,
+): Pick<ProblemForm, "declarations" | "hypotheses" | "goals"> {
+  const row = (input: ProblemStatementInput): StatementRow =>
+    input.format === "latex"
+      ? { key: nextKey(), format: "latex", text: input.latex }
+      : { key: nextKey(), format: "mathjson", text: JSON.stringify(input.expression) };
+  return {
+    declarations: draft.declarations.map(({ symbol, sort }) => ({ key: nextKey(), symbol, sort })),
+    hypotheses: draft.hypotheses.map(row),
+    goals: draft.goals.map(row),
+  };
+}
+
+/**
+ * A background the user accepted: the proposal's profile and constants, and the approval decision
+ * through which the worker resolves those constants. The browser holds the constants only to show
+ * them and to preview LaTeX; requests name the decision and never carry declarations.
+ */
+export type AcceptedBackground = Readonly<{
+  decisionId: string;
+  /** The stored proposer call the decision approved. */
+  callId: string;
+  profile: BackgroundProfile;
+  constants: readonly Readonly<{ operator: OperatorDeclaration; rationale: string }>[];
+}>;
+
+/**
+ * A library the user approved: the decision through which the worker resolves the kept results
+ * from the stored librarian call. The browser holds the names, the variant count and the new
+ * constants only to show them and to preview LaTeX; requests name the decision and never carry
+ * artifacts.
+ */
+export type ApprovedLibrary = Readonly<{
+  decisionId: string;
+  /** The stored librarian call the decision approved results of. */
+  callId: string;
+  /** The accepted background the library was built for. */
+  backgroundDecisionId: string;
+  results: readonly Readonly<{ id: string; name: string }>[];
+  /** Equivalent reshapings generated from the kept results; they are added with them. */
+  variantCount: number;
+  /** Operators the kept results add beyond the packs and the accepted background. */
+  constants: readonly OperatorDeclaration[];
+}>;
+
+/** The background fields of the form for an accepted profile; they stay editable by hand. */
+export function withBackgroundProfile(
+  profile: BackgroundProfile,
+): Pick<
+  ProblemForm,
+  | "backgroundLevel"
+  | "backgroundSummary"
+  | "backgroundAssumptions"
+  | "backgroundDomains"
+  | "maximumLevel"
+> {
+  return {
+    backgroundLevel: profile.level,
+    backgroundSummary: profile.summary,
+    backgroundAssumptions: profile.assumptions.join("\n"),
+    backgroundDomains: (profile.domains ?? []).join(", "),
+    maximumLevel: profile.maximumLevel ?? "",
+  };
 }
 
 /**

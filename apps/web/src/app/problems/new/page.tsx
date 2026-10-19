@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { ProblemEntryForm, problemEntryStyles as styles } from "../../../features/problem-entry";
-import { readProblemSetupOptions } from "../../../server/proof-service";
+import { readAiCapabilities, readProblemSetupOptions } from "../../../server/proof-service";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-/** New problem: manual entry, review and approval (roadmap N26). */
+/** New problem: manual or AI-assisted entry, review and approval (roadmap N26). */
 export default async function NewProblemPage() {
   let options;
   try {
@@ -13,6 +13,7 @@ export default async function NewProblemPage() {
   } catch {
     options = undefined;
   }
+  const capabilities = await readAiCapabilities();
   return (
     <main className={styles.page}>
       <p>
@@ -29,7 +30,14 @@ export default async function NewProblemPage() {
           The proof service could not be reached.
         </p>
       ) : (
-        <ProblemEntryForm options={options} />
+        <ProblemEntryForm
+          options={options}
+          ai={{
+            background: capabilities["background-proposer"],
+            library: capabilities.librarian,
+            formalizer: capabilities["proof-state-formalizer"],
+          }}
+        />
       )}
     </main>
   );

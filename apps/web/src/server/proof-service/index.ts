@@ -43,6 +43,7 @@ import {
 } from "@proof/protocol";
 import {
   problemApprovalRequestSchema,
+  problemDraftValidationRequestSchema,
   problemDraftValidationResponseSchema,
   problemSetupDiagnosticSchema,
   problemSetupOptionsSchema,
@@ -61,6 +62,10 @@ import {
   type ProofSelectionDescriptor,
   type SuggestionTransitionClass,
 } from "../../features/stored-proof-workspace/api-contract";
+import {
+  libraryConstantsSchema,
+  type LibraryConstants,
+} from "../../features/stored-proof-workspace/library-top-up-contract";
 import {
   sessionLibraryEventsSchema,
   sessionLibrarySchema,
@@ -1132,6 +1137,36 @@ const problemSetupFailureSchema = z.union([
 ]);
 
 /**
+ * Names an approved background decision (`POST /ai/background/decisions`) whose constants the
+ * worker resolves from storage for the setup check and the session approval. The browser never
+ * sends operator declarations.
+ */
+export const approvedBackgroundReferenceSchema = z
+  .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
+  .strict();
+
+/**
+ * Names an approved library decision (`POST /ai/library/decisions`) whose results the worker
+ * resolves from the stored librarian call for the setup check and the session approval. The
+ * browser never sends library artifacts.
+ */
+export const approvedLibraryReferenceSchema = z
+  .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
+  .strict();
+
+/** `POST /api/problem-drafts/validate` body: the protocol request plus the optional references. */
+export const problemDraftValidationBodySchema = problemDraftValidationRequestSchema.extend({
+  approvedBackground: approvedBackgroundReferenceSchema.optional(),
+  approvedLibrary: approvedLibraryReferenceSchema.optional(),
+});
+
+/** `POST /api/proof-sessions` body: the protocol approval request plus the optional references. */
+export const problemApprovalBodySchema = problemApprovalRequestSchema.extend({
+  approvedBackground: approvedBackgroundReferenceSchema.optional(),
+  approvedLibrary: approvedLibraryReferenceSchema.optional(),
+});
+
+/**
  * Validate a draft into a review; writes nothing. A 422 carries the draft diagnostics and is
  * returned, not thrown, so the form can show every one of them.
  */
@@ -1139,7 +1174,7 @@ export async function validateProblemDraftRequest(
   requestInput: unknown,
   options: ProofServiceRequestOptions = {},
 ): Promise<ProtocolServiceAnswer> {
-  const request = z.object({ draft: z.unknown() }).strict().safeParse(requestInput);
+  const request = problemDraftValidationBodySchema.safeParse(requestInput);
   if (!request.success) throw invalidRequest("The draft validation request is invalid.");
   const response = await requestProofService("/problem-drafts/validate", {
     method: "POST",
@@ -1189,7 +1224,7 @@ export async function createProblemSession(
   requestInput: unknown,
   options: ProofServiceRequestOptions = {},
 ): Promise<ProtocolServiceAnswer> {
-  const request = problemApprovalRequestSchema.safeParse(requestInput);
+  const request = problemApprovalBodySchema.safeParse(requestInput);
   if (!request.success) throw invalidRequest("The approval request is invalid.");
   const response = await requestProofService("/proof-sessions", {
     method: "POST",
@@ -1363,6 +1398,17 @@ export async function readSessionLibraryEvents(
   options: ProofServiceRequestOptions = {},
 ): Promise<SessionLibraryEvents> {
   return readLibraryView(sessionIdInput, "library/events", sessionLibraryEventsSchema, options);
+}
+
+/**
+ * Which constants of a session are active, dormant or newly activated by a committed step, and
+ * which activations a recorded library top-up already covered. Read-only.
+ */
+export async function readSessionLibraryConstants(
+  sessionIdInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<LibraryConstants> {
+  return readLibraryView(sessionIdInput, "library/constants", libraryConstantsSchema, options);
 }
 
 async function readLibraryView<View extends { sessionId: string }>(
@@ -1599,4 +1645,136 @@ export async function previewConditionalLemma(
   const parsed = lemmaPreviewResponseSchema.safeParse(value);
   if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
   return parsed.data;
+}
+
+// ---------------------------------------------------------------------------------------------
+// AI assistance (design plan §4.2, §4.4, §15.2)
+// ---------------------------------------------------------------------------------------------
+
+/** The model roles the worker can serve; every other role is unimplemented. */
+export const AI_ROLES = [
+  "background-proposer",
+  "librarian",
+  "proof-state-formalizer",
+  "move-shortlister",
+  "move-executor",
+] as const;
+export type AiRole = (typeof AI_ROLES)[number];
+export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
+export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
+  "background-proposer": false,
+  librarian: false,
+  "proof-state-formalizer": false,
+  "move-shortlister": false,
+  "move-executor": false,
+});
+
+const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
+
+/** Which AI roles are configured on the worker; an unreachable worker means none are. */
+export async function readAiCapabilities(
+  options: ProofServiceRequestOptions = {},
+): Promise<AiCapabilities> {
+  try {
+    const response = await requestProofService("/ai/capabilities", {
+      method: "GET",
+      ...signalOption(options.signal),
+    });
+    const value = await readValidatedEnvelope(response);
+    const parsed = aiCapabilitiesSchema.safeParse(value);
+    if (response.status !== 200 || !parsed.success) return NO_AI_CAPABILITIES;
+    const { roles } = parsed.data;
+    return {
+      "background-proposer": roles["background-proposer"] === true,
+      librarian: roles.librarian === true,
+      "proof-state-formalizer": roles["proof-state-formalizer"] === true,
+      "move-shortlister": roles["move-shortlister"] === true,
+      "move-executor": roles["move-executor"] === true,
+    };
+  } catch {
+    return NO_AI_CAPABILITIES;
+  }
+}
+
+const aiRequestBodySchema = z.record(z.string(), z.unknown());
+const aiAnswerSchema = z
+  .object({
+    status: z.string().min(1).optional(),
+    diagnostics: z
+      .array(z.object({ code: z.string().min(1), message: z.string().min(1) }).passthrough())
+      .optional(),
+  })
+  .passthrough();
+
+const MAX_LIBRARY_PROPOSAL_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/** The worker AI endpoints the web application relays. */
+export type AiEndpoint =
+  | Readonly<{ kind: "background" }>
+  | Readonly<{ kind: "background-decisions" }>
+  | Readonly<{ kind: "library" }>
+  | Readonly<{ kind: "library-decisions" }>
+  | Readonly<{ kind: "formalize" }>
+  | Readonly<{ kind: "shortlist"; sessionId: string }>
+  | Readonly<{ kind: "execute"; sessionId: string }>
+  | Readonly<{ kind: "execute-apply"; sessionId: string }>
+  | Readonly<{ kind: "library-top-up"; sessionId: string }>;
+
+function aiEndpointPath(endpoint: AiEndpoint): string {
+  if (endpoint.kind === "background") return "/ai/background";
+  if (endpoint.kind === "background-decisions") return "/ai/background/decisions";
+  if (endpoint.kind === "library") return "/ai/library";
+  if (endpoint.kind === "library-decisions") return "/ai/library/decisions";
+  if (endpoint.kind === "formalize") return "/ai/formalize";
+  const sessionId = parseIdentifier(endpoint.sessionId, "proof session");
+  const base = `/proof-sessions/${encodeURIComponent(sessionId)}/ai`;
+  if (endpoint.kind === "execute") return `${base}/execute`;
+  if (endpoint.kind === "execute-apply") return `${base}/execute/apply`;
+  if (endpoint.kind === "library-top-up") return `${base}/library/top-up`;
+  return `${base}/shortlist`;
+}
+
+/**
+ * Relay one AI request. The worker validates the request strictly and records the call; its
+ * answer (proposal, fallback, or diagnostics) is relayed intact so the browser can show why a
+ * proposal was not admitted. Nothing here can change proof state.
+ */
+export async function relayAiRequest(
+  endpoint: AiEndpoint,
+  bodyInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<ProtocolServiceAnswer> {
+  const body = aiRequestBodySchema.safeParse(bodyInput);
+  if (!body.success) throw invalidRequest("The AI request must be a JSON object.");
+  const response = await requestProofService(aiEndpointPath(endpoint), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body.data),
+    ...signalOption(options.signal),
+  });
+  // A library proposal carries up to 40 results with their variants, which can exceed the usual
+  // bound for an AI answer.
+  const value = await readValidatedEnvelope(
+    response,
+    endpoint.kind === "library" ? MAX_LIBRARY_PROPOSAL_RESPONSE_BYTES : MAX_RESPONSE_BYTES,
+  );
+  const parsed = aiAnswerSchema.safeParse(value);
+  if (!parsed.success) throw invalidUpstreamResponse();
+  if (response.status === 200 || response.status === 201) {
+    return { ok: true, status: response.status, body: parsed.data };
+  }
+  const first = parsed.data.diagnostics?.[0];
+  if (first === undefined || response.status < 400 || response.status > 599) {
+    throw invalidUpstreamResponse();
+  }
+  return {
+    ok: false,
+    status:
+      response.status === 422 || response.status === 429
+        ? response.status
+        : publicFailureStatus(response.status),
+    code: first.code,
+    message: first.message,
+    body: parsed.data,
+  };
 }

@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBackgroundProposerContext,
   buildTopicExtractorContext,
   executePreparedLlmCall,
   prepareLlmCall,
   type PreparedLlmCall,
   type TopicManifestProposal,
 } from "@proof/llm";
-import type { LlmCallOwner, StoredLlmCall, TopicProposalDecision } from "./llm-call-repository";
+import type {
+  BackgroundProposalDecision,
+  LlmCallOwner,
+  StoredLlmCall,
+  TopicProposalDecision,
+} from "./llm-call-repository";
 import { PostgresLlmCallStore } from "./postgres-llm-call-store";
 import type { SqlClient, SqlPool, SqlQueryResult } from "./postgres-proof-store";
 import { ProofStoreTransactionError } from "./proof-repository";
@@ -148,6 +154,67 @@ describe("PostgresLlmCallStore", () => {
     ]);
     expect(client.calls.at(-1)?.text.trim()).toBe("COMMIT");
     expect(client.releases).toEqual([undefined]);
+  });
+
+  it("stores a background proposal call and its decision in the shared tables", async () => {
+    const client = new RecordingClient();
+    const store = new PostgresLlmCallStore(poolFor(client));
+    const built = buildBackgroundProposerContext({
+      id: "llm-call:background",
+      problem: "Show that consecutive integers are coprime.",
+    });
+    if (!built.ok) throw new Error(built.diagnostics[0].message);
+    const prepared = prepareLlmCall(built.envelope);
+    if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+    const record: StoredLlmCall = {
+      owner,
+      id: prepared.call.id,
+      role: prepared.call.role,
+      preparedCall: prepared.call,
+      dispatch: { provider: "test-provider", model: "test-model", promptVersion: "background-v1" },
+      status: "dispatching",
+    };
+    const decision: BackgroundProposalDecision = {
+      id: "decision:background",
+      owner,
+      callId: record.id,
+      reviewerId: "user:reviewer",
+      decidedAt: "2026-10-15T05:00:00+00:00",
+      proposal: {
+        kind: "background-proposal",
+        background: { level: "undergraduate", summary: "Number theory.", assumptions: [] },
+        constants: [],
+      },
+      rationale: "Accepted.",
+      decision: "approved",
+      approvedManifestId: "background-approval:decision:background",
+    };
+
+    await store.transaction(async (transaction) => {
+      await transaction.insertCall(record);
+      await transaction.insertDecision(decision);
+    });
+
+    const callInsert = client.calls.find(({ text }) => text.includes("INSERT INTO llm_calls"));
+    expect(callInsert?.values?.slice(0, 5)).toEqual([
+      "construction",
+      "construction:one",
+      "llm-call:background",
+      "background-proposer",
+      "dispatching",
+    ]);
+    const decisionInsert = client.calls.find(({ text }) =>
+      text.includes("INSERT INTO llm_topic_decisions"),
+    );
+    expect(decisionInsert?.values).toEqual([
+      "construction",
+      "construction:one",
+      "decision:background",
+      "llm-call:background",
+      "approved",
+      "background-approval:decision:background",
+      JSON.stringify(decision),
+    ]);
   });
 
   it("rolls back callback failures and releases the client normally exactly once", async () => {

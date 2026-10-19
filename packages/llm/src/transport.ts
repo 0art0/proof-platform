@@ -2,6 +2,8 @@ import {
   LlmTransportError,
   llmContextEnvelopeSchema,
   llmOutputSchemaForRole,
+  NONE_RELEVANT_CHOICE_ID,
+  NONE_RELEVANT_CRITERION,
   preparedLlmCallSchema,
   type LlmTransport,
   type LlmTransportFailureSubcode,
@@ -12,10 +14,22 @@ import { z } from "zod";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 export const DEFAULT_FORMALIZER_MODEL = "openai/gpt-6-luna";
 export const DEFAULT_SHORTLISTER_MODEL = "typesafe-ai/jev";
+export const DEFAULT_TOPIC_EXTRACTOR_MODEL = DEFAULT_FORMALIZER_MODEL;
+export const DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT = "medium" as const;
+export const DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS = 8_000;
+export const DEFAULT_BACKGROUND_PROPOSER_MODEL = DEFAULT_FORMALIZER_MODEL;
+export const DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT = "medium" as const;
+export const DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS = 8_000;
+export const DEFAULT_LIBRARIAN_MODEL = DEFAULT_FORMALIZER_MODEL;
+export const DEFAULT_LIBRARIAN_REASONING_EFFORT = "high" as const;
+export const DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_FORMALIZER_REASONING_EFFORT = "high" as const;
 export const DEFAULT_LLM_TIMEOUT_MS = 120_000;
 export const DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_SHORTLISTER_MIN_CONFIDENCE = 0.55;
+export const DEFAULT_EXECUTOR_MODEL = DEFAULT_FORMALIZER_MODEL;
+export const DEFAULT_EXECUTOR_REASONING_EFFORT = "high" as const;
+export const DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS = 16_000;
 
 export const DEFAULT_LLM_MAX_ATTEMPTS = 3;
 export const DEFAULT_LLM_RETRY_BASE_DELAY_MS = 500;
@@ -118,7 +132,7 @@ export function createVercelStructuredOutputTransport(
     if (asRecord(first)?.finish_reason !== "stop") return null;
     const message = asRecord(asRecord(first)?.message);
     if (message?.refusal !== undefined && message.refusal !== null) {
-      return { kind: "declined", reason: "The model declined this formalization request." };
+      return { kind: "declined", reason: "The model declined this request." };
     }
     const content = message?.content;
     if (typeof content !== "string" || content.length === 0) return null;
@@ -142,8 +156,9 @@ export type VercelJevShortlisterOptions = Readonly<{
 
 /**
  * Jev is an evaluation model, not a chat model. A single typed Choice question returns a
- * probability distribution over the displayed suggestion IDs. The distribution is converted
- * into a ranked proposal and then checked again by validateLlmOutput.
+ * probability distribution over the displayed suggestion IDs and the reserved none-relevant
+ * option. The distribution is converted into a ranked proposal (or a none-relevant outcome) and
+ * then checked again by validateLlmOutput.
  */
 export function createVercelJevShortlisterTransport(
   options: VercelJevShortlisterOptions,
@@ -157,9 +172,13 @@ export function createVercelJevShortlisterTransport(
     if (call.role !== "move-shortlister") return null;
     const envelope = llmContextEnvelopeSchema.parse(call.envelope);
     if (envelope.role !== "move-shortlister") return null;
-    const criteria = Object.fromEntries(
-      envelope.context.candidates.map((candidate) => [candidate.id, candidate.name]),
-    );
+    // Every displayed candidate, plus the reserved option for "none of them is relevant".
+    const criteria = {
+      ...Object.fromEntries(
+        envelope.context.candidates.map((candidate) => [candidate.id, candidate.name]),
+      ),
+      [NONE_RELEVANT_CHOICE_ID]: NONE_RELEVANT_CRITERION,
+    };
     const providerRequest = {
       model,
       state: envelope,
@@ -167,7 +186,7 @@ export function createVercelJevShortlisterTransport(
         shortlist: {
           type: "choice" as const,
           instructions:
-            "Choose the single most relevant displayed suggestion for the exact selected fragment and proof snapshot.",
+            "Choose the single most relevant displayed suggestion for the exact selected fragment and proof snapshot. Choose the none-relevant option only if no displayed suggestion is a plausible next step for that fragment.",
           criteria,
         },
       },

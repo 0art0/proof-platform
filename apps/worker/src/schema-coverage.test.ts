@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { SUPPORTED_LLM_ROLES } from "@proof/llm";
 import { MemoryLibraryStore } from "./memory-library-store";
 import { DEFAULT_MIGRATIONS_DIRECTORY, loadMigrations } from "./migrations/runner";
 import { SESSION_TABLES_IN_DELETION_ORDER } from "./postgres-proof-store";
@@ -77,6 +78,18 @@ describe("migration schema", () => {
     expect(sql).toContain("(record ->> 'evidence') IS NOT DISTINCT FROM evidence");
     // It adds columns only: existing rows are neither inferred nor rewritten.
     expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
+  });
+
+  it("lets the last role-constraint migration store every supported LLM role", () => {
+    const widening = migrations.filter(({ sql }) => sql.includes("llm_calls_role_check"));
+    const last = widening[widening.length - 1];
+    expect(last?.name.startsWith("0017_")).toBe(true);
+    const allowed = [...(last?.sql.matchAll(/'([a-z-]+)'/g) ?? [])].map((match) => match[1]);
+    for (const role of SUPPORTED_LLM_ROLES) expect(allowed, role).toContain(role);
+    // The earlier roles stay valid: a widening never narrows the stored history.
+    for (const role of ["topic-extractor", "move-shortlister", "proof-state-formalizer"]) {
+      expect(allowed, role).toContain(role);
+    }
   });
 
   it("keeps the event provenance constraint (0003) and the discarding client release", () => {
