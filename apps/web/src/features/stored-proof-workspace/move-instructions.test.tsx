@@ -292,6 +292,34 @@ describe("the move-instruction box", () => {
     expect(within(card).getByRole("button", { name: "Discard" })).toBeEnabled();
   });
 
+  it("says which library constants applying the plan would add", async () => {
+    const INTEGER = { kind: "named", id: "sort:integer" };
+    const GCD = {
+      id: "operator:gcd",
+      symbol: "Gcd",
+      signature: { parameters: [INTEGER, INTEGER], result: INTEGER },
+      presentation: {
+        displayName: "greatest common divisor",
+        latex: { template: String.raw`\gcd\left(#1, #2\right)`, precedence: "atom" },
+        naturalLanguage: [{ template: "the gcd of #1 and #2", proposition: false }],
+      },
+    };
+    stubFetch([200, previewedAnswer({ constants: [GCD] })]);
+    renderPanel();
+    await preview();
+    const card = screen.getByRole("region", { name: "Proposed steps" });
+    expect(within(card).getByTestId("preview-constants")).toHaveTextContent(
+      "Applying this adds the constant ‘greatest common divisor’ to this proof’s constants.",
+    );
+  });
+
+  it("adds no constants note when the plan uses only the proof's constants", async () => {
+    stubFetch([200, previewedAnswer()]);
+    renderPanel();
+    await preview();
+    expect(screen.queryByTestId("preview-constants")).toBeNull();
+  });
+
   it("shows a weakening as weaker, not as an equivalence", async () => {
     stubFetch([
       200,

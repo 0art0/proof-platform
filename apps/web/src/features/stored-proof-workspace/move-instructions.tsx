@@ -17,7 +17,7 @@ import {
   type ExecutorPreview,
   type MoveInstructionOutcome,
 } from "./move-instructions-contract";
-import { StateChangeSections, deltaText } from "./preview-details";
+import { PreviewConstantsNote, StateChangeSections, deltaText } from "./preview-details";
 import { previewDiff } from "./preview-diff";
 import { toDescriptor } from "./selection-descriptor";
 import { EvidenceBadge, TransitionClassBadge, transitionMeaning } from "./suggestion-badges";
@@ -470,6 +470,7 @@ function PreviewCard({
       <p className={styles.meaning} data-testid="executor-meaning">
         {transitionMeaning(preview.transitionClass)}
       </p>
+      <PreviewConstantsNote constants={preview.constants} />
       <p className={previewStyles.previewMeaning}>
         {preview.explanation} Proposed by an AI model from{" "}
         {preview.provenance === "user-proposal" ? "your description" : "a suggested technique"}; the

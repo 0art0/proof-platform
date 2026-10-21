@@ -15,6 +15,7 @@ import { EvidenceBadge, TransitionClassBadge, transitionMeaning } from "./sugges
 import styles from "./suggestion-panel.module.css";
 
 type ViewProps = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
+type PreviewConstant = NonNullable<MovePreview["constants"]>[number];
 
 /**
  * A recorded move preview as a before → after difference of statements, rendered in the
@@ -37,12 +38,7 @@ export function PreviewDetails({
         </span>
       </div>
       <p className={styles.previewMeaning}>{transitionMeaning(preview.transitionClass)}</p>
-      {preview.constants === undefined ? null : (
-        <p className={styles.previewConstants} role="note" data-testid="preview-constants">
-          Applying this adds the {preview.constants.length === 1 ? "constant" : "constants"}{" "}
-          {constantNames(preview.constants)} to this proof’s constants.
-        </p>
-      )}
+      <PreviewConstantsNote constants={preview.constants} />
       <dl className={styles.previewCounts}>
         <div>
           <dt>Goals</dt>
@@ -147,7 +143,20 @@ export function StateChangeSections({
 }
 
 /** ‘gcd’, or ‘gcd’ and ‘lcm’: the constants a previewed step would add, by display name. */
-function constantNames(constants: NonNullable<MovePreview["constants"]>): string {
+/** The library constants a previewed step would add to the proof's constants, if any. */
+export function PreviewConstantsNote({
+  constants,
+}: Readonly<{ constants: readonly PreviewConstant[] | undefined }>) {
+  if (constants === undefined || constants.length === 0) return null;
+  return (
+    <p className={styles.previewConstants} role="note" data-testid="preview-constants">
+      Applying this adds the {constants.length === 1 ? "constant" : "constants"}{" "}
+      {constantNames(constants)} to this proof’s constants.
+    </p>
+  );
+}
+
+function constantNames(constants: readonly PreviewConstant[]): string {
   const names = constants.map(
     ({ symbol, presentation }) => `‘${presentation?.displayName ?? symbol}’`,
   );

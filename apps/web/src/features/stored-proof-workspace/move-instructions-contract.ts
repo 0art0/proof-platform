@@ -141,6 +141,8 @@ export type ExecutorPreview = Readonly<{
   beforeState: ProofNode["state"];
   afterState: ProofNode["state"];
   delta: z.infer<typeof proofStateDeltaSchema>;
+  /** Library constants that applying the plan would add to the proof's constants. */
+  constants?: readonly OperatorDeclaration[];
 }>;
 
 export type MoveInstructionOutcome =
@@ -286,6 +288,7 @@ export async function requestMoveInstructionPreview(
       beforeState: before.data.state,
       afterState: after.data.state,
       delta: data.preview.delta,
+      ...(added.length === 0 ? {} : { constants: added }),
     },
   };
 }
