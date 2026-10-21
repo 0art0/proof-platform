@@ -109,3 +109,44 @@ What needs prompt or context fixes, in order of impact:
    trial run) fell below the 0.55 threshold and fell back to the deterministic order, both on the
    contraposition goal where Jev's choice was reasonable. Where the scripted selections resolved, its
    top choice was the corpus suggestion in 2 of 4 scored calls.
+
+## After the prompt fixes, 2026-10-21
+
+The fixes, in the order they were made and measured (three more runs over the same five problems):
+
+- Formalizer (`proof-state-formalizer-v3`): the system message lists the built-in symbols with the
+  LaTeX the setup parser reads for each (`FORMALIZER_BUILTIN_LATEX`, checked by a worker test),
+  says they need no approval even when `approvedLibrary.operators` is empty, and says to write
+  implication as `\implies`, never `\to`. The `unapproved-constant` diagnostic now says that no
+  operators are approved "besides the built-in symbols".
+- Move author (`move-author-v2`): in the provider schema the source example has no `state`,
+  `outcome` or `expected` field, so it cannot state them; the system message says to state only
+  parameters with a value (never `selection` or `generated-id` ones such as
+  `premiseHypothesisIds`) and that an example selects only slots of the first step; a malformed
+  proposal's diagnostic names the field.
+- Move executor (`move-executor-v2`): the system message says to close a target with a hypothesis
+  by `close-by-hypothesis` (`close-by-assumption` only uses the state's additional assumptions) and
+  that targets an operation creates in place of its target stay in that target's collection.
+
+| Role             | Before (2 runs)                 | After                                                                                                   |
+| ---------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| formalizer       | 3 of 10 setups admitted         | 15 of 15 admitted, 13 equal to the corpus state (3 runs)                                                |
+| move executor    | 8 of 10 plans previewed         | 10 of 10 previewed and applied (2 runs with its fix)                                                    |
+| move author      | 0 of 8 outputs validated        | 10 of 14 validated (3 runs); 2 templates passed every kernel example and were submitted as drafts (201) |
+| move shortlister | 1 of 8 low-confidence fallbacks | 3 of 12 (no change was made)                                                                            |
+
+The move author's remaining outcomes are of a different kind: a validated proposal whose template
+fails a kernel check (a declared class the steps do not compose to, an example that does not run),
+which the person sees with its diagnostics and can revise; one output fixing a first-step result
+the user should choose; and two honest answers, a refusal and a context request. The last run had
+no example selecting a later step's slot.
+
+Still open:
+
+- **Librarian latency.** Its maximum reached 117.3 s, 2.7 s under the 120 s timeout it shares with
+  the other roles (`PROOF_AI_TIMEOUT_MS`). A role-specific budget (as the formalizer has) or medium
+  effort would remove the risk; that is a configuration choice.
+- **Shortlister threshold.** Fallbacks happened at confidences 0.47 to 0.54 against the 0.55
+  threshold. Lowering `PROOF_AI_SHORTLISTER_MIN_CONFIDENCE` trades fewer fallbacks for more wrong
+  rankings; five problems are too few to set it.
+- A none-relevant answer that should be given, and a library top-up, were not exercised.

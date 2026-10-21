@@ -69,7 +69,7 @@ describe("createAiRuntime", () => {
     expect(runtime["move-executor"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_EXECUTOR_MODEL,
-      promptVersion: "move-executor-v1",
+      promptVersion: "move-executor-v2",
       maxOutputTokens: DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_EXECUTOR_REASONING_EFFORT,
     });
@@ -83,7 +83,7 @@ describe("createAiRuntime", () => {
     expect(runtime["move-author"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_MOVE_AUTHOR_MODEL,
-      promptVersion: "move-author-v1",
+      promptVersion: "move-author-v2",
       maxOutputTokens: DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
     });
@@ -99,7 +99,7 @@ describe("createAiRuntime", () => {
     expect(runtime["proof-state-formalizer"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_FORMALIZER_MODEL,
-      promptVersion: "proof-state-formalizer-v2",
+      promptVersion: "proof-state-formalizer-v3",
       maxOutputTokens: DEFAULT_FORMALIZER_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_FORMALIZER_REASONING_EFFORT,
     });

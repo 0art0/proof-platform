@@ -42,6 +42,7 @@ import {
 } from "./librarian";
 import {
   MOVE_AUTHOR_MAX_EXAMPLES,
+  MOVE_AUTHOR_PREVIOUS_SYSTEM_MESSAGE,
   MOVE_AUTHOR_SYSTEM_MESSAGE,
   describePrimitives,
   moveAuthorContextSchema,
@@ -73,6 +74,7 @@ export {
   MOVE_AUTHOR_MAX_EXAMPLES,
   MOVE_AUTHOR_MAX_FEEDBACK,
   MOVE_AUTHOR_PARAMETER_KINDS,
+  MOVE_AUTHOR_PREVIOUS_SYSTEM_MESSAGE,
   MOVE_AUTHOR_SYSTEM_MESSAGE,
   describePrimitives,
   moveAuthorContextSchema,
@@ -1331,7 +1333,39 @@ export function prepareLlmCall(
 
 const FORMALIZER_BASE_SYSTEM_MESSAGE =
   "Return one structured N26 problem draft, a permitted context request, or a refusal. Mirror the existing proof-state model in the draft: use the supplied problem, background, preferences, library layers, and selected packs exactly; use declarations with admitted sorts; express hypotheses and goals as LaTeX inputs. Do not add a separate presentation AST, a library result, proof steps, or unsupported variable kinds. The worker validates and parses the draft into authoritative plain MathJSON, then presents it for human review. The draft is a proposal, never an approved proof state.";
-const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. If the problem needs an operator that is not listed, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
+/** The formalizer message before it listed the built-in symbols (`proof-state-formalizer-v2`). */
+const FORMALIZER_PREVIOUS_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. If the problem needs an operator that is not listed, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
+/**
+ * The built-in symbols a formalized statement may use without approval, each with LaTeX that the
+ * problem-setup parser reads as that symbol. The worker's tests parse every entry.
+ */
+export const FORMALIZER_BUILTIN_LATEX: readonly (readonly [symbol: string, latex: string])[] = [
+  ["Not", "\\neg p"],
+  ["And", "p \\land q"],
+  ["Or", "p \\lor q"],
+  ["Implies", "p \\implies q"],
+  ["Equivalent", "p \\iff q"],
+  ["ForAll", "\\forall x, x = x"],
+  ["Exists", "\\exists x, x = a"],
+  ["Equal", "a = b"],
+  ["NotEqual", "a \\ne b"],
+  ["Less", "a < b"],
+  ["LessEqual", "a \\le b"],
+  ["Greater", "a > b"],
+  ["GreaterEqual", "a \\ge b"],
+  ["Element", "x \\in A"],
+  ["NotElement", "x \\notin A"],
+  ["Subset", "A \\subset B"],
+  ["SubsetEqual", "A \\subseteq B"],
+  ["Add", "a + b"],
+  ["Subtract", "a - b"],
+  ["Negate", "-a"],
+  ["Multiply", "a \\cdot b"],
+  ["Divide", "\\frac{a}{b}"],
+  ["Power", "a^2"],
+  ["Abs", "|a|"],
+];
+const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. The built-in symbols are always available, need no approval and are never listed in approvedLibrary.operators, even when that list is empty; write them with exactly this LaTeX: ${FORMALIZER_BUILTIN_LATEX.map(([symbol, latex]) => `${symbol} ${latex}`).join("; ")}. Write implication as \\implies, never \\to or \\rightarrow, which denote a function arrow. Never ask for a definition of a built-in symbol. If the problem needs an operator that is neither listed nor built in, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
 
 function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "topic-extractor") {
@@ -1345,7 +1379,9 @@ function expectedSystemMessage(role: SupportedLlmRole): string {
   return SHORTLISTER_SYSTEM_MESSAGE;
 }
 
-const MOVE_EXECUTOR_SYSTEM_MESSAGE = `Return one plan of kernel operations that carries out the described step on the supplied target sequent, a permitted context request, or a refusal. Use only the supplied target, hypotheses, declarations, operators and approved results, and refer to existing goals, obligations and hypotheses by their exact supplied IDs. A plan has between 1 and ${MAX_PLAN_STEPS} operations; the kernel applies each to the state the previous one produced, and rejects any step that is not valid. Give every new statement, hypothesis, obligation, declaration or assumption you introduce a short unique label of letters, digits, dots, underscores and hyphens: the platform makes labels globally unique, and later operations refer to the same label. Write every expression as MathJSON: a symbol or number as a plain string or number, an application as [Operator, ...operands]. Operations that mark a sorry or accept an attested inference do not exist for you. The platform previews the plan and a person confirms it; nothing is applied before that. If the description cannot be carried out with the supplied context, return an insufficient-context request or a refusal instead of guessing.`;
+/** The move executor message before it said how targets are closed and kept (`move-executor-v1`). */
+const MOVE_EXECUTOR_PREVIOUS_SYSTEM_MESSAGE = `Return one plan of kernel operations that carries out the described step on the supplied target sequent, a permitted context request, or a refusal. Use only the supplied target, hypotheses, declarations, operators and approved results, and refer to existing goals, obligations and hypotheses by their exact supplied IDs. A plan has between 1 and ${MAX_PLAN_STEPS} operations; the kernel applies each to the state the previous one produced, and rejects any step that is not valid. Give every new statement, hypothesis, obligation, declaration or assumption you introduce a short unique label of letters, digits, dots, underscores and hyphens: the platform makes labels globally unique, and later operations refer to the same label. Write every expression as MathJSON: a symbol or number as a plain string or number, an application as [Operator, ...operands]. Operations that mark a sorry or accept an attested inference do not exist for you. The platform previews the plan and a person confirms it; nothing is applied before that. If the description cannot be carried out with the supplied context, return an insufficient-context request or a refusal instead of guessing.`;
+const MOVE_EXECUTOR_SYSTEM_MESSAGE = `Return one plan of kernel operations that carries out the described step on the supplied target sequent, a permitted context request, or a refusal. Use only the supplied target, hypotheses, declarations, operators and approved results, and refer to existing goals, obligations and hypotheses by their exact supplied IDs. A plan has between 1 and ${MAX_PLAN_STEPS} operations; the kernel applies each to the state the previous one produced, and rejects any step that is not valid. Give every new statement, hypothesis, obligation, declaration or assumption you introduce a short unique label of letters, digits, dots, underscores and hyphens: the platform makes labels globally unique, and later operations refer to the same label. To close a target with one of its hypotheses use close-by-hypothesis; close-by-assumption closes a target only with an entry of the state's additional assumptions, never with a hypothesis. The targets an operation creates in place of its target, such as the premise targets of apply-result-backward or the children of a case split, stay in the same collection as that target: on a goal they are goals, on an obligation they are obligations; only a field named obligationId or obligationIds creates obligations. Write every expression as MathJSON: a symbol or number as a plain string or number, an application as [Operator, ...operands]. Operations that mark a sorry or accept an attested inference do not exist for you. The platform previews the plan and a person confirms it; nothing is applied before that. If the description cannot be carried out with the supplied context, return an insufficient-context request or a refusal instead of guessing.`;
 const SHORTLISTER_SYSTEM_MESSAGE =
   "Shortlist only supplied candidate IDs. Do not propose operations or new mathematics. If every supplied candidate is clearly unrelated to the selected fragment, return a none-relevant outcome with your confidence and a short reason instead of forcing a choice; use it only when no candidate is a plausible next step for the selection, not when the best candidate is merely a weak fit.";
 /** The shortlister message before the none-relevant outcome existed. */
@@ -1362,10 +1398,14 @@ const SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE =
 function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean {
   return (
     content === expectedSystemMessage(role) ||
-    (role === "proof-state-formalizer" && content === FORMALIZER_BASE_SYSTEM_MESSAGE) ||
+    (role === "proof-state-formalizer" &&
+      (content === FORMALIZER_BASE_SYSTEM_MESSAGE ||
+        content === FORMALIZER_PREVIOUS_SYSTEM_MESSAGE)) ||
     (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE) ||
     (role === "background-proposer" && content === BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE) ||
-    (role === "librarian" && content === LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE)
+    (role === "librarian" && content === LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "move-author" && content === MOVE_AUTHOR_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "move-executor" && content === MOVE_EXECUTOR_PREVIOUS_SYSTEM_MESSAGE)
   );
 }
 

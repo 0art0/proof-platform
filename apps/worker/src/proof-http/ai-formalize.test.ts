@@ -5,7 +5,8 @@ import { ELEMENTARY_CORPUS, starterLibraryPacks } from "@proof/library";
 import { setDraft } from "../problem-setup.testing";
 import { InspectableMemoryProofStore } from "../memory-proof-store.testing";
 import { MemoryLlmCallStore } from "../memory-llm-call-store";
-import type { LlmTransport, PreparedLlmCall } from "@proof/llm";
+import { createLatexRenderer } from "@proof/language";
+import { FORMALIZER_BUILTIN_LATEX, type LlmTransport, type PreparedLlmCall } from "@proof/llm";
 import { createProofHttpService, type ProofHttpService } from ".";
 import type { AiRuntime } from "../ai-runtime";
 
@@ -106,6 +107,18 @@ function counts(store: InspectableMemoryProofStore) {
 
 afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.close()));
+});
+
+describe("formalizer system message", () => {
+  it("writes each built-in symbol with LaTeX that the problem-setup parser reads as that symbol", () => {
+    const latex = createLatexRenderer();
+    for (const [symbol, input] of FORMALIZER_BUILTIN_LATEX) {
+      const parsed = latex.parse(input);
+      expect(parsed.ok, input).toBe(true);
+      const expression = parsed.ok ? parsed.expression : undefined;
+      expect(Array.isArray(expression) ? expression[0] : expression, input).toBe(symbol);
+    }
+  });
 });
 
 describe("formalizer HTTP endpoint", () => {

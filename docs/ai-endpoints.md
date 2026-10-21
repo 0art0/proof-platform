@@ -354,7 +354,10 @@ clients cannot provide library statements, operators, or sorts directly. The for
 `approvedLibrary.operators` are the selected packs' operators followed by the approved constants
 (`approvedLibrary.sorts` stays the problem setup's sort menu), and its system message requires it to
 formalize using only those operators, the built-in symbols and its own declarations, and to ask for
-an operator definition instead of inventing one. The decision must be an approval of the same
+an operator definition instead of inventing one. It lists the built-in symbols with the LaTeX the
+setup parser reads for each (`FORMALIZER_BUILTIN_LATEX`, for example `\implies` rather than `\to`,
+which parses as a function arrow), and says they need no approval even when
+`approvedLibrary.operators` is empty. The decision must be an approval of the same
 construction (`404` otherwise; `409` for a rejected decision or a constant that clashes with the
 registry).
 
@@ -410,8 +413,9 @@ evidence belongs to the construction and is available at
 
 Call IDs are immutable within their owner scope. Retrying the same ID and identical prepared call
 replays its stored outcome; reusing it for different input or dispatch settings is a conflict. A
-changed context should use a new call ID. The strengthened formalizer system message has the
-prompt version `proof-state-formalizer-v2`; calls stored with the earlier message remain readable.
+changed context should use a new call ID. The formalizer system message that lists the built-in
+symbols has the prompt version `proof-state-formalizer-v3`; calls stored with an earlier message
+remain readable.
 
 ## Check and approve a setup with approved constants and library
 
@@ -740,7 +744,10 @@ IDs, and cites only supplied library results; anything else is recorded and answ
 (`status: "rejected"`). The model names every new statement, hypothesis, obligation, declaration or
 assumption with a short **label**; the worker makes labels globally unique by prefixing the call
 ID, and a later step refers to an earlier label by the same text. State IDs are chained by the
-worker (`state:<callId>:<n>`).
+worker (`state:<callId>:<n>`). The system message (prompt version `move-executor-v2`; calls
+stored with the earlier message remain readable) also says that a target is closed with a
+hypothesis by `close-by-hypothesis`, not `close-by-assumption`, and that targets an operation
+creates in place of its target stay in that target's collection.
 
 The worker runs the plan with `planMoveSequence` against the current state and answers `200`:
 
@@ -829,10 +836,15 @@ selection slots, a plan of one to sixteen primitive steps (each with the selecti
 slots, as expressions over the metavariables, and its menu parameters), required results, and three
 to eight examples. Exactly one example is the situation the step was applied to: for it the
 platform supplies the abstracted state and what the step left, so the model states only the
-selections. At least one more positive example (with its own state and the outcome it expects) and
+selections (and the first step's choices): in the provider schema the source example has no
+`state`, `outcome` or `expected` field at all. A step's parameters and an example's choices state
+only menu parameters; parameters the platform fills itself (`selection` and `generated-id`, such as
+premise hypotheses) are never stated. At least one more positive example (with its own state and the outcome it expects) and
 at least one negative or boundary example are required. An output that breaks these rules, names a
 primitive, slot, parameter or result the context does not offer, or does not compile to a
-well-formed template, is recorded and answered `422` (`status: "rejected"`).
+well-formed template, is recorded and answered `422` (`status: "rejected"`); a malformed proposal's
+diagnostic names the field (`(at examples.1.choices.0.resultId)`). This system message has the
+prompt version `move-author-v2`; calls stored with the earlier message remain readable.
 
 **Template language.** The proposal is compiled into the existing authored-move template. One
 extension carries what executor steps need and a menu cannot offer: a **construction**. A recorded

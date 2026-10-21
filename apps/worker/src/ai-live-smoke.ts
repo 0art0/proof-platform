@@ -571,13 +571,15 @@ async function runProblem(api: Api, problem: CorpusProblem): Promise<ProblemReco
         target: { kind: "goal", id: goal.id },
         selections: [conclusionSelection],
       }),
-    (body, status) => ({
+    (body, status, raw) => ({
       outcome: statusOf(body, status),
       detail: {
         steps: body.steps?.map((planned: Json) => planned.operation?.kind ?? planned.kind),
         transitionClass: body.transitionClass,
         failure: body.failure,
         result: body.result,
+        // A plan the kernel rejected is validated output, so keep it here for diagnosis.
+        ...(body.status === "plan-failed" ? { plan: (raw as Json | undefined)?.result } : {}),
         ...diagnosticsOf(body),
       },
     }),
