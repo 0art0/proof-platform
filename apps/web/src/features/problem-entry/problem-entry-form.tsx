@@ -653,7 +653,8 @@ function ReviewPanel({
               )}
               {library.addedOperatorSymbols.length === 0 ? null : (
                 <em className={styles.hint}>
-                  Adds notation: {library.addedOperatorSymbols.join(", ")}.
+                  New notation these results introduce: {library.addedOperatorSymbols.join(", ")}.
+                  It joins the proof’s constants when a step first applies a result that uses it.
                 </em>
               )}
             </dd>

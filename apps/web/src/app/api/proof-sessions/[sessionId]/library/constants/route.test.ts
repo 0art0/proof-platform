@@ -20,8 +20,14 @@ describe("GET /api/proof-sessions/:sessionId/library/constants", () => {
     const constants = {
       sessionId: "session:test",
       readOnly: false,
-      active: ["Divides"],
-      dormant: ["Gcd"],
+      active: [
+        {
+          symbol: "Divides",
+          origin: "setup",
+          operator: { id: "operator:divides", symbol: "Divides" },
+        },
+      ],
+      available: [],
       activated: [],
     };
     const request = new Request(

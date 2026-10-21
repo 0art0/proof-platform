@@ -13,7 +13,10 @@
  *    record in the artifact;
  * 4. displayed suggestion sets against their historical snapshot, and every preview re-prepared;
  * 5. every transition replayed through `prepareProofCommand` (the kernel's `applyTransition`) from
- *    its parent snapshot, reproducing the stored command record, child snapshot, edge and event;
+ *    its parent snapshot, reproducing the stored command record, child snapshot, edge and event.
+ *    The constants a step activates are derived from the library result it applied and must be
+ *    exactly the artifact's activation records of that step; an activation whose step is not in
+ *    the artifact must be one a deletion tombstone accounts for;
  * 6. replay-step records, deletion tombstones, interaction events and inquiry commands (each
  *    re-prepared by `prepareInquiryCommand` against the earlier records);
  * 7. the library: background revisions replayed, every addition event re-run through the
@@ -44,7 +47,9 @@ import {
 import {
   LEGACY_ARTIFACT_VERSION,
   SUPPORTED_ARTIFACT_VERSIONS,
+  appliedResultIds,
   assignTransitionSequence,
+  effectiveOperators,
   canonicalArtifactJson,
   deriveArtifactFinalMaterial,
   deriveTranslationDictionary,
@@ -58,6 +63,7 @@ import {
   suggestionSetMatchesNode,
   withArtifactSessionId,
   withoutStoredTransitionEvidence,
+  type ConstantActivation,
   type DisplayedSuggestionSet,
   type InquiryContextEdge,
   type InquiryRecord,
@@ -82,6 +88,7 @@ import {
 import { approvedDerivedResults } from "./conditional-lemmas";
 import { approvedAuthoredMacros, approvedAuthoredMoves } from "./move-authoring";
 import { sessionLibraryResults, withSessionResults } from "./session-results";
+import { catalogOperators, extendOperators, stepConstants } from "./session-constants";
 import { artifactDigest } from "./artifact-export";
 import { storedLlmCallSchema } from "./llm-call-repository";
 import {
@@ -213,6 +220,10 @@ export async function importProofArtifact(
           : { metadata: artifact.problemSetup.metadata }),
       };
       await transaction.insertSession(session);
+      // The session row holds the setup operators; the activated constants are rows of their own.
+      for (const activation of bySequence(artifact.constantActivations)) {
+        await transaction.insertConstantActivation(sessionId, activation);
+      }
       for (const node of tree.nodes) await transaction.insertNode(sessionId, node);
       for (const set of tree.suggestionSets) {
         await transaction.insertSuggestionSet(sessionId, set);
@@ -343,6 +354,19 @@ function artifactAuthoredMoves(
   };
 }
 
+/** The constant activations of an artifact, by the step that triggered them. */
+type ActivationPlan = Readonly<{
+  byCommand: ReadonlyMap<string, readonly ConstantActivation[]>;
+  /** Activations whose step was deleted: their constants stay active. */
+  orphans: readonly ConstantActivation[];
+  all: readonly ConstantActivation[];
+}>;
+
+type StepScope = Readonly<{
+  operators: NonNullable<ProtocolEnvironment["operators"]>;
+  results: NonNullable<ProtocolEnvironment["results"]>;
+}>;
+
 /** Every revalidation step after the schema and the digest; throws `ArtifactRejection`. */
 class ArtifactValidator {
   private readonly environment: ProtocolEnvironment;
@@ -367,7 +391,14 @@ class ArtifactValidator {
       artifactSessionResults(artifact.library.finalLibrary as readonly LibraryArtifact[]),
     );
     this.definitions = baseDefinitions;
-    const operators = artifact.initialState.operators;
+    // Every snapshot is read in the effective operators: the setup operators plus the activated
+    // constants. Each transition is replayed in the operators in force at its step.
+    const effective = effectiveOperators(
+      artifact.initialState.operators,
+      artifact.constantActivations,
+    );
+    if (!effective.ok) fail("invalid-artifact", effective.message, ["constantActivations"]);
+    const operators = effective.operators;
     let results: ProtocolEnvironment["results"];
     try {
       results = baseDefinitions.catalog(operators).kernelResults;
@@ -389,9 +420,9 @@ class ArtifactValidator {
     );
     if (authored.length > 0 || macros.length > 0) {
       this.definitions = Object.freeze({
+        ...baseDefinitions,
         moves: [...baseDefinitions.moves, ...authored],
         ...(macros.length === 0 ? {} : { macros }),
-        catalog: baseDefinitions.catalog,
       });
     }
     this.environment = {
@@ -512,6 +543,10 @@ class ArtifactValidator {
       if (set.nodeId !== node.id) {
         fail("dangling-reference", `The preview ${preview.id} names another node's set.`, path);
       }
+      // A preview that names constants was made before a step activated them: it is re-prepared in
+      // the effective operators plus those, which must be library constants of the artifact that
+      // the previewed result applies.
+      const previewOperators = this.previewOperators(preview, path);
       const prepared = prepareMovePreview(
         node,
         set,
@@ -523,6 +558,7 @@ class ArtifactValidator {
           operation: preview.operation,
           ...(preview.menuSelection === undefined ? {} : { menuSelection: preview.menuSelection }),
           ...(preview.definitions === undefined ? {} : { definitions: preview.definitions }),
+          ...(preview.constants === undefined ? {} : { constants: preview.constants }),
           ...(preview.macro === undefined
             ? {}
             : {
@@ -535,7 +571,13 @@ class ArtifactValidator {
                 },
               }),
         },
-        this.environment,
+        previewOperators === undefined
+          ? this.environment
+          : {
+              ...this.environment,
+              operators: previewOperators,
+              results: this.resultsIn(previewOperators),
+            },
       );
       // Version 1 stored no evidence, so its previews are compared without it; version 2 must
       // store exactly the evidence the kernel reports.
@@ -556,6 +598,40 @@ class ArtifactValidator {
     });
   }
 
+  /**
+   * The operators a preview is re-prepared in: the effective operators, extended by the constants
+   * the preview names. Undefined when it names none.
+   */
+  private previewOperators(
+    preview: MovePreview,
+    path: Path,
+  ): NonNullable<ProtocolEnvironment["operators"]> | undefined {
+    if (preview.constants === undefined) return undefined;
+    const effective = this.environment.operators ?? [];
+    const operations = [preview.operation, ...(preview.macro?.steps ?? []).map((s) => s.operation)];
+    const applied = new Set(operations.flatMap((operation) => appliedResultIds(operation)));
+    const carried = new Set(
+      this.definitions
+        .catalog(catalogOperators(effective, this.definitions))
+        .results.filter(({ id }) => applied.has(id))
+        .flatMap(({ operators }) => (operators ?? []).map(({ symbol }) => symbol)),
+    );
+    const library = this.definitions.libraryConstants ?? [];
+    for (const constant of preview.constants) {
+      const declared =
+        effective.some((operator) => sameJson(operator, constant)) ||
+        library.some((operator) => sameJson(operator, constant));
+      if (!declared || !carried.has(constant.symbol)) {
+        fail(
+          "preview-not-reproduced",
+          `The preview ${preview.id} names the constant ${constant.symbol}, which the result it applies does not declare.`,
+          path,
+        );
+      }
+    }
+    return extendOperators(effective, preview.constants);
+  }
+
   /** Replay every transition through the kernel from its stored parent snapshot. */
   private checkTransitions(): void {
     const { tree } = this.artifact;
@@ -570,6 +646,7 @@ class ArtifactValidator {
         ["tree", "edges"],
       );
     }
+    const activations = this.activationPlan();
     tree.edges.forEach((edge, index) => {
       const path = ["tree", "edges", index];
       const command = commands.get(edge.commandId);
@@ -581,6 +658,7 @@ class ArtifactValidator {
           path,
         );
       }
+      const scope = this.stepScope(edge, activations, path);
       const parent = this.requireNode(edge.parentNodeId, [...path, "parentNodeId"]);
       const child = this.requireNode(edge.childNodeId, [...path, "childNodeId"]);
       const stored = command.prepared.command;
@@ -594,10 +672,8 @@ class ArtifactValidator {
           : this.requirePreview(stored.previewId, [...path, "previewId"]);
       const replayed = prepareProofCommand(parent, stored, {
         trustedActor: stored.actor,
-        ...(this.environment.operators === undefined
-          ? {}
-          : { operators: this.environment.operators }),
-        ...(this.environment.results === undefined ? {} : { results: this.environment.results }),
+        operators: scope.operators,
+        results: scope.results,
         ...(this.environment.moves === undefined ? {} : { moves: this.environment.moves }),
         ...(suggestionSet === undefined ? {} : { suggestionSet }),
         ...(preview === undefined ? {} : { preview }),
@@ -625,6 +701,135 @@ class ArtifactValidator {
         );
       }
     });
+  }
+
+  /**
+   * The constant activations by the step that triggered them. An activation whose step is in the
+   * artifact belongs to that step; one whose step is not there must have been deleted with it
+   * (an ID-only tombstone names the command, edge and node), and the constant stays active.
+   */
+  private activationPlan(): ActivationPlan {
+    const { tree, constantActivations } = this.artifact;
+    const retained = new Set(tree.commands.map((command) => command.prepared.command.commandId));
+    const deleted = {
+      commands: new Set(tree.deletions.flatMap(({ deletedCommandIds }) => deletedCommandIds)),
+      edges: new Set(tree.deletions.flatMap(({ deletedEdgeIds }) => deletedEdgeIds)),
+      nodes: new Set(tree.deletions.flatMap(({ deletedNodeIds }) => deletedNodeIds)),
+    };
+    const byCommand = new Map<string, ConstantActivation[]>();
+    const orphans: ConstantActivation[] = [];
+    constantActivations.forEach((activation, index) => {
+      const path = ["constantActivations", index];
+      if (retained.has(activation.commandId)) {
+        byCommand.set(activation.commandId, [
+          ...(byCommand.get(activation.commandId) ?? []),
+          activation,
+        ]);
+        return;
+      }
+      if (
+        !deleted.commands.has(activation.commandId) ||
+        !deleted.edges.has(activation.edgeId) ||
+        !deleted.nodes.has(activation.nodeId)
+      ) {
+        fail(
+          "constant-activation-mismatch",
+          `The activation of ${activation.symbol} names a step that is neither in the artifact nor recorded as deleted.`,
+          path,
+        );
+      }
+      // A deleted step's activation is still in force: no retained step can rely on its absence.
+      const library = this.definitions.libraryConstants ?? [];
+      if (!library.some((declared) => sameJson(declared, activation.declaration))) {
+        fail(
+          "constant-activation-mismatch",
+          `The activated constant ${activation.symbol} is not declared by any library result of the artifact.`,
+          path,
+        );
+      }
+      orphans.push(activation);
+    });
+    // Activations are numbered in the order their steps were sequenced.
+    let previous = 0;
+    for (const activation of constantActivations) {
+      if (!orphans.includes(activation)) {
+        if (activation.transitionSequence < previous) {
+          fail(
+            "constant-activation-mismatch",
+            `The activation of ${activation.symbol} is out of order with the steps' sequence.`,
+            ["constantActivations", activation.sequence - 1],
+          );
+        }
+        previous = activation.transitionSequence;
+      }
+    }
+    return { byCommand, orphans, all: constantActivations };
+  }
+
+  /**
+   * The operators a step runs in, and the activations it must have recorded. The operators in force
+   * before the step are the setup operators, the constants of deleted steps and the constants
+   * activated by earlier steps; applying a library result that uses a constant not among them
+   * activates it, and the artifact must record exactly that.
+   */
+  private stepScope(edge: ProofEdge, plan: ActivationPlan, path: Path): StepScope {
+    const sequence = edge.sequence ?? Number.MAX_SAFE_INTEGER;
+    const earlier = plan.all.filter(
+      (activation) =>
+        plan.orphans.includes(activation) ||
+        (activation.commandId !== edge.commandId && activation.transitionSequence < sequence),
+    );
+    const before = extendOperators(
+      this.artifact.initialState.operators,
+      earlier.map(({ declaration }) => declaration),
+    );
+    const step = stepConstants(this.definitions, before, edge.operation);
+    const expected = step?.constants ?? [];
+    const own = plan.byCommand.get(edge.commandId) ?? [];
+    const matches =
+      own.length === expected.length &&
+      own.every(
+        (activation, position) =>
+          activation.symbol === expected[position]?.symbol &&
+          sameJson(activation.declaration, expected[position]) &&
+          activation.resultId === step?.resultId &&
+          activation.edgeId === edge.id &&
+          activation.nodeId === edge.childNodeId &&
+          activation.transitionSequence === edge.sequence,
+      );
+    if (!matches) {
+      fail(
+        "constant-activation-mismatch",
+        expected.length === 0
+          ? `The step of edge ${edge.id} activates no constant, but the artifact records one for it.`
+          : `The step of edge ${edge.id} applies ${step?.resultId} and so activates ${expected
+              .map(({ symbol }) => symbol)
+              .join(", ")}; the artifact's activation records of that step differ.`,
+        path,
+      );
+    }
+    const operators = extendOperators(before, expected);
+    const results = this.resultsIn(operators);
+    return { operators, results };
+  }
+
+  private readonly scopedResults = new Map<string, NonNullable<ProtocolEnvironment["results"]>>();
+
+  /** The approved results adapted to the given operators (cached by operator environment). */
+  private resultsIn(
+    operators: NonNullable<ProtocolEnvironment["operators"]>,
+  ): NonNullable<ProtocolEnvironment["results"]> {
+    const key = JSON.stringify(operators);
+    const cached = this.scopedResults.get(key);
+    if (cached !== undefined) return cached;
+    const results = this.definitions.catalog(operators).kernelResults;
+    if (results === undefined) {
+      fail("invalid-artifact", "The approved results cannot be adapted to the step's operators.", [
+        "constantActivations",
+      ]);
+    }
+    this.scopedResults.set(key, results);
+    return results;
   }
 
   /** The replayed transition in the shape this artifact's version stores. */
@@ -808,7 +1013,9 @@ class ArtifactValidator {
       this.artifact.tree.edges.map((edge) => [edge.childNodeId as string, edge]),
     );
     const results = new Set<string>(
-      this.definitions.catalog(this.artifact.initialState.operators).results.map(({ id }) => id),
+      this.definitions
+        .catalog(catalogOperators(this.environment.operators ?? [], this.definitions))
+        .results.map(({ id }) => id),
     );
     const methods = {
       moves: new Set<string>(this.definitions.moves.map(({ id }) => id)),
@@ -1053,7 +1260,7 @@ class ArtifactValidator {
         ["final"],
       );
     }
-    const dictionary = deriveTranslationDictionary(this.artifact.initialState.operators);
+    const dictionary = deriveTranslationDictionary(this.environment.operators ?? []);
     if (!sameJson(dictionary, this.artifact.translationDictionary)) {
       fail(
         "translation-dictionary-mismatch",

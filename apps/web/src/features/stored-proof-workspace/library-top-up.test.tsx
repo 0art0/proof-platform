@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnchoredProofSelection } from "@proof/selections";
 import { describeTopUpFailure, describeTopUpOutcome } from "./library-top-up-contract";
 import { TopUpNotice, useLibraryTopUp } from "./library-top-up";
+import { useSessionConstants } from "./use-session-constants";
 
 afterEach(() => {
   cleanup();
@@ -22,10 +23,14 @@ function jsonResponse(value: unknown, status = 200): Response {
 
 const ACTIVATION = {
   symbol: "Gcd",
+  sequence: 1,
+  commandId: "command:1",
   edgeId: "edge:1",
   nodeId: "node:1",
   resultId: "result:library-gcd",
-  sequence: 1,
+  resultName: "Gcd divides",
+  transitionSequence: 1,
+  activatedAt: "2026-10-19T10:00:00.000Z",
   topUp: null,
 };
 function constants(activated: readonly unknown[] = []) {
@@ -34,8 +39,8 @@ function constants(activated: readonly unknown[] = []) {
     data: {
       sessionId: "session:a",
       readOnly: false,
-      active: ["Divides"],
-      dormant: [],
+      active: [],
+      available: [],
       activated,
     },
   };
@@ -89,10 +94,12 @@ function Harness({
   selections?: readonly AnchoredProofSelection[];
 }>) {
   const [nodeId, setNodeId] = useState(initialNode);
+  const { view: read } = useSessionConstants("session:a", nodeId);
   const topUp = useLibraryTopUp({
     sessionId: "session:a",
     nodeId,
     enabled,
+    activated: read.kind === "ready" ? read.constants.activated : undefined,
     createId: (prefix) => `${prefix}-fixed`,
   });
   return (
@@ -157,7 +164,48 @@ describe("automatic new-constants top-up", () => {
     render(<Harness enabled={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Move on" }));
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(calls).toHaveLength(0);
+    // The constants are still read (the list needs no assistant); nothing is requested.
+    expect(topUpCalls(calls)).toHaveLength(0);
+    expect(calls.every(({ url }) => url.endsWith("/library/constants"))).toBe(true);
+  });
+
+  it("asks once more at a later step when the first request was rate limited, and then stops", async () => {
+    const calls = stubWorker({
+      activated: () => [ACTIVATION],
+      topUp: () =>
+        jsonResponse(
+          { ok: false, error: { code: "ai-rate-limited", message: "Retry later." } },
+          429,
+        ),
+    });
+    render(<Harness />);
+    await waitFor(() => expect(topUpCalls(calls)).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Nothing more happens on its own: the retry waits for the proof to move on.
+    expect(topUpCalls(calls)).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move on" }));
+    await waitFor(() => expect(topUpCalls(calls)).toHaveLength(2));
+    expect(topUpCalls(calls)[1]?.body).toMatchObject({ kind: "new-constants", constants: ["Gcd"] });
+
+    // A second refusal ends the attempts for this page.
+    fireEvent.click(screen.getByRole("button", { name: "Move on" }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(topUpCalls(calls)).toHaveLength(2);
+    expect(screen.queryByTestId("library-top-up-status")).toBeNull();
+  });
+
+  it("does not ask again after an answer that is not a rate limit", async () => {
+    const calls = stubWorker({
+      activated: () => [ACTIVATION],
+      topUp: () =>
+        jsonResponse({ ok: false, error: { code: "ai-disabled", message: "Off." } }, 503),
+    });
+    render(<Harness />);
+    await waitFor(() => expect(topUpCalls(calls)).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Move on" }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(topUpCalls(calls)).toHaveLength(1);
   });
 
   it.each([

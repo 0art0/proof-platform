@@ -14,7 +14,12 @@
  * - `problemSetup`: the session metadata (problem, background profile, preferences, library
  *   layer IDs). Setup edits and topic/vocabulary manifest stages are not stored (N26 keeps drafts
  *   in the browser), so they are absent.
- * - `initialState`: the root node ID and the session operators; the root snapshot is in `tree`.
+ * - `initialState`: the root node ID and the session's setup operators; the root snapshot is in
+ *   `tree`.
+ * - `constantActivations`: the library constants that committed steps activated, in activation
+ *   order (absent in an artifact written before they existed, which has none). Every snapshot is
+ *   read in the setup operators plus these; an importer re-derives each activation from the step
+ *   that applied the library result and compares.
  * - `library`: the library's operator environment, the session's addition events (admitted and
  *   rejected) and background revisions, and the final active library (global + session layers).
  * - `tree`: the full retained tree with complete snapshots, edges, transition events, the
@@ -50,6 +55,11 @@ import {
 import { z } from "zod";
 import { analyzeDiscoveryTree, prunedProof } from "./discovery-tree";
 import { inquiryRecordSchema, type InquiryRecord } from "./inquiry";
+import {
+  constantActivationSchema,
+  effectiveOperators,
+  type ConstantActivation,
+} from "./constant-activation";
 import { interactionEventSchema, type InteractionEvent } from "./interaction-events";
 import { proofDeletionRecordSchema, type ProofDeletionRecord } from "./move-deletion";
 import { semanticReplayStepRecordSchema, type SemanticReplayStepRecord } from "./semantic-replay";
@@ -206,8 +216,11 @@ export type ProofArtifact = Readonly<{
   problemSetup: Readonly<{ metadata: ProofSessionMetadata | null }>;
   initialState: Readonly<{
     rootNodeId: ProofNode["id"];
+    /** The setup operators; the effective operators add `constantActivations`. */
     operators: readonly OperatorDeclaration[];
   }>;
+  /** Library constants activated by committed steps, in activation order. */
+  constantActivations: readonly ConstantActivation[];
   library: ProofArtifactLibrary;
   tree: ProofArtifactTree;
   interactionEvents: readonly InteractionEvent[];
@@ -221,8 +234,10 @@ export type ProofArtifact = Readonly<{
 export type ProofArtifactContent = Omit<ProofArtifact, "digest">;
 
 export type ProofArtifactEnvironment = Readonly<{
-  /** The session operators (`initialState.operators`). */
+  /** The session's setup operators (`initialState.operators`). */
   operators: readonly OperatorDeclaration[];
+  /** The activated constants (`constantActivations`); snapshots are read in both. */
+  activations?: readonly ConstantActivation[] | undefined;
   /** The library operator environment (`library.operators`). */
   libraryOperators: readonly OperatorDeclaration[];
 }>;
@@ -234,7 +249,10 @@ export type ProofArtifactEnvironment = Readonly<{
 export function createProofArtifactSchema(
   environment: ProofArtifactEnvironment,
 ): z.ZodType<ProofArtifact> {
-  const protocolEnvironment = { operators: environment.operators };
+  const activations = environment.activations ?? [];
+  const effective = effectiveOperators(environment.operators, activations);
+  if (!effective.ok) throw new Error(effective.message);
+  const protocolEnvironment = { operators: effective.operators };
   const libraryEnvironment = { operators: environment.libraryOperators };
   const libraryArtifactSchema = createLibraryArtifactSchema(libraryEnvironment);
   return z
@@ -254,6 +272,7 @@ export function createProofArtifactSchema(
           operators: operatorDeclarationsSchema,
         })
         .strict(),
+      constantActivations: z.array(constantActivationSchema).default([]),
       library: z
         .object({
           operators: operatorDeclarationsSchema,
@@ -299,6 +318,13 @@ export function createProofArtifactSchema(
           path: ["initialState", "operators"],
         });
       }
+      if (!sameJson(artifact.constantActivations, activations)) {
+        context.addIssue({
+          code: "custom",
+          message: "The constant activations differ from the parsing environment.",
+          path: ["constantActivations"],
+        });
+      }
       if (!sameJson(artifact.library.operators, environment.libraryOperators)) {
         context.addIssue({
           code: "custom",
@@ -309,15 +335,28 @@ export function createProofArtifactSchema(
       const libraryOperators = new Map(
         artifact.library.operators.map((operator) => [operator.symbol, operator]),
       );
-      artifact.initialState.operators.forEach((operator, index) => {
+      effective.operators.forEach((operator, index) => {
         if (!sameJson(libraryOperators.get(operator.symbol), operator)) {
           context.addIssue({
             code: "custom",
             message: `The library environment must declare the session operator ${operator.symbol} identically.`,
-            path: ["initialState", "operators", index],
+            path:
+              index < artifact.initialState.operators.length
+                ? ["initialState", "operators", index]
+                : ["constantActivations", index - artifact.initialState.operators.length],
           });
         }
       });
+      if (
+        artifact.constantActivations.length > 0 &&
+        artifact.artifactVersion === LEGACY_ARTIFACT_VERSION
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "A version-1 artifact has no constant activations.",
+          path: ["constantActivations"],
+        });
+      }
       artifact.library.additionEvents.forEach((event, index) => {
         if (event.sessionId !== artifact.sessionId) {
           context.addIssue({
@@ -386,8 +425,20 @@ export function parseProofArtifact(input: unknown): ParseProofArtifactResult {
         "operators",
       ]);
     }
+    const activations = z
+      .array(constantActivationSchema)
+      .safeParse(input.constantActivations ?? []);
+    const effective = activations.success
+      ? effectiveOperators(operators.data, activations.data)
+      : undefined;
+    if (!activations.success || effective === undefined || !effective.ok) {
+      return parseFailure("invalid-artifact", "The constant activations are invalid.", [
+        "constantActivations",
+      ]);
+    }
     const parsed = createProofArtifactSchema({
       operators: operators.data,
+      activations: activations.data,
       libraryOperators: libraryOperators.data,
     }).safeParse(input);
     if (!parsed.success) {

@@ -36,6 +36,7 @@ const MEMORY_PROOF_TABLES: Readonly<Record<string, string>> = {
   replaySteps: "proof_replay_steps",
   inquiryRecords: "proof_inquiry_records",
   artifactImports: "proof_artifact_imports",
+  constantActivations: "proof_constant_activations",
 };
 
 const MEMORY_LIBRARY_TABLES: Readonly<Record<string, string>> = {

@@ -242,9 +242,9 @@ export async function sessionDefinitions(
   ]);
   if (authored.length === 0 && macros.length === 0) return withLemmas;
   return Object.freeze({
+    ...withLemmas,
     moves: [...base.moves, ...authored],
     ...(macros.length === 0 ? {} : { macros: [...(base.macros ?? []), ...macros] }),
-    catalog: withLemmas.catalog,
   });
 }
 

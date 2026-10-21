@@ -37,6 +37,12 @@ export function PreviewDetails({
         </span>
       </div>
       <p className={styles.previewMeaning}>{transitionMeaning(preview.transitionClass)}</p>
+      {preview.constants === undefined ? null : (
+        <p className={styles.previewConstants} role="note" data-testid="preview-constants">
+          Applying this adds the {preview.constants.length === 1 ? "constant" : "constants"}{" "}
+          {constantNames(preview.constants)} to this proof’s constants.
+        </p>
+      )}
       <dl className={styles.previewCounts}>
         <div>
           <dt>Goals</dt>
@@ -138,6 +144,16 @@ export function StateChangeSections({
       ) : null}
     </>
   );
+}
+
+/** ‘gcd’, or ‘gcd’ and ‘lcm’: the constants a previewed step would add, by display name. */
+function constantNames(constants: NonNullable<MovePreview["constants"]>): string {
+  const names = constants.map(
+    ({ symbol, presentation }) => `‘${presentation?.displayName ?? symbol}’`,
+  );
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** The goal/obligation delta line, `+1 −1 ~0`, exactly as the preview panel writes it. */

@@ -178,6 +178,14 @@ class FakeLibrarySqlClient implements SqlClient {
       const session = t.sessions.get(String(a));
       return rows(session === undefined ? [] : [structuredClone(session)]);
     }
+    if (
+      sql.startsWith(
+        "SELECT record -> 'declaration' AS declaration FROM proof_constant_activations",
+      )
+    ) {
+      // The fake sessions have activated no constant.
+      return rows([]);
+    }
     if (sql.startsWith("SELECT 1 FROM proof_nodes")) {
       return rows(t.nodes.has(`${String(a)}\u0000${String(b)}`) ? [{ exists: 1 }] : []);
     }

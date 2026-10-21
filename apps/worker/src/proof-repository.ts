@@ -1,6 +1,8 @@
 import {
   actorSchema,
   analyzeBacktrack,
+  constantActivationSchema,
+  effectiveOperators,
   backtrackAnalysisRequestSchema,
   backtrackAutoCloseCommandId,
   backtrackWithInformationCommandSchema,
@@ -39,6 +41,7 @@ import {
   type ApplyKernelCommand,
   type BacktrackAnalysis,
   type BacktrackDiagnostic,
+  type ConstantActivation,
   type DefinitionReference,
   type DeletePreviousMoveReceipt,
   type DisplayedSuggestionSet,
@@ -73,6 +76,13 @@ import {
 import { runMovePlan } from "@proof/moves/authoring";
 import type { RetrievalIndex } from "@proof/retrieval";
 import { z } from "zod";
+import {
+  extendOperators,
+  missingConstants,
+  sequenceConstants,
+  stepConstants,
+  type StepConstants,
+} from "./session-constants";
 import {
   APPROVED_DEFINITIONS,
   definitionHash,
@@ -328,6 +338,19 @@ export interface ProofStoreTransaction {
   /** The artifact-import record of an imported session, if any. */
   readArtifactImport(sessionId: ProofSessionId): Promise<unknown | undefined>;
   insertArtifactImport(record: ProofArtifactImportRecord): Promise<void>;
+  /**
+   * The session's constant activations (migration 0018) in activation order. They are append-only
+   * history: neither backtracking nor "Delete previous move" removes one.
+   */
+  listConstantActivations(sessionId: ProofSessionId): Promise<readonly unknown[]>;
+  /**
+   * Append one constant activation. The caller writes it in the transaction of the step that
+   * triggered it, before it stores the step, and under the session lock.
+   */
+  insertConstantActivation(
+    sessionId: ProofSessionId,
+    activation: ConstantActivation,
+  ): Promise<void>;
 }
 
 export type InquiryRecordQuery = Readonly<{
@@ -428,6 +451,7 @@ export function guardReadOnlySessions(inner: ProofStoreTransaction): ProofStoreT
     listReplaySteps: (sessionId) => inner.listReplaySteps(sessionId),
     listDeletions: (sessionId) => inner.listDeletions(sessionId),
     readArtifactImport: (sessionId) => inner.readArtifactImport(sessionId),
+    listConstantActivations: (sessionId) => inner.listConstantActivations(sessionId),
     // Privacy and deletion are administrative, not proof writes: a read-only (imported) session
     // must stay deletable and its visibility changeable.
     setSessionVisibility: (sessionId, visibility) =>
@@ -499,6 +523,10 @@ export function guardReadOnlySessions(inner: ProofStoreTransaction): ProofStoreT
     insertArtifactImport: async (record) => {
       await writable(record.sessionId as ProofSessionId);
       return inner.insertArtifactImport(record);
+    },
+    insertConstantActivation: async (sessionId, activation) => {
+      await writable(sessionId);
+      return inner.insertConstantActivation(sessionId, activation);
     },
     markSessionReadOnly: async (sessionId) => {
       await writable(sessionId);
@@ -579,6 +607,8 @@ export type ExecuteProofCommandResult =
       status: "committed";
       result: PrepareProofCommandSuccess;
       replayed: boolean;
+      /** Library constants this command activated, in the same transaction (absent when none). */
+      activations?: readonly ConstantActivation[];
     }>
   | RepositoryFailure;
 
@@ -1049,11 +1079,23 @@ export async function materializeMoveChoice(
       }
 
       const menuChoices: MoveMenuChoices = choice.menuChoices ?? {};
+      // A displayed library result that uses a library constant the session has not activated is
+      // materialized in the operators extended with it; activating it waits for the applied step.
+      const needed = missingConstants(
+        definitions,
+        session.operators,
+        displayedResultIds(chosen, definitions),
+      );
+      const materializing =
+        needed.length === 0
+          ? environment
+          : (frozenEnvironment(extendOperators(session.operators, needed), definitions) ??
+            environment);
       const materialized = materializeSuggestion(
         loadedParentNode.node,
         suggestionSet,
         chosen,
-        environment,
+        materializing,
         choice.commandId,
         menuChoices,
         definitions,
@@ -1233,7 +1275,27 @@ export async function recordMovePreview(
       if (!loadedCurrentNode.ok) return loadedCurrentNode.failure;
       const currentNode = loadedCurrentNode.node;
 
-      const prepared = prepareMovePreview(currentNode, suggestionSet, freshRequest, environment);
+      // A previewed step that applies a library result using constants the session has not
+      // activated is previewed in the operators extended with them, and the preview says so
+      // (`MovePreview.constants`). Nothing is activated until the step is applied.
+      const ahead = sequenceConstants(
+        options.definitions ?? APPROVED_DEFINITIONS,
+        session.operators,
+        previewOperations(freshRequest),
+      );
+      const previewEnvironment =
+        ahead.constants.length === 0
+          ? environment
+          : (frozenEnvironment(ahead.operators, options.definitions ?? APPROVED_DEFINITIONS) ??
+            environment);
+      const prepared = prepareMovePreview(
+        currentNode,
+        suggestionSet,
+        ahead.constants.length === 0 || !isDataRecord(freshRequest)
+          ? freshRequest
+          : { ...freshRequest, constants: ahead.constants },
+        previewEnvironment,
+      );
       if (!prepared.ok) {
         return repositoryFailure(
           "rejected",
@@ -2849,6 +2911,7 @@ export async function executeProofCommand(
   commandInput: unknown,
   trustedActorInput: unknown,
   definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+  options: StepOptions = {},
 ): Promise<ExecuteProofCommandResult> {
   const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
   const trustedActor = safeParse(actorSchema, trustedActorInput);
@@ -2862,7 +2925,14 @@ export async function executeProofCommand(
 
   try {
     return await store.transaction((transaction) =>
-      executeProofCommandWithin(transaction, sessionId, commandInput, trustedActor, definitions),
+      executeProofCommandWithin(
+        transaction,
+        sessionId,
+        commandInput,
+        trustedActor,
+        definitions,
+        options,
+      ),
     );
   } catch (error: unknown) {
     return transactionFailure(error, "The proof command transaction failed.");
@@ -2879,20 +2949,23 @@ export async function executeProofCommandWithin(
   commandInput: unknown,
   trustedActor: Actor,
   definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+  options: StepOptions = {},
 ): Promise<ExecuteProofCommandResult> {
-  const sessionInput = await transaction.lockSession(sessionId);
-  if (sessionInput === undefined) {
-    return repositoryFailure("rejected", "session-not-found", "The proof session does not exist.");
-  }
-  const session = safeParse(proofSessionSchema, sessionInput);
-  if (session === undefined || session.id !== sessionId) {
-    return repositoryFailure(
-      "rejected",
-      "invalid-session-record",
-      "The stored proof session failed runtime validation or identity checks.",
-    );
-  }
-  const environment = frozenEnvironment(session.operators, definitions);
+  const record = await readSessionRecord(transaction, sessionId);
+  if (!record.ok) return record.failure;
+  const { session, activations } = record;
+  // A step that applies a library result using a constant the session has not activated is
+  // validated in the operators extended with it; the activation is recorded below, in this
+  // transaction and before the step, only if the step is accepted.
+  const step = stepConstants(
+    definitions,
+    session.operators,
+    isDataRecord(commandInput) ? commandInput.operation : undefined,
+  );
+  const environment = frozenEnvironment(
+    step === undefined ? session.operators : extendOperators(session.operators, step.constants),
+    definitions,
+  );
   if (environment === undefined) {
     return repositoryFailure(
       "rejected",
@@ -3018,6 +3091,13 @@ export async function executeProofCommandWithin(
 
   const [sequenced] = await sequenceCommands(transaction, session.id, environment, [prepared]);
   if (sequenced === undefined) throw new Error("The command could not be sequenced.");
+  const activated = await recordActivations(
+    transaction,
+    session.id,
+    activations.length,
+    [{ step, prepared: sequenced }],
+    options.now,
+  );
   await transaction.insertNode(session.id, sequenced.prepared.node);
   await transaction.insertEdge(session.id, sequenced.prepared.edge);
   await transaction.insertEvent(session.id, sequenced.prepared.event);
@@ -3030,7 +3110,63 @@ export async function executeProofCommandWithin(
   if (!advanced) {
     throw new SerializedStaleCommandError();
   }
-  return { status: "committed" as const, result: sequenced, replayed: false };
+  return {
+    status: "committed" as const,
+    result: sequenced,
+    replayed: false,
+    ...(activated.length === 0 ? {} : { activations: activated }),
+  };
+}
+
+/** Options of the steps that commit commands (the clock records when constants activate). */
+export type StepOptions = Readonly<{ now?: (() => Date) | undefined }>;
+
+/**
+ * Append the constant activations of committed steps, in the order of the steps. Called in the
+ * storing transaction, under the session lock, after the steps are prepared and sequenced and
+ * before their rows are inserted: a rejected step never reaches it, and an activation never exists
+ * without the step that caused it. Each record names the step by command, edge and node IDs and
+ * by transition sequence, and the library result it applied.
+ */
+async function recordActivations(
+  transaction: ProofStoreTransaction,
+  sessionId: ProofSessionId,
+  existing: number,
+  entries: readonly Readonly<{
+    step: StepConstants | undefined;
+    prepared: PrepareProofCommandSuccess;
+  }>[],
+  now: (() => Date) | undefined,
+): Promise<readonly ConstantActivation[]> {
+  const activatedAt = (now?.() ?? new Date()).toISOString();
+  const recorded: ConstantActivation[] = [];
+  for (const { step, prepared } of entries) {
+    if (step === undefined) continue;
+    const transitionSequence = prepared.prepared.edge.sequence;
+    if (transitionSequence === undefined) {
+      throw new Error("A step that activates constants must be sequenced.");
+    }
+    for (const declaration of step.constants) {
+      const activation = safeParse(constantActivationSchema, {
+        sequence: existing + recorded.length + 1,
+        symbol: declaration.symbol,
+        declaration,
+        commandId: prepared.prepared.command.commandId,
+        edgeId: prepared.prepared.edge.id,
+        nodeId: prepared.prepared.node.id,
+        resultId: step.resultId,
+        transitionSequence,
+        activatedAt,
+      });
+      if (activation === undefined) {
+        // Throwing rolls the transaction back: nothing of the step is recorded.
+        throw new Error("The constant activation failed runtime validation.");
+      }
+      await transaction.insertConstantActivation(sessionId, activation);
+      recorded.push(activation);
+    }
+  }
+  return recorded;
 }
 
 /** The command ID of one step of a macro application. */
@@ -3047,6 +3183,8 @@ export type ExecuteMacroResult =
       /** One prepared result per step, in order; the last holds the node the cursor is at. */
       results: readonly PrepareProofCommandSuccess[];
       replayed: boolean;
+      /** Library constants the steps activated, in the same transaction (absent when none). */
+      activations?: readonly ConstantActivation[];
     }>
   | RepositoryFailure;
 
@@ -3064,6 +3202,7 @@ export async function executeMacroPreview(
   input: Readonly<{ commandId: ApplyKernelCommand["commandId"]; previewId: MovePreviewId }>,
   trustedActorInput: unknown,
   definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+  options: StepOptions = {},
 ): Promise<ExecuteMacroResult> {
   const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
   const trustedActor = safeParse(actorSchema, trustedActorInput);
@@ -3078,7 +3217,7 @@ export async function executeMacroPreview(
     return await store.transaction(async (transaction) => {
       const loadedSession = await loadSession(transaction, sessionId, definitions);
       if (!loadedSession.ok) return loadedSession.failure;
-      const { session, environment } = loadedSession;
+      const { session, environment, activations } = loadedSession;
       const previewInput = await transaction.readPreview(session.id, input.previewId);
       if (previewInput === undefined) {
         return repositoryFailure(
@@ -3097,12 +3236,23 @@ export async function executeMacroPreview(
       }
       const { steps } = preview.macro;
       const stepCommandId = (index: number) => macroStepCommandId(input.commandId, index);
-      const context = {
+      const scopes = stepScopes(
+        definitions,
+        session.operators,
+        steps.map(({ operation }) => operation),
+        environment,
+      );
+      if (scopes === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-session-record",
+          "The operator environment of the macro's steps could not be detached safely.",
+        );
+      }
+      const contextFor = (index: number) => ({
         trustedActor,
-        ...(environment.operators === undefined ? {} : { operators: environment.operators }),
-        ...(environment.results === undefined ? {} : { results: environment.results }),
-        ...(environment.moves === undefined ? {} : { moves: environment.moves }),
-      };
+        ...scopes.environments[index],
+      });
       const commandFor = (index: number, parentNodeId: ProofNode["id"]) => {
         const step = steps[index];
         const id = stepCommandId(index + 1);
@@ -3148,7 +3298,7 @@ export async function executeMacroPreview(
           const replayed = prepareProofCommand(
             recorded.prepared.parent,
             commandFor(index, parent),
-            { ...context, previous: recorded },
+            { ...contextFor(index), previous: recorded },
           );
           if (!replayed.ok) {
             return repositoryFailure(
@@ -3203,7 +3353,7 @@ export async function executeMacroPreview(
             "A macro step's command ID is already recorded.",
           );
         }
-        const prepared = prepareProofCommand(node, commandFor(index, node.id), context);
+        const prepared = prepareProofCommand(node, commandFor(index, node.id), contextFor(index));
         if (!prepared.ok) {
           return repositoryFailure(
             "rejected",
@@ -3224,8 +3374,15 @@ export async function executeMacroPreview(
       const sequencedResults = await sequenceCommands(
         transaction,
         session.id,
-        environment,
+        scopes.final,
         results,
+      );
+      const activated = await recordActivations(
+        transaction,
+        session.id,
+        activations.length,
+        sequencedResults.map((prepared, index) => ({ step: scopes.perStep[index], prepared })),
+        options.now,
       );
       for (const result of sequencedResults) {
         await transaction.insertNode(session.id, result.prepared.node);
@@ -3236,7 +3393,12 @@ export async function executeMacroPreview(
       if (!(await transaction.repointCurrentNode(session.id, currentNode.id, node.id))) {
         throw new SerializedStaleCommandError();
       }
-      return { status: "committed" as const, results: sequencedResults, replayed: false };
+      return {
+        status: "committed" as const,
+        results: sequencedResults,
+        replayed: false,
+        ...(activated.length === 0 ? {} : { activations: activated }),
+      };
     });
   } catch (error: unknown) {
     return transactionFailure(error, "The macro could not be applied atomically.");
@@ -3276,6 +3438,7 @@ export async function executeProposalPlan(
   input: ExecuteProposalPlanInput,
   trustedActorInput: unknown,
   definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+  options: StepOptions = {},
 ): Promise<ExecuteMacroResult> {
   const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
   const trustedActor = safeParse(actorSchema, trustedActorInput);
@@ -3298,14 +3461,20 @@ export async function executeProposalPlan(
     return await store.transaction(async (transaction) => {
       const loadedSession = await loadSession(transaction, sessionId, definitions);
       if (!loadedSession.ok) return loadedSession.failure;
-      const { session, environment } = loadedSession;
+      const { session, environment, activations } = loadedSession;
       const stepCommandId = (index: number) => proposalStepCommandId(input.commandIdPrefix, index);
-      const context = {
+      const scopes = stepScopes(definitions, session.operators, input.operations, environment);
+      if (scopes === undefined) {
+        return repositoryFailure(
+          "rejected",
+          "invalid-session-record",
+          "The operator environment of the plan's steps could not be detached safely.",
+        );
+      }
+      const contextFor = (index: number) => ({
         trustedActor,
-        ...(environment.operators === undefined ? {} : { operators: environment.operators }),
-        ...(environment.results === undefined ? {} : { results: environment.results }),
-        ...(environment.moves === undefined ? {} : { moves: environment.moves }),
-      };
+        ...scopes.environments[index],
+      });
       const commandFor = (index: number, parentNodeId: ProofNode["id"]) => {
         const id = stepCommandId(index + 1);
         const ids = derivedMoveRecordIds(id);
@@ -3349,7 +3518,7 @@ export async function executeProposalPlan(
           const replayed = prepareProofCommand(
             recorded.prepared.parent,
             commandFor(index, parent),
-            { ...context, previous: recorded },
+            { ...contextFor(index), previous: recorded },
           );
           if (!replayed.ok) {
             return repositoryFailure(
@@ -3404,7 +3573,7 @@ export async function executeProposalPlan(
             "A plan step's command ID is already recorded.",
           );
         }
-        const prepared = prepareProofCommand(node, commandFor(index, node.id), context);
+        const prepared = prepareProofCommand(node, commandFor(index, node.id), contextFor(index));
         if (!prepared.ok) {
           return repositoryFailure(
             "rejected",
@@ -3418,8 +3587,15 @@ export async function executeProposalPlan(
       const sequencedResults = await sequenceCommands(
         transaction,
         session.id,
-        environment,
+        scopes.final,
         results,
+      );
+      const activated = await recordActivations(
+        transaction,
+        session.id,
+        activations.length,
+        sequencedResults.map((prepared, index) => ({ step: scopes.perStep[index], prepared })),
+        options.now,
       );
       for (const result of sequencedResults) {
         await transaction.insertNode(session.id, result.prepared.node);
@@ -3430,11 +3606,79 @@ export async function executeProposalPlan(
       if (!(await transaction.repointCurrentNode(session.id, currentNode.id, node.id))) {
         throw new SerializedStaleCommandError();
       }
-      return { status: "committed" as const, results: sequencedResults, replayed: false };
+      return {
+        status: "committed" as const,
+        results: sequencedResults,
+        replayed: false,
+        ...(activated.length === 0 ? {} : { activations: activated }),
+      };
     });
   } catch (error: unknown) {
     return transactionFailure(error, "The plan could not be applied atomically.");
   }
+}
+
+/**
+ * The environment each step of a sequence of operations runs in: the effective operators plus the
+ * constants activated by that step and the ones before it. `final` is the environment after the
+ * last step. `undefined` when an environment cannot be built.
+ */
+function stepScopes(
+  definitions: DefinitionCatalog,
+  operators: readonly OperatorDeclaration[],
+  operations: readonly unknown[],
+  base: ProtocolEnvironment,
+):
+  | Readonly<{
+      environments: readonly Readonly<{
+        operators?: ProtocolEnvironment["operators"];
+        results?: ProtocolEnvironment["results"];
+        moves?: ProtocolEnvironment["moves"];
+      }>[];
+      perStep: readonly (StepConstants | undefined)[];
+      final: ProtocolEnvironment;
+    }>
+  | undefined {
+  const sequence = sequenceConstants(definitions, operators, operations);
+  const cache = new Map<string, ProtocolEnvironment | undefined>();
+  const environmentFor = (stepOperators: readonly OperatorDeclaration[]) => {
+    if (stepOperators === operators) return base;
+    const key = JSON.stringify(stepOperators);
+    if (!cache.has(key)) cache.set(key, frozenEnvironment(stepOperators, definitions));
+    return cache.get(key);
+  };
+  const environments: ProtocolEnvironment[] = [];
+  for (const stepOperators of sequence.stepOperators) {
+    const environment = environmentFor(stepOperators);
+    if (environment === undefined) return undefined;
+    environments.push(environment);
+  }
+  const final = environmentFor(sequence.operators);
+  return final === undefined ? undefined : { environments, perStep: sequence.perStep, final };
+}
+
+/** The operations a preview request carries: its own, or a macro's steps'. */
+function previewOperations(request: unknown): readonly unknown[] {
+  if (!isDataRecord(request)) return [];
+  const steps = isDataRecord(request.macro) ? request.macro.steps : undefined;
+  return Array.isArray(steps)
+    ? steps.map((step) => (isDataRecord(step) ? step.operation : undefined))
+    : [request.operation];
+}
+
+/**
+ * The library results a displayed suggestion applies: the result of a result suggestion, or the
+ * results an approved macro's template requires.
+ */
+function displayedResultIds(
+  suggestion: DisplayedSuggestionSet["suggestions"][number],
+  definitions: DefinitionCatalog,
+): readonly string[] {
+  if (suggestion.source !== "move") return [suggestion.artifactId];
+  const macro = definitions.macros?.find(({ move }) => move.id === suggestion.artifactId);
+  return (macro?.template.requiredArtifacts ?? [])
+    .filter(({ kind }) => kind === "result")
+    .map(({ id }) => id);
 }
 
 type DisplayedSuggestion = DisplayedSuggestionSet["suggestions"][number];
@@ -4013,15 +4257,28 @@ function frozenEnvironment(
   }
 }
 
-type LoadedSession =
-  | Readonly<{ ok: true; session: ProofSession; environment: ProtocolEnvironment }>
+type SessionRecord =
+  | Readonly<{
+      ok: true;
+      /** The session with its effective operators: the setup operators plus activated constants. */
+      session: ProofSession;
+      /** The operators stored on the session row. */
+      setupOperators: readonly OperatorDeclaration[];
+      /** The constants committed steps activated, in activation order. */
+      activations: readonly ConstantActivation[];
+    }>
   | Readonly<{ ok: false; failure: RepositoryFailure }>;
 
-export async function loadSession(
+/**
+ * Lock and read a session with its constant activations (migration 0018). A session's
+ * `operators` here are its effective operators: the setup operators stored on its row followed by
+ * the declarations of its activated constants, in activation order. Every reader of a session
+ * goes through this, so nothing validates or executes against the setup operators alone.
+ */
+async function readSessionRecord(
   transaction: ProofStoreTransaction,
   expectedSessionId: ProofSessionId,
-  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
-): Promise<LoadedSession> {
+): Promise<SessionRecord> {
   const sessionInput = await transaction.lockSession(expectedSessionId);
   if (sessionInput === undefined) {
     return {
@@ -4044,8 +4301,59 @@ export async function loadSession(
       ),
     };
   }
-  const environment = frozenEnvironment(parsed.operators, definitions);
-  const session = freezeDetached(parsed);
+  const activations = parseActivations(await transaction.listConstantActivations(parsed.id));
+  const effective =
+    activations === undefined ? undefined : effectiveOperators(parsed.operators, activations);
+  if (activations === undefined || effective === undefined || !effective.ok) {
+    return {
+      ok: false,
+      failure: repositoryFailure(
+        "rejected",
+        "invalid-session-record",
+        "The stored constant activations failed runtime validation.",
+      ),
+    };
+  }
+  return {
+    ok: true,
+    session: { ...parsed, operators: effective.operators },
+    setupOperators: parsed.operators,
+    activations,
+  };
+}
+
+function parseActivations(inputs: readonly unknown[]): readonly ConstantActivation[] | undefined {
+  if (!Array.isArray(inputs)) return undefined;
+  const activations: ConstantActivation[] = [];
+  for (const input of inputs) {
+    const activation = safeParse(constantActivationSchema, input);
+    if (activation === undefined) return undefined;
+    activations.push(activation);
+  }
+  return activations;
+}
+
+type LoadedSession =
+  | Readonly<{
+      ok: true;
+      /** The session with its effective operators. */
+      session: ProofSession;
+      /** The effective operators and the approved results valid in them. */
+      environment: ProtocolEnvironment;
+      setupOperators: readonly OperatorDeclaration[];
+      activations: readonly ConstantActivation[];
+    }>
+  | Readonly<{ ok: false; failure: RepositoryFailure }>;
+
+export async function loadSession(
+  transaction: ProofStoreTransaction,
+  expectedSessionId: ProofSessionId,
+  definitions: DefinitionCatalog = APPROVED_DEFINITIONS,
+): Promise<LoadedSession> {
+  const record = await readSessionRecord(transaction, expectedSessionId);
+  if (!record.ok) return record;
+  const environment = frozenEnvironment(record.session.operators, definitions);
+  const session = freezeDetached(record.session);
   if (environment === undefined || session === undefined) {
     return {
       ok: false,
@@ -4056,7 +4364,13 @@ export async function loadSession(
       ),
     };
   }
-  return { ok: true, session, environment };
+  return {
+    ok: true,
+    session,
+    environment,
+    setupOperators: record.setupOperators,
+    activations: record.activations,
+  };
 }
 
 type LoadedNode =

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { statementKey } from "./library-proposal";
+import type { OperatorDeclaration } from "@proof/mathjson-model";
+import { DIVIDES, GCD, INTEGER, LCM } from "./constant-activation.testing";
+import { evaluateTopUpProposal, statementKey } from "./library-proposal";
 
 /**
  * A top-up repeats nothing the session library already holds. Two results coincide when their
@@ -73,5 +75,87 @@ describe("statementKey", () => {
       ),
       { numRuns: 100 },
     );
+  });
+});
+
+describe("judging a top-up proposal that declares a constant", () => {
+  const profile = {
+    level: "undergraduate",
+    summary: "Number theory.",
+    assumptions: [],
+    domains: ["number theory"],
+    maximumLevel: "undergraduate",
+  } as never;
+  const proposal = {
+    kind: "library-proposal",
+    unusable: [],
+    newConstants: [{ operator: LCM, rationale: "Results are stated with the lcm." }],
+    results: [
+      {
+        id: "result:lcm-multiples",
+        name: "Lcm multiples",
+        description: "A number divides its multiples when the lcm is their product.",
+        classification: { domains: ["number theory"], level: "foundational" },
+        parameters: ["a", "b"].map((symbol) => ({
+          id: `declaration:lcm-multiples-${symbol}`,
+          symbol,
+          sort: INTEGER,
+          role: "universal-parameter",
+        })),
+        statement: { expression: ["Divides", "a", ["Multiply", "a", "b"]] },
+        premises: [{ expression: ["Equal", ["Lcm", "a", "b"], ["Multiply", "a", "b"]] }],
+        applicationDirections: ["backward"],
+        patterns: [
+          {
+            id: "pattern:lcm-multiples",
+            expression: ["Divides", "a", ["Multiply", "a", "b"]],
+            direction: "backward",
+            requirement: { section: "goal", polarity: "positive", role: "proposition" },
+          },
+        ],
+      },
+    ],
+  };
+  const context = { kind: "no-relevant-results" } as never;
+  const judge = (operators: readonly OperatorDeclaration[]) =>
+    evaluateTopUpProposal({
+      callId: "llm-call:top-up",
+      context,
+      proposal: proposal as never,
+      operators,
+      profile,
+      existing: [],
+    });
+
+  it("carries the constant on the result, the same whether or not a step activated it since", () => {
+    const first = judge([DIVIDES, GCD]);
+    expect(first.rejected).toEqual([]);
+    expect(first.results.map(({ artifact }) => artifact.operators)).toEqual([[LCM]]);
+    expect(first.newConstants.map(({ operator }) => operator.symbol)).toEqual(["Lcm"]);
+
+    // Lcm is active now: the stored call is judged again and gives the very same artifacts, so a
+    // replay by call ID finds its additions already recorded.
+    const again = judge([DIVIDES, GCD, LCM]);
+    expect(again.results).toEqual(first.results);
+    expect(again.rejectedConstants).toEqual([]);
+  });
+
+  it("sets the constant aside when it clashes, and the results that need it with it", () => {
+    const clashing = { ...LCM, id: DIVIDES.id } as OperatorDeclaration;
+    const rejected = evaluateTopUpProposal({
+      callId: "llm-call:top-up",
+      context,
+      proposal: { ...proposal, newConstants: [{ operator: clashing, rationale: "x" }] } as never,
+      operators: [DIVIDES, GCD],
+      profile,
+      existing: [],
+    });
+    expect(rejected.results).toEqual([]);
+    expect(rejected.rejectedConstants).toEqual([
+      { symbol: "Lcm", reason: expect.stringContaining("already used by Divides") },
+    ]);
+    expect(rejected.rejected).toMatchObject([
+      { id: "result:lcm-multiples", codes: ["needs-new-constant"] },
+    ]);
   });
 });

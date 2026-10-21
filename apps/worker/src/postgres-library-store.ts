@@ -84,9 +84,24 @@ class PostgresLibraryStoreTransaction implements LibraryStoreTransaction {
       [sessionId],
     );
     const row = result.rows[0];
-    return row === undefined
-      ? undefined
-      : { operators: row.operators, metadata: row.metadata, readOnly: row.read_only === true };
+    if (row === undefined) return undefined;
+    // The library works in the session's effective operators: its setup operators followed by the
+    // constants its committed steps activated.
+    const activated = await this.client.query(
+      `SELECT record -> 'declaration' AS declaration
+       FROM proof_constant_activations
+       WHERE session_id = $1
+       ORDER BY sequence`,
+      [sessionId],
+    );
+    const setup: unknown = row.operators;
+    return {
+      operators: Array.isArray(setup)
+        ? [...setup, ...activated.rows.map((entry) => entry.declaration)]
+        : setup,
+      metadata: row.metadata,
+      readOnly: row.read_only === true,
+    };
   }
 
   async lockGlobalLibrary(): Promise<void> {

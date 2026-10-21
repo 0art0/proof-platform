@@ -67,14 +67,6 @@ export const proofSessionMetadataSchema = z
       .strict()
       .optional(),
     libraryLayerIds: uniqueArray(libraryLayerIdSchema, "library layer ID"),
-    /**
-     * Symbols of operators that joined the session's operators only because its approved initial
-     * library applies them; the accepted background's constants and the packs' operators are not
-     * listed. They are declared from the start but dormant: a constant becomes active when a
-     * committed step first applies a library result that uses it (the worker's
-     * `active-constants.ts`). Absent when the library introduced no operator.
-     */
-    libraryConstants: uniqueArray(shortTextSchema, "library constant").optional(),
   })
   .strict();
 export type ProofSessionMetadata = z.infer<typeof proofSessionMetadataSchema>;

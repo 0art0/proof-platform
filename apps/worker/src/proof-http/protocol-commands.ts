@@ -36,6 +36,7 @@ import {
   snapshotDelta,
   summarizeSnapshot,
   type CommandProtocolDiagnostic,
+  type ConstantActivation,
   type DisplayedSuggestionSet,
   type InteractionEvent,
   type MathPayload,
@@ -763,6 +764,9 @@ async function dispatch(
           replayed: applied.executed.replayed,
           result: {
             receipt: applied.executed.result.receipt,
+            ...(applied.executed.activations === undefined
+              ? {}
+              : { constantActivations: summarizeActivations(applied.executed.activations) }),
             ...(applied.executed.records === undefined
               ? {}
               : { inquiryRecords: applied.executed.records }),
@@ -1270,12 +1274,34 @@ async function executeKernel(
     },
     envelope.actor,
     context.definitions,
+    context.now === undefined ? {} : { now: context.now },
   );
   if (executed.status !== "committed") return repositoryFailed(executed);
   return {
     ok: true,
-    value: { replayed: executed.replayed, result: { receipt: executed.result.receipt } },
+    value: {
+      replayed: executed.replayed,
+      result: {
+        receipt: executed.result.receipt,
+        ...(executed.activations === undefined
+          ? {}
+          : { constantActivations: summarizeActivations(executed.activations) }),
+      },
+    },
   };
+}
+
+/**
+ * The constants a command activated, for its caller: the step's library result made them part of
+ * the proof's constants (`GET /proof-sessions/:id/library/constants` lists them all).
+ */
+function summarizeActivations(activations: readonly ConstantActivation[]) {
+  return activations.map(({ symbol, sequence, resultId, declaration }) => ({
+    symbol,
+    sequence,
+    resultId,
+    operator: declaration,
+  }));
 }
 
 // ---------------------------------------------------------------------------------------------

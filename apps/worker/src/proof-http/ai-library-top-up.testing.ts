@@ -124,14 +124,22 @@ export async function topUp(origin: string, body: Record<string, unknown>) {
 
 export type ConstantsBody = {
   readOnly: boolean;
-  active: string[];
-  dormant: string[];
+  active: { symbol: string; origin: "setup" | "activated"; operator: { id: string } }[];
+  available: {
+    symbol: string;
+    operator: { id: string };
+    results: { id: string; name: string }[];
+  }[];
   activated: {
     symbol: string;
+    sequence: number;
+    commandId: string;
     edgeId: string;
     nodeId: string;
     resultId: string;
-    sequence: number | null;
+    resultName: string | null;
+    transitionSequence: number;
+    activatedAt: string;
     topUp: { callId: string } | null;
   }[];
 };
@@ -148,7 +156,11 @@ export type EventBody = {
   occurredAt: string;
   origin: { kind: string; actorId?: string };
   admission: { decision: string };
-  artifact: { id: string; approval: { status: string; reviewerId?: string } };
+  artifact: {
+    id: string;
+    approval: { status: string; reviewerId?: string };
+    operators?: { symbol: string }[];
+  };
 };
 export async function events(origin: string): Promise<EventBody[]> {
   const response = await fetch(`${origin}${SESSION_URL}/library/events`);

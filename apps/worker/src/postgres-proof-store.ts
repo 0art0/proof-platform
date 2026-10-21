@@ -16,6 +16,7 @@ import {
   inquiryRecordNodeIds,
   inquiryRecordReferenceIds,
   type ApplyKernelCommand,
+  type ConstantActivation,
   type DisplayedSuggestionSet,
   type InquiryRecord,
   type InteractionEvent,
@@ -51,6 +52,7 @@ export interface SqlPool {
  * command and session-pointer keys are settled at commit).
  */
 export const SESSION_TABLES_IN_DELETION_ORDER = [
+  "proof_constant_activations",
   "proof_replay_steps",
   "proof_interaction_events",
   "proof_inquiry_records",
@@ -662,6 +664,41 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
       [sessionId, commandId],
     );
     return result.rows[0]?.record;
+  }
+
+  async listConstantActivations(sessionId: ProofSessionId): Promise<readonly unknown[]> {
+    const result = await this.client.query(
+      `SELECT record
+       FROM proof_constant_activations
+       WHERE session_id = $1
+       ORDER BY sequence`,
+      [sessionId],
+    );
+    return result.rows.map((row) => row.record);
+  }
+
+  async insertConstantActivation(
+    sessionId: ProofSessionId,
+    activation: ConstantActivation,
+  ): Promise<void> {
+    await this.client.query(
+      `INSERT INTO proof_constant_activations
+         (session_id, symbol, sequence, command_id, edge_id, node_id, result_id,
+          transition_sequence, activated_at, record)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::jsonb)`,
+      [
+        sessionId,
+        activation.symbol,
+        activation.sequence,
+        activation.commandId,
+        activation.edgeId,
+        activation.nodeId,
+        activation.resultId,
+        activation.transitionSequence,
+        activation.activatedAt,
+        JSON.stringify(activation),
+      ],
+    );
   }
 
   async insertReplayStep(

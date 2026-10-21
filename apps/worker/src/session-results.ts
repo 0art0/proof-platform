@@ -11,10 +11,12 @@
  *   additions);
  * - approved conditional lemmas of the `derived` layer (N44, `conditional-lemmas.ts`).
  *
- * A result that the kernel cannot instantiate in the session's operator environment is not
- * offered (it never crashes the session), and a catalog that cannot be adapted as a whole falls
- * back to the base catalog. Stored suggestion sets are never rewritten: only a suggestion request
- * made after a result was added sees it.
+ * A result that the kernel cannot instantiate in the operators it is asked about is not offered
+ * (it never crashes the session), and a catalog that cannot be adapted as a whole falls back to
+ * the base catalog. A result that needs library constants (`LibraryResult.operators`) is offered
+ * only for operators that declare them; the catalog lists those constants as `libraryConstants`
+ * so that retrieval can ask about the effective operators extended with them. Stored suggestion
+ * sets are never rewritten: only a suggestion request made after a result was added sees it.
  */
 import {
   variantFamilySchema,
@@ -28,6 +30,7 @@ import {
   type ApprovedCatalog,
   type DefinitionCatalog,
 } from "./approved-catalog";
+import { extendOperators, libraryConstantsOf } from "./session-constants";
 
 /** Layers whose admitted results are part of a session's catalog (besides approved lemmas). */
 export const SESSION_RESULT_LAYERS = ["initial-problem", "proof-time-background"] as const;
@@ -61,8 +64,13 @@ export function withSessionResults(
 ): DefinitionCatalog {
   if (results.length === 0) return base;
   const cache = new Map<string, ApprovedCatalog>();
+  const libraryConstants = extendOperators(
+    base.libraryConstants ?? [],
+    libraryConstantsOf(results),
+  );
   return Object.freeze({
     ...base,
+    ...(libraryConstants.length === 0 ? {} : { libraryConstants }),
     catalog(operators: Parameters<DefinitionCatalog["catalog"]>[0]) {
       const key = JSON.stringify(operators);
       const cached = cache.get(key);

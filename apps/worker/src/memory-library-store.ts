@@ -160,10 +160,17 @@ export class MemoryLibraryStore extends MemoryProofStore implements LibraryStore
     return {
       lockLibrarySession: async (sessionId): Promise<LibrarySessionRow | undefined> => {
         const found = session(sessionId);
+        // The library works in the session's effective operators: its setup operators followed by
+        // the constants its committed steps activated.
+        const prefix = memoryProofRecordKey(sessionId, "");
+        const activated = [...this.tables.constantActivations.entries()]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([, activation]) => activation)
+          .sort((left, right) => left.sequence - right.sequence);
         return found === undefined
           ? undefined
           : jsonRow({
-              operators: found.operators,
+              operators: [...found.operators, ...activated.map(({ declaration }) => declaration)],
               metadata: found.metadata ?? null,
               readOnly: found.readOnly === true,
             });

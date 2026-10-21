@@ -8,9 +8,11 @@ import {
   type TransitionClass,
   type TransitionEvidence,
 } from "@proof/kernel";
+import { mergeLibraryOperators } from "@proof/library";
 import {
   createExecutableProofStateSchema,
   declarationsSchema,
+  operatorDeclarationSchema,
   operatorDeclarationsSchema,
   plainMathJsonSchema,
   proofStateIdSchema,
@@ -74,6 +76,7 @@ export * from "./lemma-hypotheses";
 export * from "./command-protocol";
 export * from "./problem-setup";
 export * from "./artifact";
+export * from "./constant-activation";
 
 export const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 export type ActorId = z.infer<typeof actorIdSchema>;
@@ -809,11 +812,57 @@ export type MovePreview = Readonly<{
   definitions?: readonly DefinitionReference[] | undefined;
   /** Present when `moveId` is a multi-step macro: every step's outcome, in order. */
   macro?: MacroPreview | undefined;
+  /**
+   * Library constants the previewed step would add to the proof's constants, because the library
+   * result it applies uses them and no earlier step activated them. The after-state is valid in
+   * the session's operators plus these. Recorded as displayed: a later activation by another step
+   * does not change it. Absent when the step needs no new constant.
+   */
+  constants?: readonly OperatorDeclaration[] | undefined;
 }>;
 
+/** The most constants one previewed step (a macro's steps together) can add. */
+export const MAX_PREVIEW_CONSTANTS = 32;
+
+/**
+ * The preview schema for an operator environment. A preview that names `constants` is read in the
+ * environment plus those declarations; they must merge with it without a clash.
+ */
 export function createMovePreviewSchema(
   environment: ProtocolEnvironment = {},
 ): z.ZodType<MovePreview> {
+  const base = createMovePreviewSchemaIn(environment);
+  return z.unknown().transform((value, context) => {
+    let schema = base;
+    if (isRecord(value) && value.constants !== undefined) {
+      const declared = z
+        .array(operatorDeclarationSchema)
+        .min(1)
+        .max(MAX_PREVIEW_CONSTANTS)
+        .safeParse(value.constants);
+      const merged = declared.success
+        ? mergeLibraryOperators([environment.operators ?? [], declared.data])
+        : undefined;
+      if (merged === undefined || !merged.ok) {
+        context.addIssue({
+          code: "custom",
+          message: "The constants of a preview must be valid and must not clash with the session.",
+          path: ["constants"],
+        });
+        return z.NEVER;
+      }
+      schema = createMovePreviewSchemaIn({ ...environment, operators: merged.operators });
+    }
+    const parsed = schema.safeParse(value);
+    if (parsed.success) return parsed.data;
+    parsed.error.issues.forEach((issue) =>
+      context.addIssue({ code: "custom", message: issue.message, path: issue.path }),
+    );
+    return z.NEVER;
+  }) as unknown as z.ZodType<MovePreview>;
+}
+
+function createMovePreviewSchemaIn(environment: ProtocolEnvironment): z.ZodType<MovePreview> {
   const stateSchema = createExecutableProofStateSchema(environment);
   return z
     .object({
@@ -832,6 +881,7 @@ export function createMovePreviewSchema(
       menuSelection: moveMenuSelectionSchema.optional(),
       definitions: definitionReferencesSchema.optional(),
       macro: macroPreviewSchema.optional(),
+      constants: z.array(operatorDeclarationSchema).min(1).max(MAX_PREVIEW_CONSTANTS).optional(),
     })
     .strict()
     .superRefine((preview, context) => {
@@ -917,6 +967,8 @@ const prepareMovePreviewInputSchema = z
     operation: kernelOperationAdapterSchema,
     menuSelection: moveMenuSelectionSchema.optional(),
     definitions: definitionReferencesSchema.optional(),
+    /** Library constants the previewed step adds (the worker computed them; see `MovePreview`). */
+    constants: z.array(operatorDeclarationSchema).min(1).max(MAX_PREVIEW_CONSTANTS).optional(),
     /** The concrete steps of a macro suggestion (the worker ran the template to obtain them). */
     macro: z
       .object({
@@ -1003,6 +1055,7 @@ export function prepareMovePreview(
       delta: computeDelta(node.state, planned.preview.state),
       ...(request.menuSelection === undefined ? {} : { menuSelection: request.menuSelection }),
       ...(request.definitions === undefined ? {} : { definitions: request.definitions }),
+      ...(request.constants === undefined ? {} : { constants: request.constants }),
     });
     const preview = candidate === undefined ? undefined : freezeDetached(candidate);
     return preview === undefined
@@ -1085,6 +1138,7 @@ function prepareMacroPreview(
     delta: computeDelta(node.state, state),
     ...(request.menuSelection === undefined ? {} : { menuSelection: request.menuSelection }),
     ...(request.definitions === undefined ? {} : { definitions: request.definitions }),
+    ...(request.constants === undefined ? {} : { constants: request.constants }),
     macro: { steps },
   });
   const preview = candidate === undefined ? undefined : freezeDetached(candidate);

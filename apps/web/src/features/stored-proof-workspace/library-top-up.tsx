@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AnchoredProofSelection } from "@proof/selections";
 import {
-  constantsAnswerSchema,
   describeTopUpFailure,
   describeTopUpOutcome,
   topUpAnswerSchema,
+  type LibraryConstants,
 } from "./library-top-up-contract";
 import { toDescriptor } from "./selection-descriptor";
 import styles from "./suggestion-panel.module.css";
@@ -22,12 +22,23 @@ const IDLE: TopUpStatus = { kind: "idle" };
 
 export type LibraryTopUpOptions = Readonly<{
   sessionId: string;
-  /** The current node: after each change the session's activated constants are read again. */
+  /** The current node: each change is a chance to ask again after a request was rate limited. */
   nodeId: string;
   /** False when the librarian is not configured or the session is read-only: nothing is sent. */
   enabled: boolean;
+  /**
+   * The activations the session's constants last listed (`useSessionConstants`): each one that no
+   * recorded top-up covered is requested. Undefined until the constants have been read.
+   */
+  activated: LibraryConstants["activated"] | undefined;
   createId?: (prefix: string) => string;
 }>;
+
+/**
+ * How often one constant is requested per page: once, and once more later in the session if the
+ * first request was rate limited (or could not reach the service). Any other answer is final.
+ */
+const MAX_AUTOMATIC_ATTEMPTS = 2;
 
 export type LibraryTopUp = Readonly<{
   status: TopUpStatus;
@@ -53,16 +64,17 @@ async function send(url: string, init: RequestInit): Promise<Answer> {
  *
  * - **Find more results** (user-initiated, from the none-relevant notice or the empty state) sends
  *   the current selections. The request is announced inline and answered inline.
- * - **New constants** (automatic): whenever the current node changes, the session's activated
- *   constants are read, and each one that a committed step activated and no recorded top-up
- *   covered gets one `new-constants` request, once per page. There is no review step, and every
- *   failure (rate limit, disabled, stale, unreachable) is silent: the proof is unaffected. Only a
- *   top-up that added results leaves a brief note.
+ * - **New constants** (automatic): each constant that a committed step activated (the session's
+ *   constants list it) and no recorded top-up covered gets one `new-constants` request. A request
+ *   that was rate limited is made once more at a later change of the current node. There is no
+ *   review step, and every failure (rate limit, disabled, stale, unreachable) is silent: the proof
+ *   is unaffected. Only a top-up that added results leaves a brief note.
  */
 export function useLibraryTopUp({
   sessionId,
   nodeId,
   enabled,
+  activated,
   createId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
 }: LibraryTopUpOptions): LibraryTopUp {
   const [status, setStatus] = useState<TopUpStatus>(IDLE);
@@ -70,12 +82,17 @@ export function useLibraryTopUp({
   const manual = useRef(false);
   const automatic = useRef(false);
   const rerun = useRef(false);
-  const attempted = useRef(new Set<string>());
+  const attempts = useRef(new Map<string, number>());
   // What the in-flight handlers read when their answer arrives; refreshed after every render.
-  const latest = useRef({ sessionId, nodeId, createId });
+  const latest = useRef({ sessionId, nodeId, createId, activated });
   useEffect(() => {
-    latest.current = { sessionId, nodeId, createId };
+    latest.current = { sessionId, nodeId, createId, activated };
   });
+  // The constants waiting for a request, as a key: the effect below runs when they change.
+  const waiting = (activated ?? [])
+    .filter(({ topUp }) => topUp === null)
+    .map(({ symbol }) => symbol)
+    .join("\u0000");
 
   useEffect(() => {
     mounted.current = true;
@@ -139,7 +156,7 @@ export function useLibraryTopUp({
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || waiting.length === 0) return;
     const run = async (): Promise<void> => {
       if (automatic.current) {
         rerun.current = true;
@@ -148,16 +165,16 @@ export function useLibraryTopUp({
       automatic.current = true;
       const asked = sessionId;
       try {
-        const read = await send(`${base}/library/constants`, { method: "GET" });
-        if (read.kind !== "answer" || !mounted.current || latest.current.sessionId !== asked)
-          return;
-        const constants = constantsAnswerSchema.safeParse(read.value);
-        if (!constants.success || !constants.data.ok) return;
-        const pending = constants.data.data.activated
-          .filter(({ topUp, symbol }) => topUp === null && !attempted.current.has(symbol))
+        const pending = (latest.current.activated ?? [])
+          .filter(
+            ({ topUp, symbol }) =>
+              topUp === null && (attempts.current.get(symbol) ?? 0) < MAX_AUTOMATIC_ATTEMPTS,
+          )
           .map(({ symbol }) => symbol);
         if (pending.length === 0) return;
-        pending.forEach((symbol) => attempted.current.add(symbol));
+        pending.forEach((symbol) =>
+          attempts.current.set(symbol, (attempts.current.get(symbol) ?? 0) + 1),
+        );
         const answer = await send(`${base}/ai-library-top-up`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -169,6 +186,11 @@ export function useLibraryTopUp({
         });
         if (answer.kind !== "answer" || !mounted.current || latest.current.sessionId !== asked)
           return;
+        // A rate limit is not an answer about the constants: they are asked about once more at a
+        // later change. Every other reply, a refusal included, settles the matter for this page.
+        if (answer.status !== 429) {
+          pending.forEach((symbol) => attempts.current.set(symbol, MAX_AUTOMATIC_ATTEMPTS));
+        }
         const parsed = topUpAnswerSchema.safeParse(answer.value);
         // Silent unless results were added: a refusal, rate limit or disabled role changes nothing.
         if (!parsed.success || !parsed.data.ok || parsed.data.data.status !== "topped-up") return;
@@ -192,7 +214,7 @@ export function useLibraryTopUp({
       }
     };
     void run();
-  }, [base, enabled, nodeId, sessionId]);
+  }, [base, enabled, nodeId, sessionId, waiting]);
 
   return { status, findMoreResults };
 }

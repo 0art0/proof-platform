@@ -2,6 +2,7 @@ import {
   inquiryRecordNodeIds,
   inquiryRecordReferenceIds,
   type ApplyKernelCommand,
+  type ConstantActivation,
   type DisplayedSuggestionSet,
   type InquiryRecord,
   type InteractionEvent,
@@ -53,6 +54,8 @@ export type MemoryProofTables = Readonly<{
   inquiryRecords: Map<string, InquiryRecord>;
   /** `proof_artifact_imports` of `0011_artifact_imports.sql`, keyed by the imported session. */
   artifactImports: Map<string, ProofArtifactImportRecord>;
+  /** `proof_constant_activations` of `0018_constant_activations.sql`, keyed by constant symbol. */
+  constantActivations: Map<string, ConstantActivation>;
 }>;
 
 type TableName = keyof MemoryProofTables;
@@ -73,6 +76,7 @@ const TABLE_NAMES = [
   "replaySteps",
   "inquiryRecords",
   "artifactImports",
+  "constantActivations",
 ] as const satisfies readonly TableName[];
 
 /** The composite `(session_id, id)` key used by every session-scoped memory table. */
@@ -118,6 +122,7 @@ export class MemoryProofStore implements ProofStore {
     replaySteps: new Map(),
     inquiryRecords: new Map(),
     artifactImports: new Map(),
+    constantActivations: new Map(),
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
@@ -187,6 +192,7 @@ class MemoryTransactionContext {
     replaySteps: new Map(),
     inquiryRecords: new Map(),
     artifactImports: new Map(),
+    constantActivations: new Map(),
   };
   /** Keys deleted by this transaction; a later insert of the same key re-stages the row. */
   private readonly deleted: { [Name in TableName]: Set<string> } = {
@@ -202,6 +208,7 @@ class MemoryTransactionContext {
     replaySteps: new Set(),
     inquiryRecords: new Set(),
     artifactImports: new Set(),
+    constantActivations: new Set(),
   };
   private readonly locks = new Map<string, Promise<() => void>>();
   private closed = false;
@@ -567,6 +574,35 @@ class MemoryTransactionContext {
       listReplaySteps: async (sessionId) =>
         this.sortedSessionRows("replaySteps", sessionId, (row) => row.commandId),
       listDeletions: async (sessionId) => this.sortedSessionRows("deletions", sessionId, idOf),
+      listConstantActivations: async (sessionId) =>
+        this.sortedSessionRows("constantActivations", sessionId, (row) =>
+          String(row.sequence).padStart(12, "0"),
+        ),
+      insertConstantActivation: async (sessionId, activation) =>
+        this.insert(
+          "constantActivations",
+          sessionId,
+          memoryProofRecordKey(sessionId, activation.symbol),
+          activation,
+          (row) => {
+            if (!Number.isInteger(row.sequence) || row.sequence < 1) {
+              violation("proof_constant_activations check: sequence must be positive.");
+            }
+            if (!Number.isInteger(row.transitionSequence) || row.transitionSequence < 1) {
+              violation("proof_constant_activations check: transition_sequence must be positive.");
+            }
+            if (row.declaration.symbol !== row.symbol) {
+              violation("proof_constant_activations check: the record repeats another symbol.");
+            }
+            if (
+              this.sessionRows("constantActivations", sessionId).some(
+                (existing) => existing.sequence === row.sequence,
+              )
+            ) {
+              violation(`proof_constant_activations unique sequence: ${row.sequence} exists.`);
+            }
+          },
+        ),
       readArtifactImport: async (sessionId) =>
         this.read("artifactImports", memoryProofRecordKey(sessionId, sessionId)),
       insertArtifactImport: async (record) =>

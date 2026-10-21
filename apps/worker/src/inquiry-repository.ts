@@ -27,6 +27,7 @@ import {
 } from "@proof/protocol";
 import { z } from "zod";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "./approved-catalog";
+import { catalogOperators } from "./session-constants";
 import {
   isStrictDataRecord,
   jsonEquals,
@@ -341,7 +342,11 @@ function invalidStoredRecord(): RepositoryFailure {
 function approvedMethods(definitions: DefinitionCatalog, session: ProofSession) {
   return {
     moves: new Set<string>(definitions.moves.map(({ id }) => id)),
-    results: new Set<string>(definitions.catalog(session.operators).results.map(({ id }) => id)),
+    results: new Set<string>(
+      definitions
+        .catalog(catalogOperators(session.operators, definitions))
+        .results.map(({ id }) => id),
+    ),
   };
 }
 

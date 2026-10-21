@@ -1,145 +1,106 @@
 /**
- * Active constants of a session (`docs/ai-agents-architecture.md` section 2, top-ups).
+ * The constants of a session as the records say (`docs/ai-agents-architecture.md` section 2).
  *
- * The constants of a session are its operator declarations. Those from the accepted background and
- * the starter packs are active from the start. An operator that joined the session only because an
- * approved initial-library result applies it (`metadata.libraryConstants`, recorded at approval) is
- * declared but dormant: no proof step has used it, and the library has no results written about
- * it. It becomes active when a committed step first applies a library result that uses it.
+ * - **Active** constants are the session's effective operators: its setup operators (origin
+ *   `setup`) and the constants committed steps activated (origin `activated`), in that order.
+ * - **Available** constants are the library constants (`LibraryResult.operators`) that the
+ *   session's library results declare and the effective operators do not: dormant until a
+ *   committed step applies a result that needs them.
+ * - **Activations** are the append-only records of that happening, each naming the step (command,
+ *   edge and node), the library result it applied and the activation's sequence. They persist
+ *   after backtracking or deleting the step.
  *
- * That is not a new record. The committed step already is the append-only record: its edge names the
- * library result it applied (`apply-result-*` operations, or a rewrite whose source is a result),
- * and the edge carries the session's transition sequence. So activation is a deterministic read
- * of the retained history, in sequence order: the first edge whose result mentions a dormant
- * constant activates it, and later edges activate nothing new. Backtracking does not undo it (the
- * discovery tree keeps every edge); deleting the step that activated a constant does, as it
- * removes the step's record.
- *
- * The request for a `new-constants` top-up is a separate HTTP call made after the step committed.
- * Nothing here calls a model, and nothing runs inside a proof transaction.
+ * Nothing here calls a model or reads the proof history: activation is a record written by the
+ * command service in the step's own transaction (`proof-repository.ts`).
  */
 import type { LibraryResult } from "@proof/library";
-import type { OperatorDeclaration, PlainMathJson } from "@proof/mathjson-model";
-import type { ProofEdge } from "@proof/protocol";
+import type { OperatorDeclaration } from "@proof/mathjson-model";
+import type { ConstantActivation } from "@proof/protocol";
+import type { DefinitionCatalog } from "./approved-catalog";
 import { listLlmCalls, type LlmCallStore } from "./llm-call-repository";
-import { loadProofHistory, type ProofSession, type ProofStore } from "./proof-repository";
+import {
+  loadSession,
+  transactionFailure,
+  type ProofSession,
+  type ProofStore,
+} from "./proof-repository";
+import { availableConstants, catalogOperators } from "./session-constants";
 
-/** A dormant constant that a committed step made active, and the step that did. */
-export type ConstantActivation = Readonly<{
+export type ActiveConstant = Readonly<{
   symbol: string;
+  operator: OperatorDeclaration;
+  origin: "setup" | "activated";
+}>;
+
+export type AvailableConstant = Readonly<{
+  symbol: string;
+  operator: OperatorDeclaration;
+  /** The library results that apply the constant (applying one activates it). */
+  results: readonly Readonly<{ id: string; name: string }>[];
+}>;
+
+export type ActivatedConstant = Readonly<{
+  symbol: string;
+  sequence: number;
+  commandId: string;
   edgeId: string;
-  /** The node the activating step created. */
   nodeId: string;
   resultId: string;
-  /** The step's transition sequence, when it was stored with one. */
-  sequence: number | undefined;
+  /** The library result's name when the catalog still knows it. */
+  resultName: string | null;
+  transitionSequence: number;
+  activatedAt: string;
 }>;
 
 export type SessionConstants = Readonly<{
-  /** The operators in play: everything declared except the dormant ones. */
-  active: readonly OperatorDeclaration[];
-  /** Declared by the approved initial library only, and not yet applied by any step. */
-  dormant: readonly OperatorDeclaration[];
-  /** Constants activated by committed steps, in the order they were activated. */
-  activations: readonly ConstantActivation[];
+  active: readonly ActiveConstant[];
+  available: readonly AvailableConstant[];
+  activated: readonly ActivatedConstant[];
 }>;
 
-/** The symbols of the session's operators that only the approved initial library introduced. */
-export function libraryConstantSymbols(session: Pick<ProofSession, "metadata" | "operators">) {
-  const declared = new Set(session.operators.map(({ symbol }) => symbol));
-  return (session.metadata?.libraryConstants ?? []).filter((symbol) => declared.has(symbol));
-}
-
-/** The library results a kernel operation applies (none for a structural step). */
-export function appliedResultIds(operation: ProofEdge["operation"]): readonly string[] {
-  switch (operation.kind) {
-    case "apply-result-backward":
-    case "apply-result-forward":
-      return [operation.resultId];
-    case "rewrite-with-equivalence":
-    case "rewrite-with-implication":
-      return operation.source.kind === "result" ? [operation.source.resultId] : [];
-    default:
-      return [];
-  }
-}
-
-/** Every symbol an expression mentions, operator heads included. */
-export function mentionedSymbols(expression: PlainMathJson, symbols = new Set<string>()) {
-  if (typeof expression === "string") {
-    symbols.add(expression);
-  } else if (Array.isArray(expression)) {
-    expression.forEach((child) => mentionedSymbols(child as PlainMathJson, symbols));
-  } else if (typeof expression === "object" && expression !== null) {
-    if ("sym" in expression && typeof expression.sym === "string") symbols.add(expression.sym);
-    if ("fn" in expression) {
-      (expression.fn as readonly PlainMathJson[]).forEach((child) =>
-        mentionedSymbols(child, symbols),
-      );
-    }
-  }
-  return symbols;
-}
-
-/** The symbols a library result's statement, premises and patterns mention. */
-export function resultSymbols(result: LibraryResult): ReadonlySet<string> {
-  const symbols = new Set<string>();
-  mentionedSymbols(result.statement.expression, symbols);
-  result.premises.forEach(({ expression }) => mentionedSymbols(expression, symbols));
-  result.patterns.forEach(({ expression }) => mentionedSymbols(expression, symbols));
-  return symbols;
-}
-
-/**
- * Split a session's operators into active and dormant, and find the steps that activated the
- * dormant ones. `edges` may be in any order; they are read by transition sequence.
- */
-export function deriveSessionConstants(
+/** Describe a session's constants from its setup operators, activation records and library. */
+export function describeSessionConstants(
   input: Readonly<{
-    operators: readonly OperatorDeclaration[];
-    /** `metadata.libraryConstants` of the session. */
-    libraryConstants: readonly string[];
-    edges: readonly ProofEdge[];
-    results: readonly LibraryResult[];
+    setupOperators: readonly OperatorDeclaration[];
+    activations: readonly ConstantActivation[];
+    definitions: DefinitionCatalog;
   }>,
 ): SessionConstants {
-  const dormantSymbols = new Set(input.libraryConstants);
-  const symbolsOf = new Map<string, ReadonlySet<string>>(
-    input.results.map((result) => [result.id as string, resultSymbols(result)]),
-  );
-  const ordered = input.edges
-    .map((edge, position) => ({ edge, position }))
-    .sort(
-      (left, right) =>
-        (left.edge.sequence ?? Number.MAX_SAFE_INTEGER) -
-          (right.edge.sequence ?? Number.MAX_SAFE_INTEGER) || left.position - right.position,
-    );
-
-  const activations: ConstantActivation[] = [];
-  const activated = new Set<string>();
-  for (const { edge } of ordered) {
-    for (const resultId of appliedResultIds(edge.operation)) {
-      const symbols = symbolsOf.get(resultId);
-      if (symbols === undefined) continue;
-      for (const symbol of [...symbols].sort()) {
-        if (!dormantSymbols.has(symbol) || activated.has(symbol)) continue;
-        activated.add(symbol);
-        activations.push({
-          symbol,
-          edgeId: edge.id,
-          nodeId: edge.childNodeId,
-          resultId,
-          sequence: edge.sequence,
-        });
-      }
-    }
-  }
-  const isDormant = ({ symbol }: OperatorDeclaration) =>
-    dormantSymbols.has(symbol) && !activated.has(symbol);
+  const { setupOperators, activations, definitions } = input;
+  const activatedSymbols = new Set(activations.map(({ symbol }) => symbol));
+  const effective = [...setupOperators, ...activations.map(({ declaration }) => declaration)];
+  const wide = catalogOperators(effective, definitions);
+  const results: readonly LibraryResult[] = definitions.catalog(wide).results;
+  const nameOf = new Map<string, string>(results.map(({ id, name }) => [id, name]));
   return {
-    active: input.operators.filter((operator) => !isDormant(operator)),
-    dormant: input.operators.filter(isDormant),
-    activations,
+    active: effective.map((operator) => ({
+      symbol: operator.symbol,
+      operator,
+      origin: activatedSymbols.has(operator.symbol) ? "activated" : "setup",
+    })),
+    available: availableConstants(effective, definitions).map((operator) => ({
+      symbol: operator.symbol,
+      operator,
+      // Generated variants of a result are not listed beside it.
+      results: results
+        .filter(
+          (result) =>
+            result.provenance.kind !== "derived-variant" &&
+            result.operators?.some(({ symbol }) => symbol === operator.symbol),
+        )
+        .map(({ id, name }) => ({ id, name })),
+    })),
+    activated: activations.map((activation) => ({
+      symbol: activation.symbol,
+      sequence: activation.sequence,
+      commandId: activation.commandId,
+      edgeId: activation.edgeId,
+      nodeId: activation.nodeId,
+      resultId: activation.resultId,
+      resultName: nameOf.get(activation.resultId) ?? null,
+      transitionSequence: activation.transitionSequence,
+      activatedAt: activation.activatedAt,
+    })),
   };
 }
 
@@ -177,6 +138,8 @@ export type LoadedSessionConstants =
   | Readonly<{
       status: "loaded";
       session: ProofSession;
+      setupOperators: readonly OperatorDeclaration[];
+      activations: readonly ConstantActivation[];
       constants: SessionConstants;
     }>
   | Readonly<{
@@ -184,23 +147,33 @@ export type LoadedSessionConstants =
       diagnostics: readonly [Readonly<{ code: string; message: string }>];
     }>;
 
-/** Read a session's retained history and derive its constants against the given results. */
+/** Read a session's constants against the library catalog the request is scoped to. */
 export async function loadSessionConstants(
   store: ProofStore,
   sessionId: string,
-  results: readonly LibraryResult[],
+  definitions: DefinitionCatalog,
 ): Promise<LoadedSessionConstants> {
-  const history = await loadProofHistory(store, sessionId);
-  if (history.status !== "loaded") return history;
-  const { session } = history;
-  return {
-    status: "loaded",
-    session,
-    constants: deriveSessionConstants({
-      operators: session.operators,
-      libraryConstants: libraryConstantSymbols(session),
-      edges: history.edges.map(({ edge }) => edge),
-      results,
-    }),
-  };
+  try {
+    return await store.transaction(async (transaction) => {
+      const loaded = await loadSession(
+        transaction,
+        sessionId as Parameters<typeof loadSession>[1],
+        definitions,
+      );
+      if (!loaded.ok) return loaded.failure;
+      return {
+        status: "loaded" as const,
+        session: loaded.session,
+        setupOperators: loaded.setupOperators,
+        activations: loaded.activations,
+        constants: describeSessionConstants({
+          setupOperators: loaded.setupOperators,
+          activations: loaded.activations,
+          definitions,
+        }),
+      };
+    });
+  } catch (error: unknown) {
+    return transactionFailure(error, "The session's constants could not be read.");
+  }
 }

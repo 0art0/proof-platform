@@ -312,6 +312,35 @@ describe("PreviewDetails", () => {
     expect(panel.textContent).not.toMatch(/[[{]"/);
   });
 
+  it("says that applying the step adds the library constants it names, and only then", () => {
+    const operator = (symbol: string, displayName?: string) => ({
+      id: `operator:${symbol.toLowerCase()}`,
+      symbol,
+      signature: {
+        parameters: [{ kind: "named", id: "sort:integer" }],
+        result: { kind: "named", id: "sort:integer" },
+      },
+      ...(displayName === undefined ? {} : { presentation: { displayName } }),
+    });
+    const base = resultPreview();
+    const { rerender } = render(
+      <PreviewDetails preview={base} presentation={presentation} view="formal" />,
+    );
+    expect(screen.queryByTestId("preview-constants")).toBeNull();
+
+    const one = { ...base, constants: [operator("Gcd", "greatest common divisor")] };
+    rerender(<PreviewDetails preview={one as never} presentation={presentation} view="formal" />);
+    expect(screen.getByTestId("preview-constants")).toHaveTextContent(
+      "Applying this adds the constant ‘greatest common divisor’ to this proof’s constants.",
+    );
+
+    const two = { ...base, constants: [operator("Gcd", "gcd"), operator("Lcm")] };
+    rerender(<PreviewDetails preview={two as never} presentation={presentation} view="formal" />);
+    expect(screen.getByTestId("preview-constants")).toHaveTextContent(
+      "Applying this adds the constants ‘gcd’ and ‘Lcm’ to this proof’s constants.",
+    );
+  });
+
   it("shows an updated goal's conclusion and new hypothesis in natural language", () => {
     const preview = introductionPreview();
     const { rerender } = render(

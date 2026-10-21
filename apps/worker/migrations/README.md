@@ -42,6 +42,14 @@ widening lists every role that exists on its branch.
 approval of its results is again a row of `llm_topic_decisions` (it names the stored call and the
 approved result IDs only, never the artifacts), so no table is added.
 
+`0018_constant_activations.sql` creates `proof_constant_activations`, the append-only record of the
+library constants that committed steps activated (a step that applies a library result using a
+constant the session has not yet activated appends one row per constant in its own transaction,
+before the step is stored). A session's effective operators are its `proof_sessions.operators`
+followed by these declarations in `sequence` order. Rows name the triggering command, edge, node
+and result by ID without foreign keys, so backtracking and "Delete previous move" never remove
+them.
+
 `0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
 events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
 as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so

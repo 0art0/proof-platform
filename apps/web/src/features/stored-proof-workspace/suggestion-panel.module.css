@@ -664,3 +664,13 @@
   padding-left: 1.25rem;
   font-size: 0.85rem;
 }
+
+.previewConstants {
+  margin: 0;
+  border-left: 4px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 0.5rem 0.7rem;
+  color: var(--accent-text);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}

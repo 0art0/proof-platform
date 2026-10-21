@@ -83,7 +83,10 @@ export type ExportProofArtifactOptions = Readonly<{
 const PAGE_SIZE = 500;
 
 type StoredRows = Readonly<{
+  /** The session with its effective operators. */
   session: ProofSession;
+  setupOperators: ProofArtifact["initialState"]["operators"];
+  activations: ProofArtifact["constantActivations"];
   nodes: readonly ProofNode[];
   edges: readonly ProofEdge[];
   tree: Omit<ProofArtifact["tree"], "rootNodeId" | "currentNodeId" | "nodes" | "edges">;
@@ -135,7 +138,8 @@ export async function exportProofArtifact(
             sourceDigest: rows.importRecord.digest,
           },
     problemSetup: { metadata: session.metadata ?? null },
-    initialState: { rootNodeId: session.rootNodeId, operators: session.operators },
+    initialState: { rootNodeId: session.rootNodeId, operators: rows.setupOperators },
+    constantActivations: rows.activations,
     library: library.library as ProofArtifact["library"],
     tree: {
       rootNodeId: session.rootNodeId,
@@ -211,7 +215,7 @@ async function readStoredRows(
 ): Promise<StoredRows | ArtifactExportFailure> {
   const loaded = await loadSession(transaction, sessionId, definitions);
   if (!loaded.ok) return loaded.failure;
-  const { session, environment } = loaded;
+  const { session, environment, setupOperators, activations } = loaded;
 
   const nodes = parseAll(await transaction.listNodes(session.id), (input) =>
     parseNodeRow(input, session, environment),
@@ -292,6 +296,8 @@ async function readStoredRows(
     [...rows].sort((left, right) => compareStrings(keyOf(left), keyOf(right)));
   return {
     session,
+    setupOperators,
+    activations,
     nodes: byId(nodes, ({ id }) => id),
     edges: byId(edges, ({ id }) => id),
     tree: {

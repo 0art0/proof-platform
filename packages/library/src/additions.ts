@@ -11,12 +11,7 @@
  * Schemas that depend on `./index` are wrapped in `z.lazy` because `./index` re-exports this module
  * and is still evaluating when this module first runs.
  */
-import {
-  operatorDeclarationSchema,
-  operatorDeclarationsSchema,
-  stableIdentifierSchema,
-  type OperatorDeclaration,
-} from "@proof/mathjson-model";
+import { operatorDeclarationSchema, stableIdentifierSchema } from "@proof/mathjson-model";
 import { z } from "zod";
 import {
   backgroundClassificationSchema,
@@ -205,42 +200,6 @@ export const libraryOperatorRegistrationSchema = z
   })
   .strict();
 export type LibraryOperatorRegistration = z.infer<typeof libraryOperatorRegistrationSchema>;
-
-export type MergeLibraryOperatorsResult =
-  | Readonly<{ ok: true; operators: readonly OperatorDeclaration[] }>
-  | Readonly<{ ok: false; message: string }>;
-
-/**
- * Merge operator environments (for example the global registry and a session's operators).
- * Identical declarations of one symbol collapse to one; any other conflict, and any invalid
- * combined environment, is rejected.
- */
-export function mergeLibraryOperators(
-  groups: readonly (readonly unknown[])[],
-): MergeLibraryOperatorsResult {
-  const bySymbol = new Map<string, unknown>();
-  for (const operator of groups.flat()) {
-    const symbol =
-      typeof operator === "object" && operator !== null && "symbol" in operator
-        ? operator.symbol
-        : undefined;
-    if (typeof symbol !== "string") return { ok: false, message: "An operator is invalid." };
-    const existing = bySymbol.get(symbol);
-    if (existing === undefined) bySymbol.set(symbol, operator);
-    else if (!sameJson(existing, operator)) {
-      return { ok: false, message: `The operator ${symbol} is declared inconsistently.` };
-    }
-  }
-  let parsed: ReturnType<typeof operatorDeclarationsSchema.safeParse>;
-  try {
-    parsed = operatorDeclarationsSchema.safeParse(structuredClone([...bySymbol.values()]));
-  } catch {
-    return { ok: false, message: "The combined operator environment is invalid." };
-  }
-  return parsed.success
-    ? deepFreeze({ ok: true, operators: parsed.data })
-    : { ok: false, message: "The combined operator environment is invalid." };
-}
 
 export type BackgroundRevisionResult =
   | Readonly<{ ok: true; profile: BackgroundProfile; diagnostics: readonly [] }>

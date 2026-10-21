@@ -1,5 +1,6 @@
 import {
   createProofNodeSchema,
+  operatorDeclarationSchema,
   proofStateDeltaSchema,
   transitionClassSchema,
   transitionEvidenceSchema,
@@ -52,6 +53,8 @@ const previewedSchema = z
     transitionClass: transitionClassSchema,
     evidence: transitionEvidenceSchema,
     steps: z.array(stepSchema).min(1),
+    /** Library constants the plan's steps would add; the preview's states may use them. */
+    constants: z.array(operatorDeclarationSchema).optional(),
     preview: z
       .object({
         transitionClass: transitionClassSchema,
@@ -262,7 +265,11 @@ export async function requestMoveInstructionPreview(
       failure: data.failure,
     };
   }
-  const schema = createProofNodeSchema({ operators });
+  // The plan's states are read in the proof's constants plus the ones its steps would add.
+  const added = (data.constants ?? []).filter(
+    ({ symbol }) => !operators.some((operator) => operator.symbol === symbol),
+  );
+  const schema = createProofNodeSchema({ operators: [...operators, ...added] });
   const before = schema.safeParse({ id: "node:preview-before", state: data.preview.beforeState });
   const after = schema.safeParse({ id: "node:preview-after", state: data.preview.afterState });
   if (!before.success || !after.success) return INVALID;

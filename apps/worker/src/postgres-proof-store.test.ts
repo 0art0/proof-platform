@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  constantActivationSchema,
   interactionEventSchema,
+  problemSetupSort,
   proofDeletionRecordSchema,
   proofNodeSchema,
   type DisplayedSuggestionSet,
@@ -783,5 +785,77 @@ describe("PostgresProofStore interaction events", () => {
     expect(listed).toEqual([expected]);
     const list = client.calls.find(({ text }) => text.includes("ORDER BY sequence"));
     expect(list?.values).toEqual(["session:one", 2, "node:root", 10]);
+  });
+});
+
+describe("PostgresProofStore constant activations", () => {
+  const activation = constantActivationSchema.parse({
+    sequence: 2,
+    symbol: "Gcd",
+    declaration: {
+      id: "operator:gcd",
+      symbol: "Gcd",
+      signature: {
+        parameters: [problemSetupSort("integer"), problemSetupSort("integer")],
+        result: problemSetupSort("integer"),
+      },
+    },
+    commandId: "command:apply",
+    edgeId: "edge:apply",
+    nodeId: "node:apply",
+    resultId: "result:gcd-divides",
+    transitionSequence: 3,
+    activatedAt: "2026-10-19T10:00:00.000Z",
+  });
+
+  it("appends an activation with its identities as columns and the record as JSONB", async () => {
+    const client = new RecordingClient();
+    const store = new PostgresProofStore({ connect: async () => client });
+    await store.transaction(async (transaction) =>
+      transaction.insertConstantActivation("session:one" as ProofSessionId, activation),
+    );
+    const insert = client.calls.find(({ text }) =>
+      text.includes("INSERT INTO proof_constant_activations"),
+    );
+    expect(insert?.values).toEqual([
+      "session:one",
+      "Gcd",
+      2,
+      "command:apply",
+      "edge:apply",
+      "node:apply",
+      "result:gcd-divides",
+      3,
+      "2026-10-19T10:00:00.000Z",
+      JSON.stringify(activation),
+    ]);
+    // The read-only guard locks the session row before the write.
+    expect(client.calls.findIndex(({ text }) => text.includes("FOR UPDATE"))).toBeLessThan(
+      client.calls.findIndex(({ text }) => text.includes("INSERT INTO proof_constant_activations")),
+    );
+  });
+
+  it("lists them in activation order and never deletes them with a step's records", async () => {
+    const client = new DeletionClient();
+    const store = new PostgresProofStore({ connect: async () => client });
+    await store.transaction(async (transaction) => {
+      await transaction.listConstantActivations("session:one" as ProofSessionId);
+      await transaction.deleteProofRecords(
+        "session:one" as ProofSessionId,
+        {
+          nodeIds: ["node:apply"],
+          edgeIds: ["edge:apply"],
+          commandIds: ["command:apply"],
+          chosenPreviewIds: [],
+        } as unknown as ProofRecordDeletionRequest,
+      );
+    });
+    const listed = client.calls.find(({ text }) =>
+      text.includes("FROM proof_constant_activations"),
+    );
+    expect(listed?.text).toContain("ORDER BY sequence");
+    expect(listed?.values).toEqual(["session:one"]);
+    const writes = client.calls.filter(({ text }) => /^\s*(DELETE|UPDATE)/.test(text));
+    expect(writes.some(({ text }) => text.includes("proof_constant_activations"))).toBe(false);
   });
 });

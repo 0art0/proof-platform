@@ -9,8 +9,9 @@
  *   their generated variants, as `proof-time-background` additions of the session. There is no
  *   review step. Nothing here touches proof state, and stored suggestion sets are never rewritten;
  *   the next suggestion request simply sees the larger library.
- * - `GET /proof-sessions/:id/library/constants` tells which constants are active, dormant or newly
- *   activated by a committed step, and which activations a recorded top-up already covered.
+ * - `GET /proof-sessions/:id/library/constants` tells which constants are active (and whether the
+ *   setup or a committed step made them so), which library constants are available but not yet
+ *   active, and the recorded activations, with the ones a top-up already covered.
  *
  * Session-owned evidence, the shared cost guard and replay by call ID work as for the move
  * executor, with one difference: a top-up changes the library, so the context a replay would
@@ -34,21 +35,18 @@ import {
   type LibrarianTopUpContext,
   type PreparedLlmCall,
 } from "@proof/llm";
-import type { LibraryAdditionEvent, LibraryResult } from "@proof/library";
+import { mentionedSymbols, type LibraryAdditionEvent, type LibraryResult } from "@proof/library";
 import type { OperatorDeclaration } from "@proof/mathjson-model";
 import { resolveProofSelection } from "@proof/selections";
 import { z } from "zod";
-import {
-  coveredConstants,
-  loadSessionConstants,
-  mentionedSymbols,
-  type SessionConstants,
-} from "../active-constants";
+import { coveredConstants, loadSessionConstants, type SessionConstants } from "../active-constants";
 import {
   addLibraryArtifact,
+  listLibraryOperators,
   type AddLibraryArtifactResult,
   type LibraryStore,
 } from "../library-repository";
+import { availableConstants, catalogOperators } from "../session-constants";
 import { evaluateTopUpProposal, TOP_UP_REVIEWER_ID } from "../library-proposal";
 import {
   readLlmCall,
@@ -361,8 +359,12 @@ async function prepareContext(
       ),
     );
   }
-  const catalog = context.definitions.catalog(session.operators);
-  const state = await loadSessionConstants(context.store, sessionId, catalog.results);
+  // The session library: the results valid in the effective operators and those that would
+  // activate an available library constant.
+  const catalog = context.definitions.catalog(
+    catalogOperators(session.operators, context.definitions),
+  );
+  const state = await loadSessionConstants(context.store, sessionId, context.definitions);
   if (state.status !== "loaded") {
     return fail({
       status: repositoryFailureStatus(state),
@@ -388,7 +390,7 @@ async function prepareContext(
     if (covered === undefined) {
       return fail(refuse(503, "storage-failure", "The recorded top-ups could not be read."));
     }
-    const { activations } = state.constants;
+    const { activations } = state;
     const unknown = (requested.constants ?? []).filter(
       (symbol) => !activations.some((activation) => activation.symbol === symbol),
     );
@@ -413,12 +415,11 @@ async function prepareContext(
         ),
       );
     }
-    const symbols = new Set(wanted.map(({ symbol }) => symbol));
-    newConstants = session.operators.filter(({ symbol }) => symbols.has(symbol));
+    newConstants = wanted.map(({ declaration }) => declaration);
   }
 
   const newSymbols = new Set(newConstants.map(({ symbol }) => symbol));
-  const constants = state.constants.active.filter(({ symbol }) => !newSymbols.has(symbol));
+  const constants = session.operators.filter(({ symbol }) => !newSymbols.has(symbol));
   if (constants.length > MAX_LIBRARIAN_CONTEXT_CONSTANTS) {
     return fail(refuse(400, "invalid-request", "The session declares too many constants."));
   }
@@ -511,7 +512,16 @@ async function recordTopUp(
       event.admission.decision === "admitted" ? [event.artifact.id] : [],
     ),
   );
-  const catalog = context.definitions.catalog(session.operators);
+  const catalog = context.definitions.catalog(
+    catalogOperators(session.operators, context.definitions),
+  );
+  const registry = await listLibraryOperators(library);
+  if (registry.status !== "found") {
+    return {
+      status: repositoryFailureStatus(registry),
+      body: { diagnostics: registry.diagnostics },
+    };
+  }
   const known = new Set<string>(catalog.results.map(({ id }) => id));
   const existing: LibraryResult[] = catalog.results.filter(({ id }) => !ownArtifactIds.has(id));
   for (const event of read.events) {
@@ -531,6 +541,8 @@ async function recordTopUp(
     context: topUp,
     proposal,
     operators: session.operators,
+    available: availableConstants(session.operators, context.definitions),
+    registry: registry.registrations.map(({ operator }) => operator),
     profile,
     existing,
   });
@@ -637,6 +649,12 @@ async function recordTopUp(
       added,
       addedCount: added.length,
       rejected,
+      newConstants: evaluation.newConstants.map(({ operator, rationale, usedBy }) => ({
+        symbol: operator.symbol,
+        operator,
+        rationale,
+        usedBy,
+      })),
       rejectedConstants: evaluation.rejectedConstants,
     },
   };
@@ -649,19 +667,13 @@ async function recordTopUp(
 export type SessionConstantsResponse = Readonly<{
   sessionId: string;
   readOnly: boolean;
-  /** Symbols of the operators in play. */
-  active: readonly string[];
-  /** Declared by the approved initial library only; no step has used them yet. */
-  dormant: readonly string[];
-  /** Constants a committed step made active, with the step and the top-up that covered them. */
-  activated: readonly Readonly<{
-    symbol: string;
-    edgeId: string;
-    nodeId: string;
-    resultId: string;
-    sequence: number | null;
-    topUp: Readonly<{ callId: string }> | null;
-  }>[];
+  /** The effective operators: those of the setup and the ones committed steps activated. */
+  active: SessionConstants["active"];
+  /** Library constants the session's library declares and no step has activated yet. */
+  available: SessionConstants["available"];
+  /** The recorded activations, in order, with the top-up that covered each one. */
+  activated: readonly (SessionConstants["activated"][number] &
+    Readonly<{ topUp: Readonly<{ callId: string }> | null }>)[];
 }>;
 
 /** Describe a session's constants; `diagnostics` carry a failure. */
@@ -675,27 +687,20 @@ export async function readSessionConstants(
       diagnostics: readonly [Readonly<{ code: string; message: string }>];
     }>
 > {
-  const loaded = await loadCurrentProofSession(context.store, sessionId);
-  if (loaded.status !== "loaded") return loaded;
-  const catalog = context.definitions.catalog(loaded.session.operators);
-  const state = await loadSessionConstants(context.store, sessionId, catalog.results);
+  const state = await loadSessionConstants(context.store, sessionId, context.definitions);
   if (state.status !== "loaded") return state;
   const covered =
     context.llmCalls === undefined
       ? new Map<string, string>()
       : ((await coveredConstants(context.llmCalls, sessionId)) ?? new Map<string, string>());
-  const constants: SessionConstants = state.constants;
+  const { constants } = state;
   return {
     sessionId,
-    readOnly: loaded.session.readOnly === true,
-    active: constants.active.map(({ symbol }) => symbol),
-    dormant: constants.dormant.map(({ symbol }) => symbol),
-    activated: constants.activations.map((activation) => ({
-      symbol: activation.symbol,
-      edgeId: activation.edgeId,
-      nodeId: activation.nodeId,
-      resultId: activation.resultId,
-      sequence: activation.sequence ?? null,
+    readOnly: state.session.readOnly === true,
+    active: constants.active,
+    available: constants.available,
+    activated: constants.activated.map((activation) => ({
+      ...activation,
       topUp:
         covered.get(activation.symbol) === undefined
           ? null

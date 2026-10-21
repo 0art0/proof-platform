@@ -54,7 +54,9 @@ import {
 } from "./api-contract";
 import { toDescriptor } from "./selection-descriptor";
 import { createInteractionRecorder } from "./interaction-recorder";
+import { ConstantsPanel } from "./constants-panel";
 import { useLibraryTopUp } from "./library-top-up";
+import { useSessionConstants } from "./use-session-constants";
 import { MoveInstructions } from "./move-instructions";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
@@ -156,14 +158,14 @@ function StatefulStoredWorkspace({
 
   const loadHistory = useCallback(async () => {
     const generation = ++historyGeneration.current;
-    const result = await requestHistory(session.id, session.operators);
+    const result = await requestHistory(session.id);
     if (historyGeneration.current !== generation) return;
     setHistory(
       result.ok
         ? { kind: "ready", nodes: result.nodes, edges: result.edges }
         : { kind: "rejected", message: result.message },
     );
-  }, [session.id, session.operators]);
+  }, [session.id]);
 
   useEffect(() => void loadHistory(), [loadHistory]);
 
@@ -501,7 +503,7 @@ function StatefulStoredWorkspace({
         moveState.choices,
       );
       setMoveState({ kind: "applying", suggestionId });
-      const result = await requestApply(session.id, choice, session.operators);
+      const result = await requestApply(session.id, choice);
       mutationPendingRef.current = false;
       setMutationPending(false);
       if (actionGeneration.current !== generation) return;
@@ -536,7 +538,7 @@ function StatefulStoredWorkspace({
       });
       void loadHistory();
     },
-    [loadHistory, moveState, previewSuggestion, resetTransientState, session.id, session.operators],
+    [loadHistory, moveState, previewSuggestion, resetTransientState, session.id],
   );
 
   const backtrackTo = useCallback(
@@ -545,11 +547,10 @@ function StatefulStoredWorkspace({
       mutationPendingRef.current = true;
       setMutationPending(true);
       const generation = ++actionGeneration.current;
-      const result = await requestBacktrack(
-        session.id,
-        { expectedCurrentNodeId: node.id, targetNodeId },
-        session.operators,
-      );
+      const result = await requestBacktrack(session.id, {
+        expectedCurrentNodeId: node.id,
+        targetNodeId,
+      });
       mutationPendingRef.current = false;
       setMutationPending(false);
       if (actionGeneration.current !== generation) return;
@@ -563,7 +564,7 @@ function StatefulStoredWorkspace({
       setNotice({ state: "committed", message: `Backtracked to ${result.node.id}.` });
       void loadHistory();
     },
-    [loadHistory, node.id, resetTransientState, session.id, session.operators],
+    [loadHistory, node.id, resetTransientState, session.id],
   );
 
   /** Toolbar actions (N31): one command envelope, then the new current node and history. */
@@ -617,11 +618,30 @@ function StatefulStoredWorkspace({
 
   // Library top-ups (architecture §2): "Find more results" for the current selections, and the
   // automatic request after a committed step first used a constant the library had no results for.
+  const constantsRead = useSessionConstants(session.id, node.id);
   const topUp = useLibraryTopUp({
     sessionId: session.id,
     nodeId: node.id,
     enabled: aiLibrarian && !readOnly,
+    activated:
+      constantsRead.view.kind === "ready" ? constantsRead.view.constants.activated : undefined,
   });
+  // Library results and previews may use library constants the proof does not have yet; they are
+  // shown in their own notation, while the proof state itself uses only the proof's constants.
+  const availableOperators = useMemo(
+    () =>
+      constantsRead.view.kind === "ready"
+        ? constantsRead.view.constants.available
+            .map(({ operator }) => operator)
+            .filter(({ symbol }) => !session.operators.some((own) => own.symbol === symbol))
+        : [],
+    [constantsRead.view, session.operators],
+  );
+  const catalogOperators = useMemo(
+    () => [...session.operators, ...availableOperators],
+    [availableOperators, session.operators],
+  );
+  const catalogPresentation = usePresentation(catalogOperators, node.state);
   const findMoreResults = useCallback(() => {
     void topUp.findMoreResults(selections);
   }, [selections, topUp]);
@@ -777,10 +797,11 @@ function StatefulStoredWorkspace({
       </WorkspaceToolbar>
       <LibraryDrawer
         sessionId={session.id}
-        presentation={presentation}
+        presentation={catalogPresentation}
         view={view}
         gestures={drag.bindings}
       />
+      <ConstantsPanel view={constantsRead.view} />
       {notice ? (
         <p className={styles.actionNotice} data-state={notice.state} role="status">
           {notice.message}
@@ -840,7 +861,7 @@ function StatefulStoredWorkspace({
         mutationPending={mutationPending || readOnly}
         authorMovesHref={readOnly ? undefined : movesHref(session.id)}
         macros={macros}
-        presentation={presentation}
+        presentation={catalogPresentation}
         view={view}
         aiShortlist={
           aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
@@ -1092,11 +1113,7 @@ async function requestMovePreview(
   }
 }
 
-async function requestApply(
-  sessionId: string,
-  choice: MoveChoiceRequest,
-  operators: readonly OperatorDeclaration[],
-) {
+async function requestApply(sessionId: string, choice: MoveChoiceRequest) {
   try {
     const response = await postChoice(sessionId, "commands", choice);
     const parsed = commandApiResponseSchema.safeParse(await response.json());
@@ -1108,7 +1125,11 @@ async function requestApply(
         message: explainMacroFailure(parsed.data.error.code, parsed.data.error.message),
       };
     }
-    const node = createProofNodeSchema({ operators }).safeParse(parsed.data.data.node);
+    // A step that applied a library result may have added constants to the proof: the node is
+    // read in the operators the answer's session states, which include them.
+    const node = createProofNodeSchema({
+      operators: parsed.data.data.session.operators,
+    }).safeParse(parsed.data.data.node);
     if (!node.success || parsed.data.data.session.currentNodeId !== node.data.id)
       return invalidActionResponse();
     return {
@@ -1122,7 +1143,7 @@ async function requestApply(
   }
 }
 
-async function requestHistory(sessionId: string, operators: readonly OperatorDeclaration[]) {
+async function requestHistory(sessionId: string) {
   try {
     const response = await fetch(`/api/proof-sessions/${encodeURIComponent(sessionId)}/history`, {
       cache: "no-store",
@@ -1130,12 +1151,15 @@ async function requestHistory(sessionId: string, operators: readonly OperatorDec
     const parsed = proofHistoryApiResponseSchema.safeParse(await response.json());
     if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
     if (!parsed.data.ok) return { ok: false as const, message: parsed.data.error.message };
+    // The history is read in the operators its session states: later nodes may use constants
+    // that steps added.
+    const stated = parsed.data.data.session.operators;
     const nodes = parsed.data.data.nodes.map((value) =>
-      createProofNodeSchema({ operators }).safeParse(value),
+      createProofNodeSchema({ operators: stated }).safeParse(value),
     );
     const edges = parsed.data.data.edges.map(({ edge, name }) => ({
       name,
-      parsed: createProofEdgeSchema({ operators }).safeParse(edge),
+      parsed: createProofEdgeSchema({ operators: stated }).safeParse(edge),
     }));
     if (nodes.some((value) => !value.success) || edges.some(({ parsed }) => !parsed.success))
       return invalidActionResponse();
@@ -1152,7 +1176,6 @@ async function requestHistory(sessionId: string, operators: readonly OperatorDec
 async function requestBacktrack(
   sessionId: string,
   request: Readonly<{ expectedCurrentNodeId: string; targetNodeId: string }>,
-  operators: readonly OperatorDeclaration[],
 ) {
   try {
     const response = await fetch(`/api/proof-sessions/${encodeURIComponent(sessionId)}/backtrack`, {
@@ -1164,7 +1187,9 @@ async function requestBacktrack(
     const parsed = backtrackApiResponseSchema.safeParse(await response.json());
     if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
     if (!parsed.data.ok) return { ok: false as const, message: parsed.data.error.message };
-    const node = createProofNodeSchema({ operators }).safeParse(parsed.data.data.node);
+    const node = createProofNodeSchema({
+      operators: parsed.data.data.session.operators,
+    }).safeParse(parsed.data.data.node);
     if (!node.success || parsed.data.data.session.currentNodeId !== node.data.id)
       return invalidActionResponse();
     return { ok: true as const, session: parsed.data.data.session, node: node.data };

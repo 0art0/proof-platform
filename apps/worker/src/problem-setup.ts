@@ -21,6 +21,7 @@
 import {
   admitLibraryArtifact,
   libraryPacksForOperators,
+  mentionedSymbols,
   starterLibraryPacks,
   type LibraryPack,
 } from "@proof/library";
@@ -109,10 +110,14 @@ export function problemSetupOptions(
 }
 
 /**
- * Operators the session gets besides its packs': the constants of an approved background and the
- * new constants of an approved initial library, which the worker resolved from storage. They
- * follow the packs' operators in the session environment. The approved library's artifacts are
- * checked against the environment and recorded as setup additions when the session is created.
+ * Operators the session gets besides its packs': the constants of an approved background, which the
+ * worker resolved from storage, and the new constants of an approved initial library. The
+ * background's constants are setup operators and follow the packs' operators. A library constant is
+ * only read in the draft (LaTeX notation, the formalizer's output); it is a setup operator only when
+ * the problem statement itself uses it, and otherwise stays an available library constant that
+ * the library results declare (`LibraryResult.operators`) until a step applies one of them. The
+ * approved library's artifacts are checked against the setup operators and recorded as setup
+ * additions when the session is created.
  */
 export type ProblemDraftOptions = Readonly<{
   constants?: readonly OperatorDeclaration[];
@@ -346,8 +351,18 @@ export function validateProblemDraft(
 
   const hypotheses = draft.hypotheses.map((input, index) => statement("hypotheses", input, index));
   const goals = draft.goals.map((input, index) => statement("goals", input, index));
+  // The session's setup operators: everything read in the draft except the library constants the
+  // statement does not use.
+  const used = new Set<string>();
+  [...hypotheses, ...goals].forEach((expression) => {
+    if (expression !== undefined) mentionedSymbols(expression, used);
+  });
+  const setupOperators = operators.filter(
+    ({ symbol }) =>
+      operatorOrigin.get(symbol) !== APPROVED_LIBRARY_CONSTANTS_ORIGIN || used.has(symbol),
+  );
   if (options.library !== undefined) {
-    addLibraryDiagnostics(options.library, draft, operators, add);
+    addLibraryDiagnostics(options.library, draft, setupOperators, add);
   }
   if (diagnostics.length > 0) return failed(diagnostics);
 
@@ -369,7 +384,9 @@ export function validateProblemDraft(
       obligations: [],
     },
   };
-  const node = safely(() => createProofNodeSchema({ operators }).safeParse(rootNodeInput));
+  const node = safely(() =>
+    createProofNodeSchema({ operators: setupOperators }).safeParse(rootNodeInput),
+  );
   if (node === undefined || !node.success) {
     (node?.error.issues ?? [{ message: "The root state is invalid.", path: [] }]).forEach((issue) =>
       add("invalid-root-state", issue.message, ["rootNode", ...issuePath(issue.path)]),
@@ -386,11 +403,6 @@ export function validateProblemDraft(
     background: draft.background,
     ...(Object.keys(preferences).length === 0 ? {} : { preferences }),
     libraryLayerIds: draft.libraryLayerIds,
-    // Operators that only the approved initial library introduced stay dormant until a step
-    // applies a result that uses them (see `active-constants.ts`).
-    ...(options.library === undefined || options.library.constants.length === 0
-      ? {}
-      : { libraryConstants: options.library.constants.map(({ symbol }) => symbol) }),
   });
   if (!metadata.success) {
     metadata.error.issues.forEach((issue) =>
@@ -400,18 +412,18 @@ export function validateProblemDraft(
   }
 
   const rootNode = node.data;
-  const activePackIds = libraryPacksForOperators(operators, packs).map((pack) => pack.id);
-  const digest = problemSetupDigest(rootNode, operators, metadata.data, options.library);
+  const activePackIds = libraryPacksForOperators(setupOperators, packs).map((pack) => pack.id);
+  const digest = problemSetupDigest(rootNode, setupOperators, metadata.data, options.library);
   const initialLibrary =
     options.library === undefined ? undefined : summarizeInitialLibrary(options.library);
   const value = freezeDetached({
     draft,
     rootNode,
-    operators,
+    operators: setupOperators,
     metadata: metadata.data,
     review: {
       rootNode,
-      operators,
+      operators: setupOperators,
       metadata: metadata.data,
       activePackIds,
       ...(initialLibrary === undefined ? {} : { initialLibrary }),
@@ -667,7 +679,13 @@ async function readApprovedSession(
   sessionId: ProofSessionId,
   value: ValidatedProblemDraft,
 ): Promise<ApproveProblemSessionResult | undefined> {
-  let loaded: Readonly<{ session: ProofSession; root: ProofNode | undefined }> | undefined;
+  let loaded:
+    | Readonly<{
+        session: ProofSession;
+        setupOperators: readonly OperatorDeclaration[];
+        root: ProofNode | undefined;
+      }>
+    | undefined;
   try {
     loaded = await store.transaction(async (transaction) => {
       const session = await loadSession(transaction, sessionId);
@@ -680,7 +698,11 @@ async function readApprovedSession(
         "current-node-not-found",
         "invalid-current-node",
       );
-      return { session: session.session, root: root.ok ? root.node : undefined };
+      return {
+        session: session.session,
+        setupOperators: session.setupOperators,
+        root: root.ok ? root.node : undefined,
+      };
     });
   } catch (error: unknown) {
     return {
@@ -692,7 +714,7 @@ async function readApprovedSession(
   const same =
     loaded.root !== undefined &&
     jsonEquals(loaded.root, value.rootNode) &&
-    jsonEquals(loaded.session.operators, value.operators) &&
+    jsonEquals(loaded.setupOperators, value.operators) &&
     jsonEquals(loaded.session.metadata, value.metadata);
   return same && loaded.root !== undefined
     ? { status: "replayed", session: loaded.session, node: loaded.root }

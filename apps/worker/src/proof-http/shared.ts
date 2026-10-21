@@ -26,6 +26,7 @@ import type { AiLimiter } from "./ai-rate-limit";
 import { executeTryResultCommand } from "../inquiry-methods";
 import type { LibraryStore } from "../library-repository";
 import type { LlmCallStore } from "../llm-call-repository";
+import { catalogOperators } from "../session-constants";
 import {
   derivedMoveRecordIds,
   executeMacroPreview,
@@ -185,7 +186,10 @@ export function approvedRetrievalIndex(
   definitions: DefinitionCatalog,
   operators: NonNullable<ProtocolEnvironment["operators"]>,
 ): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
-  const catalog = definitions.catalog(operators);
+  // Retrieval also offers the results that would activate an available library constant, so it
+  // works in the effective operators extended with those constants.
+  const offered = catalogOperators(operators, definitions);
+  const catalog = definitions.catalog(offered);
   const result = createRetrievalIndex(
     {
       results: catalog.results,
@@ -193,7 +197,7 @@ export function approvedRetrievalIndex(
       moves: [...definitions.moves, ...(definitions.macros ?? []).map(({ move }) => move)],
       variantFamilies: catalog.variantFamilies,
     },
-    { operators },
+    { operators: offered },
   );
   return result.ok
     ? { ok: true, index: result.index }
@@ -410,6 +414,7 @@ export async function applyMoveChoice(
       { commandId: choice.commandId, previewId: preview.id },
       actor,
       definitions,
+      now === undefined ? {} : { now },
     );
     if (applied.status !== "committed") return { status: "failed", failure: applied };
     const last = applied.results.at(-1);
@@ -430,6 +435,7 @@ export async function applyMoveChoice(
         result: last,
         replayed: applied.replayed,
         macroResults: applied.results,
+        ...(applied.activations === undefined ? {} : { activations: applied.activations }),
       },
       session: loadedMacro.session,
       node: loadedMacro.node,
@@ -457,7 +463,14 @@ export async function applyMoveChoice(
           definitions,
           ...(now === undefined ? {} : { now }),
         })
-      : await executeProofCommand(store, sessionId, proofCommand, actor, definitions);
+      : await executeProofCommand(
+          store,
+          sessionId,
+          proofCommand,
+          actor,
+          definitions,
+          now === undefined ? {} : { now },
+        );
   if (executed.status !== "committed") return { status: "failed", failure: executed };
   const loaded = await loadCurrentProofSession(store, sessionId);
   if (loaded.status !== "loaded") return { status: "failed", failure: loaded };

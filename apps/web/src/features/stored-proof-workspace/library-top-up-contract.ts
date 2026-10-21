@@ -1,26 +1,53 @@
-import { stableIdentifierSchema } from "@proof/protocol";
+import { operatorDeclarationSchema, stableIdentifierSchema } from "@proof/protocol";
 import { z } from "zod";
 
 /**
  * The browser's view of the library top-up routes (`docs/ai-endpoints.md`, "Top up the library
- * during a proof"). The worker owns the contract; these schemas only decide what the page shows.
+ * during a proof") and of the session's constants. The worker owns the contract; these schemas
+ * only decide what the page shows.
  */
 
-/** `GET /proof-sessions/:id/library/constants`: which constants a committed step has activated. */
+/**
+ * `GET /proof-sessions/:id/library/constants`: the constants of a session as the records say. The
+ * active ones are the setup operators and the constants committed steps activated; the available
+ * ones are declared by library results and become active when a step applies such a result.
+ */
 export const libraryConstantsSchema = z
   .object({
     sessionId: stableIdentifierSchema,
     readOnly: z.boolean(),
-    active: z.array(z.string()),
-    dormant: z.array(z.string()),
+    active: z.array(
+      z
+        .object({
+          symbol: z.string().min(1),
+          origin: z.enum(["setup", "activated"]),
+          operator: operatorDeclarationSchema,
+        })
+        .strict(),
+    ),
+    available: z.array(
+      z
+        .object({
+          symbol: z.string().min(1),
+          operator: operatorDeclarationSchema,
+          /** The library results that apply the constant; applying one activates it. */
+          results: z.array(z.object({ id: z.string(), name: z.string() }).strict()),
+        })
+        .strict(),
+    ),
     activated: z.array(
       z
         .object({
           symbol: z.string().min(1),
+          sequence: z.number().int(),
+          commandId: z.string(),
           edgeId: z.string(),
           nodeId: z.string(),
           resultId: z.string(),
-          sequence: z.number().nullable(),
+          /** The name of the library result the activating step applied, when it is known. */
+          resultName: z.string().nullable(),
+          transitionSequence: z.number().int(),
+          activatedAt: z.string(),
           /** The recorded top-up that covered the activation, if one did. */
           topUp: z.object({ callId: z.string() }).strict().nullable(),
         })

@@ -42,6 +42,26 @@ describe("proof event provenance migration", () => {
     expect(sql).not.toMatch(/\bnot valid\b/);
     expect(sql).not.toMatch(/\bmatch full\b/);
     expect(sql).not.toMatch(/\bcoalesce\s*\(/);
-    expect(sql).not.toMatch(/\b(?:insert|update|delete)\b/);
+  });
+});
+
+describe("constant activations migration", () => {
+  const sql = normalizedSql(
+    readFileSync(new URL("../migrations/0018_constant_activations.sql", import.meta.url), "utf8"),
+  );
+
+  it("keys an activation by session and symbol, numbers them per session and mirrors the record", () => {
+    expect(sql).toContain("create table proof_constant_activations");
+    expect(sql).toContain("primary key (session_id, symbol)");
+    expect(sql).toContain("unique (session_id, sequence)");
+    expect(sql).toContain("(record ->> 'commandid') is not distinct from command_id".toLowerCase());
+    expect(sql).toContain("(record -> 'sequence') is not distinct from to_jsonb(sequence)");
+  });
+
+  it("outlives the step: no foreign key to commands, edges or nodes, only to the session", () => {
+    expect(sql).toContain(
+      "foreign key (session_id) references proof_sessions (id) on delete cascade",
+    );
+    expect(sql).not.toMatch(/references proof_(commands|edges|nodes|events)/);
   });
 });

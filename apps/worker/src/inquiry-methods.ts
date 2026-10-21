@@ -127,6 +127,7 @@ export async function executeTryResultCommand(
         commandInput,
         actor,
         definitions,
+        options.now === undefined ? {} : { now: options.now },
       );
       if (executed.status !== "committed") return executed;
       const { parent, node, edge, command } = executed.result.prepared;

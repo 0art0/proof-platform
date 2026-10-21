@@ -16,8 +16,10 @@ Every agent below obeys the product invariants in `AGENTS.md`:
 
 "Constants" are the platform's existing notion of vocabulary: operator declarations
 (`OperatorDeclaration`, including the reserved built-ins) together with the sorts they use. The
-"active constants" of a session are the operators and sorts declared by its approved setup, plus any
-operators that were added later through a recorded library addition.
+"active constants" of a session are its effective operators: the operators declared by its approved
+setup (the selected packs, the accepted background's constants, and any library constant the problem
+statement itself uses), followed by the constants that committed steps activated by applying a
+library result that needs them. Library constants that no step has activated are _available_.
 
 ## 1. Background proposer (`background-proposer`)
 
@@ -77,8 +79,8 @@ role, so stored evidence still reads, but the web UI no longer calls it.
   shows them as ordinary library additions, without an "AI" disclaimer badge. Their provenance is
   still stored and exported. Earlier suggestion menus are never rewritten (§12.4).
   - **New-constant trigger:** when a committed step applies a library result whose operators
-    include a constant that is not active, that constant becomes active through a recorded event,
-    and a `new-constants` top-up is requested automatically.
+    include a constant that is not active, that constant becomes active through a recorded
+    activation, and a `new-constants` top-up is requested automatically.
   - **No-relevant-results trigger:** this is user-initiated, from the empty suggestion state or
     from the shortlister's "none relevant" outcome. The button reads "Find more results".
 
@@ -171,12 +173,29 @@ from the sections above:
   transaction; repeating the approval completes an interrupted recording. Session results from
   `initial-problem` and `proof-time-background` join the session's single retrieval and
   application catalog.
-- **Top-ups (§2).** A live session's operators are fixed. A top-up result that needs a constant
-  the session does not declare is rejected (`needs-new-constant`), not registered. Constants that
-  only the approved initial library introduced are recorded as dormant library constants. One
-  becomes active when a committed step first applies a result that mentions it; this is derived
-  from the retained proof edges, so deleting that step removes the activation. The web then
-  requests one `new-constants` top-up per newly active constant.
+- **Top-ups and constants (§2).** A library result may carry operator declarations it needs that
+  the session's effective operators do not declare (`operators` of the library result; its variants
+  carry them too). These are the session's _available_ (dormant) library constants. The approved
+  initial library's new constants are available unless the problem statement itself uses them, in
+  which case they are setup operators. A top-up's `newConstants` are no longer rejected: each is
+  validated deterministically (schema, known sorts, no identifier, symbol or LaTeX-trigger clash
+  with active constants, available constants, packs or the registry unless identical), and the
+  admitted results carry the ones they apply. When a committed step applies a result that needs an
+  available constant (an `apply-result-*` step, a rewrite using a result, or a macro, executor or
+  agent step that does), the command service appends an append-only _constant activation_ record in
+  the step's own transaction, before the step is stored (table `proof_constant_activations`,
+  migration `0018`). The step is validated in the effective operators extended with the constant,
+  so a refused step records nothing. Activation is monotonic: backtracking and deleting the step
+  keep it. A session's effective operators are its setup operators followed by its activations;
+  they are used wherever the session's operators are (parsing, node and preview schemas, the kernel
+  environment, the move executor, the librarian's "active constants", export). Retrieval offers
+  results whose operators are effective or available, and a preview that would activate a constant
+  names it (`MovePreview.constants`). `GET /proof-sessions/:id/library/constants` reports
+  `{ active (setup or activated), available, activated }` from the records; the web application
+  lists them in a "Constants" panel and requests one `new-constants` top-up per newly activated
+  constant (a rate-limited request is retried once at a later step). Artifacts carry
+  `constantActivations`; import re-derives every step's activations and detects a removed, added or
+  moved record. The earlier derivation from retained edges (`metadata.libraryConstants`) is gone.
 - **Shortlister (§4).** Jev answers a choice question, so "none relevant" is a reserved option
   next to the candidates. Automatic ranking uses its own `automatic` trigger.
 - **Move performer (§5).** The worker assigns commands from the call (`command:<callId>:step:<i>`),

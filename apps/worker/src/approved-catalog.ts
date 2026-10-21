@@ -69,6 +69,15 @@ export type DefinitionCatalog = Readonly<{
    * ordinary commands. Retrieval indexes `moves` plus each macro's first-step projection.
    */
   macros?: readonly MacroDefinition[];
+  /**
+   * The library constants the session's own library results declare (`LibraryResult.operators`):
+   * operator declarations those results need and the session's effective operators may not yet
+   * declare. They are dormant until a committed step applies a result that needs them. Absent for
+   * the base catalog. `catalog(operators)` offers exactly the results valid in `operators`, so a
+   * caller that wants to offer results which would activate a constant passes the operators
+   * extended with these (`session-constants.ts`).
+   */
+  libraryConstants?: Operators;
   catalog(operators: Operators): ApprovedCatalog;
 }>;
 

@@ -1,6 +1,7 @@
 import {
   createStatementViewSchema,
   freeSymbolNames,
+  operatorDeclarationSchema,
   operatorDeclarationsSchema,
   plainMathJsonSchema,
   stableIdentifierSchema,
@@ -11,6 +12,7 @@ import {
 } from "@proof/mathjson-model";
 import { z } from "zod";
 import { backgroundClassificationSchema, type BackgroundClassification } from "./background";
+import { mergeLibraryOperators, resultMentionedSymbols } from "./operator-environment";
 
 export const libraryArtifactKindSchema = z.enum(["definition", "result", "technique", "move"]);
 export type LibraryArtifactKind = z.infer<typeof libraryArtifactKindSchema>;
@@ -153,6 +155,13 @@ export type LibraryResult = LibraryArtifactCommon &
     variantFamilyId?: VariantFamilyId | undefined;
     /** Present on the artifact that records a human review of a derived draft (N44). */
     review?: LibraryResultReview | undefined;
+    /**
+     * Operator declarations the result needs that its session's active operators do not declare:
+     * library constants. The result is valid in the environment plus these; each must be applied
+     * by the result. A session holds them dormant until a committed step applies the result
+     * (`docs/ai-agents-architecture.md` section 2).
+     */
+    operators?: readonly OperatorDeclaration[] | undefined;
   }>;
 
 export type LibraryDefinition = LibraryArtifactCommon &
@@ -222,6 +231,9 @@ export const libraryResultReviewSchema = z
   })
   .strict();
 
+/** The most library constants one result may declare. */
+export const MAX_RESULT_OPERATORS = 16;
+
 const rawResultSchema = z
   .object({
     ...commonShape,
@@ -234,6 +246,7 @@ const rawResultSchema = z
     patterns: z.array(resultPatternSchema).min(1),
     variantFamilyId: variantFamilyIdSchema.optional(),
     review: libraryResultReviewSchema.optional(),
+    operators: z.array(operatorDeclarationSchema).min(1).max(MAX_RESULT_OPERATORS).optional(),
   })
   .strict();
 
@@ -339,7 +352,8 @@ export function createLibraryResultSchema(
           });
         }
       });
-      addMathematicalIssues(result, operators, context);
+      const effective = addOperatorIssues(result, operators, context);
+      if (effective !== undefined) addMathematicalIssues(result, effective, context);
       addResultReviewIssues(result, context);
     }),
   );
@@ -388,6 +402,35 @@ export const variantFamilySchema = guardedSchema(
     }),
 );
 export type VariantFamily = z.infer<typeof variantFamilySchema>;
+
+/**
+ * The environment a result is valid in: the session's operators plus the library constants it
+ * declares. A declaration that clashes with the environment (a symbol declared differently, a
+ * shared identifier or LaTeX trigger), or that the result does not apply, is an issue.
+ */
+function addOperatorIssues(
+  result: z.infer<typeof rawResultSchema>,
+  operators: readonly OperatorDeclaration[],
+  context: z.RefinementCtx,
+): readonly OperatorDeclaration[] | undefined {
+  if (result.operators === undefined) return operators;
+  const merged = mergeLibraryOperators([operators, result.operators]);
+  if (!merged.ok) {
+    context.addIssue({ code: "custom", message: merged.message, path: ["operators"] });
+    return undefined;
+  }
+  const mentioned = resultMentionedSymbols(result);
+  result.operators.forEach((operator, index) => {
+    if (!mentioned.has(operator.symbol)) {
+      context.addIssue({
+        code: "custom",
+        message: `The declared constant ${operator.symbol} is not applied by the result.`,
+        path: ["operators", index],
+      });
+    }
+  });
+  return merged.operators;
+}
 
 function addResultReviewIssues(
   result: z.infer<typeof rawResultSchema>,
@@ -704,6 +747,7 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
 }
 
 export * from "./background";
+export * from "./operator-environment";
 export * from "./variants";
 export * from "./additions";
 export * from "./derived";

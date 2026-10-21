@@ -918,18 +918,15 @@ describe("problem setup with an approved library", () => {
     ]);
   });
 
-  it("adds a new constant that a kept result applies to the session's operators", async () => {
+  it("holds a new constant that a kept result applies as an available library constant", async () => {
     const { origin } = await scenario([GCD_SYMMETRY], [gcd()], ["result:library-gcd-symmetry"]);
     const { body } = await check(origin, {
       approvedBackground: BACKGROUND_REF,
       approvedLibrary: LIBRARY_REFERENCE,
     });
+    // The library introduces Gcd, but the problem does not use it: it is not a setup operator.
     expect(body.review!.initialLibrary?.addedOperatorSymbols).toEqual(["Gcd"]);
-    expect(body.review!.operators.map(({ symbol }) => symbol)).toEqual([
-      "Divides",
-      "Coprime",
-      "Gcd",
-    ]);
+    expect(body.review!.operators.map(({ symbol }) => symbol)).toEqual(["Divides", "Coprime"]);
     const created = await post(origin, "/proof-sessions", {
       sessionId: "session:gcd",
       draft: draft(),
@@ -942,23 +939,42 @@ describe("problem setup with an approved library", () => {
       (await json<{ session: { operators: { symbol: string }[] } }>(created)).session.operators.map(
         ({ symbol }) => symbol,
       ),
-    ).toEqual(["Divides", "Coprime", "Gcd"]);
+    ).toEqual(["Divides", "Coprime"]);
+    // The kept result carries the declaration it needs; the session lists it as available.
     expect((await events(origin, "session:gcd"))[0]).toMatchObject({
-      artifact: { id: "result:library-gcd-symmetry" },
+      artifact: { id: "result:library-gcd-symmetry", operators: [{ symbol: "Gcd" }] },
       admission: { decision: "admitted" },
     });
+    const listed = await json<{
+      active: { symbol: string; origin: string }[];
+      available: { symbol: string; results: { id: string }[] }[];
+    }>(await fetch(`${origin}/proof-sessions/session%3Agcd/library/constants`));
+    expect(listed.active.map(({ symbol, origin: from }) => [symbol, from])).toEqual([
+      ["Divides", "setup"],
+      ["Coprime", "setup"],
+    ]);
+    expect(listed.available).toMatchObject([
+      { symbol: "Gcd", results: [{ id: "result:library-gcd-symmetry" }] },
+    ]);
     // The setup cannot use the new constant's notation without the library that adds it.
     const without = await check(origin, {
       approvedBackground: BACKGROUND_REF,
       draft: draft({ goals: [{ format: "latex", latex: String.raw`\gcd(m, n) = 1` }] }),
     });
     expect(without.response.status).toBe(422);
+    // A problem that states its goal with the constant uses it from the start: Gcd is then a
+    // setup operator, active in the root state, and no longer waits to be activated.
     const withLibrary = await check(origin, {
       approvedBackground: BACKGROUND_REF,
       approvedLibrary: LIBRARY_REFERENCE,
       draft: draft({ goals: [{ format: "latex", latex: String.raw`\gcd(m, n) = 1` }] }),
     });
     expect(withLibrary.response.status).toBe(200);
+    expect(withLibrary.body.review!.operators.map(({ symbol }) => symbol)).toEqual([
+      "Divides",
+      "Coprime",
+      "Gcd",
+    ]);
   });
 
   it("treats a review made without the library, or with another one, as stale", async () => {

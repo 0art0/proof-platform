@@ -14,7 +14,12 @@
  * Renderings are derived placeholders (the source strings prefixed with the transformation name);
  * the language package (N03/N04) will replace them with real deterministic renderings.
  */
-import { mathJsonEquals, type PlainMathJson } from "@proof/mathjson-model";
+import {
+  mathJsonEquals,
+  type OperatorDeclaration,
+  type PlainMathJson,
+} from "@proof/mathjson-model";
+import { mentionedSymbols } from "./operator-environment";
 import {
   createLibraryResultSchema,
   type ApplicationDirection,
@@ -181,7 +186,24 @@ function buildVariant(
     applicationDirections: source.applicationDirections,
     patterns: derivePatterns(id, content, source),
     variantFamilyId: familyId,
+    ...variantOperators(source, content),
   };
+}
+
+/** The library constants of the source that the variant still applies. */
+function variantOperators(
+  source: LibraryResult,
+  content: Content,
+): { operators?: readonly OperatorDeclaration[] } {
+  if (source.operators === undefined) return {};
+  const mentioned = new Set<string>();
+  mentionedSymbols(content.statement, mentioned);
+  content.premises.forEach((premise) => mentionedSymbols(premise, mentioned));
+  source.sideConditions.forEach(({ statement }) => {
+    if (statement !== undefined) mentionedSymbols(statement.expression, mentioned);
+  });
+  const kept = source.operators.filter(({ symbol }) => mentioned.has(symbol));
+  return kept.length === 0 ? {} : { operators: kept };
 }
 
 type PatternSeed = Omit<ResultPattern, "id">;

@@ -5,8 +5,10 @@
  * context and validated output): each proposed result is assembled into the library's result
  * shape, run through `admitLibraryArtifact` in the construction's operator environment and
  * background profile, checked against the profile's declared domains and level, and given its
- * deterministic variants. Rejected results keep their reasons. Because the outcome depends on
- * nothing but the stored call, the proposal route, the decision route and the setup approval all
+ * deterministic variants. A result that applies a constant the environment does not declare
+ * carries that constant's declaration itself (`LibraryResult.operators`): it is a library
+ * constant, dormant in a session until a committed step applies the result. Rejected results keep
+ * their reasons. Because the outcome depends on nothing but the stored call, the proposal route, the decision route and the setup approval all
  * derive the same admitted set, and none of them accepts an artifact from a client.
  *
  * The gate for the `initial-problem` layer admits approved artifacts only, and a person approves
@@ -25,6 +27,7 @@ import {
   admitLibraryArtifact,
   checkBackgroundAdmission,
   generateVariants,
+  mentionedSymbols,
   mergeLibraryOperators,
   type BackgroundProfile,
   type LibraryResult,
@@ -37,6 +40,8 @@ import {
   type PlainMathJson,
 } from "@proof/mathjson-model";
 import { resolveAgainstRegistry } from "./approved-background";
+import { definitionHash } from "./approved-catalog";
+import { extendOperators } from "./session-constants";
 
 /** The single human actor of the web application; library approvals are recorded under it. */
 export const LIBRARY_REVIEWER_ID = "actor:web";
@@ -90,6 +95,11 @@ export function evaluateLibraryProposal(
   const operators = constants.environment;
   const presentation = presentationFor(operators);
   const newSymbols = new Set(constants.accepted.map(({ operator }) => operator.symbol));
+  const offered: Offered = {
+    operators: context.constants,
+    constants: constants.accepted.map(({ operator }) => operator),
+    full: operators,
+  };
 
   const results: EvaluatedLibraryResult[] = [];
   const rejected: RejectedLibraryResult[] = proposal.unusable.map(({ id, reason }) => ({
@@ -99,7 +109,7 @@ export function evaluateLibraryProposal(
     codes: ["unreadable"],
   }));
   for (const proposed of proposal.results) {
-    const outcome = evaluateResult(proposed, callId, context.background, operators, presentation);
+    const outcome = evaluateResult(proposed, callId, context.background, offered, presentation);
     if (!outcome.ok) {
       rejected.push({
         id: proposed.id,
@@ -142,18 +152,18 @@ const TOP_UP_JUDGEMENT: Judgement = {
   reviewerId: TOP_UP_REVIEWER_ID,
 };
 
-/** Why a top-up cannot take a constant the librarian declares. */
-export const TOP_UP_CONSTANT_REASON =
-  "A proof in progress cannot declare new constants: its operators were fixed when the session was approved.";
-
 /** The verdict on a top-up proposal: what the gate admitted (in recordable form) and what it did not. */
 export type TopUpEvaluation = Readonly<{
   /**
    * Admitted results with their variants, approved by `TOP_UP_REVIEWER_ID` in the
-   * `proof-time-background` layer, exactly as they are recorded.
+   * `proof-time-background` layer, exactly as they are recorded. A result that applies a constant
+   * the session does not yet declare carries it (`LibraryResult.operators`).
    */
   results: readonly EvaluatedLibraryResult[];
   rejected: readonly RejectedLibraryResult[];
+  /** Constants the proposal declared that an admitted result applies: new library constants. */
+  newConstants: readonly EvaluatedNewConstant[];
+  /** Constants set aside, with the reason (a clash, or no admitted result applies them). */
   rejectedConstants: readonly Readonly<{ symbol: string; reason: string }>[];
 }>;
 
@@ -161,9 +171,12 @@ export type TopUpEvaluation = Readonly<{
  * Judge a top-up proposal (`new-constants` or `no-relevant-results`) for a session in progress.
  * Pure: the same stored call, operators, profile and library always give the same verdict.
  *
- * - Results are judged in the session's own operators. The librarian may declare constants, but a
- *   session's operators cannot change after approval, so none is accepted and a result that
- *   applies one is rejected with that reason.
+ * - Results are judged in the session's effective operators. The librarian may declare constants:
+ *   each is checked deterministically (a repeat of an active or available constant is a reference;
+ *   one that clashes on symbol, identifier or LaTeX trigger with the active constants, the
+ *   available library constants, the packs or the registry is set aside with its reason), and an
+ *   accepted one is carried by every result that applies it. A result that applies a set-aside
+ *   constant is rejected with that reason.
  * - A result whose identifier or (alpha-renamed) statement and premises repeat one already in the
  *   library, or one admitted earlier in the proposal, is rejected as a duplicate.
  * - A `new-constants` result must apply at least one newly activated constant.
@@ -173,8 +186,12 @@ export function evaluateTopUpProposal(
     callId: string;
     context: LibrarianTopUpContext;
     proposal: LibrarianProposal;
-    /** The session's complete operator environment. */
+    /** The session's effective operators (its active constants). */
     operators: readonly OperatorDeclaration[];
+    /** The library constants the session's library already declares and has not activated. */
+    available?: readonly OperatorDeclaration[];
+    /** The global operator registry's declarations (a constant must not clash with them). */
+    registry?: readonly OperatorDeclaration[];
     /** The session's current background profile. */
     profile: BackgroundProfile;
     /** The results the session library already holds, other than the ones this call adds. */
@@ -182,8 +199,22 @@ export function evaluateTopUpProposal(
   }>,
 ): TopUpEvaluation {
   const { callId, context, proposal, operators, profile } = input;
-  const presentation = presentationFor(operators);
-  const declared = new Set(proposal.newConstants.map(({ operator }) => operator.symbol));
+  const constants = resolveTopUpConstants(
+    operators,
+    input.available ?? [],
+    input.registry ?? [],
+    proposal.newConstants,
+  );
+  const full = extendOperators(
+    operators,
+    constants.accepted.map(({ operator }) => operator),
+  );
+  const presentation = presentationFor(full);
+  const offered: Offered = {
+    operators,
+    constants: constants.accepted.map(({ operator }) => operator),
+    full,
+  };
   const activated =
     context.kind === "new-constants"
       ? new Set(context.newConstants.map(({ symbol }) => symbol))
@@ -212,13 +243,13 @@ export function evaluateTopUpProposal(
       );
       continue;
     }
-    const heads = proposedHeads(proposed);
-    const needed = [...declared].filter((symbol) => heads.has(symbol)).sort();
-    if (needed.length > 0) {
+    const heads = proposedSymbols(proposed);
+    const refused = constants.rejected.filter(({ symbol }) => heads.has(symbol));
+    if (refused.length > 0) {
       reject(
         proposed,
         "needs-new-constant",
-        `This result needs the new constant ${needed.join(", ")}. ${TOP_UP_CONSTANT_REASON}`,
+        `This result needs the new constant ${refused.map(({ symbol }) => symbol).join(", ")}, which cannot be added: ${refused.map(({ reason }) => reason).join(" ")}`,
       );
       continue;
     }
@@ -226,7 +257,7 @@ export function evaluateTopUpProposal(
       proposed,
       callId,
       profile,
-      operators,
+      offered,
       presentation,
       TOP_UP_JUDGEMENT,
     );
@@ -268,23 +299,120 @@ export function evaluateTopUpProposal(
       newConstantSymbols: [],
     });
   }
+  // A constant is new to the library only through an admitted result that applies it.
+  const used = new Set(
+    results.flatMap(({ artifact, variants }) =>
+      [artifact, ...variants].flatMap((result) =>
+        (result.operators ?? []).map(({ symbol }) => symbol),
+      ),
+    ),
+  );
+  const rejectedConstants = [
+    ...constants.rejected,
+    ...constants.accepted
+      .filter(({ operator }) => !used.has(operator.symbol))
+      .map(({ operator }) => ({
+        symbol: operator.symbol,
+        reason: "No admitted result applies this constant, so it was not added.",
+      })),
+  ];
   return Object.freeze({
     results,
     rejected,
-    rejectedConstants: proposal.newConstants.map(({ operator }) => ({
-      symbol: operator.symbol,
-      reason: TOP_UP_CONSTANT_REASON,
-    })),
+    newConstants: constants.accepted
+      .filter(({ operator }) => used.has(operator.symbol))
+      .map(({ operator, rationale }) => ({
+        operator,
+        rationale,
+        usedBy: results
+          .filter(({ artifact }) =>
+            (artifact.operators ?? []).some(({ symbol }) => symbol === operator.symbol),
+          )
+          .map(({ artifact }) => artifact.id),
+      })),
+    rejectedConstants,
   });
 }
 
-/** Every function head in a proposed result's statement, premises and patterns. */
-function proposedHeads(proposed: LibrarianResult): Set<string> {
-  const heads = new Set<string>();
-  collectHeads(proposed.statement.expression, heads);
-  proposed.premises.forEach(({ expression }) => collectHeads(expression, heads));
-  proposed.patterns.forEach(({ expression }) => collectHeads(expression, heads));
-  return heads;
+type TopUpConstants = Readonly<{
+  /** Constants the session does not yet declare that results may carry. */
+  accepted: readonly Readonly<{ operator: OperatorDeclaration; rationale: string }>[];
+  rejected: readonly Readonly<{ symbol: string; reason: string }>[];
+}>;
+
+/**
+ * Check the constants a top-up proposal declares, deterministically. A constant that repeats an
+ * active or an available library constant, declared identically, is a reference to it and is
+ * accepted: the results that apply it carry it, exactly as they did when it was new, so judging the
+ * same stored call again after a step activated the constant gives the same artifacts (a replay
+ * by call ID records nothing twice). The same symbol declared differently is a clash. A new
+ * constant must not clash on symbol, identifier or LaTeX trigger with the active constants, the
+ * available library constants, the packs' operators or the registry, and must be a valid
+ * declaration over known sorts (its schema).
+ */
+function resolveTopUpConstants(
+  operators: readonly OperatorDeclaration[],
+  available: readonly OperatorDeclaration[],
+  registry: readonly OperatorDeclaration[],
+  proposed: LibrarianProposal["newConstants"],
+): TopUpConstants {
+  const accepted: { operator: OperatorDeclaration; rationale: string }[] = [];
+  const rejected: { symbol: string; reason: string }[] = [];
+  let environment = extendOperators(operators, available);
+  const same = (left: OperatorDeclaration, right: OperatorDeclaration) =>
+    definitionHash(left) === definitionHash(right);
+  for (const { operator, rationale } of proposed) {
+    const reject = (reason: string) => rejected.push({ symbol: operator.symbol, reason });
+    const packs = resolveAgainstRegistry([operator]);
+    const resolved = packs.constants[0];
+    if (packs.conflicts.length > 0 || resolved === undefined) {
+      reject(packs.conflicts.join(" "));
+      continue;
+    }
+    const active = operators.find(({ symbol }) => symbol === resolved.symbol);
+    if (active !== undefined) {
+      if (same(active, resolved)) accepted.push({ operator: active, rationale });
+      else reject(`${resolved.symbol} is already a constant of this proof, declared differently.`);
+      continue;
+    }
+    const registered = registry.find(({ symbol }) => symbol === resolved.symbol);
+    if (registered !== undefined && !same(registered, resolved)) {
+      reject(`${resolved.symbol} is already a registered operator, declared differently.`);
+      continue;
+    }
+    const known = environment.find(({ symbol }) => symbol === resolved.symbol);
+    if (known !== undefined) {
+      if (same(known, resolved)) accepted.push({ operator: known, rationale });
+      else {
+        reject(
+          `${resolved.symbol} is already an available library constant, declared differently.`,
+        );
+      }
+      continue;
+    }
+    const merged = mergeLibraryOperators([environment, registry, [resolved]]);
+    if (!merged.ok) {
+      reject(merged.message);
+      continue;
+    }
+    const within = mergeLibraryOperators([environment, [resolved]]);
+    if (!within.ok) {
+      reject(within.message);
+      continue;
+    }
+    environment = within.operators;
+    accepted.push({ operator: resolved, rationale });
+  }
+  return { accepted, rejected };
+}
+
+/** Every symbol in a proposed result's statement, premises and patterns. */
+function proposedSymbols(proposed: LibrarianResult): Set<string> {
+  const symbols = new Set<string>();
+  mentionedSymbols(proposed.statement.expression, symbols);
+  proposed.premises.forEach(({ expression }) => mentionedSymbols(expression, symbols));
+  proposed.patterns.forEach(({ expression }) => mentionedSymbols(expression, symbols));
+  return symbols;
 }
 
 /**
@@ -348,19 +476,32 @@ type Judgement = Readonly<{
 }>;
 const INITIAL_JUDGEMENT: Judgement = { layer: "initial-problem", reviewerId: LIBRARY_REVIEWER_ID };
 
+/** The operators a proposal's results are judged in. */
+type Offered = Readonly<{
+  /** What a result is valid in without constants of its own. */
+  operators: readonly OperatorDeclaration[];
+  /** Constants a result that applies them carries (`LibraryResult.operators`). */
+  constants: readonly OperatorDeclaration[];
+  /** `operators` and `constants` together: for rendering and for explaining a failure. */
+  full: readonly OperatorDeclaration[];
+}>;
+
 function evaluateResult(
   proposed: LibrarianResult,
   callId: string,
   profile: BackgroundProfile,
-  operators: readonly OperatorDeclaration[],
+  offered: Offered,
   presentation: Presentation,
   judgement: Judgement = INITIAL_JUDGEMENT,
 ): ResultOutcome {
   const { layer, reviewerId } = judgement;
+  const { operators } = offered;
+  const symbols = proposedSymbols(proposed);
+  const carried = offered.constants.filter(({ symbol }) => symbols.has(symbol));
   const reasons: string[] = [];
   const codes: string[] = [];
   const gate = admitLibraryArtifact({
-    artifact: assembleArtifact(proposed, callId, presentation, layer, {
+    artifact: assembleArtifact(proposed, callId, presentation, layer, carried, {
       status: "approved",
       reviewerId,
     }),
@@ -374,7 +515,7 @@ function evaluateResult(
       codes.push(diagnostic.code);
       reasons.push(
         diagnostic.code === "invalid-artifact"
-          ? explainInvalidResult(proposed, operators)
+          ? explainInvalidResult(proposed, offered.full)
           : diagnostic.message,
       );
     }
@@ -426,9 +567,11 @@ function assembleArtifact(
   callId: string,
   presentation: Presentation,
   layer: Judgement["layer"],
+  carried: readonly OperatorDeclaration[],
   approval: LibraryResult["approval"],
 ): unknown {
   return {
+    ...(carried.length === 0 ? {} : { operators: carried }),
     kind: "result",
     id: proposed.id,
     name: proposed.name,
@@ -569,28 +712,12 @@ function usedNewConstants(
   newSymbols: ReadonlySet<string>,
 ): readonly string[] {
   if (newSymbols.size === 0) return [];
-  const heads = new Set<string>();
-  for (const result of [artifact, ...variants]) {
-    collectHeads(result.statement.expression, heads);
-    result.premises.forEach(({ expression }) => collectHeads(expression, heads));
-    result.patterns.forEach(({ expression }) => collectHeads(expression, heads));
-  }
-  return [...newSymbols].filter((symbol) => heads.has(symbol)).sort();
-}
-
-/** Function heads (applied symbols) that occur anywhere in a plain MathJSON expression. */
-export function collectHeads(expression: PlainMathJson, heads: Set<string>): void {
-  let operands: readonly PlainMathJson[] = [];
-  if (Array.isArray(expression)) {
-    const [head, ...rest] = expression;
-    if (typeof head === "string") heads.add(head);
-    operands = rest as PlainMathJson[];
-  } else if (typeof expression === "object" && expression !== null && "fn" in expression) {
-    const [head, ...rest] = expression.fn;
-    if (typeof head === "string") heads.add(head);
-    operands = rest as PlainMathJson[];
-  }
-  operands.forEach((operand) => collectHeads(operand, heads));
+  const carried = new Set(
+    [artifact, ...variants].flatMap((result) =>
+      (result.operators ?? []).map(({ symbol }) => symbol),
+    ),
+  );
+  return [...newSymbols].filter((symbol) => carried.has(symbol)).sort();
 }
 
 function withApproval(artifact: LibraryResult, reviewerId: string): LibraryResult {

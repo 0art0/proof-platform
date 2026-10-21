@@ -239,9 +239,34 @@ function historyResponse(
   });
 }
 
-/** Reads the workspace makes on its own (history, the inquiry panel's records), not commands. */
+/**
+ * Reads the workspace makes on its own (history, the inquiry panel's records, the constants
+ * list), not commands.
+ */
 function isBackgroundRead(url: string): boolean {
-  return url.endsWith("/history") || url.includes("/inquiry-records");
+  return (
+    url.endsWith("/history") ||
+    url.includes("/inquiry-records") ||
+    url.endsWith("/library/constants")
+  );
+}
+
+/** The session's constants as the worker lists them: the given activations, nothing available. */
+function constantsResponse(
+  activated: readonly unknown[] = [],
+  overrides: Readonly<Record<string, unknown>> = {},
+): Response {
+  return jsonResponse({
+    ok: true,
+    data: {
+      sessionId: session.id,
+      readOnly: false,
+      active: [],
+      available: [],
+      activated,
+      ...overrides,
+    },
+  });
 }
 
 function mockWithHistory(
@@ -249,6 +274,7 @@ function mockWithHistory(
 ) {
   return vi.fn<typeof fetch>(async (input, init) => {
     if (String(input).endsWith("/history")) return historyResponse();
+    if (String(input).endsWith("/library/constants")) return constantsResponse();
     if (String(input).includes("/inquiry-records")) {
       return jsonResponse({ ok: true, data: { records: [] } });
     }
@@ -1454,10 +1480,14 @@ describe("StoredProofWorkspace library top-ups", () => {
   };
   const ACTIVATION = {
     symbol: "Gcd",
+    sequence: 1,
+    commandId: "command:1",
     edgeId: "edge:1",
     nodeId: "node:1",
     resultId: "result:library-gcd",
-    sequence: 1,
+    resultName: "Gcd divides",
+    transitionSequence: 1,
+    activatedAt: "2026-10-19T10:00:00.000Z",
     topUp: null,
   };
 
@@ -1469,34 +1499,27 @@ describe("StoredProofWorkspace library top-ups", () => {
     shortlist?: Response;
   }) {
     const calls: TopUpCall[] = [];
+    const inner = mockWithHistory(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/ai-library-top-up")) {
+        return options.topUp?.() ?? jsonResponse(TOPPED_UP);
+      }
+      if (url.endsWith("/ai-shortlist") && options.shortlist !== undefined) {
+        return options.shortlist;
+      }
+      return jsonResponse({
+        ok: true,
+        data: { suggestionSet: options.sets(), replayed: false, transitionClasses: [] },
+      });
+    });
     vi.stubGlobal(
       "fetch",
-      mockWithHistory(async (input, init) => {
+      vi.fn<typeof fetch>(async (input, init) => {
         const url = String(input);
         const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
         calls.push({ url, body });
-        if (url.endsWith("/library/constants")) {
-          return jsonResponse({
-            ok: true,
-            data: {
-              sessionId: session.id,
-              readOnly: false,
-              active: [],
-              dormant: [],
-              activated: options.activated ?? [],
-            },
-          });
-        }
-        if (url.endsWith("/ai-library-top-up")) {
-          return options.topUp?.() ?? jsonResponse(TOPPED_UP);
-        }
-        if (url.endsWith("/ai-shortlist") && options.shortlist !== undefined) {
-          return options.shortlist;
-        }
-        return jsonResponse({
-          ok: true,
-          data: { suggestionSet: options.sets(), replayed: false, transitionClasses: [] },
-        });
+        if (url.endsWith("/library/constants")) return constantsResponse(options.activated ?? []);
+        return inner(input, init);
       }),
     );
     return calls;
@@ -1578,7 +1601,8 @@ describe("StoredProofWorkspace library top-ups", () => {
     expect(readOnly).toHaveAccessibleDescription(/read-only/);
     await settle();
     expect(topUps(calls)).toHaveLength(0);
-    expect(calls.some(({ url }) => url.endsWith("/library/constants"))).toBe(false);
+    // The constants are still listed: reading them needs no assistant and changes nothing.
+    expect(calls.some(({ url }) => url.endsWith("/library/constants"))).toBe(true);
   });
 
   it("reports a rate limit and a refusal in place, and lets the user try again", async () => {
@@ -1655,6 +1679,170 @@ describe("StoredProofWorkspace library top-ups", () => {
     );
     await settle();
     expect(topUps(calls)).toHaveLength(0);
-    expect(calls.some(({ url }) => url.endsWith("/library/constants"))).toBe(false);
+    // The constants are listed all the same (the list needs no assistant); nothing is requested.
+    expect(calls.some(({ url }) => url.endsWith("/library/constants"))).toBe(true);
+  });
+});
+
+describe("StoredProofWorkspace constants", () => {
+  const INTEGER = { kind: "named", id: "sort:integer" };
+  const GCD = {
+    id: "operator:gcd",
+    symbol: "Gcd",
+    signature: { parameters: [INTEGER, INTEGER], result: INTEGER },
+    presentation: {
+      displayName: "greatest common divisor",
+      latex: {
+        template: String.raw`\gcd\left(#1, #2\right)`,
+        precedence: "atom",
+        parse: { trigger: String.raw`\gcd`, notation: "function" },
+      },
+      naturalLanguage: [{ template: "the gcd of #1 and #2", proposition: false }],
+    },
+  };
+  const ACTIVATION = {
+    symbol: "Gcd",
+    sequence: 1,
+    commandId: "command:web-1",
+    edgeId: "edge:web-1",
+    nodeId: "node:command:web-1",
+    resultId: "result:library-gcd",
+    resultName: "Gcd divides",
+    transitionSequence: 1,
+    activatedAt: "2026-10-19T10:00:00.000Z",
+    topUp: null,
+  };
+
+  it("lists the constants, says a step will add one, and shows it once the step is applied", async () => {
+    let applied = false;
+    const reads = (url: string) => {
+      if (url.endsWith("/library/constants")) {
+        return applied
+          ? constantsResponse([ACTIVATION], {
+              active: [{ symbol: "Gcd", origin: "activated", operator: GCD }],
+            })
+          : constantsResponse([], {
+              available: [
+                {
+                  symbol: "Gcd",
+                  operator: GCD,
+                  results: [{ id: "result:library-gcd", name: "Gcd divides" }],
+                },
+              ],
+            });
+      }
+      return undefined;
+    };
+    const inner = mockWithHistory((input, init) => {
+      const url = String(input);
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (url.endsWith("/move-previews")) {
+        return jsonResponse(
+          {
+            ok: true,
+            data: { preview: { ...previewFor(body.commandId), constants: [GCD] }, replayed: false },
+          },
+          201,
+        );
+      }
+      if (url.endsWith("/commands")) {
+        applied = true;
+        const preview = previewFor(body.commandId);
+        const nextNode = { id: `node:${body.commandId}`, state: preview.afterState };
+        return jsonResponse(
+          {
+            ok: true,
+            data: {
+              // The answer's session states the operators in force, the new constant among them.
+              session: { ...session, currentNodeId: nextNode.id, operators: [GCD] },
+              node: nextNode,
+              receipt: {
+                commandId: body.commandId,
+                nodeId: nextNode.id,
+                edgeId: `edge:${body.commandId}`,
+                eventId: `event:${body.commandId}`,
+                resultStateId: preview.afterState.id,
+                transitionClass: "equivalence",
+              },
+              replayed: false,
+            },
+          },
+          201,
+        );
+      }
+      return jsonResponse({
+        ok: true,
+        data: {
+          suggestionSet: moveSuggestionSet("suggestion-set:move"),
+          replayed: false,
+          transitionClasses: [
+            { suggestionId: "suggestion:split-goal", transitionClass: "equivalence" },
+          ],
+        },
+      });
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => reads(String(input)) ?? inner(input, init)),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+
+    // Before: the list is easy to find and says what is available.
+    const panel = await screen.findByTestId("constants-panel");
+    expect(panel).toHaveTextContent("0 in use, 1 more available");
+    fireEvent.click(panel.querySelector("summary")!);
+    const available = within(panel).getByRole("list", {
+      name: "Constants available from the library",
+    });
+    expect(within(available).getByText("greatest common divisor")).toBeVisible();
+    expect(available).toHaveTextContent("used by ‘Gcd divides’");
+    expect(screen.queryByTestId("constants-added")).toBeNull();
+
+    // The preview says applying the step adds the constant.
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
+    fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
+    expect(await within(card).findByTestId("preview-constants")).toHaveTextContent(
+      "Applying this adds the constant ‘greatest common divisor’ to this proof’s constants.",
+    );
+
+    // After the step: the constant is in use, marked as added by that result, and announced.
+    fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
+    await screen.findByText(/advanced to node:command:web/);
+    const added = await screen.findByTestId("constants-added");
+    expect(added).toHaveTextContent(
+      "A constant was added to this proof: ‘greatest common divisor’",
+    );
+    expect(added).toHaveTextContent("by applying ‘Gcd divides’");
+    const inUse = screen.getByRole("list", { name: "Constants in use" });
+    const item = within(inUse).getByText("greatest common divisor").closest("li")!;
+    expect(item).toHaveAttribute("data-origin", "activated");
+    expect(item).toHaveAttribute("data-new", "true");
+    expect(item).toHaveTextContent("added when ‘Gcd divides’ was applied");
+    expect(screen.getByTestId("constants-panel")).toHaveTextContent("1 in use");
+    expect(screen.getByTestId("constants-new-mark")).toBeVisible();
+  });
+
+  it("explains an empty list and a list that could not be read, and changes nothing either way", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() => Promise.reject(new Error("Unexpected request"))),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    expect(await screen.findByTestId("constants-panel")).toHaveTextContent("0 in use");
+    cleanup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        if (String(input).endsWith("/history")) return historyResponse();
+        if (String(input).endsWith("/library/constants")) throw new Error("down");
+        return jsonResponse({ ok: true, data: { records: [] } });
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    expect(await screen.findByTestId("constants-unavailable")).toHaveTextContent(
+      "The list of constants could not be loaded right now. The proof itself is unaffected.",
+    );
   });
 });

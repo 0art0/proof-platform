@@ -45,39 +45,56 @@ afterEach(closeServices);
 // ---------------------------------------------------------------------------------------------
 
 describe("active constants", () => {
-  it("keeps a constant that only the approved library introduced dormant until a step applies it", async () => {
+  const symbols = (listed: ConstantsBody["active"]) => listed.map(({ symbol }) => symbol);
+
+  it("keeps a constant that only the approved library introduced available until a step applies it", async () => {
     const { origin } = await topUpScenario();
     const before = await constants(origin);
-    expect(before).toMatchObject({ readOnly: false, dormant: ["Gcd"], activated: [] });
-    expect(before.active).toEqual(["Divides", "Coprime"]);
+    expect(before).toMatchObject({ readOnly: false, activated: [] });
+    expect(before.active.map(({ symbol, origin: from }) => [symbol, from])).toEqual([
+      ["Divides", "setup"],
+      ["Coprime", "setup"],
+    ]);
+    expect(before.available).toMatchObject([
+      { symbol: "Gcd", results: [{ id: "result:library-gcd-divides" }] },
+    ]);
 
     const { command } = await applyGcdDivides(origin);
     const after = await constants(origin);
-    expect(after.dormant).toEqual([]);
-    expect(after.active).toEqual(["Divides", "Coprime", "Gcd"]);
+    expect(after.available).toEqual([]);
+    expect(after.active.map(({ symbol, origin: from }) => [symbol, from])).toEqual([
+      ["Divides", "setup"],
+      ["Coprime", "setup"],
+      ["Gcd", "activated"],
+    ]);
     expect(after.activated).toEqual([
       {
         symbol: "Gcd",
+        sequence: 1,
+        commandId: command.commandId,
         edgeId: expect.any(String),
         nodeId: expect.any(String),
         resultId: "result:library-gcd-divides",
-        sequence: 1,
+        resultName: "Result gcd-divides",
+        transitionSequence: 1,
+        activatedAt: expect.any(String),
         topUp: null,
       },
     ]);
 
-    // The activating step is the existing record: replaying its command records nothing more.
+    // The activation is a record of its own: replaying the command records nothing more.
     const replayed = await post(origin, `${SESSION_URL}/commands`, command);
     expect(replayed.status).toBe(200);
+    expect(symbols((await constants(origin)).active)).toEqual(["Divides", "Coprime", "Gcd"]);
     expect((await constants(origin)).activated).toHaveLength(1);
   });
 
-  it("has no dormant constant when the approved library introduced none", async () => {
+  it("has no available constant when the approved library introduced none", async () => {
     const { origin } = await scenario();
     await startSession(origin, "session:plain");
     const response = await fetch(`${origin}/proof-sessions/session%3Aplain/library/constants`);
     expect(response.status).toBe(200);
-    expect(await json<ConstantsBody>(response)).toMatchObject({ dormant: [], activated: [] });
+    expect(await json<ConstantsBody>(response)).toMatchObject({ available: [], activated: [] });
     expect(
       (await fetch(`${origin}/proof-sessions/session%3Amissing/library/constants`)).status,
     ).toBe(404);
@@ -120,11 +137,12 @@ describe("new-constants top-up", () => {
       replayed: false,
       requestKind: "new-constants",
       coveredConstants: ["Gcd"],
-      addedCount: 1,
+      addedCount: 2,
       admittedBy: "service:library-gate",
     });
     expect(body.added.map((entry: { id: string }) => entry.id)).toEqual([
       "result:library-gcd-symmetry",
+      "result:library-lcm-gcd",
     ]);
     const reasons = new Map<string, { codes: string[]; reasons: string[] }>(
       body.rejected.map((item: { id: string; codes: string[]; reasons: string[] }) => [
@@ -136,7 +154,6 @@ describe("new-constants top-up", () => {
       "result:library-divides-scaling",
       "result:library-gcd-divides-again",
       "result:library-graduate-result",
-      "result:library-lcm-gcd",
     ]);
     expect(reasons.get("result:library-divides-scaling")?.codes).toEqual([
       "not-about-new-constants",
@@ -145,16 +162,14 @@ describe("new-constants top-up", () => {
       codes: ["duplicate-statement"],
       reasons: [expect.stringContaining("Result gcd-divides")],
     });
-    expect(reasons.get("result:library-lcm-gcd")).toMatchObject({
-      codes: ["needs-new-constant"],
-      reasons: [expect.stringContaining("Lcm")],
-    });
     expect(reasons.get("result:library-graduate-result")?.codes).toEqual(
       expect.arrayContaining(["level-above-background"]),
     );
-    // The constant the librarian wanted to declare cannot join a proof in progress.
-    expect(body.rejectedConstants).toEqual([
-      { symbol: "Lcm", reason: expect.stringContaining("cannot declare new constants") },
+    // The constant the librarian declared is new to the library: the result that applies it
+    // carries it, and the session lists it as available (it is activated when a step applies it).
+    expect(body.rejectedConstants).toEqual([]);
+    expect(body.newConstants).toMatchObject([
+      { symbol: "Lcm", usedBy: ["result:library-lcm-gcd"], operator: { symbol: "Lcm" } },
     ]);
 
     // The librarian saw the old constants, the newly activated one and the library, nothing else.
@@ -182,7 +197,14 @@ describe("new-constants top-up", () => {
     const recorded = (await events(origin)).filter(
       ({ layer }) => layer === "proof-time-background",
     );
-    expect(recorded.map(({ artifact }) => artifact.id)).toEqual(["result:library-gcd-symmetry"]);
+    expect(recorded.map(({ artifact }) => artifact.id)).toEqual([
+      "result:library-gcd-symmetry",
+      "result:library-lcm-gcd",
+      ...recorded.map(({ artifact }) => artifact.id).filter((id) => id.includes("/")),
+    ]);
+    expect(recorded[1]).toMatchObject({
+      artifact: { id: "result:library-lcm-gcd", operators: [{ symbol: "Lcm" }] },
+    });
     expect(recorded[0]).toMatchObject({
       id: "library-addition:session:top-up:top-up:llm-call:top-up-1:result:library-gcd-symmetry",
       origin: { kind: "service", actorId: "llm-call:top-up-1" },
@@ -190,11 +212,15 @@ describe("new-constants top-up", () => {
       artifact: { approval: { status: "approved", reviewerId: "service:library-gate" } },
     });
 
-    // The covered constant is reported, so nothing asks again.
-    expect((await constants(origin)).activated[0]).toMatchObject({
+    // The covered constant is reported, so nothing asks again; the new one waits as available.
+    const listed = await constants(origin);
+    expect(listed.activated[0]).toMatchObject({
       symbol: "Gcd",
       topUp: { callId: "llm-call:top-up-1" },
     });
+    expect(listed.available).toMatchObject([
+      { symbol: "Lcm", results: [{ id: "result:library-lcm-gcd" }] },
+    ]);
     const again = await topUp(origin, { ...request, id: "llm-call:top-up-2" });
     expect(again.response.status).toBe(409);
     expect(again.body.diagnostics[0].code).toBe("no-new-constants");
@@ -271,9 +297,9 @@ describe("new-constants top-up", () => {
       ]),
     );
     await applyGcdDivides(origin);
-    // Library transactions of the request: the scoped catalog, the event read, then one per
-    // addition. Fail the fourth, which is the second result's.
-    store.armFailure(3);
+    // Library transactions of the request: the scoped catalog, the registry read, the event read,
+    // then one per addition. Fail the fifth, which is the second result's.
+    store.armFailure(4);
     const interrupted = await topUp(origin, request);
     expect(interrupted.response.status).toBe(503);
     expect(interrupted.body).toMatchObject({

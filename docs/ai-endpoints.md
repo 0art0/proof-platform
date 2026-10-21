@@ -283,8 +283,9 @@ The results of an approved library reach later steps only by naming the decision
 resolves the decision and its call from storage, runs the gate again and keeps the named results
 with their variants (approved by the reviewer `actor:web`); if a stored decision no longer passes
 the gate the answer is `409 approved-library-stale`. The new constants that the kept results apply
-(and only those) join the session's operators after the approved background constants. The
-formalizer takes `approvedLibrary: { decisionId }`, the setup check and the session approval take
+(and only those) are _library constants_: each kept result carries the declarations it needs
+(`operators` of the library result), and they join the session's constants when a committed step
+first applies such a result (see "Constants of a session" below). The formalizer takes `approvedLibrary: { decisionId }`, the setup check and the session approval take
 `approvedLibrary: { constructionId, decisionId }` (below).
 
 ## Suggest topics
@@ -414,9 +415,13 @@ when the request names the approval:
 - `POST /proof-sessions` accepts the same optional `approvedBackground` and `approvedLibrary` beside
   `sessionId`, `draft` and `reviewedDigest`.
 
-The worker resolves the constants from storage and adds them to the session's operators after the
-selected packs' operators; the stored session therefore declares them like any pack operator. The
-reviewed digest covers the operators, so approving with other constants than the review used is a
+The worker resolves the constants from storage. The accepted background's constants join the
+session's setup operators after the selected packs' operators; the stored session therefore
+declares them like any pack operator. A library constant (a new constant that only the kept
+results apply) is read in the draft, so LaTeX such as `\gcd(m, n)` parses, but it becomes a setup
+operator only when the problem's own hypotheses or goals use it; otherwise it stays available and
+is declared by the results that need it. The reviewed digest covers the setup operators, so
+approving with other constants than the review used is a
 stale review (`409`). A missing decision is `404`, a rejected one `409`, and a field other than
 `constructionId` and `decisionId` in the reference is `400`. Without the reference, the constants
 are unknown to the setup, and a draft that uses them is invalid (`422`).
@@ -429,7 +434,8 @@ layer `layer:initial-problem`; anything the gate would reject is a `422` with an
 `approved-library-invalid` diagnostic (path `["approvedLibrary"]` or `["libraryLayerIds"]`) naming
 the result, so no result is rejected silently at approval. The review gains `initialLibrary`
 (`{ results, variantCount, addedOperatorSymbols }`, with each result's id, name, description,
-statement and premises) and its digest covers the kept results and their variants in full; a setup
+statement and premises; `addedOperatorSymbols` are the library constants the results introduce,
+which are not setup operators unless the problem uses them) and its digest covers the kept results and their variants in full; a setup
 without a library hashes as before.
 
 A `201` records the kept results and then their variants as library additions of the new session,
@@ -556,17 +562,27 @@ is `503` or `422`, recorded as session-owned evidence like the executor's calls
 Admission is deterministic and a function of the stored call, the session's operators and
 background, and its library:
 
-- Results are judged in the session's own operators and recorded in the `proof-time-background`
-  layer, approved by `service:library-gate` (the gate, not a person or the model), with origin
+- Results are judged in the session's effective operators (plus the constants they carry) and
+  recorded in the `proof-time-background` layer, approved by `service:library-gate` (the gate, not a person or the model), with origin
   `{ "kind": "service", "actorId": "llm-call:<id>" }`. Each addition has the event ID
   `library-addition:<sessionId>:top-up:<callId>:<artifactId>`, so doing it again records nothing
   twice. The library drawer lists them as ordinary additions, without a badge; the provenance is in
   the event and the exported artifact.
-- **New constants are not accepted.** A session's operators are fixed when it is approved, and no
-  recorded mechanism extends a live session's operators (the operator registry is global and is not
-  read by retrieval or the kernel). Any `newConstants` the librarian returns are reported in
-  `rejectedConstants`, and a result that applies one is rejected (`needs-new-constant`) rather
-  than silently changing the session.
+- **New constants are validated, not rejected.** The librarian may declare constants its results
+  need. Each is checked deterministically before any result is judged: it must be a valid
+  declaration over known sorts; a repeat of an active or available constant (same declaration) is
+  a reference to it and is carried like a new one, so judging the stored call again after the
+  constant was activated gives the same artifacts; the same symbol declared differently, or a new
+  constant that shares an identifier or LaTeX parse trigger with an active constant, an available
+  library constant, a pack operator or a registered operator, is set aside with its reason in `rejectedConstants`. A result
+  that applies a set-aside constant is rejected (`needs-new-constant`, with that reason). An
+  accepted constant is carried by every admitted result that applies it (`operators` of the
+  library result, also on its variants) and is listed in `newConstants`
+  (`{ symbol, operator, rationale, usedBy }`); it is _available_, not active: it joins the
+  proof's constants only when a committed step applies such a result. A declared constant that no
+  admitted result applies is reported in `rejectedConstants` and not added. The model's own wording
+  is capped by the output validator, which already refuses a proposal that declares a constant of
+  its context again.
 - Other rejections carry plain reasons and codes: the gate's own (`invalid-artifact`, an unknown
   operator or ill-sorted statement; `domain-outside-background`, `level-above-background`),
   `duplicate-id`, `duplicate-statement` (the same premises and statement as a library result, up to
@@ -583,30 +599,74 @@ background, and its library:
 The answer is `201` (something was recorded) or `200` with `status: "topped-up"`, `provenance`,
 `admittedBy`, `callId`, `replayed`, `requestKind`, `added` (`{ id, name, description, renderings,
 variantIds, eventId }` per result), `addedCount`, `rejected` (`{ id, name, reasons, codes }`),
-`rejectedConstants`, and for `new-constants` `coveredConstants`. A context request or refusal is
-`200` with its `status` and `result` and adds nothing.
+`newConstants`, `rejectedConstants`, and for `new-constants` `coveredConstants`. A context request
+or refusal is `200` with its `status` and `result` and adds nothing.
 
-### Active constants
+### Constants of a session
 
-The constants of a session are its operator declarations. Those of the accepted background and of
-the starter packs are active from the start. An operator that joined the session only because an
-approved initial-library result applies it (`libraryConstants` in the session metadata, recorded at
-approval) is declared but dormant: no step has used it and the library has no results written about
-it. It becomes active when a committed step first applies a library result that mentions it.
+The constants of a session are operator declarations (`docs/ai-agents-architecture.md` section 2).
 
-Activation is not a new record. The committed step already is the append-only record: its edge names
-the library result it applied (an `apply-result-*` operation, or a rewrite whose source is a result)
-and carries the session's transition sequence, so activation is a deterministic read of the retained
-history in sequence order. Backtracking does not undo it; deleting the step that activated a
-constant does. No migration was needed. The library call is a separate request made after the step
-committed, never inside the command transaction.
+- **Setup operators** are the selected packs', the accepted background's constants and any library
+  constant that the problem's own statements use. They are stored on the session.
+- **Library constants** are declarations that library results of the session carry
+  (`operators` of the library result) and that the effective operators do not declare. They are
+  _available_: results that use them are retrieved and previewed, but they are not part of any
+  proof state and cannot be typed.
+- **Activation.** When a committed step applies a library result (an `apply-result-*` operation, a
+  rewrite whose source is a result, or such a step inside a macro, a confirmed move-executor plan
+  or an agent's raw kernel command) that needs a constant the session has not activated, the
+  command service appends a _constant activation_ record **in the same transaction, before the
+  step** (table `proof_constant_activations`, migration `0018`; the memory store mirrors it). The
+  step is validated by the kernel in the effective operators extended with the constant, so a
+  step the kernel refuses records nothing, and a failure of the storing transaction rolls the
+  activation back with the step. The record holds the session, the full declaration, the command,
+  edge and node of the step, the library result, the activation `sequence`, the step's transition
+  sequence and the time. It is append-only: backtracking and "Delete previous move" never remove
+  it, like a library addition (design plan section 12.4), so the effective operators only grow.
+  People and agents use the same command path and get the same record. A retried command replays
+  and activates nothing again.
+- **Effective operators** are the setup operators followed by the activated constants in
+  activation order. Parsing, node and preview schemas, the kernel environment, retrieval, the move
+  executor's context, the librarian's "active constants", the session read and the artifact
+  export all use them. The session record in HTTP answers (`session.operators`) lists them.
 
-`GET /proof-sessions/:sessionId/library/constants` answers `{ sessionId, readOnly, active,
-dormant, activated }`: symbols of the operators in play and of the dormant ones, and for each
-activation `{ symbol, edgeId, nodeId, resultId, sequence, topUp }`, where `topUp` is `{ callId }` of
-the recorded `new-constants` call that covered it (a session-owned librarian call with a validated
-output; a failed or rejected call covers nothing) or `null`. The web application reads it after
-every change of the current node and requests the missing top-ups.
+A previewed step that would activate a constant says so: its stored preview carries `constants`
+(the declarations), the preview's states are valid in the effective operators plus those, and the
+web preview card reads "Applying this adds the constant ‘gcd’ to this proof’s constants." Previewing
+activates nothing. A command's answer reports what it activated: `constantActivations` in the
+`result` of an envelope command (`{ symbol, sequence, resultId, operator }` each); the web
+application reads the list below instead.
+
+`GET /proof-sessions/:sessionId/library/constants` answers from the records:
+
+```json
+{
+  "sessionId": "session:a", "readOnly": false,
+  "active":    [ { "symbol": "Divides", "origin": "setup", "operator": { ... } },
+                 { "symbol": "Gcd", "origin": "activated", "operator": { ... } } ],
+  "available": [ { "symbol": "Lcm", "operator": { ... }, "results": [ { "id": "...", "name": "..." } ] } ],
+  "activated": [ { "symbol": "Gcd", "sequence": 1, "commandId": "...", "edgeId": "...", "nodeId": "...",
+                   "resultId": "...", "resultName": "...", "transitionSequence": 3,
+                   "activatedAt": "...", "topUp": { "callId": "..." } } ]
+}
+```
+
+`active` lists the effective operators with their origin (`setup` or `activated`); `available`
+lists the library constants not yet active with the (non-variant) results that apply them;
+`activated` lists the records in order, with `topUp` the recorded `new-constants` call that covered
+the constant (a session-owned librarian call with a validated output; a failed or rejected call
+covers nothing) or `null`. The web application reads it after every change of the current node.
+The route works without the librarian and for read-only sessions (`readOnly: true`).
+
+**Export and import.** The artifact lists `constantActivations` beside `initialState.operators`
+(the setup operators); snapshots are read in both, and `library.operators` declares both. An older
+artifact without the section has none. Import re-derives each step's activations from the library
+result the step applied and requires exactly the artifact's records for that step
+(`constant-activation-mismatch`); an activation whose step is not in the artifact must be one a
+deletion tombstone accounts for (command, edge and node), and its constant must be declared by a
+library result of the artifact. A preview that names `constants` is re-prepared in the effective
+operators extended with them, and they must be declared by the result it applies. Removing,
+adding, moving or redeclaring an activation is therefore detected.
 
 ### The session library in retrieval
 
@@ -614,9 +674,10 @@ The results a session records join its retrieval and application catalog (design
 admitted results of its `initial-problem` layer (the approved initial library) and of its
 `proof-time-background` layer, with their generated variants and variant families, beside the
 approved conditional lemmas. It is one catalog for retrieval, materialization, apply, replay, the
-move executor's context and the library view. A result the kernel cannot instantiate in the
-session's operators (for example one whose operator the session does not declare) is not offered,
-and never fails the session. An imported artifact is revalidated with the results of its own
+move executor's context and the library view. It offers the results whose operators are all
+effective **or** available library constants (applying one of the latter activates its constants,
+above); a result the kernel cannot instantiate even then is not offered, and never fails the
+session. An imported artifact is revalidated with the results of its own
 library section, so a step that applied one replays. A result added during the session is available
 from then on, including after backtracking.
 
@@ -679,7 +740,12 @@ The worker runs the plan with `planMoveSequence` against the current state and a
   `move-executor`), `callId`, `replayed`, `nodeId`, the model's short `explanation`, the composed
   `transitionClass` and most caveated `evidence`, the `steps` (each concrete kernel operation with
   its own class and evidence), and `preview`: `{ transitionClass, evidence, beforeState, afterState,
-delta }`, the same before/after/delta the move preview uses. Nothing was committed.
+delta }`, the same before/after/delta the move preview uses. When a step applies a library
+  result that needs an available library constant, the plan is run in the effective operators
+  extended with it and the answer lists `constants` (declarations). Applying the plan then
+  activates them, step by step, as for any command. The model's context offers the results valid
+  in the effective operators and those that would activate an available constant. Nothing was
+  committed.
 - `status: "plan-failed"`: the kernel rejected a step. `failure` is `{ stepIndex, stepCount, code,
 message }` with the kernel's own sentence; nothing was committed.
 - `status: "insufficient-context"` or `"declined"`, with the model's `result`.
@@ -714,7 +780,7 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
 `/api/ai/formalize`, `/api/proof-sessions/:sessionId/ai-shortlist`,
 `/api/proof-sessions/:sessionId/ai-execute`, `/api/proof-sessions/:sessionId/ai-execute/apply` and
 `/api/proof-sessions/:sessionId/ai-library-top-up`), keeping the worker's status codes, including
-`429`; `GET /api/proof-sessions/:sessionId/library/constants` reads the activated constants. `/api/problem-drafts/validate` and
+`429`; `GET /api/proof-sessions/:sessionId/library/constants` reads the session's constants. `/api/problem-drafts/validate` and
 `/api/proof-sessions` also pass the optional `approvedBackground` and `approvedLibrary` references
 (and refuse any other field in them). The topic routes are no longer relayed.
 
@@ -779,9 +845,23 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
   use them." with an "Ask for suggestions again" button, or the plain reason nothing was added or why
   it failed). Where it cannot work the button is disabled and says why: the library assistant is
   not configured, or the session is read-only. After every change of the current node the workspace
-  reads `GET …/library/constants` and requests a `new-constants` top-up, once per constant and page
-  load, without review; a rate limit, a disabled role, a stale or empty answer is silent, and only a
-  top-up that added results leaves a brief note. Top-ups appear in the library drawer as ordinary
+  reads `GET …/library/constants` and requests a `new-constants` top-up for each activated constant
+  that no recorded top-up covered, without review. A rate limit is retried once, at a later change
+  of the current node; any other answer settles the constant for the page. A rate limit, a
+  disabled role, a stale or empty answer is silent, and only a top-up that added results leaves a
+  brief note.
+- **Constants.** A collapsed "Constants" list sits above the proof state (summary: "N in use, M
+  more available"), with a plain-language hint and no modal. Each constant in use shows its
+  notation and display name and where it comes from: "from the problem setup", or "added when ‘<result
+  name>’ was applied" for a constant a step activated. When a step adds one, the item is
+  highlighted briefly (reduced motion: a static tint), the summary gains a "new" mark and a line
+  below announces it ("A constant was added to this proof: ‘gcd’, by applying ‘…’"); the next
+  change of the proof clears it. Library constants that no step has activated are listed quietly
+  under "Available from the library" with the results that use them. Empty and failed states say
+  so ("This proof uses no notation of its own yet…", "The list of constants could not be loaded
+  right now. The proof itself is unaffected."); a read-only session says its constants cannot
+  change. The library drawer, suggestions and previews render library constants in their own
+  notation. A preview that would add a constant says so in the preview card. Top-ups appear in the library drawer as ordinary
   additions (origin `service`), with no AI badge.
 - A role that is not configured shows its control disabled with an explanation.
 

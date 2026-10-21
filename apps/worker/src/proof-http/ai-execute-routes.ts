@@ -25,6 +25,7 @@ import { z } from "zod";
 import { readLlmCall, runDurableLlmCall, type LlmCallOwner } from "../llm-call-repository";
 import { runExecutorPlan } from "../move-executor";
 import { executeProposalPlan, loadCurrentProofSession } from "../proof-repository";
+import { catalogOperators, sequenceConstants } from "../session-constants";
 import {
   admitProviderCall,
   LIMIT_MESSAGE,
@@ -138,7 +139,10 @@ export async function executeMove(
     }
     resolved.push(result.selection);
   }
-  const catalog = context.definitions.catalog(operators);
+  // The model is offered the results valid in the effective operators and those that would
+  // activate an available library constant; a plan that applies one adds that constant when it is
+  // applied (the command service records the activation).
+  const catalog = context.definitions.catalog(catalogOperators(operators, context.definitions));
   const built = buildMoveExecutorContext({
     id,
     node: loaded.node,
@@ -205,9 +209,17 @@ export async function executeMove(
   }
 
   const provenance = { kind: provenanceOf(source), role: "move-executor" } as const;
-  const run = runExecutorPlan(loaded.node, output.steps, callId, {
+  // The plan is run in the effective operators plus the constants its result applications would
+  // activate, so the preview sees what the applied steps will.
+  const ahead = sequenceConstants(
+    context.definitions,
     operators,
-    ...(catalog.kernelResults === undefined ? {} : { results: catalog.kernelResults }),
+    executorPlanOperations(output.steps, { stateId: loaded.node.state.id, callId }),
+  );
+  const planCatalog = context.definitions.catalog(ahead.operators);
+  const run = runExecutorPlan(loaded.node, output.steps, callId, {
+    operators: ahead.operators,
+    ...(planCatalog.kernelResults === undefined ? {} : { results: planCatalog.kernelResults }),
   });
   if (!run.ok) {
     return writeJson(response, 200, {
@@ -236,6 +248,7 @@ export async function executeMove(
     transitionClass: run.transitionClass,
     evidence: run.evidence,
     steps: run.steps,
+    ...(ahead.constants.length === 0 ? {} : { constants: ahead.constants }),
     preview: {
       transitionClass: run.transitionClass,
       evidence: run.evidence,
@@ -322,6 +335,7 @@ export async function applyExecutedMove(
     },
     WEB_ACTOR,
     context.definitions,
+    context.now === undefined ? {} : { now: context.now },
   );
   if (applied.status !== "committed") {
     return writeJson(response, repositoryFailureStatus(applied), {
