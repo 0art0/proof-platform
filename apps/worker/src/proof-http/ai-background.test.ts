@@ -823,6 +823,7 @@ describe("background-proposer capability", () => {
       "proof-state-formalizer": false,
       "move-shortlister": false,
       "move-executor": false,
+      "move-author": false,
     });
     const unstored = await running({
       ai: backgroundRuntime(async () => proposalOutput()),

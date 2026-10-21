@@ -17,6 +17,9 @@ import {
   DEFAULT_SHORTLISTER_MODEL,
   DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
   DEFAULT_TOPIC_EXTRACTOR_MODEL,
+  DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_MOVE_AUTHOR_MODEL,
+  DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
   DEFAULT_TOPIC_EXTRACTOR_REASONING_EFFORT,
   buildProofStateFormalizerContext,
   prepareLlmCall,
@@ -35,6 +38,7 @@ describe("createAiRuntime", () => {
     expect(Object.keys(runtime).sort()).toEqual([
       "background-proposer",
       "librarian",
+      "move-author",
       "move-executor",
       "move-shortlister",
       "proof-state-formalizer",
@@ -73,6 +77,17 @@ describe("createAiRuntime", () => {
     expect(DEFAULT_EXECUTOR_REASONING_EFFORT).toBe("high");
     expect(DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS).toBe(16_000);
     expect(typeof runtime["move-executor"]?.transport).toBe("function");
+    expect(DEFAULT_MOVE_AUTHOR_MODEL).toBe("openai/gpt-6-luna");
+    expect(DEFAULT_MOVE_AUTHOR_REASONING_EFFORT).toBe("high");
+    expect(DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS).toBe(32_000);
+    expect(runtime["move-author"]?.dispatch).toEqual({
+      provider: "vercel-ai-gateway",
+      model: DEFAULT_MOVE_AUTHOR_MODEL,
+      promptVersion: "move-author-v1",
+      maxOutputTokens: DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
+      reasoningEffort: DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
+    });
+    expect(typeof runtime["move-author"]?.transport).toBe("function");
     expect(runtime["topic-extractor"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_TOPIC_EXTRACTOR_MODEL,
@@ -120,6 +135,14 @@ describe("createAiRuntime", () => {
       PROOF_AI_LIBRARIAN_MODEL: "openai/luna-library",
       PROOF_AI_LIBRARIAN_MAX_OUTPUT_TOKENS: "20000",
       PROOF_AI_LIBRARIAN_REASONING_EFFORT: "xhigh",
+      PROOF_AI_MOVE_AUTHOR_MODEL: "openai/luna-author",
+      PROOF_AI_MOVE_AUTHOR_MAX_OUTPUT_TOKENS: "24000",
+      PROOF_AI_MOVE_AUTHOR_REASONING_EFFORT: "medium",
+    });
+    expect(runtime["move-author"]?.dispatch).toMatchObject({
+      model: "openai/luna-author",
+      maxOutputTokens: 24_000,
+      reasoningEffort: "medium",
     });
     expect(runtime["move-executor"]?.dispatch).toMatchObject({
       model: "openai/luna-executor",
@@ -166,6 +189,8 @@ describe("createAiRuntime", () => {
     ["executor reasoning effort", { PROOF_AI_EXECUTOR_REASONING_EFFORT: "maximal" }],
     ["librarian max output tokens", { PROOF_AI_LIBRARIAN_MAX_OUTPUT_TOKENS: "0" }],
     ["librarian reasoning effort", { PROOF_AI_LIBRARIAN_REASONING_EFFORT: "maximal" }],
+    ["move author max output tokens", { PROOF_AI_MOVE_AUTHOR_MAX_OUTPUT_TOKENS: "0" }],
+    ["move author reasoning effort", { PROOF_AI_MOVE_AUTHOR_REASONING_EFFORT: "maximal" }],
   ])("rejects an invalid %s override", (_name, config) => {
     expect(() => createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential", ...config })).toThrow();
   });

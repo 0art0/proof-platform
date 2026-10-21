@@ -49,6 +49,7 @@ async function workspaceProps() {
       aiShortlist: boolean;
       aiExecutor: boolean;
       aiLibrarian: boolean;
+      aiMoveAuthor: boolean;
     }>;
   }>;
   expect(isValidElement(page)).toBe(true);
@@ -63,6 +64,7 @@ describe("the session page", () => {
       "proof-state-formalizer": false,
       "move-shortlister": true,
       "move-executor": true,
+      "move-author": true,
     });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue({
@@ -81,6 +83,7 @@ describe("the session page", () => {
     expect(props.aiShortlist).toBe(true);
     expect(props.aiExecutor).toBe(true);
     expect(props.aiLibrarian).toBe(true);
+    expect(props.aiMoveAuthor).toBe(true);
   });
 
   it("opens a session without stored metadata under its id", async () => {
@@ -90,6 +93,7 @@ describe("the session page", () => {
       "proof-state-formalizer": false,
       "move-shortlister": false,
       "move-executor": false,
+      "move-author": false,
     });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue(undefined);
@@ -98,5 +102,6 @@ describe("the session page", () => {
     expect(props.aiShortlist).toBe(false);
     expect(props.aiExecutor).toBe(false);
     expect(props.aiLibrarian).toBe(false);
+    expect(props.aiMoveAuthor).toBe(false);
   });
 });

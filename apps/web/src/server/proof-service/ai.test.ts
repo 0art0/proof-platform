@@ -34,6 +34,7 @@ describe("readAiCapabilities", () => {
           "proof-state-formalizer": false,
           "move-shortlister": true,
           "move-executor": true,
+          "move-author": true,
           attestor: true,
         },
       },
@@ -45,6 +46,7 @@ describe("readAiCapabilities", () => {
       "proof-state-formalizer": false,
       "move-shortlister": true,
       "move-executor": true,
+      "move-author": true,
     });
   });
 
@@ -74,6 +76,7 @@ describe("relayAiRequest", () => {
   it.each([
     ["execute", "/proof-sessions/session%3Aa/ai/execute"],
     ["execute-apply", "/proof-sessions/session%3Aa/ai/execute/apply"],
+    ["move-author", "/proof-sessions/session%3Aa/ai/move-author"],
     ["library-top-up", "/proof-sessions/session%3Aa/ai/library/top-up"],
   ] as const)("posts a %s request to its worker path", async (kind, path) => {
     const fetchMock = stubWorker({ status: "previewed", callId: "llm-call:x" }, 200);

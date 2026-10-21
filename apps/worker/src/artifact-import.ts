@@ -1244,6 +1244,35 @@ class ArtifactValidator {
       }
     });
     unique(this.artifact.llmCalls, (call) => String(call.id), ["llmCalls"]);
+    this.checkProposedMoves();
+  }
+
+  /**
+   * A move draft or review that says a model proposed it names two calls (the move-author call and
+   * the move-executor step it generalizes). Both must be in the artifact's own evidence, with those
+   * roles, so a link to evidence that was dropped or swapped is not accepted.
+   */
+  private checkProposedMoves(): void {
+    const roles = new Map(
+      this.artifact.llmCalls.map((call) => [String(call["id"]), String(call["role"])] as const),
+    );
+    this.artifact.library.additionEvents.forEach((event, index) => {
+      const { artifact } = event;
+      if (artifact.kind !== "move" || artifact.provenance.kind !== "generated") return;
+      const { role, contextId, sourceContextId } = artifact.provenance;
+      if (role !== "move-author") return;
+      if (
+        roles.get(contextId) !== "move-author" ||
+        sourceContextId === undefined ||
+        roles.get(sourceContextId) !== "move-executor"
+      ) {
+        fail(
+          "llm-call-invalid",
+          `The move ${artifact.id} says a model proposed it, but the artifact does not contain the move-author and move-executor calls it names.`,
+          ["library", "additionEvents", index, "artifact", "provenance"],
+        );
+      }
+    });
   }
 
   private checkDerived(): void {

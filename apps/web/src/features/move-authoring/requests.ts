@@ -203,10 +203,19 @@ export function authoringCommandId(action: "author" | "review"): string {
   return `command:web-${action}-move-${crypto.randomUUID()}`;
 }
 
-/** Save a template as a draft revision. The acting human is the author. */
+/** The stored calls a model-proposed draft came from: the proposal and the step it generalizes. */
+export type ProposalLink = Readonly<{ callId: string; executorCallId: string }>;
+
+/**
+ * Save a template as a draft revision. The acting human is the author. When a model proposed the
+ * template (possibly edited since), the link names both stored calls; the proof service checks them
+ * against its own evidence and records them as the draft's provenance. The link grants nothing:
+ * the draft is reviewed like any other.
+ */
 export function authorDraftEnvelope(
   commandId: string,
   template: Readonly<Record<string, unknown>>,
+  proposal?: ProposalLink,
 ): ProtocolCommandEnvelope {
   return protocolCommandEnvelopeSchema.parse({
     commandId,
@@ -215,6 +224,7 @@ export function authorDraftEnvelope(
       kind: "author-move-draft",
       template,
       payloadSource: "reviewed-authoring",
+      ...(proposal === undefined ? {} : { proposal: { role: "move-author", ...proposal } }),
     },
   });
 }

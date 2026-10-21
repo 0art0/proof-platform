@@ -45,6 +45,7 @@ import {
   readDisplayedSuggestionSet,
 } from "../proof-repository";
 import { applyExecutedMove, executeMove } from "./ai-execute-routes";
+import { authorMove } from "./ai-move-author-routes";
 import { type ServiceContext } from "./shared";
 import {
   LIMIT_MESSAGE,
@@ -215,6 +216,11 @@ export async function handleAiRoute(
     if (path.length === 5 && path[2] === "ai" && path[3] === "library" && path[4] === "top-up") {
       if (request.method !== "POST") return methodNotAllowed(response, "POST");
       await topUpLibrary(context, parsedSessionId.data, request, response);
+      return true;
+    }
+    if (path.length === 4 && path[2] === "ai" && path[3] === "move-author") {
+      if (request.method !== "POST") return methodNotAllowed(response, "POST");
+      await authorMove(context, parsedSessionId.data, request, response);
       return true;
     }
     if (path[2] === "ai" && path[3] === "execute" && (path.length === 4 || path.length === 5)) {

@@ -16,6 +16,7 @@ import { POST as libraryDecisions } from "./library/decisions/route";
 import { POST as shortlist } from "../proof-sessions/[sessionId]/ai-shortlist/route";
 import { POST as execute } from "../proof-sessions/[sessionId]/ai-execute/route";
 import { POST as executeApply } from "../proof-sessions/[sessionId]/ai-execute/apply/route";
+import { POST as moveAuthor } from "../proof-sessions/[sessionId]/ai-move-author/route";
 
 const ORIGIN = "http://proof.test";
 
@@ -48,6 +49,7 @@ describe("AI relay routes", () => {
       await shortlist(request({ id: "x" }), context),
       await execute(request({ id: "x" }), context),
       await executeApply(request({ callId: "x" }), context),
+      await moveAuthor(request({ id: "x", executorCallId: "y" }), context),
     ]) {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ ok: true, data: body });
@@ -61,6 +63,7 @@ describe("AI relay routes", () => {
       { kind: "shortlist", sessionId: "session:a" },
       { kind: "execute", sessionId: "session:a" },
       { kind: "execute-apply", sessionId: "session:a" },
+      { kind: "move-author", sessionId: "session:a" },
     ]);
   });
 

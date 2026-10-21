@@ -5,12 +5,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DisplayedSuggestionSet, OperatorDeclaration, ProofNode } from "@proof/protocol";
 import type { LibraryEntry } from "../library-drawer/api-contract";
 import { READ_ONLY_REASON, type HistoryEdge } from "../stored-proof-workspace/toolbar-actions";
-import type { AuthoredMoves, TemplateDiagnosticView } from "./api-contract";
+import type { AuthoredMoveProvenance, AuthoredMoves, TemplateDiagnosticView } from "./api-contract";
 import { describeAuthoringFailure, type AuthoringFailureView } from "./diagnostics";
 import { ExamplesPanel } from "./examples-panel";
 import { Help, Hint, WhyDisabled } from "./help";
 import {
+  readStashedMoveProposal,
+  requestMoveProposal,
+  stashMoveProposal,
+  type MoveProposal,
+} from "./proposal-contract";
+import { ProposalPanel } from "./proposal-panel";
+import {
   authorDraftEnvelope,
+  type ProposalLink,
   authoringCommandId,
   fetchAuthoredMoves,
   fetchHistory,
@@ -40,6 +48,13 @@ export type MoveAuthoringProps = Readonly<{
     /** An imported artifact: moves can be read but not authored or reviewed. */
     readOnly?: true | undefined;
   }>;
+  /**
+   * A model's proposal to open in the form ("Save as reusable move" in the workspace): the call ID
+   * the workspace stashed the already-checked answer under.
+   */
+  proposalId?: string | undefined;
+  /** Whether the proof service has a configured move author, so a proposal can be revised. */
+  canRevise?: boolean | undefined;
 }>;
 
 type Loaded<Value> =
@@ -73,7 +88,7 @@ const EMPTY_ARTIFACTS: readonly LibraryEntry[] = Object.freeze([]);
  * proof service validates the template by running its examples. Saving a draft and reviewing it
  * are N25 envelope commands, so the move becomes retrievable only after a recorded approval.
  */
-export function MoveAuthoring({ session }: MoveAuthoringProps) {
+export function MoveAuthoring({ session, proposalId, canRevise = false }: MoveAuthoringProps) {
   const readOnly = session.readOnly === true;
   const disabledReason = readOnly ? READ_ONLY_REASON : undefined;
   const [history, setHistory] = useState<Loaded<HistoryData>>({ kind: "loading" });
@@ -85,6 +100,13 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
   const [saving, setSaving] = useState(false);
   const [saveFailure, setSaveFailure] = useState<AuthoringFailureView>();
   const [notice, setNotice] = useState<string>();
+  // A model's proposal being edited: the proposal itself (read-only evidence) and the link that
+  // the saved draft will carry as provenance. Starting from anything else drops both.
+  const [proposal, setProposal] = useState<MoveProposal>();
+  const [link, setLink] = useState<ProposalLink>();
+  const [revising, setRevising] = useState(false);
+  const [revisionFailure, setRevisionFailure] = useState<string>();
+  const [proposalMissing, setProposalMissing] = useState(false);
 
   const loadAuthored = useCallback(async () => {
     const result = await fetchAuthoredMoves(session.id);
@@ -137,12 +159,75 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
     setNotice(undefined);
   };
 
-  const start = (next: TemplateDraft, from: string) => {
+  const start = (next: TemplateDraft, from: string, provenance?: ProposalLink) => {
     setRun({ kind: "idle" });
     setSaveFailure(undefined);
     setNotice(undefined);
     setDraft(next);
     setSource(from);
+    setProposal(undefined);
+    setLink(provenance);
+  };
+
+  /** Open a proposal in the ordinary form, prefilled; the proposal stays beside it as evidence. */
+  const openProposal = useCallback((opened: MoveProposal) => {
+    setProposal(opened);
+    setLink({ callId: opened.callId, executorCallId: opened.executorCallId });
+    setRun({ kind: "idle" });
+    setSaveFailure(undefined);
+    setRevisionFailure(undefined);
+    const loaded = draftFromTemplate(opened.template);
+    if (loaded === undefined) {
+      setDraft(undefined);
+      setNotice(
+        "The proposal is not well formed enough to edit as a move. The checks below say why; ask the model for a revision.",
+      );
+      return;
+    }
+    setDraft(loaded);
+    setSource("the model's proposal");
+    setNotice(undefined);
+  }, []);
+
+  useEffect(() => {
+    if (proposalId === undefined) return;
+    const stashed = readStashedMoveProposal(session.id, proposalId);
+    if (stashed === undefined) setProposalMissing(true);
+    else openProposal(stashed);
+  }, [openProposal, proposalId, session.id]);
+
+  const reviseProposal = async (feedback: string) => {
+    if (proposal === undefined) return;
+    setRevising(true);
+    setRevisionFailure(undefined);
+    const outcome = await requestMoveProposal(session.id, {
+      id: `llm-call:author-${crypto.randomUUID()}`,
+      executorCallId: proposal.executorCallId,
+      revision: { previousCallId: proposal.callId, feedback },
+    });
+    setRevising(false);
+    if (outcome.kind === "error") {
+      setRevisionFailure(outcome.message);
+      return;
+    }
+    if (outcome.kind === "model-note") {
+      setRevisionFailure(
+        outcome.tone === "needs-detail"
+          ? `The model needs more detail: ${outcome.message}`
+          : `The model did not revise the proposal: ${outcome.message}`,
+      );
+      return;
+    }
+    if (stashMoveProposal(session.id, outcome.proposal)) {
+      // Keep the address in step with what is open, so a reload opens the same proposal.
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}?proposal=${encodeURIComponent(outcome.proposal.callId)}`,
+      );
+    }
+    openProposal(outcome.proposal);
+    setNotice("The form now holds the revised proposal.");
   };
 
   const validate = async () => {
@@ -159,7 +244,7 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
     setNotice(undefined);
     const outcome = await postAuthorDraft(
       session.id,
-      authorDraftEnvelope(authoringCommandId("author"), assembleTemplate(draft)),
+      authorDraftEnvelope(authoringCommandId("author"), assembleTemplate(draft), link),
     );
     setSaving(false);
     if (!outcome.ok) {
@@ -172,7 +257,9 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
           outcome.result.validation.diagnostics.length === 1 ? "" : "s"
         }, so it cannot be approved yet.`;
     setNotice(
-      `Saved revision ${outcome.result.revision} of ${outcome.result.moveId} as a draft. ${advisory}`,
+      `Saved revision ${outcome.result.revision} of ${outcome.result.moveId} as a draft${
+        link === undefined ? "" : ", linked to the model's proposal"
+      }. ${advisory}`,
     );
     void loadAuthored();
   };
@@ -191,11 +278,17 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
     !validation.outcome.value.ok
       ? validation.outcome.value.diagnostics
       : NO_DIAGNOSTICS;
+  const proposalBlocked =
+    proposal?.blocked !== undefined && link?.callId === proposal.callId
+      ? "The model classes this as a new mathematical principle, which a move cannot add. Ask for a revision, or start from a recorded step."
+      : undefined;
   const saveReason = readOnly
     ? READ_ONLY_REASON
-    : parsed !== undefined && !parsed.ok
-      ? `Complete the move first: ${parsed.problems[0] ?? "see the problems listed under the name"}.`
-      : undefined;
+    : proposalBlocked !== undefined
+      ? proposalBlocked
+      : parsed !== undefined && !parsed.ok
+        ? `Complete the move first: ${parsed.problems[0] ?? "see the problems listed under the name"}.`
+        : undefined;
   const validateBlocked =
     draft === undefined
       ? "Start a move first."
@@ -203,13 +296,27 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
         ? "Complete the template first."
         : undefined;
 
-  const revise = (template: Readonly<Record<string, unknown>>) => {
+  const revise = (
+    template: Readonly<Record<string, unknown>>,
+    provenance?: AuthoredMoveProvenance,
+  ) => {
     const loaded = draftFromTemplate(template);
     if (loaded === undefined) {
       setNotice("This stored revision is not a well-formed template and cannot be edited.");
       return;
     }
-    start(loaded, "a saved revision");
+    // A revision of a model's proposal stays linked to it.
+    const callId = provenance?.["contextId"];
+    const executorCallId = provenance?.["sourceContextId"];
+    start(
+      loaded,
+      "a saved revision",
+      provenance?.["role"] === "move-author" &&
+        typeof callId === "string" &&
+        typeof executorCallId === "string"
+        ? { callId, executorCallId }
+        : undefined,
+    );
   };
 
   return (
@@ -238,6 +345,12 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
         </ol>
         <p>Nothing here changes your proof; moves only add suggestions.</p>
       </Help>
+      {proposalMissing ? (
+        <p role="note" className={styles.muted} data-testid="proposal-missing">
+          That proposal is no longer available in this browser tab. Go back to the proof workspace
+          and choose “Save as reusable move” on the step again.
+        </p>
+      ) : null}
       {readOnly ? (
         <p role="note" className={styles.muted} data-testid="read-only-reason">
           {READ_ONLY_REASON}: authored moves can be read but not created or reviewed.
@@ -267,6 +380,21 @@ export function MoveAuthoring({ session }: MoveAuthoringProps) {
             disabledReason={disabledReason}
             onStart={start}
           />
+          {proposal === undefined ? null : (
+            <ProposalPanel
+              proposal={proposal}
+              reviseBlocked={
+                readOnly
+                  ? READ_ONLY_REASON
+                  : canRevise
+                    ? undefined
+                    : "Revising is unavailable: no AI provider is configured for this service."
+              }
+              revising={revising}
+              revisionFailure={revisionFailure}
+              onRevise={(feedback) => void reviseProposal(feedback)}
+            />
+          )}
           {draft === undefined ? null : (
             <>
               <p className={styles.muted} data-testid="draft-source">

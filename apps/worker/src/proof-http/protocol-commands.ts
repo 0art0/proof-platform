@@ -58,7 +58,10 @@ import { extractConditionalLemma, investigateHypothesis } from "../inquiry-metho
 import { listInquiryRecords, recordInquiryCommand } from "../inquiry-repository";
 import { addLibraryArtifact } from "../library-repository";
 import { reviewConditionalLemma } from "../conditional-lemmas";
+import type { LibraryProvenance } from "@proof/library";
+import { readLlmCall } from "../llm-call-repository";
 import { authorMoveDraft, reviewMoveDraft } from "../move-authoring";
+import { proposalProvenance, readStoredProposal } from "../move-author-proposal";
 import type { MoveTemplateValidationOptions } from "@proof/moves/authoring";
 import {
   backtrackProofSession,
@@ -1076,6 +1079,12 @@ async function dispatch(
       if (!source.ok) return source;
       const environment = await authoringEnvironment(context, sessionId);
       if (!environment.ok) return environment;
+      let provenance: LibraryProvenance | undefined;
+      if (command.proposal !== undefined) {
+        const linked = await proposalLink(context, sessionId, command.proposal);
+        if (!linked.ok) return linked;
+        provenance = linked.value;
+      }
       const authored = await authorMoveDraft(context.library, {
         commandId,
         sessionId,
@@ -1083,6 +1092,7 @@ async function dispatch(
         occurredAt: now().toISOString(),
         template: command.template,
         validation: environment.value,
+        ...(provenance === undefined ? {} : { provenance }),
       });
       if (authored.status !== "recorded") return repositoryFailed(authored);
       return {
@@ -1094,6 +1104,7 @@ async function dispatch(
             moveId: authored.artifact.template["id"],
             revision: authored.revision,
             definitionDigest: authored.artifact.definitionDigest,
+            provenance: authored.artifact.provenance,
             status: "draft",
             validation: authored.validation.ok
               ? { ok: true, report: authored.validation.report }
@@ -1190,6 +1201,62 @@ function authoringSource(actor: ProtocolActor, payloadSource: string | undefined
     });
   }
   return { ok: true, value: true };
+}
+
+/**
+ * The provenance of a draft that a model proposed. Both calls are read from the session's own LLM
+ * evidence, never taken on trust from the request: the move-author call must be a validated
+ * proposal that was made from the named move-executor call. The link records where the draft came
+ * from; it grants no authority, so the draft is reviewed like any other. A proposal that its own
+ * author classed as a new mathematical principle cannot be submitted as a move (refinement 7.3).
+ */
+async function proposalLink(
+  context: ServiceContext,
+  sessionId: string,
+  proposal: Extract<ProtocolCommand, { kind: "author-move-draft" }>["proposal"] & object,
+): Promise<Step<LibraryProvenance>> {
+  if (context.llmCalls === undefined) {
+    return diagnostics(
+      503,
+      "ai-disabled",
+      "The proposal's evidence cannot be checked: LLM evidence storage is unavailable.",
+    );
+  }
+  const read = await readStoredProposal(context.llmCalls, sessionId, proposal.callId);
+  if (read.status !== "found") {
+    return diagnostics(
+      409,
+      "proposal-not-found",
+      "This session has no validated move proposal with that call ID.",
+    );
+  }
+  if (read.stored.executorCallId !== proposal.executorCallId) {
+    return diagnostics(
+      409,
+      "proposal-mismatch",
+      "The proposal was not made from the named move-executor step.",
+    );
+  }
+  const executor = await readLlmCall(
+    context.llmCalls,
+    { kind: "proof-session", id: sessionId },
+    proposal.executorCallId,
+  );
+  if (executor.status !== "found" || executor.record.role !== "move-executor") {
+    return diagnostics(
+      409,
+      "proposal-mismatch",
+      "The move-executor step the proposal came from is not in this session's evidence.",
+    );
+  }
+  if (read.stored.proposal.classification.kind === "principle") {
+    return diagnostics(
+      409,
+      "principle-not-a-move",
+      "The proposal is classified as a new mathematical principle. A move cannot add a result by being approved; admit the result to the library instead.",
+    );
+  }
+  return { ok: true, value: proposalProvenance(proposal.callId, proposal.executorCallId) };
 }
 
 async function authoringEnvironment(

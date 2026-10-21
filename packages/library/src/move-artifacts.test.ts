@@ -94,4 +94,24 @@ describe("move artifacts", () => {
       expect(result.diagnostics.map(({ code }) => code)).toContain("move-layer-required");
     }
   });
+
+  it("records a model's proposal as generated provenance naming both calls", () => {
+    const provenance = {
+      kind: "generated",
+      role: "move-author",
+      contextId: "llm-call:author-1",
+      sourceContextId: "llm-call:execute-1",
+    };
+    const result = admit(move({ provenance }));
+    expect(result.ok).toBe(true);
+    // The source context is optional, and nothing else may be added to the provenance.
+    expect(
+      admit(move({ provenance: { kind: "generated", role: "librarian", contextId: "call:1" } })).ok,
+    ).toBe(true);
+    expect(admit(move({ provenance: { ...provenance, extra: "field" } })).ok).toBe(false);
+    expect(admit(move({ provenance: { ...provenance, sourceContextId: "has space" } })).ok).toBe(
+      false,
+    );
+    expect(admit(move({ provenance: { ...provenance, contextId: undefined } })).ok).toBe(false);
+  });
 });

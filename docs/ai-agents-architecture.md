@@ -201,11 +201,20 @@ from the sections above:
 - **Move performer (§5).** The worker assigns commands from the call (`command:<callId>:step:<i>`),
   and each command carries a `proposal` link to the executor call. Its `source`
   (`user-instruction` or `shortlisted-technique`) is claimed by the client.
-- **Not yet built: "Save as reusable move" (§5).** Authored moves are derived from steps picked
-  from displayed suggestions, with recorded selections and menu choices. An executor plan is a
-  sequence of raw kernel operations with neither. Turning one into a general template needs the
-  prose move-authoring workflow (refinement §7.1, a move-author/generality-review role), which is a
-  separate change.
+- **Save as reusable move (§5).** An executor plan is a sequence of raw kernel operations with
+  concrete IDs and one problem's constants, so it is not wrapped as a macro. A seventh role,
+  `move-author` (defaults: `openai/gpt-6-luna`, high effort, 32,000 tokens; env prefix
+  `PROOF_AI_MOVE_AUTHOR_`; migration `0019`), implements the prose-authoring workflow of
+  refinement §7.1: from the stored, applied executor call and a deterministically abstracted
+  situation it proposes a general move in the existing authored-move template language, with
+  examples (one of them the abstracted situation), a motivation and an honest classification
+  (macro, heuristic, principle; refinement §7.3). The template language gained constructions
+  (a proposition or term built from the pattern metavariables, still checked by the menu's typing
+  filter and the kernel) and a check that fails a template naming a symbol of one problem. The
+  worker runs `validateMoveTemplate` over the proposal and returns the result without recording
+  anything; the user submits the possibly edited template through `author-move-draft` with a link
+  to the two stored calls, and review stays the human generality review of refinement §7.2. A
+  proposal classed as a new principle cannot be submitted as a move. See `docs/ai-endpoints.md`.
 - **Stored evidence.** Prompts changed for the formalizer, shortlister, background proposer and
   librarian; each still accepts its previous system message on read, so earlier call records stay
   readable.

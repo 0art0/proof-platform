@@ -34,7 +34,10 @@ export type RevisionsPanelProps = Readonly<{
   /** Why drafts cannot be reviewed (a read-only session), if so. */
   disabledReason?: string | undefined;
   /** Load a saved revision's template into the editor to revise it. */
-  onRevise: (template: Readonly<Record<string, unknown>>) => void;
+  onRevise: (
+    template: Readonly<Record<string, unknown>>,
+    provenance: AuthoredMoveRevision["provenance"],
+  ) => void;
   /** A review was recorded: the list must be read again. */
   onReviewed: (message: string) => void;
 }>;
@@ -111,7 +114,7 @@ export function RevisionsPanel({
                     <button
                       type="button"
                       className={styles.button}
-                      onClick={() => onRevise(revision.template)}
+                      onClick={() => onRevise(revision.template, revision.provenance)}
                       aria-label={`Revise revision ${revision.revision} of ${move.moveId} in the editor`}
                     >
                       Revise in the editor
@@ -120,6 +123,19 @@ export function RevisionsPanel({
                   <span className={`${styles.muted} ${styles.code}`}>
                     {revision.definitionDigest}
                   </span>
+                  {revision.provenance?.["kind"] === "generated" ? (
+                    <p className={styles.muted} data-testid="revision-provenance">
+                      Proposed by a model ({String(revision.provenance["role"])}, call{" "}
+                      <span className={styles.code}>
+                        {String(revision.provenance["contextId"])}
+                      </span>
+                      {typeof revision.provenance["sourceContextId"] === "string"
+                        ? `, from your step ${revision.provenance["sourceContextId"]}`
+                        : ""}
+                      ) and saved by {revision.authorId}. The link records where it came from; it
+                      approves nothing.
+                    </p>
+                  ) : null}
                   {revision.review === undefined ? null : (
                     <p data-testid="recorded-review">
                       {DECISION_LABELS[revision.review.decision]} by {revision.review.reviewerId} on{" "}

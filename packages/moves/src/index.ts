@@ -84,6 +84,61 @@ export const moveImplementationSchema = z
   .strict();
 export type MoveImplementation = z.infer<typeof moveImplementationSchema>;
 
+/**
+ * Primitive parameters whose value a reviewed template may CONSTRUCT instead of the user picking
+ * it from a menu: a proposition or a term. Every other parameter is a selection, a generated ID,
+ * or a closed menu (an index, a direction, a result), and stays a menu choice.
+ */
+const CONSTRUCTIBLE_PARAMETERS: Readonly<
+  Partial<Record<MoveOperationKind, Readonly<Record<string, "term" | "proposition">>>>
+> = Object.freeze({
+  "split-classical-cases": { proposition: "proposition" },
+  "assume-hypothesis": { proposition: "proposition" },
+  "replace-goal": { proposition: "proposition" },
+  suffices: { proposition: "proposition" },
+  "instantiate-universal-hypothesis": { term: "term" },
+  "choose-existential-witness": { witness: "term" },
+});
+
+/** The prefix of the menus that complete a result's or assumption's instantiation. */
+export const INSTANTIATION_PARAMETER_PREFIX = "instantiation/";
+
+/**
+ * What a construction for this parameter of this primitive may be, or undefined when the parameter
+ * cannot be constructed. The instantiation of a result or additional assumption is a term.
+ */
+export function constructibleParameterKind(
+  operationKind: MoveOperationKind,
+  parameterId: string,
+): "term" | "proposition" | undefined {
+  if (
+    (operationKind === "apply-result-backward" ||
+      operationKind === "apply-result-forward" ||
+      operationKind === "close-by-assumption") &&
+    parameterId.startsWith(INSTANTIATION_PARAMETER_PREFIX) &&
+    parameterId.length > INSTANTIATION_PARAMETER_PREFIX.length
+  ) {
+    return "term";
+  }
+  return CONSTRUCTIBLE_PARAMETERS[operationKind]?.[parameterId];
+}
+
+/**
+ * A constructed parameter (reviewed template language, refinement section 7.2): the value is a
+ * MathJSON template over the move's pattern metavariables. When the move is applied, the
+ * metavariables are bound by matching the selections against the move's patterns, the template is
+ * instantiated by capture-avoiding substitution, and the result is offered as one more item of the
+ * parameter's menu, already chosen. The menu's own typing check and the kernel still validate it.
+ */
+export const moveConstructionSchema = z
+  .object({
+    parameterId: stableIdentifierSchema,
+    kind: z.enum(["term", "proposition"]),
+    template: plainMathJsonSchema,
+  })
+  .strict();
+export type MoveConstruction = z.infer<typeof moveConstructionSchema>;
+
 export const moveDefinitionSchema = guardedSchema(
   z
     .object({
@@ -98,6 +153,8 @@ export const moveDefinitionSchema = guardedSchema(
       sideConditions: z.array(z.string().min(1)),
       parameters: z.array(moveParameterSchema),
       requiredArtifacts: z.array(libraryArtifactReferenceSchema),
+      /** Parameters this move constructs from its pattern metavariables (see above). */
+      constructions: z.array(moveConstructionSchema).max(8).optional(),
       implementation: moveImplementationSchema,
       transitionClass: z.enum(["equivalence", "strengthening", "weakening"]),
       previewRenderer: z.literal("kernel-state-delta"),
@@ -129,6 +186,33 @@ export const moveDefinitionSchema = guardedSchema(
         }
       });
       addUniqueFieldIssues(move.parameters, "id", "move parameter", context, ["parameters"]);
+      const constructions = move.constructions ?? [];
+      addUniqueFieldIssues(constructions, "parameterId", "construction", context, [
+        "constructions",
+      ]);
+      constructions.forEach((construction, index) => {
+        const kind = constructibleParameterKind(
+          move.implementation.operationKind,
+          construction.parameterId,
+        );
+        if (kind !== construction.kind) {
+          context.addIssue({
+            code: "custom",
+            message:
+              kind === undefined
+                ? `The ${move.implementation.operationKind} primitive has no constructible parameter ${construction.parameterId}.`
+                : `The parameter ${construction.parameterId} is constructed as a ${kind}, not a ${construction.kind}.`,
+            path: ["constructions", index, "parameterId"],
+          });
+        }
+        if (move.parameters.some(({ id }) => id === construction.parameterId)) {
+          context.addIssue({
+            code: "custom",
+            message: `The constructed parameter ${construction.parameterId} is not asked of the user.`,
+            path: ["constructions", index, "parameterId"],
+          });
+        }
+      });
       addUniqueArtifactIssues(move.requiredArtifacts, context);
       move.requiredArtifacts.forEach((reference, index) => {
         if (reference.kind !== "definition" && reference.kind !== "result") {
@@ -1151,6 +1235,14 @@ function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()):
 }
 
 export * from "./result-adapter";
+export {
+  bindPatterns,
+  instantiateTemplate,
+  metavariablesOf,
+  type Instantiation,
+  type MetavariableBindings,
+  type PatternFragment,
+} from "./construction";
 export * from "./materialize";
 export * from "./plan";
 export { declaredTransitionClass };
