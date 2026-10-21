@@ -376,6 +376,21 @@ function findTarget(node: SnapshotView, target: TargetIdentity): TargetView | un
 // Math payloads and their sources
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Where an authored-move draft came from when a model proposed it (refinement section 7.1): the
+ * stored move-author call, and the stored move-executor call whose applied step it generalizes.
+ * Both are in the session's own LLM evidence. The draft is still the human's submission: it is
+ * reviewed, and never approved, because of this link.
+ */
+export const moveDraftProposalSchema = z
+  .object({
+    role: z.literal("move-author"),
+    callId: stableIdentifierSchema,
+    executorCallId: stableIdentifierSchema,
+  })
+  .strict();
+export type MoveDraftProposal = z.infer<typeof moveDraftProposalSchema>;
+
 export const payloadSourceSchema = z.enum([
   "setup",
   "approved-generator",
@@ -686,6 +701,11 @@ const commandSchemas = [
       kind: z.literal("author-move-draft"),
       template: z.record(z.string(), z.unknown()),
       payloadSource: payloadSourceSchema.optional(),
+      /**
+       * Present when the template came from a move-author proposal (possibly edited by the human).
+       * The service checks both calls in the session's evidence and records the link on the draft.
+       */
+      proposal: moveDraftProposalSchema.optional(),
     })
     .strict(),
   z

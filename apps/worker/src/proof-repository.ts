@@ -3251,6 +3251,42 @@ export function proposalStepCommandId(
   return `${prefix}:step:${index}` as ApplyKernelCommand["commandId"];
 }
 
+/**
+ * Whether every step of a confirmed move-executor plan is still a recorded command of the session,
+ * each naming the stored call as its proposal. A plan that was only previewed, a plan of another
+ * session, and a plan whose moves were deleted since all answer false.
+ */
+export async function proposalPlanApplied(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  input: Readonly<{ commandIdPrefix: string; callId: string; stepCount: number }>,
+): Promise<boolean> {
+  const sessionId = safeParse(proofSessionIdSchema, sessionIdInput) as ProofSessionId | undefined;
+  if (sessionId === undefined || input.stepCount < 1 || input.stepCount > 16) return false;
+  try {
+    return await store.transaction(async (transaction) => {
+      for (let index = 1; index <= input.stepCount; index += 1) {
+        const record = (await transaction.readCommand(
+          sessionId,
+          proposalStepCommandId(input.commandIdPrefix, index),
+        )) as { prepared?: { command?: { proposal?: Record<string, unknown> } } } | undefined;
+        const proposal = record?.prepared?.command?.proposal;
+        if (
+          proposal?.["callId"] !== input.callId ||
+          proposal["role"] !== "move-executor" ||
+          proposal["stepIndex"] !== index ||
+          proposal["stepCount"] !== input.stepCount
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
 export type ExecuteProposalPlanInput = Readonly<{
   /** The step command IDs are `<prefix>:step:<i>`; a retry with the same prefix replays. */
   commandIdPrefix: string;

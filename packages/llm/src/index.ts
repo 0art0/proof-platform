@@ -41,17 +41,65 @@ import {
   normalizeLibrarianWireResult,
 } from "./librarian";
 import {
+  MOVE_AUTHOR_MAX_EXAMPLES,
+  MOVE_AUTHOR_SYSTEM_MESSAGE,
+  describePrimitives,
+  moveAuthorContextSchema,
+  moveAuthorFindingSchema,
+  moveAuthorOutputSchema,
+  moveAuthorProposalSchema,
+  moveAuthorWireResultSchema,
+  normalizeMoveAuthorWireResult,
+  proposalProblem,
+  type MoveAuthorContext,
+} from "./move-author";
+import { abstractSituation } from "./move-author-situation";
+import {
   MAX_PLAN_STEPS,
   executorInsufficientContextSchema,
   executorPlanProposalSchema,
+  executorResultCardSchema,
   executorWirePlanSchema,
   normalizeWireStep,
   planUsesForbiddenOperation,
   stepResultIds,
   type ExecutorPlanProposal,
+  type ExecutorResultCard,
 } from "./move-executor-plan";
 
 export * from "./move-executor-plan";
+export {
+  MOVE_AUTHOR_EXTENSION_KINDS,
+  MOVE_AUTHOR_MAX_EXAMPLES,
+  MOVE_AUTHOR_MAX_FEEDBACK,
+  MOVE_AUTHOR_PARAMETER_KINDS,
+  MOVE_AUTHOR_SYSTEM_MESSAGE,
+  describePrimitives,
+  moveAuthorContextSchema,
+  moveAuthorExampleSchema,
+  moveAuthorExtensionKindSchema,
+  moveAuthorFindingSchema,
+  moveAuthorOutputSchema,
+  moveAuthorParameterKind,
+  moveAuthorProposalSchema,
+  moveAuthorWireResultSchema,
+  primitiveSpecSchema,
+  type MoveAuthorContext,
+  type MoveAuthorExample,
+  type MoveAuthorExtensionKind,
+  type MoveAuthorFinding,
+  type MoveAuthorOutput,
+  type MoveAuthorProposal,
+  type PrimitiveSpec,
+} from "./move-author";
+export {
+  SITUATION_STATE_ID,
+  SITUATION_TARGET_ID,
+  abstractSituation,
+  situationSchema,
+  type Situation,
+} from "./move-author-situation";
+export { compileMoveAuthorProposal, proposedMoveId } from "./move-author-template";
 
 export const LLM_ROLES = [
   "topic-extractor",
@@ -60,6 +108,7 @@ export const LLM_ROLES = [
   "proof-state-formalizer",
   "move-shortlister",
   "move-executor",
+  "move-author",
   "attestor",
   "background-gatekeeper",
   "generality-reviewer",
@@ -75,6 +124,7 @@ export const SUPPORTED_LLM_ROLES = [
   "background-proposer",
   "move-executor",
   "librarian",
+  "move-author",
 ] as const;
 export const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
@@ -287,23 +337,6 @@ const executorSelectionSchema = z
   .strict();
 export type ExecutorSelection = z.infer<typeof executorSelectionSchema>;
 
-const executorResultCardSchema = z
-  .object({
-    id: stableIdentifierSchema,
-    name: shortTextSchema.optional(),
-    parameters: z
-      .array(z.object({ symbol: z.string().min(1).max(200), sort: sortSchema }).strict())
-      .max(32),
-    premises: z.array(plainMathJsonSchema).max(32),
-    conclusion: plainMathJsonSchema,
-    directions: z
-      .array(z.enum(["forward", "backward"]))
-      .min(1)
-      .max(2),
-  })
-  .strict();
-export type ExecutorResultCard = z.infer<typeof executorResultCardSchema>;
-
 const moveExecutorContextSchema = z
   .object({
     nodeId: stableIdentifierSchema,
@@ -417,6 +450,13 @@ const moveExecutorEnvelopeSchema = z
     context: moveExecutorContextSchema,
   })
   .strict();
+const moveAuthorEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("move-author"),
+    context: moveAuthorContextSchema,
+  })
+  .strict();
 const librarianEnvelopeSchema = z
   .object({
     ...envelopeBaseShape,
@@ -431,6 +471,7 @@ export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   backgroundProposerEnvelopeSchema,
   moveExecutorEnvelopeSchema,
   librarianEnvelopeSchema,
+  moveAuthorEnvelopeSchema,
 ]);
 export type LlmContextEnvelope = z.infer<typeof llmContextEnvelopeSchema>;
 
@@ -802,6 +843,102 @@ export function buildMoveExecutorContext(input: unknown): RoleLlmContextResult<"
   }) as RoleLlmContextResult<"move-executor">;
 }
 
+const moveAuthorRequestSchema = z
+  .object({
+    id: llmCallIdSchema,
+    /** The stored move-executor call the step came from. */
+    executorCallId: stableIdentifierSchema,
+    /** That call's stored context, and the stored plan it produced. */
+    executorContext: z.unknown(),
+    executorPlan: z.unknown(),
+    /** On a revision: the previous proposal as stored, the feedback, and the platform's findings. */
+    revision: z
+      .object({
+        previousCallId: stableIdentifierSchema,
+        feedback: z.string(),
+        previousProposal: z.unknown(),
+        previousFindings: z.array(z.unknown()).default([]),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Build the move author's minimal context (design plan sections 13.3 and 15.3) from a stored
+ * move-executor call whose plan was applied: the user's instruction, the applied step abstracted
+ * deterministically (see `abstractSituation`), the kernel primitives generated from the move
+ * catalog, the active operators and the supplied results. Never the original problem, other goals,
+ * history or branches. Only a step the user described in their own words can be authored from.
+ */
+export function buildMoveAuthorContext(input: unknown): RoleLlmContextResult<"move-author"> {
+  const request = safeParsePlain(moveAuthorRequestSchema, input);
+  if (request === undefined) {
+    return failure("invalid-request", "The move-author request is invalid.");
+  }
+  const executed = safeParsePlain(moveExecutorContextSchema, request.executorContext);
+  const plan = safeParsePlain(executorPlanProposalSchema, request.executorPlan);
+  if (executed === undefined || plan === undefined) {
+    return failure("invalid-request", "The stored move-executor call is invalid.");
+  }
+  if (executed.source !== "user-instruction") {
+    return failure(
+      "invalid-request",
+      "Only a step the user described in their own words can be turned into a move.",
+    );
+  }
+  let revision: MoveAuthorContext["revision"];
+  if (request.revision !== undefined) {
+    const feedback = request.revision.feedback.trim();
+    const previousProposal = safeParsePlain(
+      moveAuthorProposalSchema,
+      request.revision.previousProposal,
+    );
+    const previousFindings = z
+      .array(moveAuthorFindingSchema)
+      .max(20)
+      .safeParse(request.revision.previousFindings);
+    if (
+      feedback.length === 0 ||
+      feedback.length > 4_000 ||
+      previousProposal === undefined ||
+      !previousFindings.success
+    ) {
+      return failure("invalid-request", "The revision is invalid.");
+    }
+    revision = {
+      previousCallId: request.revision.previousCallId,
+      feedback,
+      previousProposal,
+      previousFindings: previousFindings.data,
+    };
+  }
+  const situation = abstractSituation({
+    target: executed.target,
+    selections: executed.selections.map(({ location, expression }) => ({ location, expression })),
+    sequent: executed.sequent,
+    operators: executed.operators,
+    results: executed.results,
+    steps: plan.steps,
+  });
+  if (!situation.ok) return failure("invalid-request", situation.reason);
+  return envelopeSuccess({
+    id: request.id,
+    schemaVersion: "llm-context/v1",
+    role: "move-author",
+    context: {
+      executorCallId: request.executorCallId,
+      instruction: executed.instruction,
+      situation: situation.situation,
+      primitives: describePrimitives(),
+      operators: executed.operators,
+      results: executed.results,
+      limits: { maxSteps: MAX_PLAN_STEPS, maxExamples: MOVE_AUTHOR_MAX_EXAMPLES },
+      ...(revision === undefined ? {} : { revision }),
+    },
+  }) as RoleLlmContextResult<"move-author">;
+}
+
 /** A resolved selection in the executor's shape; undefined if it is invalid or elsewhere. */
 function projectExecutorSelection(
   id: string,
@@ -1087,7 +1224,8 @@ export type ValidatedLlmOutput =
   | z.infer<typeof formalizerOutputSchema>
   | z.infer<typeof backgroundProposerOutputSchema>
   | z.infer<typeof executorOutputSchema>
-  | z.infer<typeof librarianOutputSchema>;
+  | z.infer<typeof librarianOutputSchema>
+  | z.infer<typeof moveAuthorOutputSchema>;
 
 const topicWireSchema = z.object({ result: topicOutputSchema }).strict();
 const backgroundWireSchema = z.object({ result: backgroundProposerWireResultSchema }).strict();
@@ -1095,6 +1233,7 @@ const librarianWireSchema = z.object({ result: librarianWireResultSchema }).stri
 const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).strict();
 const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
 const executorWireSchema = z.object({ result: executorWireResultSchema }).strict();
+const moveAuthorWireSchema = z.object({ result: moveAuthorWireResultSchema }).strict();
 
 const jevChoiceResultSchema = z
   .object({
@@ -1135,6 +1274,7 @@ export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
   if (role === "background-proposer") return backgroundWireSchema;
   if (role === "move-executor") return executorWireSchema;
   if (role === "librarian") return librarianWireSchema;
+  if (role === "move-author") return moveAuthorWireSchema;
   return shortlisterWireSchema;
 }
 
@@ -1201,6 +1341,7 @@ function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "background-proposer") return BACKGROUND_PROPOSER_SYSTEM_MESSAGE;
   if (role === "librarian") return LIBRARIAN_SYSTEM_MESSAGE;
   if (role === "move-executor") return MOVE_EXECUTOR_SYSTEM_MESSAGE;
+  if (role === "move-author") return MOVE_AUTHOR_SYSTEM_MESSAGE;
   return SHORTLISTER_SYSTEM_MESSAGE;
 }
 
@@ -1310,6 +1451,27 @@ export function validateLlmOutput(
       );
     }
     return { ok: true, output: freezeDetached(output), diagnostics: [] };
+  }
+
+  if (call.role === "move-author") {
+    if (call.envelope.role !== "move-author") {
+      return failure("invalid-output", "The LLM output does not belong to this call.");
+    }
+    const { context } = call.envelope;
+    const wireOutput = safeParsePlain(moveAuthorWireResultSchema, candidate);
+    if (wireOutput !== undefined) {
+      const normalized = normalizeMoveAuthorWireResult(wireOutput, context);
+      return normalized.ok
+        ? { ok: true, output: freezeDetached(normalized.output), diagnostics: [] }
+        : failure("invalid-output", normalized.message);
+    }
+    // An already normalized output is checked against the same context.
+    const output = safeParsePlain(moveAuthorOutputSchema, candidate);
+    if (output === undefined) return failure("invalid-output", "The LLM output is malformed.");
+    const problem = output.kind === "move-proposal" ? proposalProblem(output, context) : undefined;
+    return problem === undefined
+      ? { ok: true, output: freezeDetached(output), diagnostics: [] }
+      : failure("invalid-output", problem);
   }
 
   const jevResult = safeParsePlain(jevChoiceResultSchema, candidate);
@@ -1513,6 +1675,7 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         backgroundProposerOutputSchema,
         executorOutputSchema,
         librarianOutputSchema,
+        moveAuthorOutputSchema,
       ])
       .optional(),
     diagnostics: z.array(llmBoundaryDiagnosticSchema),
@@ -1559,7 +1722,9 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         (evidence.role === "move-executor" &&
           !executorOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "librarian" &&
-          !librarianOutputSchema.safeParse(evidence.output).success))
+          !librarianOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "move-author" &&
+          !moveAuthorOutputSchema.safeParse(evidence.output).success))
     ) {
       context.addIssue({ code: "custom", message: "Evidence output must match the call role." });
     }

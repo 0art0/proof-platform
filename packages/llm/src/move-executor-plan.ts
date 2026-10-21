@@ -11,7 +11,7 @@
  */
 import { KERNEL_OPERATION_KINDS, kernelOperationSchema } from "@proof/kernel";
 import { MAX_PLAN_STEPS } from "@proof/moves/authoring";
-import { plainMathJsonSchema, stableIdentifierSchema } from "@proof/protocol";
+import { plainMathJsonSchema, sortSchema, stableIdentifierSchema } from "@proof/protocol";
 import { z } from "zod";
 
 export { MAX_PLAN_STEPS };
@@ -43,9 +43,9 @@ const targetSchema = z
   .object({ kind: z.enum(["goal", "obligation"]), id: referenceSchema })
   .strict();
 
-type WireMathJson = string | number | WireMathJson[];
+export type WireMathJson = string | number | WireMathJson[];
 /** MathJSON as the model writes it: a symbol or number, or `[Operator, ...operands]`. */
-const wireMathJsonSchema: z.ZodType<WireMathJson> = z.lazy(() =>
+export const wireMathJsonSchema: z.ZodType<WireMathJson> = z.lazy(() =>
   z.union([z.string(), z.number(), z.array(wireMathJsonSchema)]),
 );
 const mathJsonFields = ["proposition", "term", "witness"] as const;
@@ -233,6 +233,24 @@ export function executorFreshIdFields(kind: string): readonly string[] {
   return FRESH_ID_FIELDS[kind] ?? [];
 }
 
+/** An approved library result as a model sees it: its parameters, premises and conclusion. */
+export const executorResultCardSchema = z
+  .object({
+    id: stableIdentifierSchema,
+    name: z.string().min(1).max(500).optional(),
+    parameters: z
+      .array(z.object({ symbol: z.string().min(1).max(200), sort: sortSchema }).strict())
+      .max(32),
+    premises: z.array(plainMathJsonSchema).max(32),
+    conclusion: plainMathJsonSchema,
+    directions: z
+      .array(z.enum(["forward", "backward"]))
+      .min(1)
+      .max(2),
+  })
+  .strict();
+export type ExecutorResultCard = z.infer<typeof executorResultCardSchema>;
+
 const explanationSchema = z.string().min(1).max(1000);
 
 export const executorWirePlanSchema = z
@@ -404,6 +422,39 @@ const REFERENCE_FIELDS = [
   "equalityHypothesisId",
   "assumptionId",
 ] as const;
+
+/**
+ * The step with every reference to an existing target or statement passed through `map` (a map
+ * that returns an ID it does not know unchanged leaves a reference to a label an earlier step
+ * introduced as it was). The labels the step introduces itself are not references.
+ */
+export function mapExecutorStepReferences(
+  step: ExecutorPlanStep,
+  map: (id: string) => string,
+): ExecutorPlanStep {
+  const fresh = new Set(executorFreshIdFields(step.kind));
+  const mapped: Record<string, unknown> = structuredClone(step) as Record<string, unknown>;
+  const target = mapped.target as { kind: string; id: string };
+  mapped.target = { ...target, id: map(target.id) };
+  for (const field of REFERENCE_FIELDS) {
+    const value = mapped[field];
+    if (!fresh.has(field) && typeof value === "string") mapped[field] = map(value);
+  }
+  const statement = mapped.statement as { kind: string; id?: string } | undefined;
+  if (statement?.kind === "hypothesis" && statement.id !== undefined) {
+    mapped.statement = { ...statement, id: map(statement.id) };
+  }
+  const source = mapped.source as { kind: string; hypothesisId?: string } | undefined;
+  if (source?.kind === "hypothesis" && source.hypothesisId !== undefined) {
+    mapped.source = { ...source, hypothesisId: map(source.hypothesisId) };
+  }
+  if (Array.isArray(mapped.premiseHypothesisIds)) {
+    mapped.premiseHypothesisIds = mapped.premiseHypothesisIds.map((id) =>
+      typeof id === "string" ? map(id) : id,
+    );
+  }
+  return mapped as ExecutorPlanStep;
+}
 
 /** The ID of the state after step `index` (1-based) of the call's plan. */
 export function executorStateId(callId: string, index: number): string {

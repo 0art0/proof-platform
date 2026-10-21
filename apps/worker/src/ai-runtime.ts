@@ -14,6 +14,9 @@ import {
   DEFAULT_LIBRARIAN_MODEL,
   DEFAULT_LIBRARIAN_REASONING_EFFORT,
   DEFAULT_LLM_TIMEOUT_MS,
+  DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
+  DEFAULT_MOVE_AUTHOR_MODEL,
+  DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   DEFAULT_SHORTLISTER_MODEL,
   DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
@@ -82,6 +85,16 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     "PROOF_AI_EXECUTOR_REASONING_EFFORT",
     env.PROOF_AI_EXECUTOR_REASONING_EFFORT,
     DEFAULT_EXECUTOR_REASONING_EFFORT,
+  );
+  const authorModel = nonEmpty(env.PROOF_AI_MOVE_AUTHOR_MODEL) ?? DEFAULT_MOVE_AUTHOR_MODEL;
+  const authorTokens = positiveInteger(
+    env.PROOF_AI_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
+    DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
+  );
+  const authorReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_MOVE_AUTHOR_REASONING_EFFORT",
+    env.PROOF_AI_MOVE_AUTHOR_REASONING_EFFORT,
+    DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
   );
   const librarianModel = nonEmpty(env.PROOF_AI_LIBRARIAN_MODEL) ?? DEFAULT_LIBRARIAN_MODEL;
   const librarianTokens = positiveInteger(
@@ -178,6 +191,22 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         promptVersion: "move-executor-v1",
         maxOutputTokens: executorTokens,
         reasoningEffort: executorReasoningEffort,
+      }),
+    },
+    "move-author": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: authorModel,
+        reasoningEffort: authorReasoningEffort,
+        maxOutputTokens: authorTokens,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: authorModel,
+        promptVersion: "move-author-v1",
+        maxOutputTokens: authorTokens,
+        reasoningEffort: authorReasoningEffort,
       }),
     },
     "move-shortlister": {

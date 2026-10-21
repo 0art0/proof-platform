@@ -1,15 +1,28 @@
 import { notFound } from "next/navigation";
 import { MoveAuthoring } from "../../../../features/move-authoring";
-import { ProofServiceError, readCurrentProofSession } from "../../../../server/proof-service";
+import {
+  ProofServiceError,
+  readAiCapabilities,
+  readCurrentProofSession,
+} from "../../../../server/proof-service";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-/** Move authoring without AI (roadmap N35) for one stored proof session. */
+/**
+ * Move authoring for one stored proof session (roadmap N35). `?proposal=<call ID>` opens a model's
+ * proposal from "Save as reusable move" in the form.
+ */
 export default async function SessionMovesPage({
   params,
-}: Readonly<{ params: Promise<{ sessionId: string }> }>) {
+  searchParams,
+}: Readonly<{
+  params: Promise<{ sessionId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}>) {
   const { sessionId } = await params;
+  const query = (await searchParams) ?? {};
+  const proposal = Array.isArray(query["proposal"]) ? query["proposal"][0] : query["proposal"];
   let loaded;
   try {
     loaded = await readCurrentProofSession(decodedSegment(sessionId));
@@ -22,6 +35,7 @@ export default async function SessionMovesPage({
     }
     throw error;
   }
+  const capabilities = await readAiCapabilities();
   return (
     <main>
       <MoveAuthoring
@@ -30,6 +44,8 @@ export default async function SessionMovesPage({
           operators: loaded.session.operators,
           readOnly: loaded.session.readOnly,
         }}
+        proposalId={proposal === "" ? undefined : proposal}
+        canRevise={capabilities["move-author"]}
       />
     </main>
   );

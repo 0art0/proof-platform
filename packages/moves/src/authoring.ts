@@ -15,6 +15,16 @@
  *   and each menu parameter is chosen again by its recorded value, then by its origin. The
  *   correspondence of pattern variables and statement IDs carries forward, so a macro recorded on
  *   one state adapts to an alpha-renamed one.
+ * - A parameter whose value is not on any menu of the situation (a case split or a `suffices` on a
+ *   proposition built from the selected parts, a witness built from a selected term) is a
+ *   CONSTRUCTION: a recorded parameter with the template's own `rule` origin and a term or
+ *   proposition value that is a MathJSON template over the metavariables of the patterns. It is
+ *   instantiated by capture-avoiding substitution from what the selections bind, offered as one more
+ *   item of the parameter's menu, and still checked by the menu's typing filter and the kernel.
+ *   Every symbol of a template must be an operator, a built-in or such a metavariable: a literal
+ *   symbol of the situation the move was written in fails validation as `problem-specific-symbol`.
+ * - A later step may refer to an identifier an earlier step created by the step and field that
+ *   created it (`<step>.childIds.1`), so a template need not record the operations it replays.
  * - `validateMoveTemplate` RUNS every example through that path and compares the kernel's result
  *   with the expected outcome. The declared class must equal the class composed from the kernel
  *   transitions of the steps, both statically and on every positive example.
@@ -34,12 +44,13 @@ import {
   type KernelOperationKind,
   type TransitionClass,
 } from "@proof/kernel";
-import { libraryArtifactReferenceSchema } from "@proof/library";
+import { libraryArtifactReferenceSchema, type LibraryProvenance } from "@proof/library";
 import {
   CONSTRUCTION_REQUIREMENT_ROLES,
   binderShape,
   constructionRequirementEvidenceSchema,
   createExecutableProofStateSchema,
+  RESERVED_BUILTIN_SYMBOLS,
   plainMathJsonSchema,
   sortSchema,
   stableIdentifierSchema,
@@ -50,9 +61,11 @@ import {
   type PlainMathJson,
 } from "@proof/mathjson-model";
 import { z } from "zod";
+import { instantiateTemplate, metavariablesOf } from "./construction";
 import { expressionAtPath, functionParts } from "./context-terms";
 import {
   HAND_AUTHORED_MOVES,
+  constructibleParameterKind,
   declaredTransitionClass,
   moveDefinitionSchema,
   moveIdSchema,
@@ -390,13 +403,6 @@ export const authoredMoveTemplateSchema = z
           path: ["plan", "steps", index, "selections"],
         });
       }
-      if (index > 0 && step.operation === undefined) {
-        context.addIssue({
-          code: "custom",
-          message: "A step after the first records the operation it applied.",
-          path: ["plan", "steps", index, "operation"],
-        });
-      }
     });
   });
 export type AuthoredMoveTemplate = z.infer<typeof authoredMoveTemplateSchema>;
@@ -420,7 +426,9 @@ export type TemplateDiagnosticCode =
   | "example-mismatch"
   | "example-accepted"
   | "macro-step-unmatched"
-  | "plan-inconsistent";
+  | "plan-inconsistent"
+  | "invalid-construction"
+  | "problem-specific-symbol";
 
 export type TemplateDiagnostic = Readonly<{
   code: TemplateDiagnosticCode;
@@ -485,15 +493,38 @@ export function plannedTransitionClass(plan: AuthoredPlan): TransitionClass | un
   return classes.length === 0 ? undefined : composeTransitionClasses(classes);
 }
 
+/**
+ * A construction (refinement section 7.2): a recorded parameter whose origin is the template's own
+ * `rule` and whose value is a term or proposition. Its value is a MathJSON template over the
+ * metavariables of the step's patterns, instantiated when the move is applied and offered as one
+ * more item of the parameter's menu. Every other recorded parameter is a pick from a menu.
+ */
+export function isConstruction(parameter: MacroParameter): boolean {
+  return (
+    parameter.origin.kind === "rule" &&
+    (parameter.value.kind === "term" || parameter.value.kind === "proposition")
+  );
+}
+
+/** The constructions of one plan step, in recorded order. */
+export function constructionsOf(step: AuthoredPlanStep): readonly MacroParameter[] {
+  return (step.parameters ?? []).filter(isConstruction);
+}
+
 /** The first step's definition: the template's contract over the first primitive. */
 function firstStepDefinition(
   template: AuthoredMoveTemplate,
   approval: MoveDefinition["approval"],
-  provenanceSource: string,
+  provenanceSource: string | LibraryProvenance,
 ): MoveDefinition | undefined {
   const first = template.plan.steps[0];
   const primitive = first === undefined ? undefined : primitiveForStep(first);
   if (first === undefined || primitive === undefined) return undefined;
+  const constructions = constructionsOf(first).flatMap(({ parameterId, value }) =>
+    value.kind === "term" || value.kind === "proposition"
+      ? [{ parameterId, kind: value.kind, template: value.expression }]
+      : [],
+  );
   const parsed = moveDefinitionSchema.safeParse({
     id: template.id,
     name: template.name,
@@ -508,6 +539,7 @@ function firstStepDefinition(
       template.sideConditions.length === 0 ? primitive.sideConditions : template.sideConditions,
     parameters: template.parameters,
     requiredArtifacts: template.requiredArtifacts,
+    ...(constructions.length === 0 ? {} : { constructions }),
     implementation: primitive.implementation,
     // The primitive's own class: the moves schema ties it to the implementation.
     transitionClass: declaredTransitionClass(first.operationKind),
@@ -520,7 +552,10 @@ function firstStepDefinition(
         .filter(({ expected }) => expected.outcome === "rejected")
         .map(({ description }) => description),
     },
-    provenance: { kind: "curated", source: provenanceSource },
+    provenance:
+      typeof provenanceSource === "string"
+        ? { kind: "curated", source: provenanceSource }
+        : provenanceSource,
     approval,
     ...(template.discoveryContext === undefined
       ? {}
@@ -536,7 +571,7 @@ function firstStepDefinition(
 export function authoredMoveDefinition(
   template: unknown,
   approval: Extract<MoveDefinition["approval"], { status: "approved" }>,
-  provenanceSource: string,
+  provenanceSource: string | LibraryProvenance,
 ): MoveDefinition | undefined {
   const parsed = authoredMoveTemplateSchema.safeParse(template);
   if (!parsed.success || parsed.data.plan.steps.length !== 1) return undefined;
@@ -559,7 +594,7 @@ export function authoredMoveDefinition(
 export function authoredMacroDefinition(
   template: unknown,
   approval: Extract<MoveDefinition["approval"], { status: "approved" }>,
-  provenanceSource: string,
+  provenanceSource: string | LibraryProvenance,
 ): Readonly<{ definition: MoveDefinition; template: AuthoredMoveTemplate }> | undefined {
   const parsed = authoredMoveTemplateSchema.safeParse(template);
   if (!parsed.success || parsed.data.plan.steps.length < 2) return undefined;
@@ -706,6 +741,7 @@ export function runMovePlan(
     }
     if (step.operation !== undefined)
       pairIdentifiers(step.operation, operation, correspondence.ids);
+    nameStepIdentifiers(step.id, operation, correspondence.ids);
     operations.push(operation);
     classes.push(planned.preview.transitionClass);
     state = planned.preview.state;
@@ -940,7 +976,22 @@ function materializeRecordedStep(
 ): Replayed {
   const operators = environment.operators ?? [];
   const choices: Record<string, string> = {};
-  const recorded = step.parameters ?? [];
+  const recorded = (step.parameters ?? []).filter((parameter) => !isConstruction(parameter));
+  // Constructions are instantiated from what the step's selections and the earlier steps bound.
+  const constructed: Record<string, MenuValue> = {};
+  for (const construction of constructionsOf(step)) {
+    const value = construction.value;
+    if (value.kind !== "term" && value.kind !== "proposition") continue;
+    const instance = instantiateTemplate(value.expression, correspondence.symbols, operators);
+    if (!instance.ok) {
+      return replayFailure(
+        "materialization-failed",
+        `The ${construction.parameterId} of step ${step.id} is constructed, but ${instance.message}`,
+        "construction-unbound",
+      );
+    }
+    constructed[construction.parameterId] = { kind: value.kind, expression: instance.expression };
+  }
   for (let round = 0; round <= recorded.length + 1; round += 1) {
     const materialized = materializeMoveOperation({
       state,
@@ -949,6 +1000,7 @@ function materializeRecordedStep(
       menuChoices: choices,
       idGenerator: generator,
       env: environment,
+      ...(Object.keys(constructed).length === 0 ? {} : { constructed }),
     });
     if (materialized.ok) return { ok: true, operation: materialized.operation };
     const diagnostic = materialized.diagnostics[0];
@@ -1337,6 +1389,32 @@ function pairIdentifiers(
   }
 }
 
+/**
+ * Name the identifiers a step's operation holds by the step and the field: `<step>.childIds.1` is
+ * the first child target the step `<step>` created, `<step>.hypothesisId` the hypothesis it
+ * introduced or used. A later step's recorded selections may refer to a target or hypothesis by
+ * such a name instead of by a recorded operation, so a template can say "close the first case"
+ * without having been recorded.
+ */
+function nameStepIdentifiers(
+  stepId: string,
+  operation: KernelOperation,
+  ids: Map<string, string>,
+): void {
+  for (const [key, value] of Object.entries(operation as Readonly<Record<string, unknown>>)) {
+    if (STATE_ID_KEYS.has(key) || !(key === "id" || /Ids?$/.test(key))) continue;
+    if (typeof value === "string") {
+      if (!ids.has(`${stepId}.${key}`)) ids.set(`${stepId}.${key}`, value);
+    } else if (Array.isArray(value)) {
+      value.forEach((entry, index) => {
+        if (typeof entry === "string" && !ids.has(`${stepId}.${key}.${index + 1}`)) {
+          ids.set(`${stepId}.${key}.${index + 1}`, entry);
+        }
+      });
+    }
+  }
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1418,6 +1496,7 @@ function validate(input: unknown, options: MoveTemplateValidationOptions): MoveT
   const firstStep = template.plan.steps[0] as AuthoredPlanStep;
   const primitive = primitiveForStep(firstStep) as MoveDefinition;
   diagnostics.push(...checkContract(template, primitive));
+  diagnostics.push(...checkGenerality(template, operators));
 
   // The declared class is the class of the kernel steps.
   const planned = plannedTransitionClass(template.plan) as TransitionClass;
@@ -1477,6 +1556,101 @@ function validate(input: unknown, options: MoveTemplateValidationOptions): MoveT
   };
 }
 
+/**
+ * A move is general only if every symbol it mentions is an operator, a built-in, or a metavariable
+ * that a pattern or a recorded selection binds when the move is applied. A symbol of the situation
+ * the move was written in, kept as a literal, would make the move apply only where that exact
+ * symbol occurs: a problem-specific construction retained as an unexplained constant (refinement
+ * section 7.2). Constructions must also be of a parameter the primitive can construct.
+ */
+function checkGenerality(
+  template: AuthoredMoveTemplate,
+  operators: readonly OperatorDeclaration[],
+): TemplateDiagnostic[] {
+  const diagnostics: TemplateDiagnostic[] = [];
+  const literal = (symbol: string, where: string, path: (string | number)[], stepIndex: number) =>
+    diagnostics.push({
+      code: "problem-specific-symbol",
+      message: `${where} mentions the symbol ${symbol} directly. Every symbol of a general move must be an operator or a metavariable bound by its patterns or selections, otherwise it applies only where ${symbol} itself occurs.`,
+      path,
+      stepIndex,
+    });
+  // Metavariables a construction may use: those of the patterns, then of each step's selections.
+  const bound = new Set<string>();
+  for (const pattern of template.patterns) {
+    metavariablesOf(pattern.expression, operators).forEach((symbol) => bound.add(symbol));
+  }
+  template.plan.steps.forEach((step, stepIndex) => {
+    const base: (string | number)[] = ["plan", "steps", stepIndex];
+    (step.selections ?? []).forEach((selection, selectionIndex) => {
+      const declared = new Set(selection.variables.map(({ symbol }) => symbol));
+      selection.variables.forEach(({ symbol }) => bound.add(symbol));
+      for (const symbol of metavariablesOf(selection.fragment, operators)) {
+        if (!declared.has(symbol)) {
+          literal(
+            symbol,
+            `The recorded selection for ${selection.slotId}`,
+            [...base, "selections", selectionIndex, "fragment"],
+            stepIndex,
+          );
+        }
+      }
+    });
+    (step.parameters ?? []).forEach((parameter, parameterIndex) => {
+      const path = [...base, "parameters", parameterIndex];
+      const { value } = parameter;
+      if (isConstruction(parameter)) {
+        const kind = constructibleParameterKind(step.operationKind, parameter.parameterId);
+        if (kind !== value.kind) {
+          diagnostics.push({
+            code: "invalid-construction",
+            message:
+              kind === undefined
+                ? `The ${step.operationKind} primitive has no parameter ${parameter.parameterId} that a template can construct.`
+                : `The parameter ${parameter.parameterId} is constructed as a ${kind}, not a ${value.kind}.`,
+            path,
+            stepIndex,
+          });
+          return;
+        }
+        const expression = (value as Extract<MacroParameter["value"], { expression: unknown }>)
+          .expression;
+        for (const symbol of metavariablesOf(expression, operators)) {
+          if (!bound.has(symbol)) {
+            literal(
+              symbol,
+              `The construction of ${parameter.parameterId}`,
+              [...path, "value", "expression"],
+              stepIndex,
+            );
+          }
+        }
+        return;
+      }
+      const declared = new Set(parameter.variables.map(({ symbol }) => symbol));
+      const expressions =
+        value.kind === "term" || value.kind === "proposition"
+          ? [value.expression]
+          : value.kind === "rewrite-source" && value.source.kind === "result"
+            ? Object.values(value.source.instantiation)
+            : [];
+      for (const expression of expressions) {
+        for (const symbol of metavariablesOf(expression, operators)) {
+          if (!declared.has(symbol)) {
+            literal(
+              symbol,
+              `The recorded choice for ${parameter.parameterId}`,
+              [...path, "value"],
+              stepIndex,
+            );
+          }
+        }
+      }
+    });
+  });
+  return diagnostics;
+}
+
 function checkContract(
   template: AuthoredMoveTemplate,
   primitive: MoveDefinition,
@@ -1522,10 +1696,21 @@ function checkContract(
   const primitiveParameters = new Map(
     primitive.parameters.map((parameter) => [parameter.id, parameter]),
   );
+  // The first step's constructions are not asked of the user, so the contract does not list them.
+  const first = template.plan.steps[0];
+  const constructed = new Set(
+    (first === undefined ? [] : constructionsOf(first)).map(({ parameterId }) => parameterId),
+  );
   template.parameters.forEach((parameter, index) => {
     const base = primitiveParameters.get(parameter.id);
     const path = ["parameters", index];
-    if (base === undefined) {
+    if (constructed.has(parameter.id)) {
+      diagnostics.push({
+        code: "parameter-mismatch",
+        message: `The parameter ${parameter.id} is constructed by the first step, so it is not asked of the user and the contract must not list it.`,
+        path: [...path, "id"],
+      });
+    } else if (base === undefined) {
       diagnostics.push({
         code: "parameter-mismatch",
         message: `The parameter ${parameter.id} is not a parameter of ${primitive.id}.`,
@@ -1541,7 +1726,7 @@ function checkContract(
   });
   const declaredParameters = new Set(template.parameters.map(({ id }) => id));
   for (const base of primitive.parameters) {
-    if (!declaredParameters.has(base.id)) {
+    if (!declaredParameters.has(base.id) && !constructed.has(base.id)) {
       diagnostics.push({
         code: "parameter-mismatch",
         message: `The parameter ${base.id} of ${primitive.id} is missing.`,
@@ -1915,6 +2100,181 @@ export function recordedMacroExample(input: RecordedExampleInput): AuthoredExamp
   };
   const parsed = authoredExampleSchema.safeParse(example);
   return parsed.success ? parsed.data : undefined;
+}
+
+// --------------------------------------------------------------------------------------------
+// Menu choices stated by value
+// --------------------------------------------------------------------------------------------
+
+export type ExampleChoiceInput = Readonly<{
+  /** The template whose first step's menus are read; its examples are not used. */
+  template: AuthoredMoveTemplate;
+  state: ExecutableProofState;
+  selections: MoveSelections;
+  /** The choices by value, for the parameters of the first step that the user would make. */
+  choices: readonly Readonly<{ parameterId: string; value: MenuValue }>[];
+  environment: KernelEnvironment;
+}>;
+
+/**
+ * Turn menu choices stated by value into the menu item IDs an example records. A menu item ID is a
+ * content hash of the menu's value, so it cannot be written by hand; the choice is found by
+ * reading the first step's menus for the example's own state and selections, a dependent menu once
+ * its prerequisite is chosen. A parameter the first step constructs is not a choice, and a choice
+ * that is not on its menu is returned as unresolved, for validation to report.
+ */
+export function resolveExampleChoices(input: ExampleChoiceInput): Readonly<{
+  menuChoices: Readonly<Record<string, string>>;
+  unresolved: readonly string[];
+}> {
+  const operators = input.environment.operators ?? [];
+  const definition = firstStepDefinition(
+    input.template,
+    { status: "approved", reviewerId: "reviewer:template-check" },
+    "choice resolution",
+  );
+  const first = input.template.plan.steps[0];
+  const constructed = new Set(
+    (first === undefined ? [] : constructionsOf(first)).map(({ parameterId }) => parameterId),
+  );
+  const wanted = input.choices.filter(({ parameterId }) => !constructed.has(parameterId));
+  const menuChoices: Record<string, string> = {};
+  if (definition === undefined) {
+    return { menuChoices, unresolved: wanted.map(({ parameterId }) => parameterId) };
+  }
+  const generator = commandIdGenerator(`authoring:${input.template.id}:choices`);
+  for (let round = 0; round <= wanted.length; round += 1) {
+    const menus = generateParameterMenus(
+      input.state,
+      definition,
+      input.selections,
+      input.environment,
+      { menuChoices, idGenerator: generator },
+    );
+    if (!menus.ok) break;
+    let progressed = false;
+    for (const { parameterId, value } of wanted) {
+      if (menuChoices[parameterId] !== undefined) continue;
+      const menu = menus.menus.find((candidate) => candidate.parameterId === parameterId);
+      const item = menu?.items.find((candidate) =>
+        valuesEqual(candidate.value as MenuValue, value, operators),
+      );
+      if (item !== undefined) {
+        menuChoices[parameterId] = item.id;
+        progressed = true;
+      }
+    }
+    if (!progressed) break;
+  }
+  return {
+    menuChoices,
+    unresolved: wanted
+      .map(({ parameterId }) => parameterId)
+      .filter((parameterId) => menuChoices[parameterId] === undefined),
+  };
+}
+
+// --------------------------------------------------------------------------------------------
+// Generality notes
+// --------------------------------------------------------------------------------------------
+
+export type GeneralityNote = Readonly<{
+  code: "numeric-constant" | "examples-alike";
+  message: string;
+  path?: readonly (string | number)[];
+}>;
+
+/**
+ * Evidence about generality that is not a validation failure and never certifies generality
+ * (refinement section 7.2): numerals a construction keeps (a modulus, a bound), and positive
+ * examples that differ from each other only by renaming symbols. Generality review remains a
+ * mathematical judgment; these notes only tell the reviewer where to look.
+ */
+export function describeGenerality(
+  template: AuthoredMoveTemplate,
+  operators: readonly OperatorDeclaration[] = [],
+): readonly GeneralityNote[] {
+  const notes: GeneralityNote[] = [];
+  template.plan.steps.forEach((step, stepIndex) => {
+    (step.parameters ?? []).forEach((parameter, parameterIndex) => {
+      if (!isConstruction(parameter)) return;
+      const value = parameter.value;
+      if (value.kind !== "term" && value.kind !== "proposition") return;
+      const numerals = numeralsOf(value.expression);
+      if (numerals.length > 0) {
+        notes.push({
+          code: "numeric-constant",
+          message: `The construction of ${parameter.parameterId} keeps the numeral${
+            numerals.length === 1 ? "" : "s"
+          } ${numerals.join(", ")}. A numeral is a constant of the method: the description should say why it is needed.`,
+          path: ["plan", "steps", stepIndex, "parameters", parameterIndex, "value"],
+        });
+      }
+    });
+  });
+  const shapes = new Map<string, string[]>();
+  for (const example of template.examples) {
+    if (example.expected.outcome !== "applied") continue;
+    const key = situationShape(example.state, operators);
+    shapes.set(key, [...(shapes.get(key) ?? []), example.id]);
+  }
+  const positives = template.examples.filter(({ expected }) => expected.outcome === "applied");
+  if (positives.length >= 2 && shapes.size === 1) {
+    notes.push({
+      code: "examples-alike",
+      message:
+        "Every positive example has the same shape up to renaming symbols, so together they show one situation, not several independent ones.",
+      path: ["examples"],
+    });
+  }
+  return notes;
+}
+
+function numeralsOf(expression: PlainMathJson, found: string[] = []): string[] {
+  if (typeof expression === "number") {
+    found.push(String(expression));
+  } else if (typeof expression === "object" && expression !== null && !Array.isArray(expression)) {
+    if ("num" in expression) found.push(String(expression.num));
+  }
+  const parts = functionParts(expression);
+  if (parts !== undefined) parts.operands.forEach((operand) => numeralsOf(operand, found));
+  return [...new Set(found)];
+}
+
+/** A canonical form of an example's statements with symbols renamed by first occurrence. */
+function situationShape(
+  state: Readonly<Record<string, unknown>>,
+  operators: readonly OperatorDeclaration[],
+): string {
+  const fixed = new Set(operators.map(({ symbol }) => symbol));
+  const names = new Map<string, string>();
+  const rename = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      if (RESERVED_BUILTIN_SYMBOLS.has(value) || fixed.has(value)) return value;
+      if (!names.has(value)) names.set(value, `v${names.size + 1}`);
+      return names.get(value);
+    }
+    if (Array.isArray(value)) return value.map(rename);
+    if (typeof value === "object" && value !== null) {
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, rename(entry)]));
+    }
+    return value;
+  };
+  const goals = Array.isArray(state["goals"]) ? (state["goals"] as unknown[]) : [];
+  const statements = goals.map((goal) => {
+    const sequent = (
+      goal as { sequent?: { context?: { hypotheses?: unknown[] }; conclusion?: unknown } }
+    ).sequent;
+    const hypotheses = (sequent?.context?.hypotheses ?? []).map(
+      (hypothesis) =>
+        (hypothesis as { statement?: { expression?: unknown } }).statement?.expression,
+    );
+    return [
+      rename((sequent?.conclusion as { expression?: unknown } | undefined)?.expression),
+      hypotheses.map(rename),
+    ];
+  });
+  return JSON.stringify(statements);
 }
 
 /** The move ID brand of a template, for callers that hold a parsed template. */

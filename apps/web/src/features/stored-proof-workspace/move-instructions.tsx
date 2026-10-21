@@ -7,6 +7,11 @@ import type { AnchoredProofSelection } from "@proof/selections";
 import type { Presentation } from "@proof/language";
 import type { WorkspaceView } from "../proof-workspace";
 import {
+  proposalHref,
+  requestMoveProposal,
+  stashMoveProposal,
+} from "../move-authoring/proposal-contract";
+import {
   requestMoveInstructionApply,
   requestMoveInstructionPreview,
   type ExecutorPreview,
@@ -17,6 +22,7 @@ import { previewDiff } from "./preview-diff";
 import { toDescriptor } from "./selection-descriptor";
 import { EvidenceBadge, TransitionClassBadge, transitionMeaning } from "./suggestion-badges";
 import { READ_ONLY_REASON } from "./toolbar-actions";
+import { movesHref } from "./workspace-toolbar";
 import previewStyles from "./suggestion-panel.module.css";
 import styles from "./move-instructions.module.css";
 
@@ -33,6 +39,8 @@ export type MoveInstructionsProps = Readonly<{
   view: WorkspaceView;
   /** Whether the proof service has a configured move executor. */
   enabled: boolean;
+  /** Whether the proof service has a configured move author ("Save as reusable move"). */
+  moveAuthorEnabled?: boolean | undefined;
   readOnly: boolean;
   /** Another proof command is being applied. */
   busy: boolean;
@@ -45,6 +53,8 @@ export type MoveInstructionsProps = Readonly<{
   /** Called after a plan was committed, with what happened; the page reloads the proof. */
   onApplied: (applied: Readonly<{ nodeId: string; stepCount: number }>) => void | Promise<void>;
   createId?: (prefix: string) => string;
+  /** Open an address; the page is replaced. Defaults to the browser's navigation. */
+  navigate?: ((href: string) => void) | undefined;
 }>;
 
 type Phase =
@@ -60,6 +70,18 @@ type Phase =
   | Readonly<{ kind: "note"; tone: "info" | "warning"; message: string }>;
 
 const IDLE: Phase = { kind: "idle" };
+
+/** The step just applied, which can be turned into a reusable move. */
+type SaveState =
+  | Readonly<{ kind: "none" }>
+  | Readonly<{ kind: "offered"; callId: string }>
+  | Readonly<{ kind: "asking"; callId: string }>
+  | Readonly<{ kind: "note"; callId: string; message: string }>;
+
+const NO_SAVE: SaveState = { kind: "none" };
+
+export const SAVE_AS_MOVE_HINT =
+  "Turn this step into a general move you can reuse. You'll review it before it's added.";
 
 type Target = Readonly<{ kind: "goal" | "obligation"; id: string }>;
 
@@ -114,6 +136,7 @@ export function MoveInstructions({
   presentation,
   view,
   enabled,
+  moveAuthorEnabled = false,
   readOnly,
   busy,
   textareaRef,
@@ -121,12 +144,16 @@ export function MoveInstructions({
   onApplyEnd,
   onApplied,
   createId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
+  navigate = (href) => window.location.assign(href),
 }: MoveInstructionsProps) {
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<Phase>(IDLE);
+  const [save, setSave] = useState<SaveState>(NO_SAVE);
   const textId = useId();
   const reasonId = useId();
   const hintId = useId();
+  const saveHintId = useId();
+  const saveReasonId = useId();
   // Identifies the latest request: an answer to an older one, or one for a proof that moved on,
   // is dropped.
   const latest = useRef(0);
@@ -223,6 +250,10 @@ export function MoveInstructions({
       }
       setText("");
       setPhase(IDLE);
+      // Only a step the user described in their own words can become a move.
+      setSave(
+        shown.provenance === "user-proposal" ? { kind: "offered", callId: shown.callId } : NO_SAVE,
+      );
       await onApplied({ nodeId: outcome.nodeId, stepCount: outcome.stepCount });
     } finally {
       onApplyEnd();
@@ -232,6 +263,51 @@ export function MoveInstructions({
   const discard = () => {
     latest.current += 1;
     setPhase(IDLE);
+  };
+
+  const saveBlocked = !moveAuthorEnabled
+    ? "Saving a step as a move is unavailable: no AI provider is configured for this service."
+    : readOnly
+      ? `${READ_ONLY_REASON}: no move can be proposed.`
+      : busy
+        ? "Another step is being applied; wait for it to finish."
+        : save.kind === "asking"
+          ? "The model is working on it."
+          : undefined;
+
+  const saveAsMove = async () => {
+    if (saveBlocked !== undefined || (save.kind !== "offered" && save.kind !== "note")) return;
+    const { callId } = save;
+    setSave({ kind: "asking", callId });
+    const outcome = await requestMoveProposal(sessionId, {
+      id: createId("llm-call:author"),
+      executorCallId: callId,
+    });
+    if (!mounted.current) return;
+    if (outcome.kind === "proposed") {
+      if (!stashMoveProposal(sessionId, outcome.proposal)) {
+        setSave({
+          kind: "note",
+          callId,
+          message:
+            "Your browser does not allow the storage needed to open the proposal. Allow site data and try again.",
+        });
+        return;
+      }
+      navigate(proposalHref(movesHref(sessionId), outcome.proposal.callId));
+      setSave({ kind: "offered", callId });
+      return;
+    }
+    setSave({
+      kind: "note",
+      callId,
+      message:
+        outcome.kind === "error"
+          ? outcome.message
+          : outcome.tone === "needs-detail"
+            ? `The model needs more detail: ${outcome.message}`
+            : `The model did not propose a move: ${outcome.message}`,
+    });
   };
 
   const selectionHint =
@@ -291,6 +367,39 @@ export function MoveInstructions({
           {phase.message}
         </p>
       ) : null}
+
+      {save.kind === "none" ? null : (
+        <div className={styles.saveMove} data-testid="save-as-move">
+          <p className={styles.hint} id={saveHintId}>
+            {SAVE_AS_MOVE_HINT}
+          </p>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              disabled={saveBlocked !== undefined}
+              aria-describedby={`${saveHintId} ${saveReasonId}`}
+              onClick={() => void saveAsMove()}
+            >
+              {save.kind === "asking" ? "Asking the model…" : "Save as reusable move"}
+            </button>
+            <button
+              type="button"
+              disabled={save.kind === "asking"}
+              onClick={() => setSave(NO_SAVE)}
+            >
+              Not now
+            </button>
+            <span id={saveReasonId} className={styles.reason}>
+              {saveBlocked ?? ""}
+            </span>
+          </div>
+          {save.kind === "note" ? (
+            <p className={styles.note} data-tone="warning" role="status">
+              {save.message}
+            </p>
+          ) : null}
+        </div>
+      )}
 
       {phase.kind === "plan-failed" ? (
         <div className={styles.note} data-tone="warning" role="status" data-testid="plan-failed">

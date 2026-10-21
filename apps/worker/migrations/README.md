@@ -42,6 +42,10 @@ widening lists every role that exists on its branch.
 approval of its results is again a row of `llm_topic_decisions` (it names the stored call and the
 approved result IDs only, never the artifacts), so no table is added.
 
+`0019_llm_move_author_role.sql` widens it to include the move author (the last widening lists all
+seven roles). A move author's proposal is call evidence only; a draft that came from one records the
+two call IDs in the move artifact's provenance, so no table is added.
+
 `0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
 events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity
 as a generated `text[]`, then uses that non-null array in the edge key and event foreign key so

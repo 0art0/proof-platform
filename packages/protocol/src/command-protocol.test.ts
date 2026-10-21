@@ -7,6 +7,7 @@ import {
   deriveSnapshotAliases,
   deriveSuggestionAliases,
   isAliasReference,
+  moveDraftProposalSchema,
   kernelOperationMathPayloads,
   observeQuerySchema,
   occursInSnapshot,
@@ -290,5 +291,57 @@ describe("envelope, summaries and deltas", () => {
     expect(observeQuerySchema.parse({})).toEqual({ view: "full" });
     expect(observeQuerySchema.safeParse({ view: "delta" }).success).toBe(false);
     expect(observeQuerySchema.safeParse({ view: "full", sinceNode: "node:a" }).success).toBe(false);
+  });
+});
+
+describe("author-move-draft with a model's proposal", () => {
+  const envelope = (command: Record<string, unknown>) => ({
+    commandId: "command:author-1",
+    actor: { id: "actor:human", kind: "human" },
+    command: { kind: "author-move-draft", template: { id: "authored:m" }, ...command },
+  });
+  const link = {
+    role: "move-author",
+    callId: "llm-call:author-1",
+    executorCallId: "llm-call:execute-1",
+  };
+
+  it("accepts the link to the move-author call and the executed step", () => {
+    expect(protocolCommandEnvelopeSchema.safeParse(envelope({ proposal: link })).success).toBe(
+      true,
+    );
+    expect(protocolCommandEnvelopeSchema.safeParse(envelope({})).success).toBe(true);
+    expect(moveDraftProposalSchema.parse(link)).toEqual(link);
+  });
+
+  it("accepts only that role, both IDs, and nothing else", () => {
+    for (const proposal of [
+      { ...link, role: "move-executor" },
+      { ...link, callId: "has space" },
+      { ...link, executorCallId: undefined },
+      { ...link, callId: undefined },
+      { ...link, approved: true },
+      "llm-call:author-1",
+    ]) {
+      expect(
+        protocolCommandEnvelopeSchema.safeParse(envelope({ proposal })).success,
+        JSON.stringify(proposal),
+      ).toBe(false);
+    }
+  });
+
+  it("does not let the review command carry a proposal link", () => {
+    expect(
+      protocolCommandEnvelopeSchema.safeParse({
+        ...envelope({}),
+        command: {
+          kind: "review-move-draft",
+          draftArtifactId: "authored:m.draft.c1",
+          decision: "approved",
+          notes: "",
+          proposal: link,
+        },
+      }).success,
+    ).toBe(false);
   });
 });

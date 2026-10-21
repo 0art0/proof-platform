@@ -21,6 +21,7 @@ import {
   type LibraryArtifact,
   type LibraryMove,
   type LibraryMoveReview,
+  type LibraryProvenance,
   type MoveReviewDecision,
 } from "@proof/library";
 import {
@@ -74,6 +75,8 @@ export type MoveRevisionStatus = "draft" | MoveReviewDecision;
 /** One draft revision with the review that decided it, if any. */
 export type AuthoredMoveRevision = Readonly<{
   draftArtifactId: string;
+  /** Who stands behind the template: its author, or a model proposal the author submitted. */
+  provenance: LibraryProvenance;
   reviewArtifactId?: string;
   revision: number;
   authorId: string;
@@ -127,6 +130,7 @@ export function summarizeAuthoredMoves(
     entry.name = artifact.name;
     entry.revisions.push({
       draftArtifactId: artifact.id,
+      provenance: artifact.provenance,
       ...(review === undefined ? {} : { reviewArtifactId: review.id }),
       revision: entry.revisions.length + 1,
       authorId: artifact.authorId,
@@ -153,6 +157,13 @@ export function summarizeAuthoredMoves(
   });
 }
 
+/** A model's proposal keeps its provenance on the definition; a hand-authored move says who wrote it. */
+function definitionProvenance(artifact: LibraryMove): string | LibraryProvenance {
+  return artifact.provenance.kind === "generated"
+    ? artifact.provenance
+    : `authored by ${artifact.authorId}`;
+}
+
 /** The catalog definition of an approved review artifact, or undefined when it is not one. */
 function approvedDefinition(artifact: LibraryMove, moveId: string): MoveDefinition | undefined {
   const { approval, review } = artifact;
@@ -162,7 +173,7 @@ function approvedDefinition(artifact: LibraryMove, moveId: string): MoveDefiniti
   const definition = authoredMoveDefinition(
     artifact.template,
     { status: "approved", reviewerId: approval.reviewerId },
-    `authored by ${artifact.authorId}`,
+    definitionProvenance(artifact),
   );
   return definition?.id === moveId ? definition : undefined;
 }
@@ -175,7 +186,7 @@ function approvedMacro(artifact: LibraryMove, moveId: string): MacroDefinition |
   const macro = authoredMacroDefinition(
     artifact.template,
     { status: "approved", reviewerId: approval.reviewerId },
-    `authored by ${artifact.authorId}`,
+    definitionProvenance(artifact),
   );
   return macro?.definition.id === moveId
     ? { move: macro.definition, template: macro.template }
@@ -272,14 +283,18 @@ function isRetrievable(artifacts: readonly LibraryArtifact[], moveId: string | u
 
 const CLASSIFICATION = { domains: ["proof-moves"], level: "foundational" } as const;
 
-function artifactShape(template: AuthoredMoveTemplate, authorId: string) {
+function artifactShape(
+  template: AuthoredMoveTemplate,
+  authorId: string,
+  provenance?: LibraryProvenance,
+) {
   return {
     kind: "move" as const,
     name: template.name,
     description: template.description,
     renderings: { latex: template.name, naturalLanguage: template.description },
     classification: CLASSIFICATION,
-    provenance: { kind: "curated" as const, source: `authored:${authorId}` },
+    provenance: provenance ?? { kind: "curated" as const, source: `authored:${authorId}` },
     layer: "move-discovery-draft" as const,
     related: template.requiredArtifacts.map(({ kind, id }) => ({ kind, id })),
     priority: 0,
@@ -307,6 +322,8 @@ export type AuthorDraftInput = Readonly<{
   occurredAt: string;
   template: unknown;
   validation: MoveTemplateValidationOptions;
+  /** Set when a model proposed the template: the link to its stored calls. Verified by the caller. */
+  provenance?: LibraryProvenance;
 }>;
 
 export type AuthorDraftResult =
@@ -356,7 +373,7 @@ export async function authorMoveDraft(
   }
   const artifact = {
     id: `${template.id}.draft.${input.commandId}`,
-    ...artifactShape(template, input.authorId),
+    ...artifactShape(template, input.authorId, input.provenance),
     approval: { status: "draft" as const },
   };
   const added = await addLibraryArtifact(library, {
@@ -476,7 +493,8 @@ export async function reviewMoveDraft(
     definitionDigest: draft.definitionDigest,
   };
   const artifact = {
-    ...artifactShape(template, draft.authorId),
+    // The review restates the draft it decided, with the draft's own provenance.
+    ...artifactShape(template, draft.authorId, draft.provenance),
     id: `${template.id}.review.${input.commandId}`,
     approval:
       input.decision === "approved"

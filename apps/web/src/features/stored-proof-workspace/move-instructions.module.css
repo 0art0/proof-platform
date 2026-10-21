@@ -125,3 +125,11 @@
 .steps li {
   margin-bottom: 0.25rem;
 }
+
+/* The offer to turn an applied step into a reusable move: quiet, inline, dismissible. */
+.saveMove {
+  display: grid;
+  gap: 0.4rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}

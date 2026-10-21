@@ -78,6 +78,7 @@ import {
   statementOccurrences,
   symbolValue,
 } from "./context-terms";
+import { bindPatterns, instantiateTemplate } from "./construction";
 import { HAND_AUTHORED_MOVES, type MoveDefinition, type MoveOperationKind } from "./index";
 
 /** Where a selection sits. Extra fields of a resolved selection (fragment, position) are ignored. */
@@ -157,6 +158,25 @@ export type MenuItemOrigin =
   | Readonly<{ kind: "rule" }>
   | Readonly<{ kind: "generated" }>
   | Readonly<{ kind: "construction"; taskId: string }>;
+
+/**
+ * The kinds of origin the items of each menu parameter carry, so a reader of a move knows where a
+ * menu choice can come from. `rule` marks a value a template constructed (see `construction.ts`) or
+ * a closed rule-given choice such as a direction. Parameter IDs of the form `instantiation/<symbol>`
+ * take the `term` entry. A test reads real menus against this table.
+ */
+export const PARAMETER_MENU_ORIGINS: Readonly<Record<string, readonly MenuItemOrigin["kind"][]>> =
+  Object.freeze({
+    proposition: ["selection", "conclusion", "hypothesis", "subterm-of", "rule"],
+    term: ["selection", "declaration", "subterm-of", "rule"],
+    witness: ["selection", "declaration", "subterm-of", "rule"],
+    disjunctIndex: ["subterm-of"],
+    direction: ["rule"],
+    resultId: ["result"],
+    source: ["hypothesis", "result"],
+    assumptionId: ["assumption"],
+    attestationId: ["attestation"],
+  });
 
 export type MenuValue =
   | Readonly<{ kind: "index"; index: number }>
@@ -240,6 +260,12 @@ export type MaterializationResult =
 
 export type ParameterMenuOptions = Readonly<{
   menuChoices?: MoveMenuChoices;
+  /**
+   * Values the caller constructed for term or proposition parameters (instantiated templates),
+   * by parameter ID. They are offered as one more item of the parameter's menu and chosen. They
+   * replace the ones a move's own `constructions` would derive for the same parameter.
+   */
+  constructed?: Readonly<Record<string, MenuValue>>;
   /** Attestation references the caller recorded for the target (for accepted inferences). */
   attestationIds?: readonly string[];
   resultSeed?: ResultApplicationSeed;
@@ -272,6 +298,7 @@ export type MaterializeMoveRequest = Readonly<{
   move: MoveDefinition;
   selections: MoveSelections;
   menuChoices?: MoveMenuChoices;
+  constructed?: Readonly<Record<string, MenuValue>>;
   idGenerator: MoveIdGenerator;
   env?: KernelEnvironment;
   attestationIds?: readonly string[];
@@ -285,6 +312,7 @@ export type MaterializeMoveRequest = Readonly<{
 export function materializeMoveOperation(request: MaterializeMoveRequest): MaterializationResult {
   const walked = runWalk(request.state, request.move, request.selections, request.env ?? {}, {
     ...(request.menuChoices === undefined ? {} : { menuChoices: request.menuChoices }),
+    ...(request.constructed === undefined ? {} : { constructed: request.constructed }),
     ...(request.attestationIds === undefined ? {} : { attestationIds: request.attestationIds }),
     ...(request.resultSeed === undefined ? {} : { resultSeed: request.resultSeed }),
     idGenerator: request.idGenerator,
@@ -453,6 +481,8 @@ type Context = Readonly<{
   entry: TargetEntry;
   selections: ReadonlyMap<string, ResolvedSelection>;
   choices: MoveMenuChoices;
+  /** Constructed values by parameter ID (see `ParameterMenuOptions.constructed`). */
+  constructed: ReadonlyMap<string, MenuValue>;
   seed?: ResultApplicationSeed;
   attestationIds: readonly string[];
   idGenerator?: MoveIdGenerator;
@@ -555,6 +585,9 @@ function runWalk(
       selections.set(slotId, resolved);
     }
 
+    const constructed = constructedValues(move, selections, operators.data, options.constructed);
+    if (!constructed.ok) return walkFailure("not-applicable", constructed.message);
+
     const context: Context = {
       state,
       kind: move.implementation.operationKind,
@@ -567,6 +600,7 @@ function runWalk(
       entry,
       selections,
       choices,
+      constructed: constructed.values,
       ...(options.resultSeed === undefined ? {} : { seed: options.resultSeed }),
       attestationIds,
       ...(options.idGenerator === undefined ? {} : { idGenerator: options.idGenerator }),
@@ -659,6 +693,49 @@ function resolveSelection(
     fragment: parts.rebuild(parts.operands.slice(selection.startOperand, selection.endOperand)),
     bound,
   };
+}
+
+/**
+ * The values a move constructs for this application: the caller's, then those its own
+ * `constructions` derive from the selections. A construction binds the metavariables of the move's
+ * patterns by matching them against what was selected, then instantiates its template.
+ */
+function constructedValues(
+  move: MoveDefinition,
+  selections: ReadonlyMap<string, ResolvedSelection>,
+  operators: readonly OperatorDeclaration[],
+  explicit: Readonly<Record<string, MenuValue>> | undefined,
+):
+  | Readonly<{ ok: true; values: ReadonlyMap<string, MenuValue> }>
+  | Readonly<{ ok: false; message: string }> {
+  const values = new Map<string, MenuValue>(Object.entries(explicit ?? {}));
+  const constructions = (move.constructions ?? []).filter(
+    ({ parameterId }) => !values.has(parameterId),
+  );
+  if (constructions.length === 0) return { ok: true, values };
+  const slots = move.selectionContract.slots.map(({ id }) =>
+    move.patterns.flatMap((pattern) => {
+      const selection = selections.get(id);
+      return pattern.selectionSlotId === id && selection !== undefined
+        ? [{ pattern: pattern.expression, fragment: selection.fragment }]
+        : [];
+    }),
+  );
+  const bindings = bindPatterns(slots, operators);
+  for (const construction of constructions) {
+    const instance = instantiateTemplate(construction.template, bindings, operators);
+    if (!instance.ok) {
+      return {
+        ok: false,
+        message: `The ${construction.parameterId} of this move is constructed from the selection, but ${instance.message}`,
+      };
+    }
+    values.set(construction.parameterId, {
+      kind: construction.kind,
+      expression: instance.expression,
+    });
+  }
+  return { ok: true, values };
 }
 
 function statementExpression(
@@ -1595,8 +1672,17 @@ function occurrenceCandidates(context: Context): readonly Candidate[] {
   }));
 }
 
-/** In-scope terms of one sort: selections, then declarations, then subterms in occurrence order. */
-function termMenu(context: Context, parameterId: string, label: string, sort: Sort): ParameterMenu {
+/**
+ * In-scope terms of one sort: selections, then declarations, then subterms in occurrence order,
+ * then the term the move constructed for this parameter, if any.
+ */
+function termMenu(
+  context: Context,
+  parameterId: string,
+  label: string,
+  sort: Sort,
+  built?: MenuValue,
+): ParameterMenu {
   const candidates: Candidate[] = [
     ...selectionCandidates(context),
     ...context.entry.sequent.context.declarations.map((declaration) => ({
@@ -1604,6 +1690,9 @@ function termMenu(context: Context, parameterId: string, label: string, sort: So
       origin: { kind: "declaration" as const, declarationId: declaration.id },
     })),
     ...occurrenceCandidates(context).filter((candidate) => candidate.origin.kind === "subterm-of"),
+    ...(built?.kind === "term"
+      ? [{ expression: built.expression, origin: { kind: "rule" as const } }]
+      : []),
   ];
   const fits = sortFilter(
     sort,
@@ -1635,8 +1724,41 @@ function chooseTerm(
   label: string,
   sort: Sort,
 ): PlainMathJson | undefined {
-  const chosen = choose(context, walk, termMenu(context, parameterId, label, sort));
+  const built = context.constructed.get(parameterId);
+  const current = termMenu(context, parameterId, label, sort, built);
+  const preset = constructedPreset(walk, parameterId, "term", current, built);
+  if (preset === false) return undefined;
+  const chosen = choose(context, walk, current, preset);
   return chosen?.value.kind === "term" ? chosen.value.expression : undefined;
+}
+
+/**
+ * The preset that pins a menu to the value the move constructed for it. False (with a diagnostic)
+ * when the constructed value is of the wrong kind or did not pass the menu's own typing check, so
+ * it is not an item of the menu.
+ */
+function constructedPreset(
+  walk: Walk,
+  parameterId: string,
+  kind: "term" | "proposition",
+  current: ParameterMenu,
+  built: MenuValue | undefined,
+): ((item: ParameterMenuItem) => boolean) | undefined | false {
+  if (built === undefined) return undefined;
+  const same = (item: ParameterMenuItem) =>
+    item.value.kind === kind &&
+    built.kind === kind &&
+    mathJsonEquals(item.value.expression, built.expression);
+  if (!current.items.some(same)) {
+    walk.errors.push({
+      code: "invalid-choice",
+      message: `The ${parameterId} this move constructs is not ${
+        kind === "term" ? "a term of the required sort" : "a proposition"
+      } in the current context, so it cannot be used.`,
+    });
+    return false;
+  }
+  return same;
 }
 
 /**
@@ -1655,10 +1777,16 @@ function chooseProposition(
   );
   const conclusion = context.entry.sequent.conclusion.expression;
   const occurrences = occurrenceCandidates(context);
+  const built = context.constructed.get("proposition");
   const candidates: Candidate[] = [
     ...selectionCandidates(context),
     ...occurrences.filter((candidate) => candidate.origin.kind !== "subterm-of"),
     ...occurrences.filter((candidate) => candidate.origin.kind === "subterm-of"),
+    // The proposition the move constructed, last: it is only offered when it passes the same
+    // typing check and is not the conclusion that `replace-goal` must change.
+    ...(built?.kind === "proposition"
+      ? [{ expression: built.expression, origin: { kind: "rule" as const } }]
+      : []),
   ].filter(
     (candidate) =>
       isProposition(candidate.expression) &&
@@ -1667,22 +1795,21 @@ function chooseProposition(
         alphaEquivalent(candidate.expression, conclusion, { operators: context.operators })
       ),
   );
-  const chosen = choose(
-    context,
-    walk,
-    menu(
-      "proposition",
-      label,
-      dedupeBy(candidates, (candidate) => candidate.expression).map((candidate) =>
-        menuItem(
-          "proposition",
-          { kind: "proposition", expression: candidate.expression },
-          { kind: "math", expression: candidate.expression },
-          candidate.origin,
-        ),
+  const current = menu(
+    "proposition",
+    label,
+    dedupeBy(candidates, (candidate) => candidate.expression).map((candidate) =>
+      menuItem(
+        "proposition",
+        { kind: "proposition", expression: candidate.expression },
+        { kind: "math", expression: candidate.expression },
+        candidate.origin,
       ),
     ),
   );
+  const preset = constructedPreset(walk, "proposition", "proposition", current, built);
+  if (preset === false) return undefined;
+  const chosen = choose(context, walk, current, preset);
   return chosen?.value.kind === "proposition" ? chosen.value.expression : undefined;
 }
 

@@ -1,11 +1,13 @@
 # AI endpoints
 
-The worker exposes six single-call AI roles: the background proposer, the librarian (the initial
-library and top-ups during a proof), the topic extractor, the proof-state formalizer, the move shortlister and the move
-executor. All use the Vercel AI Gateway and persist a validated call record before returning a
+The worker exposes seven single-call AI roles: the background proposer, the librarian (the initial
+library and top-ups during a proof), the topic extractor, the proof-state formalizer, the move shortlister, the move
+executor and the move author. All use the Vercel AI Gateway and persist a validated call record before returning a
 proposal. AI responses never execute proof commands or change a proof session directly; the move
 executor's plan is committed only by a separate apply request that the user makes after reading a
-kernel preview. The other roles of design plan §15.2 (attestor, background gatekeeper, generality
+kernel preview, and the move author's proposal of a reusable move becomes a draft only when the user
+submits it through the ordinary command and is added only when a person approves it. The other
+roles of design plan §15.2 (attestor, background gatekeeper, generality
 reviewer, stateful proof agent) are not implemented. The agent architecture is specified in
 `docs/ai-agents-architecture.md`.
 
@@ -24,19 +26,23 @@ PROOF_STORE=memory node --env-file=.env.local --import tsx apps/worker/src/main.
 
 For an existing PostgreSQL database, apply migrations `0013_llm_formalizer_role.sql`,
 `0015_llm_background_proposer_role.sql`, `0016_llm_librarian_role.sql` and
-`0017_llm_move_executor_role.sql` before starting the updated worker (each widens the `llm_calls`
+`0017_llm_move_executor_role.sql` and `0019_llm_move_author_role.sql` before starting the updated
+worker (each widens the `llm_calls`
 role constraint; background and library decisions reuse the `llm_topic_decisions` table). A
 single-instance deployment can use `PROOF_AUTO_MIGRATE=true`; the normal migration runner is
 `npm run migrate`.
 
 Defaults are `openai/gpt-6-luna` with high reasoning effort and a 32,000 token output limit for the
 formalizer and for the librarian, the same model with high reasoning effort and a 16,000 token
-output limit for the move executor, the same model with medium reasoning effort and an 8,000 token
+output limit for the move executor, the same model with high reasoning effort and a 32,000 token
+output limit for the move author, the same model with medium reasoning effort and an 8,000 token
 output limit for the background proposer and for topic extraction, and `typesafe-ai/jev` for
 shortlisting. Configuration can be overridden with `PROOF_AI_FORMALIZER_MODEL`,
 `PROOF_AI_FORMALIZER_REASONING_EFFORT`, `PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`,
 `PROOF_AI_EXECUTOR_MODEL`, `PROOF_AI_EXECUTOR_REASONING_EFFORT`,
-`PROOF_AI_EXECUTOR_MAX_OUTPUT_TOKENS`, `PROOF_AI_SHORTLISTER_MODEL`,
+`PROOF_AI_EXECUTOR_MAX_OUTPUT_TOKENS`, `PROOF_AI_MOVE_AUTHOR_MODEL`,
+`PROOF_AI_MOVE_AUTHOR_REASONING_EFFORT`, `PROOF_AI_MOVE_AUTHOR_MAX_OUTPUT_TOKENS`,
+`PROOF_AI_SHORTLISTER_MODEL`,
 `PROOF_AI_SHORTLISTER_MIN_CONFIDENCE`, `PROOF_AI_BACKGROUND_MODEL`,
 `PROOF_AI_BACKGROUND_REASONING_EFFORT`, `PROOF_AI_BACKGROUND_MAX_OUTPUT_TOKENS`,
 `PROOF_AI_LIBRARIAN_MODEL`, `PROOF_AI_LIBRARIAN_REASONING_EFFORT`,
@@ -50,8 +56,8 @@ evidence. Missing credentials disable these routes. No model fallback is silentl
 
 ## Cost guard and status codes
 
-The background, library, library top-up, topic, formalizer, shortlist and move-executor preview
-routes can
+The background, library, library top-up, topic, formalizer, shortlist, move-executor preview and
+move-author routes can
 trigger paid provider calls, so they share an in-process limiter: a global cap on
 concurrent provider calls (`PROOF_AI_MAX_CONCURRENT`, default 4) and a token bucket
 (`PROOF_AI_RATE_PER_MINUTE`, default 20; it is also the burst size). A request over budget gets
@@ -70,7 +76,9 @@ worker is still trusted.
 | 409    | stale session or suggestion set; decision ID reused or not reviewable; revision  |
 |        | of a call that is not a validated background proposal; approved constant clash   |
 |        | with the operator registry; approved background decision that was rejected; a    |
-|        | move-executor plan that is stale, read-only, or not an applicable plan           |
+|        | move-executor plan that is stale, read-only, or not an applicable plan; a        |
+|        | move-author request for an executor call that is missing, not applied or not a   |
+|        | user instruction; a draft whose proposal link names calls the session lacks      |
 | 413    | request body over 256 KiB                                                        |
 | 415    | `Content-Type` is not `application/json`                                         |
 | 422    | the model output was rejected or the draft failed admission; nothing was created |
@@ -84,7 +92,7 @@ Unknown `/ai/*` paths are ordinary unknown routes.
 
 `GET /ai/capabilities` answers `{ "roles": { "topic-extractor": bool, "background-proposer": bool,
 "librarian": bool, "proof-state-formalizer": bool, "move-shortlister": bool, "move-executor":
-bool } }`. A role is `true` only when it has a configured transport and evidence storage. No model
+bool, "move-author": bool } }`. A role is `true` only when it has a configured transport and evidence storage. No model
 name, endpoint or credential is disclosed. The web application reads it to
 decide which AI controls to enable.
 
@@ -707,12 +715,114 @@ stepCount }`, so history and the exported artifact name the stored call that pro
 suggested technique. The link is part of the protocol (`proposalLinkSchema`); artifact import
 replays each command with it, so stripping it from an edge is detected.
 
+## Save a step as a reusable move (move author)
+
+A step the user described in words and applied can be turned into a general, reusable move. The
+raw operations of the executor's plan are not enough: they carry one problem's constants and no
+selections. The move author is the prose-authoring workflow of refinement section 7.1: a stronger
+model proposes a general move in the existing authored-move template language, the platform runs
+every example through the kernel, and a person reviews the draft. Nothing is approved
+automatically, and the route records no draft.
+
+`POST /proof-sessions/:sessionId/ai/move-author` accepts:
+
+```json
+{
+  "id": "llm-call:author-example",
+  "executorCallId": "llm-call:execute-example",
+  "revision": { "previousCallId": "llm-call:author-previous", "feedback": "Also handle ..." }
+}
+```
+
+`revision` is optional. The executor call, and on a revision the previous proposal, are read from
+the session's stored evidence, never from the request. Only an executor call whose plan was
+actually applied in this session (its step commands still exist) and that came from a
+`user-instruction` can be authored from; any other call (missing, another session's, another role's,
+previewed but not applied, applied and since deleted, a shortlisted technique) is `409`
+(`executor-call-unavailable`, `plan-not-applied`, `not-a-user-instruction`). A read-only session is
+`409 session-read-only`. A revision of a call that is missing is `404`, and of one that is not a
+validated proposal for the same step is `409 proposal-not-revisable`.
+
+The worker builds the model's context deterministically (design plan section 15.3) before any
+call: the user's own instruction text; the applied plan, abstracted (the target sequent restricted
+to the hypotheses and declarations the step used, the problem's symbols and every statement ID
+renamed to neutral names, the plan's references and mathematics renamed the same way, and the state
+the plan leaves, obtained by running it through the kernel); the kernel primitives a move may use
+with their selection slots, parameters (and the kind of value each takes) and the identifiers they
+create, generated from the move catalog; the active operators and the approved results the executor
+was shown; and, on a revision, the previous proposal (validated again), the reviewer's feedback and
+the platform's own findings about the previous proposal. The original problem, other goals,
+history, branches and alternative suggestions are never sent. `mark-sorry` and
+`close-by-accepted-inference` are not primitives a move can use.
+
+The model answers with a proposal, `insufficient-context`, or `declined`. A proposal is a name, a
+mathematical description, a `motivation` (how the situation led to it), an honest `classification`
+(`macro`, `heuristic` or `principle`, refinement section 7.3), the declared transition class,
+applicability conditions, the metavariables with their sorts, the patterns for the first step's
+selection slots, a plan of one to sixteen primitive steps (each with the selections that fill its
+slots, as expressions over the metavariables, and its menu parameters), required results, and three
+to eight examples. Exactly one example is the situation the step was applied to: for it the
+platform supplies the abstracted state and what the step left, so the model states only the
+selections. At least one more positive example (with its own state and the outcome it expects) and
+at least one negative or boundary example are required. An output that breaks these rules, names a
+primitive, slot, parameter or result the context does not offer, or does not compile to a
+well-formed template, is recorded and answered `422` (`status: "rejected"`).
+
+**Template language.** The proposal is compiled into the existing authored-move template. One
+extension carries what executor steps need and a menu cannot offer: a **construction**. A recorded
+plan parameter with the template's own `rule` origin and a `term` or `proposition` value is a
+MathJSON template over the metavariables of the patterns. When the move is applied the
+metavariables are bound by matching the selections against the patterns, the template is
+instantiated by capture-avoiding substitution, and the result is offered as one more item of the
+parameter's menu, already chosen. The menu's typing check and the kernel still validate it, a
+user cannot override it, and the first primitive's contract does not ask the user for it. Only the
+parameters of `split-classical-cases`, `assume-hypothesis`, `replace-goal`, `suffices`,
+`instantiate-universal-hypothesis`, `choose-existential-witness` and the instantiation of a result
+or assumption can be constructed. A later step can name an identifier an earlier step created as
+`<step id>.<field>[.<n>]` (for example `split.childIds.1`) instead of recording the operation. A
+single-step template with a construction is an ordinary retrievable move; a template of several
+steps is a macro. `validateMoveTemplate` still runs every example through the kernel and compares
+the composed class, and now also fails with `problem-specific-symbol` when a pattern fragment,
+construction or recorded value mentions a symbol that is not an operator, a built-in or a
+metavariable (a problem-specific constant), and `invalid-construction` for a construction of a
+parameter that cannot be built.
+
+The worker compiles a validated proposal, runs `validateMoveTemplate` in the session's operator
+environment and answers `200`:
+
+- `status: "proposed"`: `provenance` (`minimal-context-llm`, role `move-author`), `callId`,
+  `replayed`, `executorCallId`, `revisedCallId` (on a revision), the compiled `template`,
+  `motivation`, `classification`, `validation` (`{ ok: true, report }` or `{ ok: false,
+diagnostics }`, with per-example diagnostics carrying `exampleId`), `generality` (notes that are
+  not failures: a numeral kept by a construction, or positive examples that differ only by
+  renaming) and, for a proposal classed as a new `principle`, `blocked`. A proposal that fails
+  validation is still `proposed`: the person sees the diagnostics and can edit by hand or revise.
+- `status: "insufficient-context"` or `"declined"`, with the model's `result`.
+
+The call is session-owned evidence and is exported with the session artifact under `llmCalls`. A
+replay of a stored call costs nothing and returns the proposal and a fresh validation; reusing an
+ID for a different request is `409`.
+
+**Submitting.** The user submits the (possibly edited) template through the ordinary
+`author-move-draft` command, with an optional `proposal` link
+`{ "role": "move-author", "callId", "executorCallId" }`. The worker checks both calls in the
+session's evidence (`409 proposal-not-found` or `proposal-mismatch`) and records them as the
+draft's provenance, `{ kind: "generated", role: "move-author", contextId: <move-author call>,
+sourceContextId: <executor call> }`; the review artifact restates it, an approved move's definition
+keeps it, and artifact export and import keep it (import refuses a move that names calls the
+artifact does not contain). A proposal classed as a `principle` cannot be submitted as a move
+(`409 principle-not-a-move`): a method that needs an unavailable result cannot acquire it by being
+approved. The link grants no authority. Review is the ordinary `review-move-draft` by a human,
+against the generality questions of refinement section 7.2; the proposed move is retrievable and
+applicable in the session only after an approval, with its provenance intact.
+
 ## Web interface
 
 The web application relays these routes through same-origin proxies (`/api/ai/background`,
 `/api/ai/background/decisions`, `/api/ai/library`, `/api/ai/library/decisions`,
 `/api/ai/formalize`, `/api/proof-sessions/:sessionId/ai-shortlist`,
-`/api/proof-sessions/:sessionId/ai-execute`, `/api/proof-sessions/:sessionId/ai-execute/apply` and
+`/api/proof-sessions/:sessionId/ai-execute`, `/api/proof-sessions/:sessionId/ai-execute/apply`,
+`/api/proof-sessions/:sessionId/ai-move-author` and
 `/api/proof-sessions/:sessionId/ai-library-top-up`), keeping the worker's status codes, including
 `429`; `GET /api/proof-sessions/:sessionId/library/constants` reads the activated constants. `/api/problem-drafts/validate` and
 `/api/proof-sessions` also pass the optional `approvedBackground` and `approvedLibrary` references
@@ -785,11 +895,25 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
   additions (origin `service`), with no AI badge.
 - A role that is not configured shows its control disabled with an explanation.
 
-Not yet available: "Save as reusable move" after an applied one-off step (architecture §5). The
-authoring flow derives a move from steps picked from displayed suggestions (their recorded
-selections and menu choices), and a plan applied here is a sequence of raw kernel operations with
-neither, so it cannot be turned into an authored-move draft without inventing selections and menu
-choices. Recording such plans as macros is a separate change.
+- **Save as reusable move.** After a described step is applied, the move-instructions panel offers
+  "Save as reusable move" inline (with the hint "Turn this step into a general move you can reuse.
+  You'll review it before it's added." and a "Not now" dismissal; no dialog). Where it cannot work
+  the button is disabled and says why: the move author is not configured, the session is read-only,
+  or another step is being applied; a step that is no longer part of the proof is reported in place.
+  Clicking requests a proposal (the button reads "Asking the model…"), keeps the checked answer in
+  this tab's session storage and opens the existing **Author moves** page on
+  `/sessions/:id/moves?proposal=<call ID>`. That page fills the ordinary form from the proposal
+  (name, description, selection contract, patterns, plan, examples) and shows beside it a read-only
+  panel with how the step motivated the move, the model's classification in plain language, and the
+  kernel's result per example (diagnostics beside the example and the field they concern, and the
+  generality notes). "Revise with feedback" (a text box and a button, disabled with the reason when
+  there is no feedback, no provider or the session is read-only) asks for a revision of the stored
+  proposal and replaces the form; the address follows the open proposal. The form stays editable,
+  "Save draft" is the existing submit-for-review action and sends the link to the two calls with the
+  ordinary `author-move-draft` command, and approval stays the existing human review. Starting the
+  form from anything else drops the link; a saved revision that a model proposed shows where it came
+  from and keeps the link when revised in the editor. A proposal classed as a new principle cannot be
+  saved as a move.
 
 ## Transport behaviour
 

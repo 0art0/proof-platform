@@ -48,6 +48,7 @@ export default async function SessionPage({
         aiShortlist={capabilities["move-shortlister"]}
         aiExecutor={capabilities["move-executor"]}
         aiLibrarian={capabilities.librarian}
+        aiMoveAuthor={capabilities["move-author"]}
       />
     </main>
   );

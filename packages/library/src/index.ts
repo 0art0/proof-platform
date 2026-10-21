@@ -62,6 +62,12 @@ export const libraryProvenanceSchema = z.discriminatedUnion("kind", [
       kind: z.literal("generated"),
       role: z.string().min(1),
       contextId: stableIdentifierSchema,
+      /**
+       * The context the generating call was itself made from, when it names one. A move proposed
+       * by the move author names its own call as `contextId` and the executed step it generalizes
+       * as `sourceContextId`.
+       */
+      sourceContextId: stableIdentifierSchema.optional(),
     })
     .strict(),
   z

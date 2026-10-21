@@ -118,6 +118,8 @@ const DIAGNOSTIC_TITLES: Readonly<Record<string, string>> = Object.freeze({
   "example-accepted": "Negative example was accepted",
   "macro-step-unmatched": "A recorded step found no match",
   "plan-inconsistent": "Plan disagrees with itself",
+  "invalid-construction": "A built value is not allowed here",
+  "problem-specific-symbol": "The move names a symbol of one problem",
 });
 
 export function diagnosticTitle(code: string): string {
@@ -143,6 +145,10 @@ const DIAGNOSTIC_ADVICE: Readonly<Record<string, string>> = Object.freeze({
   "macro-step-unmatched":
     "A later step found nothing to act on; shorten the plan or change the examples.",
   "plan-inconsistent": "Rebuild the plan from a recorded path.",
+  "invalid-construction":
+    "Only a proposition or a term that the step takes can be built from the selection; remove it or pick the value from the menu.",
+  "problem-specific-symbol":
+    "Replace the symbol by a placeholder that the patterns bind (such as A or B), so the move works for any statement of that shape.",
 });
 
 /** One sentence on what to do about a diagnostic, in plain words. */

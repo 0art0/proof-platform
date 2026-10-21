@@ -83,7 +83,7 @@ describe("migration schema", () => {
   it("lets the last role-constraint migration store every supported LLM role", () => {
     const widening = migrations.filter(({ sql }) => sql.includes("llm_calls_role_check"));
     const last = widening[widening.length - 1];
-    expect(last?.name.startsWith("0017_")).toBe(true);
+    expect(last?.name.startsWith("0019_")).toBe(true);
     const allowed = [...(last?.sql.matchAll(/'([a-z-]+)'/g) ?? [])].map((match) => match[1]);
     for (const role of SUPPORTED_LLM_ROLES) expect(allowed, role).toContain(role);
     // The earlier roles stay valid: a widening never narrows the stored history.

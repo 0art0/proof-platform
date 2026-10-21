@@ -88,6 +88,8 @@ export type StoredProofWorkspaceProps = Readonly<{
   aiExecutor?: boolean | undefined;
   /** Whether the proof service can add library results during a proof with a model. */
   aiLibrarian?: boolean | undefined;
+  /** Whether the proof service can propose a general move from an applied step with a model. */
+  aiMoveAuthor?: boolean | undefined;
 }>;
 type HistoryState =
   | Readonly<{ kind: "loading" }>
@@ -113,6 +115,7 @@ function StatefulStoredWorkspace({
   aiShortlist = false,
   aiExecutor = false,
   aiLibrarian = false,
+  aiMoveAuthor = false,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -817,6 +820,7 @@ function StatefulStoredWorkspace({
           presentation={presentation}
           view={view}
           enabled={aiExecutor}
+          moveAuthorEnabled={aiMoveAuthor}
           readOnly={readOnly}
           busy={mutationPending}
           textareaRef={instructionsRef}

@@ -21,9 +21,17 @@ export const authoredMoveReviewSchema = z
   .passthrough();
 export type AuthoredMoveReview = z.infer<typeof authoredMoveReviewSchema>;
 
+/**
+ * Who stands behind a stored template: its human author (`curated`), or a model's proposal the
+ * author submitted (`generated`, naming the move-author call and the step it generalizes).
+ */
+export const authoredMoveProvenanceSchema = z.object({ kind: z.string().min(1) }).passthrough();
+export type AuthoredMoveProvenance = z.infer<typeof authoredMoveProvenanceSchema>;
+
 export const authoredMoveRevisionSchema = z
   .object({
     draftArtifactId: stableIdentifierSchema,
+    provenance: authoredMoveProvenanceSchema.optional(),
     reviewArtifactId: stableIdentifierSchema.optional(),
     revision: z.number().int().positive(),
     authorId: z.string().min(1),
