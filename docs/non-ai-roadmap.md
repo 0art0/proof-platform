@@ -1176,3 +1176,10 @@ migrate -- --status` reported up to date.
 - 2026-10-05 — Phase 10 complete — N39–N42 and N44–N46 done; N43, N47 and N48 deferred by the user.
   Final checks on `d2025d3`: verify exit 0; workspace e2e 32/32 on the memory store and 32/32 on a fresh
   PostgreSQL 18 (migrations 0001–0014).
+- 2026-10-22 — PostgreSQL check of migrations 0015–0019 — a new worker-backed spec,
+  `constant-activation.spec.ts`, adds an approved result that needs `Gcd` through `add-library-result`,
+  previews and applies it in the workspace, and reads the activation back after a reload, through
+  export and import, and after deleting the step. It is the suite's first write to
+  `proof_constant_activations`; with the activation insert skipped it fails. Checks on `b742488` plus
+  this change: verify exit 0; workspace e2e 35/35 on the memory store (twice) and 35/35 on PostgreSQL 18
+  (fresh, migrations 0001–0019, and again on the populated database); `migrate --status` up to date.

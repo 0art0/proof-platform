@@ -13,6 +13,7 @@ export const WORKER_BACKED_SPECS = [
   "move-authoring.spec.ts",
   "macro-application.spec.ts",
   "conditional-lemma.spec.ts",
+  "constant-activation.spec.ts",
 ];
 
 /**
