@@ -533,13 +533,40 @@ const wireStepSchema = z
   })
   .strict();
 
-const wireExampleSchema = z
+const wireExampleSelectionsSchema = z
+  .array(
+    z
+      .object({
+        slot: stableIdentifierSchema,
+        statementKind: wireStatementSchema.shape.statementKind,
+        statementLabel: referenceSchema.nullable(),
+        path: operandPathSchema,
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(8);
+
+/**
+ * The situation the step was applied to. It has no state, outcome or expected result: the
+ * platform supplies them, so the provider schema leaves no room to state them.
+ */
+const wireSourceExampleSchema = z
   .object({
     id: labelSchema,
     description: z.string().min(1).max(400),
+    situation: z.literal("source"),
+    selections: wireExampleSelectionsSchema,
+    choices: z.array(wireParameterSchema).max(8),
+  })
+  .strict();
+
+const wireIndependentExampleSchema = z
+  .object({
+    id: labelSchema,
+    description: z.string().min(1).max(400),
+    situation: z.literal("independent"),
     outcome: z.enum(["applied", "rejected"]),
-    /** `source` for the situation the step was applied to, otherwise `independent`. */
-    situation: z.enum(["source", "independent"]),
     state: z
       .object({
         declarations: z
@@ -552,21 +579,8 @@ const wireExampleSchema = z
           .max(16),
         conclusion: wireMathJsonSchema,
       })
-      .strict()
-      .nullable(),
-    selections: z
-      .array(
-        z
-          .object({
-            slot: stableIdentifierSchema,
-            statementKind: wireStatementSchema.shape.statementKind,
-            statementLabel: referenceSchema.nullable(),
-            path: operandPathSchema,
-          })
-          .strict(),
-      )
-      .min(1)
-      .max(8),
+      .strict(),
+    selections: wireExampleSelectionsSchema,
     choices: z.array(wireParameterSchema).max(8),
     expected: z
       .object({
@@ -578,6 +592,8 @@ const wireExampleSchema = z
       .nullable(),
   })
   .strict();
+
+const wireExampleSchema = z.union([wireSourceExampleSchema, wireIndependentExampleSchema]);
 
 const wireProposalSchema = z
   .object({
@@ -675,23 +691,30 @@ export function normalizeMoveAuthorWireResult(
     examples: wire.examples.map((example) => ({
       id: example.id,
       description: example.description,
-      outcome: example.outcome,
-      source: example.situation === "source",
-      ...(example.state === null ? {} : { state: example.state }),
+      ...(example.situation === "source"
+        ? { outcome: "applied", source: true }
+        : {
+            outcome: example.outcome,
+            source: false,
+            state: example.state,
+            ...(example.expected === null ? {} : { expected: example.expected }),
+          }),
       selections: example.selections.map((selection) => ({
         slot: selection.slot,
         statement: statementFromWire(selection.statementKind, selection.statementLabel),
         path: selection.path,
       })),
       choices: example.choices.map(parameterFromWire),
-      ...(example.expected === null ? {} : { expected: example.expected }),
     })),
   };
   const parsed = moveAuthorProposalSchema.safeParse(candidate);
   if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const at =
+      issue === undefined || issue.path.length === 0 ? "" : ` (at ${issue.path.join(".")})`;
     return {
       ok: false,
-      message: `The proposal is malformed: ${parsed.error.issues[0]?.message ?? "invalid"}`,
+      message: `The proposal is malformed: ${issue?.message ?? "invalid"}${at}`,
     };
   }
   const problem = proposalProblem(parsed.data, context);
@@ -789,6 +812,26 @@ export function proposalProblem(
 const SORT_LIST = PROBLEM_SETUP_SORT_IDS.join(", ");
 
 export const MOVE_AUTHOR_SYSTEM_MESSAGE = [
+  "You turn one applied proof step into a proposal for a general, reusable move. Return only a move proposal, a permitted context request, or a refusal. You never change a proof: the platform runs every example of your proposal through the proof kernel, and a person reviews the proposal before it is added to anything.",
+  "CONTEXT. instruction is what the user asked for. situation is the local situation the step was applied to, already abstracted: before is the target sequent (neutral symbol names, only the hypotheses and declarations the step used), selections is what the user had selected, plan is the kernel operations that were applied (their labels name what they introduced), after is what they left. primitives lists the kernel operations a move may be built from: their selection slots, their parameters and the identifiers they create. operators and results are the vocabulary and the approved results you may use. Nothing else about the original problem is available to you.",
+  "WHAT A MOVE IS. A move is a template. The user selects something in a proof state; the move is offered when the selection matches a pattern; applying it runs a fixed sequence of primitives. Make it general: it must work in situations that differ from this one in their symbols, their size and the statements around the selection. Every symbol you write in a pattern, fragment or template must be a built-in symbol, an operator from context.operators, or a metavariable listed in metavariables. Never write a symbol of the situation: a move that mentions one applies only where that symbol occurs, and the platform rejects it. A metavariable stands for one whole subexpression (a term or a proposition, matched first-order); it cannot stand for an operator. Give each metavariable a sort from: " +
+    SORT_LIST +
+    ".",
+  "patterns. For each selection slot of the FIRST step that the move should constrain, the expression the selected fragment must match, written with metavariables. The first step is driven by what the user selects.",
+  "steps. Between 1 and " +
+    String(MAX_PLAN_STEPS) +
+    " steps, each one primitive from context.primitives (operation) with a unique id. Do not use a primitive whose usable is false. selections: which slot is filled with what. target names the goal or obligation (in the first step choose a label such as goal and reuse it; in later steps use <step id>.<field> or <step id>.<field>.<n> for an identifier an earlier step created, for example split.childIds.1 is the first target created by the step split, or reuse a label). statementKind and statementLabel say whether the selection is in the conclusion or in a hypothesis (a hypothesis is named by a label you choose, or by <step id>.<field> when an earlier step created it). path is the position of the selected subexpression inside that statement (empty for the whole statement) and fragment is the expression found there, written with metavariables. Every step after the first needs at least one selection; the fragments of later steps are matched against the state the previous step left. parameters: the menu choices a step makes. State only the parameters that context.primitives lists with a value (their source is menu or term-input): kind is that value, and only the field for that kind is filled (index, direction, expression, resultId or hypothesis), the others null. Never state a parameter whose source is selection or generated-id, such as premiseHypothesisIds or premiseTargetIds: the platform fills those itself, matching premises against the state and creating identifiers. A term or proposition value is a TEMPLATE over the metavariables that the platform instantiates by substitution and then checks: this is how a move builds a proposition or term that is not in the proof state, such as the contrapositive of a selected implication. Parameters whose kind is index, direction, result or source-hypothesis are stated by value. The FIRST step may state only term and proposition parameters; the user makes its other choices when applying the move, so give those in the choices of each example, following the same rule: only parameters with a value, never selection or generated-id parameters.",
+  "examples. Between 3 and " +
+    String(MOVE_AUTHOR_MAX_EXAMPLES) +
+    ". Exactly one is the situation the step was applied to: give it situation source with only its id, description, selections and choices; it has no state, outcome or expected, because the platform supplies the abstracted state and what the step left. At least one other positive example (outcome applied, situation independent) must differ in structure from the source, not only in names, with its own declarations (symbol and sort), hypotheses (label and expression) and conclusion, the selections made in it, and expected: the transition class and the conclusions of every goal and obligation that the move leaves, in order, exactly as the kernel will produce them. At least one example is negative or a boundary case (outcome rejected, situation independent, expected null): a state in which the move must not apply, for example because the selection does not match the pattern. An example's selections are only what the user selects to start the move: they fill slots of the FIRST step's primitive and nothing else. The selections of later steps belong in the plan, never in an example; for example a later close-by-hypothesis step's fact slot is never an example selection.",
+  "transitionClass. State the class of the whole sequence honestly: equivalence if nothing is lost, strengthening if the new goals are sufficient but may be harder, weakening if they are only implied. The platform computes the class from the kernel and compares.",
+  "classification. Say honestly what you propose (refinement section 7.3): macro packages the recorded steps; heuristic is a reusable way of choosing what to do whose success is not guaranteed; principle would add a mathematical result or construction principle that is not available, which a move cannot do by being approved, so say so rather than hide it. requiredResultIds lists the supplied results the steps apply. motivation says how this situation motivated the move. description says what the move does in mathematical language and says if it encapsulates a substantial idea. sideConditions and contextRequirements state when it applies.",
+  "A WORKED SHAPE. To prove an implication by its contrapositive: metavariables A and B (proposition). patterns: slot target, expression [Implies, A, B]. One step reduce, operation suffices, selections [slot target, target goal, conclusion, path [], fragment [Implies, A, B]], parameters [proposition, kind proposition, expression [Implies, [Not, B], [Not, A]]]. Expressions are MathJSON: a symbol or number, or [Operator, operand, ...].",
+  "When the context contains a revision, apply the feedback and the platform's findings to the previous proposal and return a complete replacement, keeping what they do not change. If the situation lacks what you need, return an insufficient-context request. If you cannot make a general move from this step, return a refusal with the reason instead of guessing.",
+].join(" ");
+
+/** The move author message before the source example lost its state (`move-author-v1`). */
+export const MOVE_AUTHOR_PREVIOUS_SYSTEM_MESSAGE = [
   "You turn one applied proof step into a proposal for a general, reusable move. Return only a move proposal, a permitted context request, or a refusal. You never change a proof: the platform runs every example of your proposal through the proof kernel, and a person reviews the proposal before it is added to anything.",
   "CONTEXT. instruction is what the user asked for. situation is the local situation the step was applied to, already abstracted: before is the target sequent (neutral symbol names, only the hypotheses and declarations the step used), selections is what the user had selected, plan is the kernel operations that were applied (their labels name what they introduced), after is what they left. primitives lists the kernel operations a move may be built from: their selection slots, their parameters and the identifiers they create. operators and results are the vocabulary and the approved results you may use. Nothing else about the original problem is available to you.",
   "WHAT A MOVE IS. A move is a template. The user selects something in a proof state; the move is offered when the selection matches a pattern; applying it runs a fixed sequence of primitives. Make it general: it must work in situations that differ from this one in their symbols, their size and the statements around the selection. Every symbol you write in a pattern, fragment or template must be a built-in symbol, an operator from context.operators, or a metavariable listed in metavariables. Never write a symbol of the situation: a move that mentions one applies only where that symbol occurs, and the platform rejects it. A metavariable stands for one whole subexpression (a term or a proposition, matched first-order); it cannot stand for an operator. Give each metavariable a sort from: " +

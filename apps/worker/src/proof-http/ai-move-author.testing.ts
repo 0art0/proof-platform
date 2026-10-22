@@ -157,12 +157,9 @@ export function wireProposal(edit: (proposal: Json) => void = () => undefined): 
       {
         id: "source",
         description: "The step as the user took it.",
-        outcome: "applied",
         situation: "source",
-        state: null,
         selections: [conclusionSelection()],
         choices: [],
-        expected: null,
       },
       {
         id: "compound",

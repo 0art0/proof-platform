@@ -172,7 +172,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: formalizerModel,
-        promptVersion: "proof-state-formalizer-v2",
+        promptVersion: "proof-state-formalizer-v3",
         maxOutputTokens: formalizerTokens,
         reasoningEffort,
       }),
@@ -188,7 +188,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: executorModel,
-        promptVersion: "move-executor-v1",
+        promptVersion: "move-executor-v2",
         maxOutputTokens: executorTokens,
         reasoningEffort: executorReasoningEffort,
       }),
@@ -204,7 +204,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: authorModel,
-        promptVersion: "move-author-v1",
+        promptVersion: "move-author-v2",
         maxOutputTokens: authorTokens,
         reasoningEffort: authorReasoningEffort,
       }),

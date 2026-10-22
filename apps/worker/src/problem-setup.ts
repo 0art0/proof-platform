@@ -551,7 +551,9 @@ export function unapprovedConstantDiagnostics(
         message:
           `${label} applies the operator ${symbol}, which is not an approved constant.` +
           (pack === undefined
-            ? ` The approved operators are: ${[...approved].join(", ") || "none"}.`
+            ? approved.size === 0
+              ? " No operators are approved besides the built-in symbols."
+              : ` Besides the built-in symbols, the approved operators are: ${[...approved].join(", ")}.`
             : ` It belongs to the pack ${pack}, which is not selected.`),
         path: [kind, index, input.format === "latex" ? "latex" : "expression"],
       });

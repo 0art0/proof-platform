@@ -195,12 +195,9 @@ function wireProposal(edit: (proposal: Json) => void = () => undefined) {
       {
         id: "source",
         description: "The step as the user took it.",
-        outcome: "applied",
         situation: "source",
-        state: null,
         selections: [conclusionSelection()],
         choices: [],
-        expected: null,
       },
       {
         id: "compound",
@@ -515,8 +512,9 @@ describe("output validation", () => {
         "two source situations",
         (proposal) => {
           proposal["examples"][1].situation = "source";
-          proposal["examples"][1].state = null;
-          proposal["examples"][1].expected = null;
+          delete proposal["examples"][1].outcome;
+          delete proposal["examples"][1].state;
+          delete proposal["examples"][1].expected;
         },
       ],
       [
@@ -557,6 +555,20 @@ describe("output validation", () => {
         diagnostics: [{ code: "invalid-output" }],
       });
     }
+  });
+
+  it("names the field of a malformed proposal", () => {
+    const missing = validate(
+      wireProposal((proposal) => {
+        proposal["examples"][1].choices = [
+          wireParameter({ parameter: "resultId", kind: "result", expression: null }),
+        ];
+      }),
+    );
+    expect(missing).toMatchObject({ ok: false });
+    expect(missing.ok ? "" : missing.diagnostics[0].message).toMatch(
+      /^The proposal is malformed: .* \(at examples\.1\.choices\.0\.resultId\)$/,
+    );
   });
 
   it("rejects a proposal that disagrees with its context", () => {
@@ -733,6 +745,25 @@ describe("the move author's provider schema", () => {
     checkStrict(schema, "$", problems);
     expect(problems).toEqual([]);
     expect(schema.type).toBe("object");
+  });
+
+  it("gives the source example no state, outcome or expected result to state", () => {
+    const sources: JsonSchema[] = [];
+    const visit = (node: unknown) => {
+      if (typeof node !== "object" || node === null) return;
+      const properties = (node as JsonSchema).properties as Record<string, JsonSchema> | undefined;
+      if (properties?.situation?.const === "source") sources.push(node as JsonSchema);
+      Object.values(node).forEach(visit);
+    };
+    visit(schema);
+    expect(sources).toHaveLength(1);
+    expect(Object.keys(sources[0]!.properties as object).sort()).toEqual([
+      "choices",
+      "description",
+      "id",
+      "selections",
+      "situation",
+    ]);
   });
 
   it("is sent with the move author's defaults, and its wire proposal validates", async () => {
