@@ -1180,6 +1180,6 @@ migrate -- --status` reported up to date.
   `constant-activation.spec.ts`, adds an approved result that needs `Gcd` through `add-library-result`,
   previews and applies it in the workspace, and reads the activation back after a reload, through
   export and import, and after deleting the step. It is the suite's first write to
-  `proof_constant_activations`; with the activation insert skipped it fails. Checks on `b742488` plus
+  `proof_constant_activations`; with the activation insert skipped it fails. Checks on `478dd79` plus
   this change: verify exit 0; workspace e2e 35/35 on the memory store (twice) and 35/35 on PostgreSQL 18
   (fresh, migrations 0001–0019, and again on the populated database); `migrate --status` up to date.
