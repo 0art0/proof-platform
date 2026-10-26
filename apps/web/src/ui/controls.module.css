@@ -1,0 +1,248 @@
+/*
+ * Shared Folio primitives. Feature modules reuse these with
+ * `composes: primary from "<relative path>/ui/controls.module.css";` so every page draws
+ * buttons, chips, cards and hints from one recipe.
+ */
+
+.button {
+  display: inline-flex;
+  min-height: var(--control-height);
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-control);
+  background: var(--surface-strong);
+  padding: 0 0.875rem;
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.button:disabled,
+.button[aria-disabled="true"] {
+  border-color: transparent;
+  background: var(--surface-muted);
+  color: var(--text-subtle);
+  cursor: not-allowed;
+}
+
+.secondary {
+  composes: button;
+}
+
+.primary {
+  composes: button;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: var(--ink-hover);
+  background: var(--ink-hover);
+  color: var(--on-ink);
+}
+
+.ghost {
+  composes: button;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.ghost:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.danger {
+  composes: button;
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.danger:hover:not(:disabled) {
+  border-color: var(--danger-hover);
+  background: var(--danger-hover);
+  color: #fff;
+}
+
+.small {
+  min-height: var(--control-height-sm);
+  padding: 0 0.625rem;
+  font-size: var(--text-sm);
+}
+
+/* A text-styled button for inline actions inside prose. */
+.link {
+  display: inline;
+  min-height: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--border-control);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.link:hover:not(:disabled) {
+  background: none;
+  color: var(--focus);
+}
+
+.card {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--space-4) 1.25rem;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
+}
+
+/* The reason a nearby control is unavailable, always directly under it. */
+.reason {
+  composes: hint;
+}
+
+.reason::before {
+  content: "ⓘ ";
+}
+
+/* Metadata chip: square-cornered, neutral. Family and status variants add colour. */
+.chip {
+  display: inline-flex;
+  min-height: 1.375rem;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 0 0.5rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chipOutline {
+  composes: chip;
+  border-color: var(--border-control);
+  background: transparent;
+}
+
+.chipGoal {
+  composes: chip;
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+  color: var(--goal-fg);
+}
+
+.chipHypothesis {
+  composes: chip;
+  border-color: var(--hypothesis-border);
+  background: var(--hypothesis-bg);
+  color: var(--hypothesis-fg);
+}
+
+.chipObligation {
+  composes: chip;
+  border-style: dashed;
+  border-color: var(--obligation-border);
+  background: var(--obligation-bg);
+  color: var(--obligation-fg);
+}
+
+.chipWarning {
+  composes: chip;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-weight: 600;
+}
+
+.chipSuccess {
+  composes: chip;
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+/* Status pill: rounded, used only for session or step status. */
+.pill {
+  composes: chip;
+  border-radius: var(--radius-pill);
+}
+
+.notice {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.noticeWarning {
+  composes: notice;
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.noticeDanger {
+  composes: notice;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.noticeSuccess {
+  composes: notice;
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+/* Typeset mathematics outside MathLive fields. */
+.math {
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Internal ids and other metadata: never in the main reading line. */
+.meta {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
