@@ -5,8 +5,14 @@ import { readAiCapabilities, readProblemSetupOptions } from "../../../server/pro
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-/** New problem: manual or AI-assisted entry, review and approval (roadmap N26). */
-export default async function NewProblemPage() {
+/**
+ * New problem: AI-assisted or manual entry, review and approval (roadmap N26). A statement typed
+ * on the landing page arrives as `?statement=`.
+ */
+export default async function NewProblemPage({
+  searchParams,
+}: Readonly<{ searchParams: Promise<Record<string, string | string[] | undefined>> }>) {
+  const { statement } = await searchParams;
   let options;
   try {
     options = await readProblemSetupOptions();
@@ -21,9 +27,9 @@ export default async function NewProblemPage() {
       </p>
       <h1>New problem</h1>
       <p className={styles.lead}>
-        Give the problem a name, then enter what is known and what you want to prove. You can check
-        the mathematical setup before starting; your proof session is created only after you approve
-        it.
+        Type the problem statement. Where AI is available, a background is suggested and the setup
+        is drafted for you; otherwise enter what is known and what you want to prove. Your proof
+        session is created only after you approve the checked setup.
       </p>
       {options === undefined ? (
         <p role="alert" className={styles.warning}>
@@ -32,6 +38,7 @@ export default async function NewProblemPage() {
       ) : (
         <ProblemEntryForm
           options={options}
+          initialStatement={typeof statement === "string" ? statement : ""}
           ai={{
             background: capabilities["background-proposer"],
             library: capabilities.librarian,

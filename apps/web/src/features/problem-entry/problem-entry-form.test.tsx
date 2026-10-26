@@ -10,7 +10,7 @@ import {
   type ProblemSetupOptions,
 } from "@proof/protocol";
 import { ProblemEntryForm } from "./problem-entry-form";
-import { emptyProblemForm, formToDraft } from "./draft-form";
+import { emptyProblemForm, formToDraft, problemTitle } from "./draft-form";
 
 const SET = { kind: "named", id: "sort:set", arguments: [{ kind: "named", id: "sort:element" }] };
 const UNION = {
@@ -299,9 +299,10 @@ describe("ProblemEntryForm approval gate", () => {
 describe("ProblemEntryForm required fields", () => {
   it("marks the required fields", () => {
     renderForm();
-    expect(screen.getByLabelText("Problem title")).toHaveAttribute("aria-required", "true");
+    expect(screen.getByLabelText("Problem statement")).toHaveAttribute("aria-required", "true");
     expect(screen.getByLabelText("Assumed level")).toBeInTheDocument();
-    expect(screen.getByText("Problem title")).toHaveAttribute("data-marker", "required");
+    expect(screen.getByText("Problem statement")).toHaveAttribute("data-marker", "required");
+    expect(screen.getByText("Problem title")).toHaveAttribute("data-marker", "optional");
     expect(screen.getByText("Notation preferences (one per line)")).not.toHaveAttribute(
       "data-marker",
     );
@@ -311,8 +312,8 @@ describe("ProblemEntryForm required fields", () => {
     renderForm();
     fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
     const alert = await screen.findByRole("alert");
+    expect(alert).not.toHaveTextContent("Problem title");
     for (const field of [
-      "Problem title",
       "Problem statement",
       "Assumed level",
       "What the reader is expected to know",
@@ -345,5 +346,27 @@ describe("formToDraft", () => {
       },
     });
     expect(result.ok && "preferences" in result.draft).toBe(false);
+  });
+});
+
+describe("problemTitle", () => {
+  const title = (statement: string, entered = "") => problemTitle({ title: entered, statement });
+
+  it("prefers the entered title", () => {
+    expect(title("Show p.", "  Identity  ")).toBe("Identity");
+  });
+
+  it("takes the first sentence or line of the statement", () => {
+    expect(title("  Let p hold.  Show p or q.")).toBe("Let p hold.");
+    expect(title("Prove the following\nfor all  n:  n = n")).toBe("Prove the following");
+    expect(title("Is 1.5 an integer? No.")).toBe("Is 1.5 an integer?");
+  });
+
+  it("shortens a long first sentence at a word", () => {
+    const long = `Show that ${"every natural number ".repeat(5)}is fine`;
+    const result = title(long);
+    expect(result.length).toBeLessThanOrEqual(61);
+    expect(result).toMatch(/^Show that every natural number .*[a-z]…$/);
+    expect(long.startsWith(result.slice(0, -1))).toBe(true);
   });
 });

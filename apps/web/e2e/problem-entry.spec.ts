@@ -1,9 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
+/** By accessible name: a label's text also holds the server-rendered value of its textarea. */
+function statementBox(page: Page) {
+  return page.getByRole("textbox", { name: /^Problem statement/ });
+}
+
 async function fillPropositionalDraft(page: Page) {
   await page.getByLabel("Problem title", { exact: true }).fill("Disjunction introduction");
-  await page.getByLabel("Problem statement", { exact: true }).fill("Assuming p, show p or q.");
+  await statementBox(page).fill("Assuming p, show p or q.");
   await page.getByText("More setup choices (optional)").click();
   await page.getByLabel("Assumed level", { exact: true }).fill("elementary propositional logic");
   await page
@@ -34,12 +39,12 @@ test("the landing page offers the three ways to begin", async ({ page }) => {
 
 test("a reviewed and approved problem becomes a new session", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("link", { name: "Start a new problem" })).toHaveAttribute(
-    "href",
-    "/problems/new",
-  );
-  await page.goto("/problems/new");
+  await page.getByLabel("New problem statement", { exact: true }).fill("Assuming p, show p or q.");
+  await page.getByRole("button", { name: "Start a new problem" }).click();
+  await expect(page).toHaveURL(/\/problems\/new\?statement=/);
   await expect(page.getByRole("heading", { name: "New problem", level: 1 })).toBeVisible();
+  // The statement typed on the landing page arrives in the form.
+  await expect(statementBox(page)).toHaveValue("Assuming p, show p or q.");
   await fillPropositionalDraft(page);
 
   const approve = page.getByRole("button", { name: "Start exploring" });
@@ -110,23 +115,24 @@ test("an empty check lists every missing required field", async ({ page }) => {
   await page.goto("/problems/new");
   await page.getByRole("button", { name: "Check setup" }).click();
   const alert = page.getByRole("alert").filter({ hasText: "cannot be checked yet" });
-  await expect(alert).toContainText("Problem title: This is required.");
+  await expect(alert).toContainText("Problem statement: This is required.");
+  await expect(alert).not.toContainText("Problem title");
   await expect(alert).toContainText("Assumed level");
   await expect(alert).toContainText("Goal 1");
 });
 
-test("optional AI assistance is visible, explains that it is not configured, and sends nothing", async ({
+test("AI assistance is visible, explains that it is not configured, and sends nothing", async ({
   page,
 }) => {
   await page.goto("/problems/new");
-  const ai = page.getByRole("region", { name: "AI assistance" });
-  await expect(ai).toContainText("nothing changes until you accept them");
+  const ai = page.getByRole("region", { name: "Background and setup" });
+  await expect(ai).toContainText("nothing changes until you");
   await expect(ai).toContainText("not configured on this proof service");
-  await expect(ai.getByRole("button", { name: "Propose background" })).toBeDisabled();
+  await expect(ai.getByRole("button", { name: "Suggest background" })).toBeDisabled();
   await expect(ai.getByRole("button", { name: "Draft the setup" })).toBeDisabled();
   // The workers of the browser suite have no provider, so entering the statement cannot enable it.
   await page.getByLabel("Problem statement").fill("Show that p implies p.");
-  await expect(ai.getByRole("button", { name: "Propose background" })).toBeDisabled();
+  await expect(ai.getByRole("button", { name: "Suggest background" })).toBeDisabled();
   await expect(ai.getByText("Not configured.").first()).toBeVisible();
 });
 

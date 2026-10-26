@@ -78,7 +78,8 @@
 .declaration select,
 .statementHeader select,
 .mathInput,
-.fetchForm input {
+.fetchForm input,
+.statementForm textarea {
   font: inherit;
   font-weight: 400;
   padding: 0.4rem 0.5rem;
@@ -435,4 +436,21 @@
   gap: 0.75rem;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.handSetup[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.handSetup > .disclosure {
+  border-top: none;
+  padding-top: 0;
+}
+
+.statementForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }

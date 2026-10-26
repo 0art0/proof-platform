@@ -105,7 +105,7 @@ export function formSetupContext(form: ProblemForm, options: ProblemSetupOptions
   const preferredDomains = commaList(form.preferredDomains);
   const notation = lines(form.notation);
   return {
-    problem: { title: form.title.trim(), statement: form.statement.trim() },
+    problem: { title: problemTitle(form), statement: form.statement.trim() },
     background: {
       level: form.backgroundLevel.trim(),
       summary: form.backgroundSummary.trim(),
@@ -129,6 +129,20 @@ export function formSetupContext(form: ProblemForm, options: ProblemSetupOptions
       .filter((id) => optionalPacks.has(id) && form.packIds.includes(id)),
   } as SetupContext;
 }
+
+/** The entered title, or one taken from the start of the statement when none is entered. */
+export function problemTitle(form: Pick<ProblemForm, "title" | "statement">): string {
+  const title = form.title.trim();
+  if (title.length > 0) return title;
+  const [first = ""] = form.statement.trim().split(/\n|(?<=[.?!])\s/);
+  const line = first.replace(/\s+/g, " ").trim();
+  if (line.length <= TITLE_LENGTH) return line;
+  const cut = line.slice(0, TITLE_LENGTH);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > TITLE_LENGTH / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+const TITLE_LENGTH = 60;
 
 /** The required fields the AI roles need: the problem and the background, not the statements. */
 export function missingSetupFields(form: ProblemForm): readonly FormProblem[] {
@@ -214,7 +228,6 @@ export function missingRequiredFields(form: ProblemForm): readonly FormProblem[]
   const need = (field: string, value: string) => {
     if (value.trim().length === 0) problems.push({ field, message: "This is required." });
   };
-  need("Problem title", form.title);
   need("Problem statement", form.statement);
   need("Assumed level", form.backgroundLevel);
   need("What the reader is expected to know", form.backgroundSummary);

@@ -185,10 +185,13 @@ describe("LandingActions", () => {
     render(<LandingActions developmentSessionId="session:development" />);
     expect(screen.getByRole("heading", { name: "Open a proof file" })).toBeInTheDocument();
     expect(screen.getByLabelText("Artifact file")).toBeEnabled();
-    expect(screen.getByRole("link", { name: "Start a new problem" })).toHaveAttribute(
-      "href",
-      "/problems/new",
-    );
+    // The statement is all a new problem needs; it is carried to the problem page.
+    const statement = screen.getByLabelText("New problem statement");
+    expect(statement).toHaveAttribute("name", "statement");
+    expect(statement).toBeRequired();
+    const start = screen.getByRole("button", { name: "Start a new problem" });
+    expect(start.closest("form")).toHaveAttribute("action", "/problems/new");
+    expect(start.closest("form")).toHaveAttribute("method", "get");
     expect(screen.getByRole("heading", { name: "Resume a saved proof" })).toBeInTheDocument();
     expect(screen.getByText("Download a saved proof").closest("details")).not.toHaveAttribute(
       "open",

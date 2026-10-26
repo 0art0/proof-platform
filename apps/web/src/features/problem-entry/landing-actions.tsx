@@ -18,10 +18,23 @@ export function LandingActions({
       <div className={styles.actionsGrid}>
         <section className={styles.actionCard} aria-labelledby="action-new-problem">
           <h2 id="action-new-problem">New problem</h2>
-          <p>Set out a problem and its assumptions, then explore possible proofs.</p>
-          <Link className={styles.primary} href="/problems/new">
-            Start a new problem
-          </Link>
+          <p>
+            Type the statement. A background is suggested for you, and the setup is drafted once you
+            accept it.
+          </p>
+          {/* A plain GET form, so it works before hydration. */}
+          <form className={styles.statementForm} action="/problems/new" method="get">
+            <textarea
+              name="statement"
+              aria-label="New problem statement"
+              placeholder="e.g. Show that any two consecutive integers are coprime."
+              rows={3}
+              required
+            />
+            <button type="submit" className={styles.primary}>
+              Start a new problem
+            </button>
+          </form>
         </section>
 
         <section className={styles.actionCard} aria-labelledby="action-upload">

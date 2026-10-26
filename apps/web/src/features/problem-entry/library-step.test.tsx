@@ -293,7 +293,7 @@ function fillProblem() {
   change("What the reader is expected to know", "Logic.");
 }
 
-const section = () => screen.getByRole("region", { name: "AI assistance" });
+const section = () => screen.getByRole("region", { name: "Background and setup" });
 const button = (name: string) => within(section()).getByRole("button", { name });
 const callsTo = (url: string) => calls.filter((call) => call.url === url);
 
@@ -303,13 +303,17 @@ function fillStatements() {
   change("Goal 1", "p");
 }
 
-/** Propose a background and accept it, as the first step to a library. */
+/**
+ * Propose a background and accept it, as the first step to a library. Accepting drafts the setup
+ * and checks it (llm-call:formalize-4), so this waits for that review.
+ */
 async function acceptBackground() {
   fillProblem();
-  fireEvent.click(button("Propose background"));
+  fireEvent.click(button("Suggest background"));
   const card = await screen.findByRole("group", { name: "Proposed background" });
   fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
   await within(card).findByRole("button", { name: "Accepted" });
+  await screen.findByRole("region", { name: "Review" });
 }
 
 async function build() {
@@ -342,7 +346,7 @@ describe("Build library", () => {
     const [request] = callsTo("/api/ai/library");
     expect(request!.body).toEqual({
       constructionId: "construction:web-1",
-      id: "llm-call:library-4",
+      id: "llm-call:library-5",
       approvedBackground: { decisionId: "background-decision-3" },
       packs: [],
     });
@@ -411,8 +415,8 @@ describe("Build library", () => {
     ]);
     expect(decision!.body).toMatchObject({
       constructionId: "construction:web-1",
-      callId: "llm-call:library-4",
-      decisionId: "library-decision-5",
+      callId: "llm-call:library-5",
+      decisionId: "library-decision-6",
       approvedResultIds: [SYMMETRY_ID],
     });
     expect(decision!.body.decidedAt).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
@@ -471,19 +475,18 @@ describe("Build library", () => {
     const proposed = await build();
     fireEvent.click(within(proposed).getByRole("button", { name: "Approve library" }));
     await within(proposed).findByRole("button", { name: "Approved" });
-    const reference = { constructionId: "construction:web-1", decisionId: "library-decision-5" };
+    const reference = { constructionId: "construction:web-1", decisionId: "library-decision-6" };
 
-    fireEvent.click(button("Draft the setup"));
-    const drafted = await screen.findByLabelText("Drafted setup");
-    fireEvent.click(within(drafted).getByRole("button", { name: /Replace my variables/ }));
-    expect(callsTo("/api/ai/formalize")[0]!.body).toMatchObject({
-      approvedBackground: { decisionId: "background-decision-3" },
-      approvedLibrary: { decisionId: "library-decision-5" },
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    // Approving a library dated the draft made on acceptance; drafting again loads and checks it.
+    expect(section()).toHaveTextContent("since the setup was drafted");
+    fireEvent.click(button("Draft the setup again"));
     const reviewed = await screen.findByRole("region", { name: "Review" });
-    const [validate] = callsTo("/api/problem-drafts/validate");
+    expect(callsTo("/api/ai/formalize")[0]!.body).not.toHaveProperty("approvedLibrary");
+    expect(callsTo("/api/ai/formalize")[1]!.body).toMatchObject({
+      approvedBackground: { decisionId: "background-decision-3" },
+      approvedLibrary: { decisionId: "library-decision-6" },
+    });
+    const validate = callsTo("/api/problem-drafts/validate")[1];
     expect(validate!.body).toMatchObject({
       approvedBackground: { constructionId: "construction:web-1" },
       approvedLibrary: reference,
@@ -532,7 +535,8 @@ describe("Build library", () => {
     expect(screen.queryByRole("region", { name: "Review" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
     await screen.findByRole("region", { name: "Review" });
-    expect(callsTo("/api/problem-drafts/validate")[1]!.body).not.toHaveProperty("approvedLibrary");
+    expect(callsTo("/api/problem-drafts/validate")[1]!.body).toHaveProperty("approvedLibrary");
+    expect(callsTo("/api/problem-drafts/validate")[2]!.body).not.toHaveProperty("approvedLibrary");
   });
 
   it("drops the approved library when the accepted background is forgotten", async () => {
@@ -546,7 +550,7 @@ describe("Build library", () => {
     expect(button("Build library")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
     await screen.findByRole("region", { name: "Review" });
-    const [validate] = callsTo("/api/problem-drafts/validate");
+    const validate = callsTo("/api/problem-drafts/validate").at(-1);
     expect(validate!.body).not.toHaveProperty("approvedLibrary");
     expect(validate!.body).not.toHaveProperty("approvedBackground");
   });

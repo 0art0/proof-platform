@@ -172,7 +172,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderForm(ai = { background: true, library: true, formalizer: true }) {
+function renderForm(
+  ai = { background: true, library: true, formalizer: true },
+  initialStatement = "",
+) {
   let ids = 0;
   render(
     <ProblemEntryForm
@@ -181,6 +184,7 @@ function renderForm(ai = { background: true, library: true, formalizer: true }) 
       createSessionId={() => "session:test"}
       ai={ai}
       createAiId={(prefix) => `${prefix}-${(ids += 1)}`}
+      initialStatement={initialStatement}
     />,
   );
 }
@@ -200,12 +204,12 @@ function fillProblem() {
   change("What the reader is expected to know", "Logic.");
 }
 
-const section = () => screen.getByRole("region", { name: "AI assistance" });
+const section = () => screen.getByRole("region", { name: "Background and setup" });
 const button = (name: string) => within(section()).getByRole("button", { name });
 const callsTo = (url: string) => calls.filter((call) => call.url === url);
 
 async function propose() {
-  fireEvent.click(button("Propose background"));
+  fireEvent.click(button("Suggest background"));
   return screen.findByRole("group", { name: "Proposed background" });
 }
 
@@ -214,18 +218,18 @@ describe("AI assistance in problem entry", () => {
     renderForm({ background: false, library: false, formalizer: false });
     fillProblem();
     expect(section()).toHaveTextContent("not configured on this proof service");
-    expect(button("Propose background")).toBeDisabled();
+    expect(button("Suggest background")).toBeDisabled();
     expect(section()).toHaveTextContent("Not configured.");
     expect(button("Draft the setup")).toBeDisabled();
   });
 
   it("needs only the problem statement to propose a background, and says so", () => {
     renderForm();
-    expect(button("Propose background")).toBeDisabled();
+    expect(button("Suggest background")).toBeDisabled();
     expect(section()).toHaveTextContent("Enter the problem statement first.");
     // The background fields are what a proposal fills in; they need not be filled first.
     fillStatement();
-    expect(button("Propose background")).toBeEnabled();
+    expect(button("Suggest background")).toBeEnabled();
     expect(section()).not.toHaveTextContent("Enter the problem statement first.");
     expect(screen.getByLabelText("Assumed level")).toHaveValue("");
   });
@@ -234,8 +238,9 @@ describe("AI assistance in problem entry", () => {
     renderForm();
     fillStatement();
     expect(button("Draft the setup")).toBeDisabled();
-    expect(section()).toHaveTextContent("Fill in Problem title, Assumed level");
-    expect(section()).toHaveTextContent("an accepted background fills in the background fields");
+    expect(section()).toHaveTextContent(
+      "Accept a background first, or fill in Assumed level, What the reader is expected to know by hand.",
+    );
     fillProblem();
     expect(button("Draft the setup")).toBeEnabled();
   });
@@ -257,8 +262,9 @@ describe("AI assistance in problem entry", () => {
     expect(request!.body).toMatchObject({
       constructionId: "construction:web-1",
       id: "llm-call:background-2",
+      // Without an entered title, the statement names the problem.
       problem: {
-        title: "Untitled problem",
+        title: "Show that consecutive integers are coprime.",
         statement: "Show that consecutive integers are coprime.",
       },
       preferences: { domains: ["number theory"] },
@@ -477,30 +483,63 @@ describe("AI assistance in problem entry", () => {
     expect(card).toHaveTextContent("You have edited the problem or preferences");
   });
 
-  it("names the accepted background, and only that decision, when drafting, checking and approving", async () => {
+  it("suggests a background at once for a statement typed on the landing page, and only once", async () => {
+    renderForm(undefined, "Show that consecutive integers are coprime.");
+    expect(screen.getByLabelText("Problem statement")).toHaveValue(
+      "Show that consecutive integers are coprime.",
+    );
+    const card = await screen.findByRole("group", { name: "Proposed background" });
+    expect(card).toHaveTextContent("first-year undergraduate");
+    expect(callsTo("/api/ai/background")).toHaveLength(1);
+    expect(button("Suggest again")).toBeEnabled();
+  });
+
+  it("waits for a click when the statement was typed here, or AI is not configured", async () => {
+    renderForm({ background: false, library: false, formalizer: false }, "Show p.");
+    expect(screen.getByLabelText("Problem statement")).toHaveValue("Show p.");
+    // Without AI, the setup is entered by hand and is not tucked away.
+    expect(screen.queryByText("Edit the background and setup by hand")).toBeNull();
+    cleanup();
     renderForm();
     fillStatement();
-    change("Problem title", "Coprime neighbours");
-    const card = await propose();
-    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
-    await within(card).findByRole("button", { name: "Accepted" });
-    change("Variable or object 1", "p");
+    await Promise.resolve();
+    expect(calls).toHaveLength(0);
+  });
 
-    fireEvent.click(button("Draft the setup"));
-    const drafted = await screen.findByLabelText("Drafted setup");
+  it("drafts and checks the setup once a background is accepted, so only the statement is typed", async () => {
+    renderForm();
+    fillStatement();
+    const card = await propose();
+    expect(callsTo("/api/ai/formalize")).toHaveLength(0);
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+
+    // Accepting drafts the setup with the accepted background, loads it and checks it.
+    const reviewed = await screen.findByRole("region", { name: "Review" });
     const [formalize] = callsTo("/api/ai/formalize");
     expect(formalize!.body).toMatchObject({
       constructionId: "construction:web-1",
+      id: "llm-call:formalize-4",
+      problem: {
+        title: "Show that consecutive integers are coprime.",
+        statement: "Show that consecutive integers are coprime.",
+      },
+      background: proposal().background,
       approvedBackground: { decisionId: "background-decision-3" },
     });
     expect(JSON.stringify(formalize!.body)).not.toContain("signature");
     expect(JSON.stringify(formalize!.body)).not.toContain("operators");
-
-    fireEvent.click(
-      within(drafted).getByRole("button", { name: /Replace my variables, hypotheses/ }),
+    expect(screen.getByLabelText("Goal 1")).toHaveValue("p \\lor q");
+    expect(screen.getByLabelText("Hypothesis 1")).toHaveValue("p");
+    expect(section()).toHaveTextContent(
+      "Drafted by AI (llm-call:formalize-4) and loaded into the setup for you to review.",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
-    const reviewed = await screen.findByRole("region", { name: "Review" });
+    expect(reviewed).toHaveTextContent("started from an AI draft (llm-call:formalize-4)");
+    // Nothing needed fixing, so entering the setup by hand stays tucked away.
+    expect(
+      screen.getByText("Edit the background and setup by hand").closest("details"),
+    ).not.toHaveAttribute("open");
+    // The session still waits for the user's approval.
+    expect(callsTo("/api/proof-sessions")).toHaveLength(0);
     expect(reviewed).toHaveTextContent("Accepted constants");
     expect(reviewed).toHaveTextContent("Coprime");
     const [validate] = callsTo("/api/problem-drafts/validate");
@@ -527,11 +566,6 @@ describe("AI assistance in problem entry", () => {
     fillStatement();
     const card = await propose();
     fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
-    await within(card).findByRole("button", { name: "Accepted" });
-    change("Problem title", "Coprime neighbours");
-    change("Variable or object 1", "p");
-    change("Goal 1", "p");
-    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
     await screen.findByRole("region", { name: "Review" });
 
     fireEvent.click(within(card).getByRole("button", { name: "Stop using these constants" }));
@@ -554,7 +588,7 @@ describe("AI assistance in problem entry", () => {
     const card = await propose();
     fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     await within(card).findByRole("button", { name: "Accepted" });
-    fireEvent.click(button("Propose background"));
+    fireEvent.click(button("Suggest again"));
     await vi.waitFor(() => expect(callsTo("/api/ai/background")).toHaveLength(2));
     const fresh = await screen.findByRole("group", { name: "Proposed background" });
     await within(fresh).findByRole("button", { name: "Accept" });
@@ -562,13 +596,11 @@ describe("AI assistance in problem entry", () => {
     expect(within(fresh).getByRole("button", { name: "Accept" })).toBeEnabled();
   });
 
-  it("loads a drafted setup only on request, then reviews it with its provenance", async () => {
+  it("drafts from a background entered by hand, then loads, checks and reviews the draft with its provenance", async () => {
     renderForm();
     fillProblem();
     fireEvent.click(button("Draft the setup"));
-    const drafted = await screen.findByLabelText("Drafted setup");
-    expect(drafted).toHaveTextContent("p \\lor q");
-    expect(screen.getByLabelText("Goal 1")).toHaveValue("");
+    const reviewed = await screen.findByRole("region", { name: "Review" });
     const [formalize] = callsTo("/api/ai/formalize");
     expect(formalize!.body).toMatchObject({
       constructionId: "construction:web-1",
@@ -579,17 +611,10 @@ describe("AI assistance in problem entry", () => {
     });
     expect(formalize!.body).not.toHaveProperty("approvedBackground");
 
-    fireEvent.click(
-      within(drafted).getByRole("button", {
-        name: "Replace my variables, hypotheses and goals with this draft",
-      }),
-    );
     expect(screen.getByLabelText("Goal 1")).toHaveValue("p \\lor q");
     expect(screen.getByLabelText("Hypothesis 1")).toHaveValue("p");
     expect(screen.getByLabelText("Variable or object 2")).toHaveValue("q");
-
-    fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
-    const reviewed = await screen.findByRole("region", { name: "Review" });
+    expect(button("Draft the setup again")).toBeEnabled();
     expect(reviewed).toHaveTextContent("started from an AI draft (llm-call:formalize-2)");
     expect(callsTo("/api/problem-drafts/validate")[0]?.body.draft).toMatchObject({
       declarations: DRAFT.declarations,
@@ -625,12 +650,21 @@ describe("AI assistance in problem entry", () => {
       ),
     );
     renderForm();
-    fillProblem();
-    fireEvent.click(button("Draft the setup"));
+    fillStatement();
+    const card = await propose();
+    fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
+    // A draft that fails the check is shown, not loaded or checked.
     const drafted = await screen.findByLabelText("Drafted setup");
     expect(drafted).toHaveTextContent("which is not an approved constant");
+    expect(screen.getByLabelText("Goal 1")).toHaveValue("");
+    expect(callsTo("/api/problem-drafts/validate")).toHaveLength(0);
+    const hand = screen.getByText("Edit the background and setup by hand").closest("details");
+    expect(hand).not.toHaveAttribute("open");
     fireEvent.click(within(drafted).getByRole("button", { name: /Replace my variables/ }));
     expect(screen.getByLabelText("Goal 1")).toHaveValue("r");
+    // Loaded to be fixed by hand, so the hand-entry fields open.
+    expect(hand).toHaveAttribute("open");
+    expect(callsTo("/api/problem-drafts/validate")).toHaveLength(0);
   });
 
   it.each([
@@ -650,7 +684,7 @@ describe("AI assistance in problem entry", () => {
     );
     renderForm();
     fillStatement();
-    fireEvent.click(button("Propose background"));
+    fireEvent.click(button("Suggest background"));
     expect(await within(section()).findByRole("alert")).toHaveTextContent(text);
     expect(screen.queryByRole("group", { name: "Proposed background" })).toBeNull();
   });
@@ -673,7 +707,7 @@ describe("AI assistance in problem entry", () => {
     );
     renderForm();
     fillStatement();
-    fireEvent.click(button("Propose background"));
+    fireEvent.click(button("Suggest background"));
     expect(await within(section()).findByRole("alert")).toHaveTextContent(
       "The model asked for more detail (problem-detail): Which integers are meant?",
     );
@@ -713,7 +747,7 @@ describe("AI assistance in problem entry", () => {
     );
     renderForm();
     fillStatement();
-    fireEvent.click(button("Propose background"));
+    fireEvent.click(button("Suggest background"));
     expect(await within(section()).findByRole("alert")).toHaveTextContent(
       "The proof service returned an invalid response.",
     );

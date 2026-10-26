@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPresentation } from "@proof/language";
 import {
   backgroundProfileSchema,
@@ -47,7 +47,13 @@ export type AiAssistProps = Readonly<{
   approvedLibrary: ApprovedLibrary | undefined;
   onApproveLibrary: (library: ApprovedLibrary) => void;
   onForgetLibrary: () => void;
-  onUseDraft: (draft: ProblemDraft, callId: string) => void;
+  /**
+   * Load a drafted setup into the form. `check` is true for a draft that passed the worker's
+   * check, which the form then checks again and shows for review; false for one loaded by hand.
+   */
+  onUseDraft: (draft: ProblemDraft, callId: string, check: boolean) => void;
+  /** Suggest a background as soon as the form opens (the statement came from the landing page). */
+  proposeOnOpen?: boolean;
 }>;
 
 const proposalSchema = z
@@ -122,14 +128,16 @@ type DraftState =
     }>;
 
 /**
- * Optional AI help while setting up a problem (`docs/ai-agents-architecture.md` sections 1 to 3).
- * Every role returns proposals only. The background proposer sees the problem statement and
- * preferences, proposes a background and the constants the problem needs, and can revise its
- * proposal from the user's feedback; nothing changes until the user accepts, which fills the
- * background fields and makes the constants available to the setup. Once a background is
+ * AI help while setting up a problem (`docs/ai-agents-architecture.md` sections 1 to 3), so the
+ * statement is all a user has to type. Every role returns proposals only. The background proposer
+ * sees the problem statement and preferences, suggests a background and the constants the problem
+ * needs, and can revise its suggestion from the user's feedback; nothing changes until the user
+ * accepts, which fills the background fields and makes the constants available to the setup.
+ * Accepting a background drafts the setup at once; a draft that passes the worker's check is
+ * loaded into the form and checked, so the user lands on the review and still approves it before
+ * exploring starts. A draft that fails the check is loaded only on request. Once a background is
  * accepted, the library builder proposes general results for it (it never sees the problem), and
- * the user keeps the ones they want. A drafted setup is loaded into the form only on request,
- * where it still goes through "Check setup" and approval.
+ * the user keeps the ones they want.
  */
 export function AiAssist({
   capabilities,
@@ -145,6 +153,7 @@ export function AiAssist({
   onApproveLibrary,
   onForgetLibrary,
   onUseDraft,
+  proposeOnOpen = false,
 }: AiAssistProps) {
   const [proposed, setProposed] = useState<Proposed>();
   const [status, setStatus] = useState<RequestStatus>({ kind: "idle" });
@@ -156,6 +165,9 @@ export function AiAssist({
   const anyAvailable = capabilities.background || capabilities.library || capabilities.formalizer;
   const statementFilled = context.problem.statement.length > 0;
   const loading = status.kind === "loading";
+  // The decision whose acceptance here drafts the setup once the form has its background.
+  const draftAfter = useRef<string>(undefined);
+  const proposedOnOpen = useRef(false);
 
   const ask = async (action: "propose" | "revise") => {
     const previous = action === "revise" ? proposed : undefined;
@@ -163,10 +175,7 @@ export function AiAssist({
     const answer = await postAi("/api/ai/background", {
       constructionId,
       id: createId("llm-call:background"),
-      problem: {
-        title: context.problem.title || "Untitled problem",
-        statement: context.problem.statement,
-      },
+      problem: context.problem,
       ...(context.preferences === undefined ? {} : { preferences: context.preferences }),
       ...(previous === undefined
         ? {}
@@ -217,6 +226,7 @@ export function AiAssist({
       });
     }
     setDecision({ kind: "recorded" });
+    if (capabilities.formalizer) draftAfter.current = pending.decisionId;
     onAcceptBackground({
       decisionId: pending.decisionId,
       callId: proposed.callId,
@@ -224,6 +234,19 @@ export function AiAssist({
       constants: proposed.proposal.constants,
     });
   };
+
+  // Runs after the accepted background has reached the form, so the draft request carries it.
+  useEffect(() => {
+    if (accepted === undefined || draftAfter.current !== accepted.decisionId) return;
+    draftAfter.current = undefined;
+    if (missing.length === 0) void draftSetup();
+  });
+
+  useEffect(() => {
+    if (proposedOnOpen.current || !proposeOnOpen || !capabilities.background) return;
+    proposedOnOpen.current = true;
+    if (statementFilled) void ask("propose");
+  });
 
   const draftSetup = async () => {
     setDraft({ kind: "loading" });
@@ -264,22 +287,22 @@ export function AiAssist({
       contextKey,
       draft: parsed.data.draft,
       diagnostics: [],
-      used: false,
+      used: true,
     });
+    onUseDraft(parsed.data.draft, parsed.data.callId, true);
   };
 
   const isAccepted = proposed !== undefined && accepted?.callId === proposed.callId;
   const acceptedElsewhere = accepted !== undefined && !isAccepted;
 
   return (
-    <section className={styles.section} aria-label="AI assistance">
-      <h2>AI assistance (optional)</h2>
+    <section className={styles.section} aria-label="Background and setup">
+      <h2>Background and setup</h2>
       <p className={styles.sectionIntro}>
-        A model can propose the background your problem is set against, together with the constants
-        (operators and notation) it needs, build a starting library of general results for that
-        background, and draft the variables, hypotheses and goals. Its answers are proposals:
-        nothing changes until you accept them, and a drafted setup is still checked and approved by
-        you before exploring starts.
+        A model suggests the background your problem is set against, with the constants (operators
+        and notation) it needs. Once you accept a background, the variables, hypotheses and goals
+        are drafted and checked for you. Its answers are proposals: nothing changes until you accept
+        them, and you approve the setup before exploring starts.
       </p>
       {!anyAvailable ? (
         <p className={styles.hint} role="note">
@@ -289,20 +312,22 @@ export function AiAssist({
       ) : null}
 
       <div className={styles.aiStep}>
-        <h3>Propose background</h3>
+        <h3>Background</h3>
         <p className={styles.sectionIntro}>
-          Enter the problem statement, then ask for a background and constants. The model sees only
-          the problem statement and your preferences, and you can revise its answer with feedback.
+          Suggested from the problem statement and your preferences only. Accept it, or describe
+          what to change and ask for a revision.
         </p>
         <button
           type="button"
-          className={styles.secondary}
+          className={proposed === undefined ? styles.primary : styles.secondary}
           disabled={!capabilities.background || !statementFilled || loading}
           onClick={() => void ask("propose")}
         >
           {status.kind === "loading" && status.action === "propose"
-            ? "Proposing…"
-            : "Propose background"}
+            ? "Suggesting…"
+            : proposed === undefined
+              ? "Suggest background"
+              : "Suggest again"}
         </button>
         {!capabilities.background ? (
           <em className={styles.hint}> Not configured.</em>
@@ -347,10 +372,11 @@ export function AiAssist({
       />
 
       <div className={styles.aiStep}>
-        <h3>Draft the setup</h3>
+        <h3>Setup</h3>
         <p className={styles.sectionIntro}>
-          Proposes variables, hypotheses and goals using the selected notation packs, any accepted
-          constants and the approved library.
+          Drafted when you accept a background: variables, hypotheses and goals using the selected
+          notation packs, any accepted constants and the approved library. Draft again after
+          changing any of them.
         </p>
         <button
           type="button"
@@ -358,15 +384,19 @@ export function AiAssist({
           disabled={!capabilities.formalizer || missing.length > 0 || draft.kind === "loading"}
           onClick={() => void draftSetup()}
         >
-          {draft.kind === "loading" ? "Drafting…" : "Draft the setup"}
+          {draft.kind === "loading"
+            ? "Drafting…"
+            : draft.kind === "idle"
+              ? "Draft the setup"
+              : "Draft the setup again"}
         </button>
         {!capabilities.formalizer ? (
           <em className={styles.hint}> Not configured.</em>
         ) : missing.length > 0 ? (
           <em className={styles.hint}>
             {" "}
-            Fill in {missing.map(({ field }) => field).join(", ")} first; an accepted background
-            fills in the background fields for you.
+            Accept a background first, or fill in {missing.map(({ field }) => field).join(", ")} by
+            hand.
           </em>
         ) : null}
         {draft.kind === "failed" ? (
@@ -374,12 +404,19 @@ export function AiAssist({
             {draft.message}
           </p>
         ) : null}
-        {draft.kind === "proposed" || draft.kind === "needs-review" ? (
+        {draft.kind === "proposed" ? (
+          <p role="status" className={styles.hint}>
+            {draft.contextKey === contextKey
+              ? `Drafted by AI (${draft.callId}) and loaded into the setup for you to review.`
+              : "You have edited the problem, background, packs, constants or library since the setup was drafted."}
+          </p>
+        ) : null}
+        {draft.kind === "needs-review" ? (
           <DraftProposal
             state={draft}
             stale={draft.contextKey !== contextKey}
             onUse={() => {
-              onUseDraft(draft.draft, draft.callId);
+              onUseDraft(draft.draft, draft.callId, false);
               setDraft({ ...draft, used: true });
             }}
           />
@@ -498,7 +535,7 @@ function BackgroundProposal({
         <p className={styles.hint}>
           {noFeedback ? "To revise, describe what to change first. " : null}
           {accepted === undefined
-            ? "Accepting fills in the background fields below, which you can still edit."
+            ? "Accepting fills in the background and drafts the setup; you can still edit both."
             : null}
         </p>
       ) : null}
@@ -573,7 +610,7 @@ function DraftProposal({
   stale,
   onUse,
 }: Readonly<{
-  state: Extract<DraftState, { kind: "proposed" | "needs-review" }>;
+  state: Extract<DraftState, { callId: string }>;
   stale: boolean;
   onUse: () => void;
 }>) {
@@ -583,17 +620,15 @@ function DraftProposal({
   return (
     <div className={styles.aiProposal} role="group" aria-label="Drafted setup">
       <p className={styles.provenance}>Drafted by AI. It has not been approved.</p>
-      {state.kind === "needs-review" ? (
-        <div role="alert" className={styles.warning}>
-          <p>The draft did not pass the setup check:</p>
-          <ul>
-            {state.diagnostics.map((message, index) => (
-              <li key={index}>{message}</li>
-            ))}
-          </ul>
-          <p>You can still load it and fix it by hand.</p>
-        </div>
-      ) : null}
+      <div role="alert" className={styles.warning}>
+        <p>The draft did not pass the setup check:</p>
+        <ul>
+          {state.diagnostics.map((message, index) => (
+            <li key={index}>{message}</li>
+          ))}
+        </ul>
+        <p>You can still load it and fix it by hand.</p>
+      </div>
       <dl className={styles.reviewList}>
         <dt>Variables and objects</dt>
         <dd>
@@ -637,9 +672,7 @@ function DraftProposal({
         </p>
       ) : null}
       {state.used ? (
-        <p role="status">
-          Loaded into the form below. Use “Check setup” to review it before starting.
-        </p>
+        <p role="status">Loaded into the setup below. Fix it there, then use “Check setup”.</p>
       ) : (
         <button type="button" className={styles.secondary} onClick={onUse}>
           Replace my variables, hypotheses and goals with this draft
