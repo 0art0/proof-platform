@@ -14,12 +14,29 @@ type MathfieldPort = HTMLElement & {
   getValue: (range: [number, number], format: "math-json") => string;
 };
 
-/** Select `target` (a MathJSON value) in the first field of `fields` that displays it. */
+/**
+ * Select `target` (a MathJSON value) in the first field of `fields` that displays it. MathLive
+ * renders a field's value after the page settles, so the search retries until a field shows it.
+ */
 export async function selectInAnyField(
   fields: Locator,
   target: unknown,
   options: Readonly<{ modifier?: boolean }> = {},
 ) {
+  await expect
+    .configure({ soft: true })
+    .poll(() => trySelectInAnyField(fields, target, options), {
+      message: `no displayed field contains ${JSON.stringify(target)}`,
+      ...COMMAND,
+    })
+    .toBe(true);
+}
+
+async function trySelectInAnyField(
+  fields: Locator,
+  target: unknown,
+  options: Readonly<{ modifier?: boolean }>,
+): Promise<boolean> {
   const count = await fields.count();
   for (let index = 0; index < count; index += 1) {
     const selected = await fields.nth(index).evaluate(
@@ -51,9 +68,9 @@ export async function selectInAnyField(
       },
       { serializedTarget: JSON.stringify(target), modifier: options.modifier ?? false },
     );
-    if (selected) return;
+    if (selected) return true;
   }
-  expect.soft(false, `no displayed field contains ${JSON.stringify(target)}`).toBe(true);
+  return false;
 }
 
 /** Preview, then apply, the displayed suggestion card for `artifactId`. */
