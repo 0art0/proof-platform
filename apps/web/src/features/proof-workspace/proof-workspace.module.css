@@ -62,11 +62,15 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * The goals and obligations, then the active selections under them. The proof shares its row
+ * with the suggestions column (see stored-proof-workspace.module.css), so the selections do not
+ * take a third column of their own.
+ */
 .workspaceBody {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.32fr);
-  gap: var(--space-5);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
 }
 
 .sequentColumn,
@@ -253,6 +257,12 @@
   list-style: none;
 }
 
+/* Several selections sit side by side where the width allows, one per line otherwise. */
+.selectionList {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: var(--space-2);
+}
+
 .declarationList {
   display: flex;
   flex-wrap: wrap;
@@ -426,16 +436,21 @@
   font-size: 1.25rem;
 }
 
+/* A compact card under the goals: heading, the selections side by side, then one actions row. */
 .selectionPanel {
-  position: sticky;
-  /* Clear the sticky app bar. */
-  top: calc(3.5rem + var(--space-4));
   display: grid;
   gap: var(--space-3);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--surface);
-  padding: var(--space-4) 1.25rem;
+  padding: var(--space-3) var(--space-4);
+}
+
+.selectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
 }
 
 .selectionList li {
@@ -518,16 +533,6 @@
 
 section.invalidWorkspace {
   padding: var(--space-4);
-}
-
-@media (max-width: 52rem) {
-  .workspaceBody {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .selectionPanel {
-    position: static;
-  }
 }
 
 .legendDetails {

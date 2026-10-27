@@ -1,5 +1,8 @@
 /*
- * The suggestions rail (Folio). A card of cards: each suggestion is a plain card with its name and
+ * The suggestions rail (Folio). It sits beside the proof in a 24 to 28rem column (see
+ * stored-proof-workspace.module.css), so every card must hold up at about 400px: tags wrap,
+ * the two buttons share a row, and typeset maths scrolls inside its own box instead of
+ * widening the card. A card of cards: each suggestion is a plain card with its name and
  * one status pill, a single row of neutral tags, and Preview (secondary) then Apply (primary).
  * Colour appears only where it carries meaning: strengthening (goal blue), weakening and sorry
  * (warning), and the +/- markers of a preview. The previewPanel/previewHeading/previewMeaning/
@@ -11,6 +14,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
+  min-width: 0;
+  /* The "N suggestions" link jumps here: keep the sticky app bar from covering the heading. */
+  scroll-margin-top: calc(3.5rem + var(--space-4));
 }
 
 .suggestionPanel p {
@@ -92,6 +98,7 @@
 
 .suggestions {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   margin: 0;
   padding: 0;
@@ -121,6 +128,11 @@
 
 .suggestionCard h3 {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cardHeader > div {
+  min-width: 0;
 }
 
 .cardQualifier {
@@ -176,6 +188,7 @@
 .suggestionCard code {
   color: var(--text-subtle);
   font-size: var(--text-xs);
+  overflow-wrap: anywhere;
 }
 
 .cardSection {
@@ -213,10 +226,15 @@
   width: fit-content;
 }
 
+/* Preview and Apply are short enough to share one row at the narrowest rail width. */
 .cardActions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.cardActions > button {
+  flex: 0 0 auto;
 }
 
 .previewButton {
@@ -283,7 +301,9 @@
 
 .parameterMenu {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
+  min-width: 0;
   border-radius: var(--radius-control);
   background: var(--surface-muted);
   padding: var(--space-3);
@@ -341,6 +361,7 @@
 
 .variantGroup {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
 }
 
@@ -353,7 +374,9 @@
 
 .previewPanel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
+  min-width: 0;
   border-radius: var(--radius-control);
   background: var(--surface-muted);
   padding: var(--space-3);
@@ -361,6 +384,7 @@
 
 .previewPanel > div {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
 }
 
@@ -434,7 +458,20 @@
 
 .previewPanel .changeList > li {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
+}
+
+/*
+ * A typeset statement in the preview is a block of its own, so a long formula scrolls sideways
+ * inside the card instead of pushing the card (and the column) wider.
+ */
+.previewPanel .changeList > li > [data-latex],
+.previewPanel [data-side] > [data-latex],
+.hypothesisChanges li > [data-latex] {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .previewPanel .changeList > li + li {
@@ -480,7 +517,10 @@
 
 .beforeAfter > span[data-side] {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .beforeAfter > span[data-side="before"] {
@@ -633,7 +673,7 @@
 
 .labelKey dl {
   display: grid;
-  grid-template-columns: minmax(6rem, 11rem) minmax(0, 1fr);
+  grid-template-columns: minmax(5.5rem, 8rem) minmax(0, 1fr);
   gap: var(--space-1) var(--space-3);
   margin: var(--space-2) 0 0;
   border: 1px solid var(--border-soft);

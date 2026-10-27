@@ -230,12 +230,12 @@ describe("ProofWorkspace guidance", () => {
     render(
       <ProofWorkspace
         node={proofNode()}
-        suggestionsLink={{ href: "#suggestion-panel", text: "3 suggestions below" }}
+        suggestionsLink={{ href: "#suggestion-panel", text: "3 suggestions" }}
       />,
     );
-    expect(screen.queryByRole("link", { name: "3 suggestions below" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "3 suggestions" })).toBeNull();
     fireEvent.pointerUp(await screen.findByLabelText("Goal 1 conclusion"));
-    expect(screen.getByRole("link", { name: "3 suggestions below" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "3 suggestions" })).toHaveAttribute(
       "href",
       "#suggestion-panel",
     );

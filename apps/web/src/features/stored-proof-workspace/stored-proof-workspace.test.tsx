@@ -16,12 +16,19 @@ vi.mock("../proof-workspace", () => ({
   ProofWorkspace: ({
     onSelectionChange,
     view,
+    suggestionsLink,
   }: {
     onSelectionChange: (selections: readonly AnchoredProofSelection[]) => void;
     view?: string;
+    suggestionsLink?: { href: string; text: string };
   }) => (
     <div>
       <span data-testid="workspace-view">{view}</span>
+      {suggestionsLink === undefined ? null : (
+        <a data-testid="suggestions-link" href={suggestionsLink.href}>
+          {suggestionsLink.text}
+        </a>
+      )}
       <button type="button" onClick={() => onSelectionChange([exactSelection([0])])}>
         Select first
       </button>
@@ -1844,5 +1851,87 @@ describe("StoredProofWorkspace constants", () => {
     expect(await screen.findByTestId("constants-unavailable")).toHaveTextContent(
       "The list of constants could not be loaded right now. The proof itself is unaffected.",
     );
+  });
+});
+
+describe("StoredProofWorkspace layout", () => {
+  /** A matchMedia stand-in whose answer the test can change; returns the setter. */
+  function stubWideLayout(initial: boolean) {
+    let matches = initial;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      media,
+      get matches() {
+        return matches;
+      },
+      addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+    }));
+    return (next: boolean) => {
+      matches = next;
+      act(() => listeners.forEach((listener) => listener()));
+    };
+  }
+
+  /** The proof, suggestions and move-instruction panels, in the order they appear in the page. */
+  function panelOrder(): string[] {
+    const panels: Array<[string, HTMLElement]> = [
+      ["proof", screen.getByTestId("workspace-view")],
+      ["suggestions", screen.getByRole("region", { name: "Available suggestions" })],
+      ["moves", screen.getByTestId("move-instructions")],
+    ];
+    return panels
+      .sort(([, left], [, right]) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      )
+      .map(([name]) => name);
+  }
+
+  it("stacks the suggestions directly after the proof, before the move instructions", () => {
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() => Promise.reject(new Error("Unexpected request"))),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    expect(panelOrder()).toEqual(["proof", "suggestions", "moves"]);
+  });
+
+  it("puts the move instructions before the suggestions in two columns, keeping their state", () => {
+    const setWide = stubWideLayout(true);
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(() => Promise.reject(new Error("Unexpected request"))),
+    );
+    render(<StoredProofWorkspace session={session} node={node} aiExecutor />);
+    expect(panelOrder()).toEqual(["proof", "moves", "suggestions"]);
+
+    const box = screen.getByRole("textbox", { name: "Describe a step" });
+    fireEvent.change(box, { target: { value: "split into cases" } });
+    setWide(false);
+    expect(panelOrder()).toEqual(["proof", "suggestions", "moves"]);
+    // The same textarea, still holding what was typed: the panels moved, they did not remount.
+    expect(screen.getByRole("textbox", { name: "Describe a step" })).toBe(box);
+    expect(box).toHaveValue("split into cases");
+  });
+
+  it("links the active selection to the suggestions panel, which can take focus", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockWithHistory(async (input) => {
+        const body = { suggestionSet: suggestionSet("set:link", "First", "result:first") };
+        return String(input).endsWith("/suggestion-sets")
+          ? jsonResponse({ ok: true, data: { ...body, replayed: false, transitionClasses: [] } })
+          : Promise.reject(new Error("Unexpected request"));
+      }),
+    );
+    render(<StoredProofWorkspace session={session} node={node} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    const link = await screen.findByTestId("suggestions-link");
+    expect(link).toHaveTextContent(/^1 suggestion$/);
+    expect(link).toHaveAttribute("href", "#suggestion-panel");
+    const panel = screen.getByRole("region", { name: "Available suggestions" });
+    expect(panel).toHaveAttribute("id", "suggestion-panel");
+    panel.focus();
+    expect(panel).toHaveFocus();
   });
 });

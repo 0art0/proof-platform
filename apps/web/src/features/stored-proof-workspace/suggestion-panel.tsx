@@ -50,7 +50,7 @@ export type SuggestionPanelActions = Readonly<{
 
 const FIND_MORE_REASON_ID = "find-more-results-reason";
 
-/** The fragment that links to the panel (the active-selections card points here). */
+/** The fragment that links to the panel (the active-selections card points here and focuses it). */
 export const SUGGESTION_PANEL_ID = "suggestion-panel";
 
 export type SuggestionPanelProps = SuggestionPanelActions &
@@ -189,6 +189,8 @@ export function SuggestionPanel({
       id={SUGGESTION_PANEL_ID}
       className={styles.suggestionPanel}
       aria-label="Available suggestions"
+      // Focusable by script and by the "N suggestions" link, not a Tab stop of its own.
+      tabIndex={-1}
     >
       <div className={styles.suggestionHeading}>
         <div>

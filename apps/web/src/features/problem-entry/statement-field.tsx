@@ -2,12 +2,16 @@
 
 import { useMemo } from "react";
 import type { LatexRenderer } from "@proof/language";
+import type { PlainMathJson } from "@proof/protocol";
+import { splitNaturalLanguage } from "../proof-workspace/presentation";
 import { parseMathJsonText, type StatementFormat, type StatementRow } from "./draft-form";
 import styles from "./problem-entry.module.css";
+import { Formula } from "./typeset";
 
 export type StatementFeedback =
   | Readonly<{ kind: "empty" }>
-  | Readonly<{ kind: "parsed"; mathJson: string }>
+  /** `latex` is the recognized statement written back out, which is what the preview typesets. */
+  | Readonly<{ kind: "parsed"; mathJson: string; latex: string }>
   | Readonly<{ kind: "error"; message: string }>;
 
 /**
@@ -22,19 +26,65 @@ export function statementFeedback(
   if (row.format === "mathjson") {
     const parsed = parseMathJsonText(row.text);
     return parsed.ok
-      ? { kind: "parsed", mathJson: JSON.stringify(parsed.expression) }
+      ? recognized(parsed.expression, latex)
       : { kind: "error", message: parsed.message };
   }
   const parsed = latex.parse(row.text);
   return parsed.ok
-    ? { kind: "parsed", mathJson: JSON.stringify(parsed.expression) }
+    ? recognized(parsed.expression, latex)
     : { kind: "error", message: parsed.diagnostics.map(({ message }) => message).join(" ") };
+}
+
+function recognized(expression: PlainMathJson, latex: LatexRenderer): StatementFeedback {
+  const mathJson = JSON.stringify(expression);
+  try {
+    return { kind: "parsed", mathJson, latex: latex.serialize(expression) };
+  } catch {
+    // The statement is recognized even if it cannot be written back out; show its structure.
+    return { kind: "parsed", mathJson, latex: mathJson };
+  }
+}
+
+/**
+ * The problem statement is prose, so the preview typesets the `$…$` pieces of it that parse, as
+ * the proof service will read them, and leaves the rest as typed. It appears only when at least
+ * one piece parses. What is typeset is always LaTeX written back out from the parsed statement,
+ * never the typed text itself.
+ */
+export function StatementPreview({
+  text,
+  latex,
+}: Readonly<{ text: string; latex: LatexRenderer }>) {
+  const parts = useMemo(
+    () =>
+      splitNaturalLanguage(text).map((part) => {
+        if (part.kind === "text") return { ...part, typeset: undefined };
+        const feedback = statementFeedback({ format: "latex", text: part.value }, latex);
+        return { ...part, typeset: feedback.kind === "parsed" ? feedback.latex : undefined };
+      }),
+    [text, latex],
+  );
+  if (!parts.some(({ typeset }) => typeset !== undefined)) return null;
+  return (
+    <div className={styles.preview} data-preview="">
+      <span className={styles.previewLabel}>Preview</span>
+      <p className={styles.previewProse}>
+        {parts.map(({ kind, value, typeset }, index) =>
+          typeset !== undefined ? (
+            <Formula key={index} latex={typeset} />
+          ) : (
+            <span key={index}>{kind === "math" ? `$${value}$` : value}</span>
+          ),
+        )}
+      </p>
+    </div>
+  );
 }
 
 export function StatementField({
   label,
   row,
-  latex,
+  feedback,
   onChange,
   onRemove,
   required,
@@ -45,12 +95,28 @@ export function StatementField({
   /** Tints the row in its proof family's colour; the label always names the family too. */
   family?: "goal" | "hypothesis";
   row: StatementRow;
-  latex: LatexRenderer;
+  /** How the row reads, from `statementFeedback`; the form also reads it for the setup progress. */
+  feedback: StatementFeedback;
   onChange: (row: StatementRow) => void;
   onRemove?: (() => void) | undefined;
 }>) {
-  const feedback = useMemo(() => statementFeedback(row, latex), [row, latex]);
   const feedbackId = `statement-feedback-${row.key}`;
+  const line = (
+    <p id={feedbackId} className={styles.feedback} data-kind={feedback.kind}>
+      {feedback.kind === "parsed" ? (
+        <>
+          <span aria-hidden="true">✓ </span>Notation recognized.
+        </>
+      ) : feedback.kind === "error" ? (
+        <>
+          <span aria-hidden="true">✗ </span>
+          {feedback.message}
+        </>
+      ) : (
+        "Enter the statement."
+      )}
+    </p>
+  );
   return (
     <div className={styles.statementRow} data-family={family}>
       <div className={styles.statementHeader}>
@@ -88,20 +154,18 @@ export function StatementField({
         value={row.text}
         onChange={(event) => onChange({ ...row, text: event.currentTarget.value })}
       />
-      <p id={feedbackId} className={styles.feedback} data-kind={feedback.kind}>
-        {feedback.kind === "parsed" ? (
-          <>
-            <span aria-hidden="true">✓ </span>Notation recognized.
-          </>
-        ) : feedback.kind === "error" ? (
-          <>
-            <span aria-hidden="true">✗ </span>
-            {feedback.message}
-          </>
-        ) : (
-          "Enter the statement."
-        )}
-      </p>
+      {feedback.kind === "parsed" ? (
+        // The recognized statement, typeset: what the setup will actually read.
+        <div className={styles.preview} data-preview="">
+          <span className={styles.previewLabel}>Preview</span>
+          <div className={styles.previewBody}>
+            <Formula latex={feedback.latex} />
+            {line}
+          </div>
+        </div>
+      ) : (
+        line
+      )}
     </div>
   );
 }

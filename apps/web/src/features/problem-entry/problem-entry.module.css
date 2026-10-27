@@ -415,12 +415,149 @@ details[open] > .disclosure::before {
   overflow-wrap: anywhere;
 }
 
-/* Problem entry form. */
+/*
+ * Problem entry: the form beside the setup progress. Both wrap, so the rail stacks below the form
+ * on narrow screens.
+ */
+.layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+/* A jump from the setup progress should not leave its section under the sticky app bar. */
+.layout [id] {
+  scroll-margin-top: calc(3.5rem + var(--space-4));
+}
+
 .entry {
   display: flex;
-  max-width: 54rem;
+  min-width: 0;
+  flex: 999 1 560px;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+/* Setup progress. */
+.rail {
+  composes: card from "../../ui/controls.module.css";
+  display: flex;
+  min-width: 0;
+  flex: 1 1 280px;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.railTitle {
+  font-size: var(--text-lg);
+  line-height: 1.47;
+  letter-spacing: normal;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.stepTrack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.marker {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  box-sizing: border-box;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.step[data-state="done"] .marker {
+  border-color: transparent;
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.step[data-state="current"] .marker {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.stepLine {
+  width: 1px;
+  min-height: var(--space-4);
+  flex: 1;
+  margin: var(--space-1) 0;
+  background: var(--border);
+}
+
+.stepBody {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding-bottom: var(--space-3);
+}
+
+.step:last-child .stepBody {
+  padding-bottom: 0;
+}
+
+.stepLink {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.step[data-state="done"] .stepLink,
+.stepLink[aria-current="step"] {
+  color: var(--text);
+}
+
+.stepLink[aria-current="step"] {
+  font-weight: 600;
+}
+
+.stepLink:hover {
+  color: var(--focus);
+}
+
+.stepStatus {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
+}
+
+.step[data-state="done"] .stepStatus {
+  color: var(--success-text);
+  font-weight: 500;
+}
+
+@media (min-width: 60rem) {
+  .rail {
+    position: sticky;
+    /* Below the 3.5rem app bar. */
+    top: calc(3.5rem + var(--space-4));
+  }
 }
 
 .section {
@@ -813,15 +950,95 @@ details.section[open] > :not(summary) {
   align-items: flex-start;
 }
 
-.rendered code {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-}
-
 .prose {
   color: var(--text-muted);
   font-family: var(--font-math);
+  font-size: var(--text-md);
+}
+
+/*
+ * A typeset formula. `contain: paint` keeps whatever MathLive's markup draws inside this box, and
+ * the LaTeX source stays in the page as visually hidden text next to it.
+ */
+.formula {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: auto hidden;
+  color: var(--text);
+  font-family: var(--font-math);
   font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+.typeset {
+  display: inline-block;
+  padding: 0.1em 0;
+  contain: paint;
+}
+
+/* Until MathLive has loaded, or if it cannot, the LaTeX itself is shown. */
+.typeset code {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.typeset a {
+  pointer-events: none;
+}
+
+/* A premise of a library result, as a small tile. */
+.premise {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 var(--space-2) var(--space-1) 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 0 0.375rem;
+}
+
+/* The parsed statement under its field, typeset, with the notation check beside it. */
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-3) var(--space-4);
+}
+
+.statementRow[data-family] .preview {
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+.previewLabel {
+  composes: eyebrow from "../../ui/controls.module.css";
+}
+
+.previewProse {
+  margin: 0;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* A field and the preview of what was typed in it sit closer than separate fields do. */
+.fieldGroup {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.previewBody {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
 }
 
 /* Not-found pages. */

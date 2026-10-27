@@ -15,6 +15,8 @@ import { invalidAnswer, nonProposalSchema, postAi } from "./ai-api";
 import type { AcceptedBackground, ApprovedLibrary, FormProblem, SetupContext } from "./draft-form";
 import { LibraryStep } from "./library-step";
 import styles from "./problem-entry.module.css";
+import { SETUP_SECTION } from "./setup-progress";
+import { Formula } from "./typeset";
 
 /** Which setup roles the worker reports as configured. */
 export type AiSetupCapabilities = Readonly<{
@@ -313,7 +315,7 @@ export function AiAssist({
         </p>
       ) : null}
 
-      <div className={styles.aiStep}>
+      <div className={styles.aiStep} id={SETUP_SECTION.background}>
         <h3>Background</h3>
         <p className={styles.sectionIntro}>
           Suggested from the problem statement and your preferences only. Accept it, or describe
@@ -594,7 +596,8 @@ function ConstantItem({
   const { latex, prose } = renderConstant(operator);
   return (
     <li>
-      <code>{latex}</code> <strong>{operator.presentation?.displayName ?? operator.symbol}</strong>
+      <Formula latex={latex} />{" "}
+      <strong>{operator.presentation?.displayName ?? operator.symbol}</strong>
       <span className={styles.prose}> {prose}</span>
       <span className={styles.hint}> {rationale}</span>
     </li>

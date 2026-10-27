@@ -12,6 +12,8 @@ import { z } from "zod";
 import { invalidAnswer, nonProposalSchema, postAi } from "./ai-api";
 import type { AcceptedBackground, ApprovedLibrary } from "./draft-form";
 import styles from "./problem-entry.module.css";
+import { SETUP_SECTION } from "./setup-progress";
+import { Formula } from "./typeset";
 
 const resultSchema = z.object({
   artifact: z.object({
@@ -222,7 +224,7 @@ export function LibraryStep({
       : null;
 
   return (
-    <div className={styles.aiStep}>
+    <div className={styles.aiStep} id={SETUP_SECTION.library}>
       <h3>Build library</h3>
       <p className={styles.sectionIntro}>
         Proposes general results about the accepted background&apos;s constants, at its level. The
@@ -399,16 +401,16 @@ function ResultItem({
       <div className={styles.libraryBody}>
         <strong>{artifact.name}</strong>
         <span className={styles.rendered}>
-          <code>{statement.latex}</code>
+          <Formula latex={statement.latex} />
           <span className={styles.prose}>{statement.prose}</span>
         </span>
         {premises.length === 0 ? null : (
           <span className={styles.hint}>
             Assuming:{" "}
             {premises.map((premise, index) => (
-              <code key={index} className={styles.token}>
-                {premise.latex}
-              </code>
+              <span key={index} className={styles.premise}>
+                <Formula latex={premise.latex} />
+              </span>
             ))}
           </span>
         )}

@@ -39,7 +39,7 @@ export type ProofWorkspaceProps = Readonly<{
   gestures?: GestureBindings;
   /** Makes exactly these selections active when its `id` changes (a drop's source and target). */
   selectionRequest?: SelectionRequest | undefined;
-  /** A link shown in the Active selections card once something is selected (no auto-scroll). */
+  /** A link shown in the Active selections card once something is selected; following it focuses the suggestions panel. */
   suggestionsLink?: SuggestionsLink | undefined;
 }>;
 
@@ -268,20 +268,22 @@ function ValidatedProofWorkspace({
             </ol>
           )}
 
-          {suggestionsLink === undefined || selectionState.active.length === 0 ? null : (
-            <a className={styles.suggestionsLink} href={suggestionsLink.href}>
-              {suggestionsLink.text}
-            </a>
-          )}
-          <button
-            className={styles.clearButton}
-            type="button"
-            disabled={selectionState.active.length === 0}
-            aria-keyshortcuts="Escape"
-            onClick={() => dispatch({ type: "clear" })}
-          >
-            Clear selections <kbd aria-hidden="true">Esc</kbd>
-          </button>
+          <div className={styles.selectionActions}>
+            {suggestionsLink === undefined || selectionState.active.length === 0 ? null : (
+              <a className={styles.suggestionsLink} href={suggestionsLink.href}>
+                {suggestionsLink.text}
+              </a>
+            )}
+            <button
+              className={styles.clearButton}
+              type="button"
+              disabled={selectionState.active.length === 0}
+              aria-keyshortcuts="Escape"
+              onClick={() => dispatch({ type: "clear" })}
+            >
+              Clear selections <kbd aria-hidden="true">Esc</kbd>
+            </button>
+          </div>
           <p
             className={styles.selectionNotice}
             aria-live="polite"

@@ -57,6 +57,7 @@ import { createInteractionRecorder } from "./interaction-recorder";
 import { ConstantsPanel } from "./constants-panel";
 import { useLibraryTopUp } from "./library-top-up";
 import { useSessionConstants } from "./use-session-constants";
+import { useWideLayout } from "./use-wide-layout";
 import { MoveInstructions } from "./move-instructions";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
@@ -747,6 +748,7 @@ function StatefulStoredWorkspace({
       : false) ||
     (history.kind === "ready" && history.edges.some(({ edge }) => edge.macro !== undefined));
   const macros = useMacroInfo(session.id, macrosWanted);
+  const wideLayout = useWideLayout();
   const suggestionCount =
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.suggestionSet.suggestions.length
@@ -758,9 +760,59 @@ function StatefulStoredWorkspace({
           href: `#${SUGGESTION_PANEL_ID}`,
           text:
             suggestionCount === 0
-              ? "No suggestions fit this selection (see below)"
-              : `${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"} below`,
+              ? "No suggestions fit this selection"
+              : `${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}`,
         };
+  const moveInstructions = (
+    <div key="move-instructions" className={styles.movesArea}>
+      <MoveInstructions
+        sessionId={session.id}
+        node={node}
+        operators={session.operators}
+        selections={selections}
+        presentation={presentation}
+        view={view}
+        enabled={aiExecutor}
+        moveAuthorEnabled={aiMoveAuthor}
+        readOnly={readOnly}
+        busy={mutationPending}
+        textareaRef={instructionsRef}
+        onApplyStart={beginExecutorApply}
+        onApplyEnd={endExecutorApply}
+        onApplied={adoptExecutorResult}
+      />
+    </div>
+  );
+  // "Find more results" is a library top-up (docs/ai-agents-architecture.md §2); where it is
+  // unavailable the button is disabled and says why. "Describe a move" is offered only when the
+  // move-instruction box can take a description.
+  const suggestionsColumn = (
+    <div key="suggestions" className={styles.suggestionsArea}>
+      {readOnly ? (
+        <p className={styles.readOnlyReason} role="note" data-testid="read-only-reason">
+          {READ_ONLY_REASON}: suggestions can be viewed but not applied.
+        </p>
+      ) : null}
+      <SuggestionPanel
+        suggestions={suggestions}
+        move={moveState}
+        mutationPending={mutationPending || readOnly}
+        authorMovesHref={readOnly ? undefined : movesHref(session.id)}
+        macros={macros}
+        presentation={catalogPresentation}
+        view={view}
+        aiShortlist={
+          aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
+        }
+        onDescribeMove={aiExecutor && !readOnly ? focusInstructions : undefined}
+        onFindMoreResults={findMoreResults}
+        findMoreDisabledReason={findMoreDisabledReason}
+        findMoreStatus={topUp.status}
+        onAskAgain={() => handleSelectionChange(selections)}
+        {...panelActions}
+      />
+    </div>
+  );
   return (
     <section className={styles.storedWorkspace} aria-label="Stored proof session">
       <WorkspaceHeader
@@ -816,9 +868,9 @@ function StatefulStoredWorkspace({
         view={view}
         abstraction={abstraction}
       />
-      <div className={styles.stateRow}>
+      <div className={styles.workArea}>
         <div
-          className={styles.interactionShell}
+          className={`${styles.interactionShell} ${styles.proofArea}`}
           data-busy={mutationPending}
           aria-busy={mutationPending}
         >
@@ -833,50 +885,13 @@ function StatefulStoredWorkspace({
             suggestionsLink={suggestionsLink}
           />
         </div>
-        <MoveInstructions
-          sessionId={session.id}
-          node={node}
-          operators={session.operators}
-          selections={selections}
-          presentation={presentation}
-          view={view}
-          enabled={aiExecutor}
-          moveAuthorEnabled={aiMoveAuthor}
-          readOnly={readOnly}
-          busy={mutationPending}
-          textareaRef={instructionsRef}
-          onApplyStart={beginExecutorApply}
-          onApplyEnd={endExecutorApply}
-          onApplied={adoptExecutorResult}
-        />
+        {/* Stacked, the suggestions follow the proof directly; in two columns the move
+            instructions sit under the proof and the suggestions beside it. The document order
+            follows the visual order in both (CSS places the columns), so Tab does too; the keys
+            keep the panels mounted when the window crosses the breakpoint. */}
+        {wideLayout ? [moveInstructions, suggestionsColumn] : [suggestionsColumn, moveInstructions]}
       </div>
 
-      {readOnly ? (
-        <p className={styles.readOnlyReason} role="note" data-testid="read-only-reason">
-          {READ_ONLY_REASON}: suggestions can be viewed but not applied.
-        </p>
-      ) : null}
-      {/* "Find more results" is a library top-up (docs/ai-agents-architecture.md §2); where it is
-          unavailable the button is disabled and says why. "Describe a move" is offered only when
-          the move-instruction box can take a description. */}
-      <SuggestionPanel
-        suggestions={suggestions}
-        move={moveState}
-        mutationPending={mutationPending || readOnly}
-        authorMovesHref={readOnly ? undefined : movesHref(session.id)}
-        macros={macros}
-        presentation={catalogPresentation}
-        view={view}
-        aiShortlist={
-          aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
-        }
-        onDescribeMove={aiExecutor && !readOnly ? focusInstructions : undefined}
-        onFindMoreResults={findMoreResults}
-        findMoreDisabledReason={findMoreDisabledReason}
-        findMoreStatus={topUp.status}
-        onAskAgain={() => handleSelectionChange(selections)}
-        {...panelActions}
-      />
       <InquiryPanel
         sessionId={session.id}
         node={node}

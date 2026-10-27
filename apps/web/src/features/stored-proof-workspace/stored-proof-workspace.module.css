@@ -4,22 +4,63 @@
 }
 
 /*
- * The proof state and the move-instruction box. On a wide screen they sit side by side; below
- * that the box follows the proof state directly, so the proof keeps the width it has today.
+ * The work area. On a wide screen it is two columns: the proof state with the move instructions
+ * under it on the left, and the suggestions on the right, sticky just below the app bar and
+ * scrolling on their own so they stay beside the statement being worked on while the proof
+ * scrolls. Below the breakpoint everything stacks: the proof, its suggestions, then the move
+ * instructions. The document order follows the visual order in both layouts (the component
+ * swaps the last two to match); the columns themselves are placed here.
+ * Keep the breakpoint equal to WIDE_LAYOUT_QUERY in use-wide-layout.ts.
  */
-.stateRow {
+.workArea {
   display: grid;
-  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
   align-items: start;
 }
 
-.stateRow > * {
+.workArea > * {
   min-width: 0;
 }
 
-@media (min-width: 85rem) {
-  .stateRow {
-    grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+.suggestionsArea {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+@media (min-width: 72rem) {
+  .workArea {
+    /* The proof takes what is left; the suggestions get a card-friendly 24 to 28rem. */
+    grid-template-columns: minmax(0, 1fr) minmax(24rem, 28rem);
+    /* The second row absorbs a tall suggestions column, so the move instructions stay snug
+       under the proof instead of being pushed down by it. */
+    grid-template-rows: auto 1fr;
+    column-gap: var(--space-5);
+  }
+
+  .proofArea {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .movesArea {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .suggestionsArea {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    position: sticky;
+    /* Clear the sticky 3.5rem app bar, and keep the same gap below the column. */
+    top: calc(3.5rem + var(--space-4));
+    max-height: calc(100vh - 3.5rem - 2 * var(--space-4));
+    max-height: calc(100dvh - 3.5rem - 2 * var(--space-4));
+    overflow-y: auto;
+    /* Room inside the scroll box for focus rings that sit outside the panel's edge. */
+    margin: calc(-1 * var(--space-1));
+    padding: var(--space-1);
   }
 }
 
