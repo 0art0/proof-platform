@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useHydrated } from "../hydration/use-hydrated";
 import { ToolbarDialog } from "./toolbar-dialog";
 import styles from "./stored-proof-workspace.module.css";
+import dialogStyles from "./toolbar-actions.module.css";
 
 export type SessionVisibility = "private" | "shared";
 
@@ -125,12 +126,12 @@ export function ExportAction({
           description="Exporting saves the full proof history and problem setup as one file. This session is private. Export it anyway?"
           onClose={cancel}
         >
-          <div className={styles.toolbar}>
-            <button type="button" className={styles.toolbarButton} onClick={confirm}>
-              Export anyway
-            </button>
-            <button type="button" className={styles.toolbarButton} onClick={cancel}>
+          <div className={dialogStyles.dialogActions}>
+            <button type="button" className={dialogStyles.secondaryButton} onClick={cancel}>
               Cancel
+            </button>
+            <button type="button" className={dialogStyles.primaryButton} onClick={confirm}>
+              Export anyway
             </button>
           </div>
         </ToolbarDialog>

@@ -82,7 +82,7 @@ export function DeleteMoveDialog({
               {impact.parentNodeId}, where the macro started.
             </p>
           )}
-          <p>
+          <p className={styles.caution}>
             Deleted work leaves the discovery record and export; only an audit tombstone is kept. To
             keep this branch, backtrack instead.
           </p>
@@ -119,7 +119,7 @@ export function DeleteMoveDialog({
         </p>
       )}
       <div className={styles.dialogActions}>
-        <button type="button" onClick={onClose}>
+        <button type="button" className={styles.secondaryButton} onClick={onClose}>
           Cancel
         </button>
         <button

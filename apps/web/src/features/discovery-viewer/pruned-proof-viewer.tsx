@@ -5,6 +5,7 @@ import type { ProofArtifact } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
 import { usePresentation } from "../proof-workspace/presentation";
 import { indexArtifact } from "./artifact-data";
+import { EvidenceTag, TransitionTag } from "./edge-tags";
 import styles from "./discovery-viewer.module.css";
 import { InquiryRecordExplanation, useInquiryExplanations } from "./inquiry-record-item";
 import {
@@ -47,11 +48,12 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
       </div>
       {proof.solved ? (
         <>
-          <section aria-label="Pruned proof steps">
+          <section className={styles.stack} aria-label="Pruned proof steps">
             <h2>Pruned proof</h2>
             <p className={styles.muted}>
               {proof.steps.length} {proof.steps.length === 1 ? "step" : "steps"} from{" "}
-              <code>{proof.rootNodeId}</code> to <code>{proof.leafNodeId}</code>
+              <code className={styles.meta}>{proof.rootNodeId}</code> to{" "}
+              <code className={styles.meta}>{proof.leafNodeId}</code>
               {proof.removedSteps.length > 0
                 ? `; ${proof.removedSteps.length} hypothesis-only ${
                     proof.removedSteps.length === 1 ? "step was" : "steps were"
@@ -59,131 +61,154 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
                 : ""}
               .
             </p>
-            <ol className={styles.proofSteps} data-testid="proof-steps">
-              {proof.steps.map((step) => {
-                const target = stepTarget(step);
-                return (
-                  <li key={step.edgeId} data-edge-id={step.edgeId}>
-                    <h3>
-                      Step {step.number}: {step.label}
-                    </h3>
-                    <p>
-                      <span className={styles.chip}>{step.transitionClass}</span>{" "}
-                      <span className={styles.chip}>{step.evidence}</span>{" "}
-                      <span className={styles.muted}>
-                        acts on {step.target.kind} <code>{step.target.id}</code>
+            <div className={styles.proofPanel}>
+              <ol className={styles.proofSteps} data-testid="proof-steps">
+                {proof.steps.map((step) => {
+                  const target = stepTarget(step);
+                  return (
+                    <li key={step.edgeId} data-edge-id={step.edgeId}>
+                      <span className={styles.stepNumber} aria-hidden="true">
+                        {step.number}
                       </span>
-                    </p>
-                    {target === undefined ? null : (
-                      <SequentView
-                        sequent={target.sequent}
-                        presentation={presentation}
-                        view={view}
-                      />
-                    )}
-                    {step.motivatingRecords.length === 0 ? null : (
-                      <p>
-                        Motivated by:{" "}
-                        {step.motivatingRecords.map((link, position) => (
-                          <span key={link.recordId}>
-                            {position > 0 ? ", " : ""}
-                            <a href={`#${inquiryAnchor(link.recordId)}`}>
-                              {link.kind} <code>{link.recordId}</code>
-                            </a>{" "}
-                            <span className={styles.muted}>({RELATION_LABELS[link.relation]})</span>
-                          </span>
-                        ))}
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-            </ol>
-          </section>
-          <section aria-label="Sorry assumptions">
-            <h2>Sorry assumptions</h2>
-            {proof.assumptions.length === 0 ? (
-              <p data-testid="no-sorry-dependency">
-                <span aria-hidden="true">✓ </span>This proof depends on no sorry assumption.
-              </p>
-            ) : (
-              <>
-                <p>This proof is stated relative to these assumptions, taken without proof.</p>
-                <AssumptionList
-                  assumptions={proof.assumptions}
-                  presentation={presentation}
-                  view={view}
-                  label="Assumptions this proof depends on"
-                />
-                <ul aria-label="Sorry steps">
-                  {proof.sorryDependencies.map((dependency) => (
-                    <li key={dependency.edgeId}>
-                      Edge <code>{dependency.edgeId}</code> assumed {dependency.target.kind}{" "}
-                      <code>{dependency.target.id}</code> ({dependency.assumptionIds.join(", ")})
+                      <div className={styles.stepBody}>
+                        <div className={styles.stepHeading}>
+                          <h3>
+                            <span className="visually-hidden">Step {step.number}: </span>
+                            {step.label}
+                          </h3>
+                          <TransitionTag transitionClass={step.transitionClass} />
+                          <EvidenceTag evidence={step.evidence} />
+                        </div>
+                        {target === undefined ? null : (
+                          <SequentView
+                            sequent={target.sequent}
+                            presentation={presentation}
+                            view={view}
+                          />
+                        )}
+                        <p className={styles.stepMeta}>
+                          acts on {step.target.kind}{" "}
+                          <code className={styles.meta}>{step.target.id}</code>
+                        </p>
+                        {step.motivatingRecords.length === 0 ? null : (
+                          <p className={styles.stepMeta}>
+                            Motivated by:{" "}
+                            {step.motivatingRecords.map((link, position) => (
+                              <span key={link.recordId}>
+                                {position > 0 ? ", " : ""}
+                                <a href={`#${inquiryAnchor(link.recordId)}`}>
+                                  {link.kind} <code className={styles.meta}>{link.recordId}</code>
+                                </a>{" "}
+                                <span>({RELATION_LABELS[link.relation]})</span>
+                              </span>
+                            ))}
+                          </p>
+                        )}
+                      </div>
                     </li>
-                  ))}
-                </ul>
-              </>
-            )}
-            {proof.backgroundInferenceEdgeIds.length > 0 ? (
-              <p>
-                Background inference is used at:{" "}
-                {proof.backgroundInferenceEdgeIds.map((id) => (
-                  <code key={id}>{id} </code>
-                ))}
+                  );
+                })}
+              </ol>
+              <p className={styles.endMark} aria-hidden="true">
+                ∎
               </p>
-            ) : null}
-            {proof.unusedSorryAssumptions.length > 0 ? (
-              <>
-                <h3>Sorry assumptions on abandoned branches</h3>
-                <AssumptionList
-                  assumptions={proof.unusedSorryAssumptions}
-                  presentation={presentation}
-                  view={view}
-                  label="Assumptions this proof does not depend on"
-                />
-              </>
-            ) : null}
+            </div>
+          </section>
+          <section className={styles.stack} aria-label="Sorry assumptions">
+            <h2>Sorry assumptions</h2>
+            <div className={styles.panel}>
+              {proof.assumptions.length === 0 ? (
+                <p className={styles.success} data-testid="no-sorry-dependency">
+                  <span aria-hidden="true">✓ </span>This proof depends on no sorry assumption.
+                </p>
+              ) : (
+                <>
+                  <p>This proof is stated relative to these assumptions, taken without proof.</p>
+                  <AssumptionList
+                    assumptions={proof.assumptions}
+                    presentation={presentation}
+                    view={view}
+                    label="Assumptions this proof depends on"
+                  />
+                  <ul aria-label="Sorry steps" className={styles.plainList}>
+                    {proof.sorryDependencies.map((dependency) => (
+                      <li key={dependency.edgeId}>
+                        Edge <code className={styles.meta}>{dependency.edgeId}</code> assumed{" "}
+                        {dependency.target.kind}{" "}
+                        <code className={styles.meta}>{dependency.target.id}</code> (
+                        {dependency.assumptionIds.join(", ")})
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {proof.backgroundInferenceEdgeIds.length > 0 ? (
+                <p>
+                  Background inference is used at:{" "}
+                  {proof.backgroundInferenceEdgeIds.map((id) => (
+                    <code className={styles.meta} key={id}>
+                      {id}{" "}
+                    </code>
+                  ))}
+                </p>
+              ) : null}
+              {proof.unusedSorryAssumptions.length > 0 ? (
+                <div className={styles.panelSection}>
+                  <h3>Sorry assumptions on abandoned branches</h3>
+                  <AssumptionList
+                    assumptions={proof.unusedSorryAssumptions}
+                    presentation={presentation}
+                    view={view}
+                    label="Assumptions this proof does not depend on"
+                  />
+                </div>
+              ) : null}
+            </div>
           </section>
         </>
       ) : (
-        <section aria-label="Unsolved">
+        <section className={styles.stack} aria-label="Unsolved">
           <h2>No pruned proof</h2>
-          <p className={styles.muted}>
-            A pruned proof is the successful route only: the steps that lead from the starting point
-            to a finished proof, without the branches that were set aside.
-          </p>
-          <p data-testid="not-solved">
-            The stored discovery tree is not solved, so there is no pruned proof to show.
-          </p>
-          {proof.openTargets.length > 0 ? (
-            <ul aria-label="Open targets">
-              {proof.openTargets.map((target) => (
-                <li key={target.id}>
-                  Open {target.kind} <code>{target.id}</code>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {proof.sorryAssumptions.length > 0 ? (
-            <AssumptionList
-              assumptions={proof.sorryAssumptions}
-              presentation={presentation}
-              view={view}
-              label="Sorry assumptions in the retained tree"
-            />
-          ) : null}
+          <div className={styles.panel}>
+            <p className={styles.hint}>
+              A pruned proof is the successful route only: the steps that lead from the starting
+              point to a finished proof, without the branches that were set aside.
+            </p>
+            <p data-testid="not-solved">
+              The stored discovery tree is not solved, so there is no pruned proof to show.
+            </p>
+            {proof.openTargets.length > 0 ? (
+              <ul aria-label="Open targets" className={styles.plainList}>
+                {proof.openTargets.map((target) => (
+                  <li key={target.id}>
+                    Open {target.kind} <code className={styles.meta}>{target.id}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {proof.sorryAssumptions.length > 0 ? (
+              <AssumptionList
+                assumptions={proof.sorryAssumptions}
+                presentation={presentation}
+                view={view}
+                label="Sorry assumptions in the retained tree"
+              />
+            ) : null}
+          </div>
         </section>
       )}
-      <section aria-label="Inquiry records">
+      <section className={styles.stack} aria-label="Inquiry records">
         <h2>Inquiry records</h2>
         {artifact.inquiryRecords.length === 0 ? (
-          <p>No inquiry records were stored for this session.</p>
+          <p className={styles.hint}>No inquiry records were stored for this session.</p>
         ) : (
           <ol className={styles.records}>
             {artifact.inquiryRecords.map((record) => (
               <li key={record.id} id={inquiryAnchor(record.id)}>
-                <span className={styles.chip}>{record.kind}</span> <code>{record.id}</code>
+                <span className={styles.recordKey}>
+                  <span className={styles.chip}>{record.kind}</span>
+                  <code className={styles.meta}>{record.id}</code>
+                </span>
                 <InquiryRecordExplanation
                   record={recordsById.get(record.id) ?? record}
                   explain={explain}

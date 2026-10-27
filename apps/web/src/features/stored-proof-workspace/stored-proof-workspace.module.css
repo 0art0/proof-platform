@@ -1,6 +1,6 @@
 .storedWorkspace {
   display: grid;
-  gap: 1.25rem;
+  gap: var(--space-4);
 }
 
 /*
@@ -9,7 +9,7 @@
  */
 .stateRow {
   display: grid;
-  gap: 1.25rem;
+  gap: var(--space-5);
   align-items: start;
 }
 
@@ -23,177 +23,179 @@
   }
 }
 
+/*
+ * While a step is being applied the proof stays at full strength and ignores input; a thin
+ * moving line along its top edge says so (aria-busy carries the same state for assistive tech).
+ */
+.interactionShell {
+  position: relative;
+}
+
 .interactionShell[data-busy="true"] {
   pointer-events: none;
-  opacity: 0.72;
 }
 
-.sessionHeader,
-.historyPanel {
-  border: 1px solid var(--border);
-  border-radius: 1rem;
-  background: var(--surface);
-  padding: 1rem 1.15rem;
+.interactionShell[data-busy="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, transparent, var(--focus), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: busySweep 1.2s ease-in-out infinite;
 }
 
+@keyframes busySweep {
+  from {
+    background-position: -50% 0;
+  }
+
+  to {
+    background-position: 150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interactionShell[data-busy="true"]::before {
+    background: var(--focus);
+    animation: none;
+  }
+}
+
+/* Header: the problem title in the serif display style, a status pill, the branch below. */
 .sessionHeader {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.75rem 1.5rem;
+  gap: var(--space-2) var(--space-5);
   align-items: start;
 }
 
-.sessionHeader p,
-.historyPanel p {
+.sessionHeader p {
   margin: 0;
 }
 
+.headerTitle {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
 .sessionHeader h1 {
-  margin: 0.15rem 0 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: clamp(1.4rem, 3vw, 2.1rem);
-  line-height: 1.1;
+  margin: 0;
+  font-size: clamp(1.5rem, 3vw, var(--text-display));
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
+/* A session id standing in for a missing title is metadata, so it keeps the meta style. */
+.idTitle {
+  composes: meta from "../../ui/controls.module.css";
+}
+
+.sessionHeader h1.idTitle {
+  font-size: var(--text-md);
+  line-height: 1.57;
+}
+
 .headerEyebrow {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  composes: eyebrow from "../../ui/controls.module.css";
+}
+
+.headerId {
+  composes: meta from "../../ui/controls.module.css";
+  overflow-wrap: anywhere;
 }
 
 .headerBackground {
   max-width: 60ch;
-  margin-top: 0.4rem;
+  margin-top: var(--space-1);
   color: var(--text-muted);
-  line-height: 1.5;
+  font-size: var(--text-md);
+  line-height: 1.57;
 }
 
 .headerFacts {
-  display: grid;
-  gap: 0.35rem;
-  justify-items: end;
-  font-size: 0.78rem;
-}
-
-.headerFacts {
+  display: flex;
   min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
-.headerFacts > span {
-  color: var(--text-muted);
-  font-size: 0.78rem;
+.headerNode {
+  composes: meta from "../../ui/controls.module.css";
   /* Node IDs of applied steps are long and unbroken: wrap them instead of widening the page. */
   overflow-wrap: anywhere;
 }
 
-.historyNode {
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.7rem;
+.snapshotStatus {
+  composes: pill from "../../ui/controls.module.css";
+}
+
+.sessionHeader .snapshotStatus {
+  min-height: 1.75rem;
+  border-color: var(--border);
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  white-space: normal;
+}
+
+.sessionHeader .snapshotStatus[data-closed="true"] {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.readOnlyBadge {
+  composes: pill from "../../ui/controls.module.css";
+}
+
+.sessionHeader .readOnlyBadge {
+  min-height: 1.75rem;
+  border-color: var(--border-control);
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.headerStatement {
+  max-width: 60ch;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.headerStatement > summary {
+  width: fit-content;
+  text-decoration: underline;
+  text-decoration-color: var(--border-control);
+  text-underline-offset: 3px;
+}
+
+.headerStatement p {
+  margin: var(--space-2) 0 0;
   color: var(--text);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.historyNode:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.actionNotice {
-  border-left: 4px solid var(--accent);
-  background: var(--accent-soft);
-  padding: 0.7rem 0.8rem;
-  color: var(--accent-text);
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
-.actionNotice[data-state="rejected"] {
-  border-color: var(--warning-border);
-  background: var(--warning-bg);
-  color: var(--warning-text);
-}
-
-.historyPanel {
-  display: grid;
-  gap: 0.8rem;
-}
-
-.historyHeading {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.historyHeading h2 {
-  margin: 0;
-  font-size: 1.25rem;
-}
-
-.historyList {
-  display: grid;
-  gap: 0.45rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.historyItem {
-  display: grid;
-  gap: 0.25rem;
-}
-
-.historyNode {
-  display: grid;
-  width: 100%;
-  text-align: left;
-}
-
-.historyNode[data-current="true"] {
-  border-width: 2px;
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.historyNode small {
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.snapshotStatus {
-  border: 1px solid var(--goal-border);
-  border-radius: 999px;
-  background: var(--goal-bg);
-  padding: 0.25rem 0.65rem;
-  color: var(--goal-fg);
-}
-
-.snapshotStatus[data-closed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-
-.snapshotStatusLabel {
-  font-size: 0.72rem;
-}
-
+/* The branch: 13px muted, the current step bold. */
 .breadcrumb {
   grid-column: 1 / -1;
-  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
 }
 
 .breadcrumb ol {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -205,138 +207,301 @@
 }
 
 .breadcrumb li + li::before {
-  margin-right: 0.25rem;
-  color: var(--text-muted);
-  content: "→";
+  margin-right: var(--space-1);
+  color: var(--text-subtle);
+  content: "→" / "";
 }
 
 .breadcrumb li[aria-current="step"] {
-  font-weight: 800;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
+  color: var(--text);
+  font-weight: 600;
 }
 
+/* Toolbar: one wrapping row of small ghost buttons inside a single card. */
 .toolbarShell {
-  display: grid;
-  gap: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--space-1) var(--space-2);
 }
 
 .toolbar {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
-  gap: 0.6rem;
   align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.toolbarButton {
+  composes: ghost small from "../../ui/controls.module.css";
+}
+
+/*
+ * A disclosure that reads as a ghost button. When it opens it takes its own full-width line,
+ * so its contents never squeeze the buttons beside it.
+ */
+.disclosure {
+  composes: ghost small from "../../ui/controls.module.css";
+  list-style: none;
+}
+
+.disclosure::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure::after {
+  content: "▾" / "";
+  font-size: var(--text-xs);
+}
+
+details[open] > .disclosure {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+details[open] > .disclosure::after {
+  content: "▴" / "";
+}
+
+.moreTools[open],
+.proofActions[open] {
+  flex-basis: 100%;
 }
 
 .moreTools,
 .proofActions {
   color: var(--text);
-  font-size: 0.8rem;
-}
-
-.moreTools > summary,
-.proofActions > summary {
-  width: fit-content;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-  list-style-position: inside;
-}
-
-.moreTools > summary:focus-visible,
-.proofActions > summary:focus-visible,
-.rawState > summary:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  font-size: var(--text-sm);
 }
 
 .moreToolsPanel {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
   align-items: center;
-  padding: 0.65rem 0 0.2rem;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-1);
 }
 
 .moreToolsPanel .rawState {
   flex-basis: 100%;
 }
 
-.proofActions {
-  margin-top: 0.2rem;
+.proofActions > :not(summary) {
+  padding: var(--space-2) 0 var(--space-1);
 }
 
-.proofActions[open] > summary {
-  margin-bottom: 0.7rem;
-}
-
+/* The view switch: a segmented control. Nothing clips it, so focus rings stay whole. */
 .viewToggle {
   display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
+  gap: 2px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 2px;
 }
 
-.viewToggle button,
-.toolbarButton {
-  border: 0;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.75rem;
+.viewToggle button {
+  min-height: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.viewToggle button:hover:not(:disabled) {
+  background: transparent;
   color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.viewToggle button + button {
-  border-left: 1px solid var(--border);
 }
 
 .viewToggle button[aria-pressed="true"] {
-  background: var(--accent);
-  color: var(--surface-strong);
-}
-
-.viewToggle button[aria-pressed="true"]::before {
-  content: "✓ " / "";
-}
-
-.toolbarButton {
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
+  border-color: var(--border-soft);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
 }
 
 .copyFeedback {
-  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* The live region stays in the document; while empty it must not add a gap to the row. */
+.copyFeedback:empty {
+  margin-left: calc(-1 * var(--space-2));
 }
 
 .copyFeedback[data-state="copied"] {
-  color: var(--accent-text);
+  color: var(--success-text);
 }
 
 .copyFeedback[data-state="failed"] {
-  color: var(--warning-text);
+  color: var(--danger-text);
 }
 
 .rawState summary {
   width: fit-content;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .rawState pre {
+  max-width: 100%;
   max-height: 24rem;
-  margin: 0.5rem 0 0;
+  margin: var(--space-2) 0 0;
   overflow: auto;
   border: 1px solid var(--border-soft);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.75rem;
-  font-size: 0.72rem;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-3);
+  font-size: var(--text-xs);
+}
+
+.actionNotice {
+  composes: notice from "../../ui/controls.module.css";
+  overflow-wrap: anywhere;
+}
+
+.actionNotice[data-state="rejected"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.readOnlyReason {
+  composes: hint from "../../ui/controls.module.css";
+}
+
+/* History */
+.historyPanel {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--space-4) 1.25rem;
+}
+
+.historyPanel p {
+  margin: 0;
+}
+
+.historyHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+.historyHeading h2 {
+  margin: 0;
+}
+
+.historyHeading p {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.historyCount {
+  composes: chip from "../../ui/controls.module.css";
+}
+
+.historyList {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.historyItem {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.historyNode {
+  position: relative;
+  display: grid;
+  width: 100%;
+  justify-content: stretch;
+  align-items: start;
+  justify-items: start;
+  gap: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  font-size: var(--text-md);
+  text-align: left;
+}
+
+.historyNode small {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+/* The current node is not disabled-looking: it is marked by a muted fill and a "Current" tag. */
+.historyNode[data-current="true"] {
+  border-color: var(--border-control);
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: default;
+}
+
+.historyNode:hover:not(:disabled) {
+  border-color: var(--border-control);
+  background: var(--surface-muted);
+}
+
+.historyNode[data-current="true"] {
+  padding-right: 5.5rem;
+}
+
+.historyNode[data-current="true"]::after {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.25rem;
+  content: "Current" / "";
+}
+
+/* Busy: the other nodes wait, still legible. */
+.historyNode:disabled:not([data-current="true"]) {
+  border-color: var(--border-soft);
+  background: var(--surface);
+  color: var(--text-subtle);
+}
+
+.historyMacroHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  border-left: 3px solid var(--border-control);
+  background: var(--surface-muted);
+  padding: var(--space-1) var(--space-3);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.historyItem[data-macro-step] {
+  border-left: 3px solid var(--border-control);
 }
 
 @media (max-width: 42rem) {
@@ -345,79 +510,6 @@
   }
 
   .headerFacts {
-    justify-items: start;
+    justify-content: flex-start;
   }
-
-  .sessionHeader,
-  .historyHeading {
-    display: grid;
-  }
-}
-
-a.toolbarButton {
-  text-decoration: none;
-}
-
-.toolbarButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.toolbarNote {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-}
-
-.readOnlyBadge {
-  border: 1px solid var(--warning-border);
-  border-radius: 999px;
-  background: var(--warning-bg);
-  padding: 0.25rem 0.65rem;
-  color: var(--warning-text);
-  font-weight: 600;
-}
-
-.readOnlyReason {
-  margin: 0.25rem 0 0;
-  color: var(--warning-text);
-  font-size: 0.85rem;
-}
-
-.headerStatement {
-  max-width: 60ch;
-  margin-top: 0.4rem;
-  color: var(--text-muted);
-  font-size: 0.88rem;
-}
-
-.headerStatement > summary {
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.headerStatement p {
-  margin: 0.3rem 0 0;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.historyMacroHeader {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 0.6rem;
-  align-items: baseline;
-  border-left: 4px solid var(--accent);
-  background: var(--accent-soft);
-  padding-block: 0.3rem;
-  padding-right: 0.6rem;
-  color: var(--accent-text);
-  font-size: 0.8rem;
-}
-
-.historyItem[data-macro-step] {
-  border-left: 4px solid var(--accent);
 }

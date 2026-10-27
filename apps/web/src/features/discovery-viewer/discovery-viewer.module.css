@@ -1,358 +1,857 @@
+/*
+ * The stored history views (discovery tree, playback, pruned proof). Folio look: neutral ink on
+ * paper, hairline dividers instead of nested boxes, colour only for the proof families, status and
+ * the sorry warning. Three different states never share one fill: a selected tree node or current
+ * step is a muted band with an ink marker, the active view tab is an underline, and a pressed
+ * toggle is a raised segment.
+ */
+
 .viewer {
   display: grid;
-  gap: 1.1rem;
+  min-width: 0;
+  gap: var(--space-5);
 }
 
-.viewerHeader,
-.detail,
-.outline {
-  border: 1px solid var(--border);
-  border-radius: 1rem;
-  background: var(--surface);
-  padding: 1rem 1.15rem;
-}
-
-.viewerHeader {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.viewerHeader h1 {
+.viewer :where(p, ul, ol, dl, dd, pre, h1, h2, h3, h4) {
   margin: 0;
-  font-size: clamp(1.4rem, 3vw, 2rem);
+}
+
+/* Shared primitives */
+
+.eyebrow {
+  composes: eyebrow from "../../ui/controls.module.css";
+}
+
+.hint {
+  composes: hint from "../../ui/controls.module.css";
+}
+
+.meta {
+  composes: meta from "../../ui/controls.module.css";
   overflow-wrap: anywhere;
 }
 
-.viewerHeader p,
-.detail p {
-  margin: 0;
+.chip {
+  composes: chip from "../../ui/controls.module.css";
 }
 
-.eyebrow,
+.chipOutline {
+  composes: chipOutline from "../../ui/controls.module.css";
+}
+
+.chipWarning {
+  composes: chipWarning from "../../ui/controls.module.css";
+}
+
 .muted {
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
+  line-height: 1.54;
 }
 
-.viewDescription {
-  color: var(--text-muted);
-  font-size: 0.9rem;
+.action {
+  composes: secondary small from "../../ui/controls.module.css";
 }
 
-.technicalDetails {
-  color: var(--text-muted);
-  font-size: 0.8rem;
+.ghostAction {
+  composes: ghost small from "../../ui/controls.module.css";
 }
 
-.technicalDetails summary {
-  width: fit-content;
-  cursor: pointer;
+/* Header: eyebrow, display title with status pill, underline tabs, description */
+
+.viewerHeader {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
 }
 
-.technicalDetails summary:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
 }
 
-.technicalDetails p,
-.technicalDetails dl {
-  margin-top: 0.5rem;
+.titleRow h1 {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .headerFacts {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 1.2rem;
-  font-size: 0.85rem;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.statusSolved {
+  composes: pill chipSuccess from "../../ui/controls.module.css";
+  min-height: 1.5rem;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.statusOpen {
+  composes: pill from "../../ui/controls.module.css";
+  min-height: 1.5rem;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .viewerNav {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
 }
 
-.viewerNav a {
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.4rem 0.75rem;
-  color: var(--text);
-  font-size: 0.85rem;
-  font-weight: 700;
+.viewTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-5);
+}
+
+.viewTab {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  padding: 0 var(--space-1);
+  color: var(--text-muted);
+  font-weight: 500;
   text-decoration: none;
 }
 
-.viewerNav a[aria-current="page"] {
-  background: var(--accent);
-  color: var(--surface-strong);
+.viewTab:hover {
+  color: var(--text);
 }
 
-.viewerNav a[aria-current="page"]::before {
-  content: "✓ " / "";
+.viewTab[aria-current="page"] {
+  border-bottom-color: var(--ink);
+  color: var(--text);
 }
 
-.toolbarRow,
-.controls {
+.backLink {
+  composes: ghost small from "../../ui/controls.module.css";
+}
+
+.viewDescription {
+  composes: hint from "../../ui/controls.module.css";
+}
+
+.technicalDetails {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
+}
+
+.technicalDetails summary {
+  width: fit-content;
+}
+
+.technicalDetails p,
+.technicalDetails dl,
+.technicalDetails pre {
+  margin-top: var(--space-2);
+}
+
+/* Toolbar and the statement-view segmented control */
+
+.toolbarRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem 1rem;
   align-items: center;
+  gap: var(--space-2) var(--space-4);
 }
 
 .viewToggle {
   display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-}
-
-.viewToggle button,
-.controls button,
-.detail button,
-.outline button {
-  border: 1px solid var(--border);
-  background: var(--surface-strong);
-  padding: 0.35rem 0.7rem;
-  color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
+  gap: 2px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 2px;
 }
 
 .viewToggle button {
-  border: 0;
-  border-radius: 0;
+  min-height: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
-.viewToggle button + button {
-  border-left: 1px solid var(--border);
+.viewToggle button[aria-pressed="false"]:hover {
+  color: var(--text);
 }
 
-.viewToggle button[aria-pressed="true"],
-.outline button[aria-pressed="true"],
-.outline button[aria-current="step"] {
-  background: var(--accent);
-  color: var(--surface-strong);
+.viewToggle button[aria-pressed="true"] {
+  border-color: var(--border-soft);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
 }
 
-.viewToggle button[aria-pressed="true"]::before {
-  content: "✓ " / "";
-}
-
-.controls button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.viewToggle button:focus-visible,
-.controls button:focus-visible,
-.detail button:focus-visible,
-.outline button:focus-visible,
-.viewerNav a:focus-visible,
-.playback:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
-}
+/* Outline column (tree states, playback steps) and the detail pane */
 
 .treeLayout {
   display: grid;
-  grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr);
-  gap: 1rem;
+  grid-template-columns: minmax(18rem, 27.5rem) minmax(0, 1fr);
+  gap: var(--space-5);
   align-items: start;
 }
 
 .outline {
+  composes: card from "../../ui/controls.module.css";
+  min-width: 0;
   max-height: 80vh;
   overflow: auto;
+  padding: var(--space-3) var(--space-4);
 }
 
 .outline ol {
-  display: grid;
-  gap: 0.6rem;
-  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.outline li {
-  display: grid;
-  gap: 0.25rem;
-  justify-items: start;
-  border-inline-start: 2px solid var(--border-soft);
+/* A tree row: guide rails (one hairline per depth level), edge summary, label, chips. */
+.treeRow {
+  --rail: 1rem;
+
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding-block: 2px;
+  padding-inline-start: calc(var(--depth, 0) * var(--rail));
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border) 0 1px,
+    transparent 1px var(--rail)
+  );
+  background-repeat: no-repeat;
+  background-size: calc(var(--depth, 0) * var(--rail)) 100%;
 }
 
-.outline button {
-  border-radius: 0.5rem;
-  text-align: start;
+.macroGroup {
+  flex: 0 0 100%;
+  border-inline-start: 2px solid var(--border-control);
+  padding-inline-start: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.54;
 }
 
 .edgeSummary {
-  font-size: 0.78rem;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
+}
+
+.edgeSummary strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.treeRow > .edgeSummary {
+  flex: 0 0 100%;
+  padding-inline-start: calc(2px + var(--space-2));
+}
+
+.nodeButton {
+  min-height: var(--control-height-sm);
+  justify-content: flex-start;
+  border: 0;
+  border-inline-start: 2px solid transparent;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  background: transparent;
+  padding: 0 var(--space-2);
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: start;
+}
+
+.nodeButton:hover {
+  background: var(--surface-muted);
+}
+
+.treeRow[data-route-status="solved-route"] .nodeButton {
+  border-inline-start-color: var(--ink);
+}
+
+.treeRow[data-route-status="partial-route"] .nodeButton {
+  border-inline-start-color: var(--border-control);
+}
+
+.treeRow[data-route-status="abandoned"] .nodeButton {
+  color: var(--text-subtle);
+  font-weight: 400;
+}
+
+.treeRow .nodeButton[aria-pressed="true"] {
+  border-inline-start-color: var(--ink);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .badges {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
-.chip {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-muted);
-  padding: 0 0.5rem;
-  font-size: 0.72rem;
-  font-weight: 600;
+  gap: var(--space-1);
 }
 
 .chip[data-route-status="abandoned"] {
   border-style: dashed;
+  border-color: var(--border-control);
+  background: transparent;
+  color: var(--text-subtle);
+}
+
+.transitionTag {
+  composes: chipOutline from "../../ui/controls.module.css";
+  text-transform: capitalize;
+}
+
+.transitionTag[data-transition-class="strengthening"] {
+  border-color: var(--goal-border);
+  color: var(--goal-fg);
+}
+
+.transitionTag[data-transition-class="weakening"] {
+  border-style: dashed;
+  border-color: var(--warning-border);
   color: var(--warning-text);
 }
 
-.chosen {
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  background: var(--accent-soft);
-  padding: 0 0.5rem;
-  color: var(--accent-text);
-  font-size: 0.72rem;
-  font-weight: 700;
+.evidenceTag {
+  composes: chip from "../../ui/controls.module.css";
 }
+
+.evidenceTag[data-evidence="sorry"] {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-weight: 600;
+}
+
+/* The detail pane: one card, sections divided by hairlines */
 
 .detail {
+  composes: card from "../../ui/controls.module.css";
   display: grid;
-  gap: 0.75rem;
   min-width: 0;
+  gap: var(--space-4);
 }
 
-.detail h2,
-.detail h3,
-.detail h4 {
-  margin: 0;
+.detailSection {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+.detailSection + .detailSection {
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-4);
+}
+
+.detailHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+.nextSteps {
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border-soft);
+}
+
+.nextSteps li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  padding: var(--space-2) 0;
 }
 
 .facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.2rem 1rem;
-  margin: 0;
-  font-size: 0.85rem;
+  gap: var(--space-1) var(--space-4);
+  font-size: var(--text-sm);
 }
 
 .facts dt {
-  color: var(--text-muted);
+  color: var(--text-subtle);
 }
 
 .facts dd {
-  margin: 0;
   overflow-wrap: anywhere;
-}
-
-.snapshot,
-.sequent {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.target {
-  display: grid;
-  gap: 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 0.6rem 0.8rem;
-}
-
-.target[data-kind="goal"] {
-  border-color: var(--goal-border);
-  background: var(--goal-bg);
-  color: var(--goal-fg);
-}
-
-.target[data-kind="obligation"] {
-  border-color: var(--obligation-border);
-  background: var(--obligation-bg);
-  color: var(--obligation-fg);
-}
-
-.hypotheses,
-.assumptions,
-.reasons {
-  display: grid;
-  gap: 0.3rem;
-  margin: 0;
-  padding-inline-start: 1.1rem;
-}
-
-.assumptions li {
-  border-inline-start: 3px solid var(--obligation-border);
-  padding-inline-start: 0.5rem;
-}
-
-.hypotheses li {
-  color: var(--hypothesis-fg);
-}
-
-.roleTag {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.suggestionSet {
-  display: grid;
-  gap: 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 0.6rem 0.8rem;
-}
-
-.suggestionSet ol {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0;
-  padding-inline-start: 1.3rem;
-}
-
-.proofSteps,
-.records {
-  display: grid;
-  gap: 0.9rem;
-  margin: 0;
-  padding-inline-start: 0;
-  list-style: none;
-}
-
-.proofSteps li,
-.records li {
-  display: grid;
-  gap: 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: var(--surface);
-  padding: 0.7rem 0.9rem;
-}
-
-.proofSteps h3 {
-  margin: 0;
-}
-
-.playback {
-  display: grid;
-  gap: 0.8rem;
 }
 
 .detail pre {
   max-height: 20rem;
-  margin: 0.5rem 0 0;
+  margin-top: var(--space-2);
   overflow: auto;
   border: 1px solid var(--border-soft);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.75rem;
-  font-size: 0.72rem;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* Typeset text: statements in a sideways-scrolling container, prose with a readable measure */
+
+.statement {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+
+.prose {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+/* Proof-state snapshot: sequent cards (1px family border, 3px top band) */
+
+.snapshot {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.target {
+  composes: card from "../../ui/controls.module.css";
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+  border-top-width: 3px;
+}
+
+.target[data-kind="goal"] {
+  border-color: var(--goal-border);
+  border-top-color: var(--goal-fg);
+}
+
+.target[data-kind="obligation"] {
+  border-style: dashed;
+  border-top-style: solid;
+  border-color: var(--obligation-border);
+  border-top-color: var(--obligation-fg);
+}
+
+.targetHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+
+.target[data-kind="goal"] .targetHeading {
+  color: var(--goal-fg);
+}
+
+.target[data-kind="obligation"] .targetHeading {
+  color: var(--obligation-fg);
+}
+
+.targetHeading .meta {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sequent {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+.hypotheses {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.hypotheses li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.hypothesisTag {
+  border: 1px solid var(--hypothesis-border);
+  border-radius: var(--radius-control);
+  background: var(--hypothesis-bg);
+  padding: 0 0.375rem;
+  color: var(--hypothesis-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.conclusion {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.hypotheses + .conclusion {
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+}
+
+.turnstile {
+  color: var(--goal-fg);
+  font-family: var(--font-math);
+  font-size: var(--text-xl);
+  line-height: 1.5;
+}
+
+.target[data-kind="obligation"] .turnstile {
+  color: var(--obligation-fg);
+}
+
+.conclusion .statement {
+  font-size: var(--text-xl);
+  line-height: 1.5;
+}
+
+/* Sorry assumptions: each carries the warning chip, the only amber on these pages */
+
+.assumptions {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.assumptions li {
+  display: grid;
+  gap: var(--space-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-3);
+}
+
+.sorryTag {
+  composes: chipWarning from "../../ui/controls.module.css";
+  justify-self: start;
+}
+
+.assumptionMeta {
+  composes: meta from "../../ui/controls.module.css";
+  overflow-wrap: anywhere;
+}
+
+/* Stored suggestion sets */
+
+.suggestionSet {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.setHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--text-md);
+}
+
+.suggestionList {
+  padding: 0 0 0 1.5rem;
+  border-top: 1px solid var(--border-soft);
+}
+
+.suggestionList > li::marker {
+  color: var(--text-subtle);
+}
+
+.suggestionList > li {
+  border-bottom: 1px solid var(--border-soft);
+  padding: var(--space-2) 0 var(--space-2) var(--space-1);
+}
+
+.suggestionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.chosen {
+  composes: chipSuccess from "../../ui/controls.module.css";
+}
+
+.reasons {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-inline-start: 1.1rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
+}
+
+/* Playback */
+
+.playback {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.controlButton {
+  composes: secondary small from "../../ui/controls.module.css";
+}
+
+.stepStatus {
+  display: inline-flex;
+  min-height: var(--control-height-sm);
+  align-items: center;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.keyHint {
+  composes: hint from "../../ui/controls.module.css";
+  margin-inline-start: auto;
+}
+
+.stepButton {
+  width: 100%;
+  min-height: var(--control-height-sm);
+  align-items: flex-start;
+  justify-content: flex-start;
+  border: 0;
+  border-inline-start: 2px solid transparent;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  background: transparent;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: 400;
+  line-height: 1.43;
+  text-align: start;
+  white-space: normal;
+}
+
+.stepButton:hover {
+  background: var(--surface-muted);
+}
+
+.stepButton[aria-current="step"] {
+  border-inline-start-color: var(--ink);
+  background: var(--surface-muted);
+  font-weight: 600;
+}
+
+/* The kind chip sets its own colours, so it stays legible on the current step's muted band. */
+.stepChip {
+  composes: chip from "../../ui/controls.module.css";
+  flex: none;
+  border-color: var(--border-soft);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.displayedList {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline-start: 1.5rem;
+}
+
+/* Pruned proof: a typeset column of numbered steps */
+
+.stack {
+  display: grid;
+  min-width: 0;
+  max-width: 52.5rem;
+  gap: var(--space-2);
+}
+
+.proofPanel {
+  composes: card from "../../ui/controls.module.css";
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-5) clamp(1rem, 5vw, 3rem);
+}
+
+.proofSteps {
+  display: grid;
+  gap: var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.proofSteps > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.proofSteps > li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  inset-block: 2.25rem calc(-1 * var(--space-4) + 0.25rem);
+  inset-inline-start: 0.8125rem;
+  width: 1px;
+  background: var(--border-soft);
+}
+
+.stepNumber {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.stepBody {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.stepBody .sequent {
+  gap: var(--space-2);
+}
+
+.stepBody .hypotheses {
+  gap: var(--space-1);
+}
+
+.stepBody .hypotheses + .conclusion {
+  padding-top: var(--space-2);
+}
+
+.stepHeading {
+  display: flex;
+  min-height: 1.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.stepMeta {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
+}
+
+.endMark {
+  font-family: var(--font-math);
+  font-size: var(--text-xl);
+  line-height: 1.5;
+  text-align: end;
+}
+
+.panel {
+  composes: card from "../../ui/controls.module.css";
+  display: grid;
+  gap: var(--space-3);
+}
+
+.panelSection {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+}
+
+.success {
+  color: var(--success-text);
+  font-weight: 600;
+}
+
+.plainList {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline-start: 1.1rem;
+}
+
+/* Inquiry records: a hairline-separated list, not stacked cards */
+
+.records {
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.records > li {
+  display: grid;
+  grid-template-columns: minmax(6rem, 9rem) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-2) 0;
+}
+
+.records > li + li {
+  border-top: 1px solid var(--border-soft);
+}
+
+.records > li:target {
+  background: var(--surface-muted);
+}
+
+.recordKey {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  justify-items: start;
+  gap: var(--space-1);
 }
 
 @media (max-width: 52rem) {
@@ -363,13 +862,14 @@
   .outline {
     max-height: 24rem;
   }
+
+  .keyHint {
+    margin-inline-start: 0;
+  }
 }
 
-.macroGroup {
-  display: block;
-  border-left: 4px solid var(--accent, currentColor);
-  padding-left: 0.5rem;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+@media (max-width: 40rem) {
+  .records > li {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

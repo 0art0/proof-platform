@@ -99,8 +99,17 @@ export function WorkspaceHeader({
   return (
     <header className={styles.sessionHeader} aria-label="Problem">
       <div className={styles.headerTitle}>
-        <p className={styles.headerEyebrow}>{title === undefined ? "Proof session" : sessionId}</p>
-        <h1 title={title === undefined ? undefined : sessionId}>{title ?? sessionId}</h1>
+        {/* With no title the id is the heading, so the eyebrow says what the page is; with a
+            title the id drops to metadata. */}
+        <p className={title === undefined ? styles.headerEyebrow : styles.headerId}>
+          {title === undefined ? "Proof session" : sessionId}
+        </p>
+        <h1
+          className={title === undefined ? styles.idTitle : undefined}
+          title={title === undefined ? undefined : sessionId}
+        >
+          {title ?? sessionId}
+        </h1>
         {statement === undefined || statement.length === 0 ? null : (
           <details className={styles.headerStatement}>
             <summary>Problem statement</summary>
@@ -118,8 +127,7 @@ export function WorkspaceHeader({
           data-testid="snapshot-status"
           title="Counts the open targets of the displayed snapshot. It is not a provability check."
         >
-          <span aria-hidden="true">{closed ? "✓" : "○"}</span>{" "}
-          <span className={styles.snapshotStatusLabel}>Snapshot targets:</span>{" "}
+          <span aria-hidden="true">{closed ? "✓" : "○"}</span> <span>Snapshot targets:</span>{" "}
           <strong>{snapshotStatusText(counts)}</strong>
         </p>
         {readOnly ? (
@@ -131,7 +139,7 @@ export function WorkspaceHeader({
             Read-only · imported artifact
           </span>
         ) : null}
-        <span>Current node {currentNodeId}</span>
+        <span className={styles.headerNode}>Current node {currentNodeId}</span>
       </div>
       <nav className={styles.breadcrumb} aria-label="Current branch">
         {breadcrumb.kind === "loading" ? <span>Loading branch…</span> : null}

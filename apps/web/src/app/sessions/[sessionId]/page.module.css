@@ -1,0 +1,5 @@
+/* The proof workspace is the one page that uses a wider measure than the 75rem default. */
+.workspacePage {
+  width: min(100% - 2 * var(--gutter), 90rem);
+  padding-top: var(--space-5);
+}

@@ -221,6 +221,7 @@ function CandidateItem({
           <span className={styles.action}>
             <button
               type="button"
+              className={styles.toggleButton}
               aria-expanded={expanded}
               onClick={onToggle}
               disabled={busy}
@@ -231,7 +232,12 @@ function CandidateItem({
           </span>
         ) : (
           <span className={styles.action}>
-            <button type="button" disabled aria-describedby={reasonId}>
+            <button
+              type="button"
+              className={styles.saveButton}
+              disabled
+              aria-describedby={reasonId}
+            >
               Save as a lemma
             </button>
             <span id={reasonId} className={styles.reason}>
@@ -320,6 +326,7 @@ function LemmaPreviewDetails({
       <span className={styles.action}>
         <button
           type="button"
+          className={styles.saveButton}
           disabled={readOnly || busy}
           {...(readOnly ? { "aria-describedby": reasonId } : {})}
           onClick={onSave}

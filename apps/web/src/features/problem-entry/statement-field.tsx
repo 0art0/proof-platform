@@ -38,9 +38,12 @@ export function StatementField({
   onChange,
   onRemove,
   required,
+  family,
 }: Readonly<{
   label: string;
   required?: boolean;
+  /** Tints the row in its proof family's colour; the label always names the family too. */
+  family?: "goal" | "hypothesis";
   row: StatementRow;
   latex: LatexRenderer;
   onChange: (row: StatementRow) => void;
@@ -49,9 +52,10 @@ export function StatementField({
   const feedback = useMemo(() => statementFeedback(row, latex), [row, latex]);
   const feedbackId = `statement-feedback-${row.key}`;
   return (
-    <div className={styles.statementRow}>
+    <div className={styles.statementRow} data-family={family}>
       <div className={styles.statementHeader}>
         <label
+          className={styles.label}
           htmlFor={`statement-${row.key}`}
           data-marker={required === true ? "required" : undefined}
         >
@@ -68,7 +72,7 @@ export function StatementField({
           <option value="mathjson">Structured notation (advanced)</option>
         </select>
         {onRemove === undefined ? null : (
-          <button type="button" className={styles.linkButton} onClick={onRemove}>
+          <button type="button" className={styles.removeButton} onClick={onRemove}>
             Remove {label.toLowerCase()}
           </button>
         )}

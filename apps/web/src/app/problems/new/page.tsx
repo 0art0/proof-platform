@@ -22,17 +22,19 @@ export default async function NewProblemPage({
   const capabilities = await readAiCapabilities();
   return (
     <main className={styles.page}>
-      <p>
-        <Link href="/">← Home</Link>
-      </p>
-      <h1>New problem</h1>
-      <p className={styles.lead}>
-        Type the problem statement. Where AI is available, a background is suggested and the setup
-        is drafted for you; otherwise enter what is known and what you want to prove. Your proof
-        session is created only after you approve the checked setup.
-      </p>
+      <header className={styles.pageHeader}>
+        <Link className={styles.back} href="/">
+          ← Home
+        </Link>
+        <h1 className={styles.pageTitle}>New problem</h1>
+        <p className={styles.lead}>
+          Type the problem statement. Where AI is available, a background is suggested and the setup
+          is drafted for you; otherwise enter what is known and what you want to prove. Your proof
+          session is created only after you approve the checked setup.
+        </p>
+      </header>
       {options === undefined ? (
-        <p role="alert" className={styles.warning}>
+        <p role="alert" className={styles.error}>
           The proof service could not be reached.
         </p>
       ) : (

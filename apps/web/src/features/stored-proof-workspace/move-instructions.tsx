@@ -350,7 +350,7 @@ export function MoveInstructions({
       <div className={styles.actions}>
         <button
           type="button"
-          className={styles.primary}
+          className={styles.secondary}
           disabled={previewBlocked !== undefined}
           aria-describedby={reasonId}
           onClick={() => void preview()}
@@ -376,6 +376,7 @@ export function MoveInstructions({
           <div className={styles.actions}>
             <button
               type="button"
+              className={styles.secondary}
               disabled={saveBlocked !== undefined}
               aria-describedby={`${saveHintId} ${saveReasonId}`}
               onClick={() => void saveAsMove()}
@@ -384,6 +385,7 @@ export function MoveInstructions({
             </button>
             <button
               type="button"
+              className={styles.ghost}
               disabled={save.kind === "asking"}
               onClick={() => setSave(NO_SAVE)}
             >
@@ -507,7 +509,7 @@ function PreviewCard({
         >
           {applying ? "Applying…" : "Apply"}
         </button>
-        <button type="button" disabled={applying} onClick={onDiscard}>
+        <button type="button" className={styles.secondary} disabled={applying} onClick={onDiscard}>
           Discard
         </button>
       </div>

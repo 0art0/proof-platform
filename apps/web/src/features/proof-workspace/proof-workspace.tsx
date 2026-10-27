@@ -211,11 +211,11 @@ function ValidatedProofWorkspace({
         <dl className={styles.snapshotFacts}>
           <div>
             <dt>Node</dt>
-            <dd>{node.id}</dd>
+            <dd className={styles.snapshotFact}>{node.id}</dd>
           </div>
           <div>
             <dt>State</dt>
-            <dd>{node.state.id}</dd>
+            <dd className={styles.snapshotFact}>{node.state.id}</dd>
           </div>
         </dl>
       </header>
@@ -251,7 +251,7 @@ function ValidatedProofWorkspace({
               <p className={styles.eyebrow}>Gesture state</p>
               <h2 id={selectionHeadingId}>Active selections</h2>
             </div>
-            <span className={styles.selectionCount}>{selectionState.active.length}</span>
+            <span className={styles.count}>{selectionState.active.length}</span>
           </div>
 
           {selectionState.active.length === 0 ? (
@@ -374,7 +374,9 @@ function TargetGroup({ kind, targets, stateId, environment }: TargetGroupProps) 
         <h2 id={headingId}>
           <FamilyGlyph family={kind} /> {label}
         </h2>
-        <span aria-label={`${targets.length} ${label.toLowerCase()}`}>{targets.length}</span>
+        <span className={styles.count} aria-label={`${targets.length} ${label.toLowerCase()}`}>
+          {targets.length}
+        </span>
       </div>
       {targets.length === 0 ? (
         <p className={styles.emptyGroup}>No {label.toLowerCase()} in this snapshot.</p>
@@ -431,22 +433,19 @@ function ContextualSequentView({
       title={target.id}
     >
       <header className={styles.sequentHeader}>
-        <div>
-          <p className={styles.sequentKind}>
-            <FamilyGlyph family={kind} /> {kind === "goal" ? "Goal" : "Obligation (assumption)"}
-          </p>
-          <h3 id={titleId}>
-            {targetLabel} {ordinal}
-          </h3>
-        </div>
+        <h3 id={titleId} className={styles.sequentTitle}>
+          <FamilyGlyph family={kind} />
+          {targetLabel} {ordinal}
+        </h3>
+        <p className={styles.sequentKind}>{kind === "goal" ? "Goal" : "Obligation (assumption)"}</p>
       </header>
 
       <section
-        className={styles.contextSection}
+        className={`${styles.contextSection} ${styles.declarations}`}
         data-family="variable"
         aria-labelledby={declarationsId}
       >
-        <h4 id={declarationsId}>
+        <h4 id={declarationsId} className={styles.declarationsLabel}>
           Declarations for {targetLabel.toLowerCase()} {ordinal}
         </h4>
         {declarations.length === 0 ? (
@@ -476,7 +475,8 @@ function ContextualSequentView({
         data-family="hypothesis"
         aria-labelledby={hypothesesId}
       >
-        <h4 id={hypothesesId}>
+        {/* The H1/H2 tags name the rows for sighted readers; the heading stays for assistive tech. */}
+        <h4 id={hypothesesId} className="visually-hidden">
           Hypotheses for {targetLabel.toLowerCase()} {ordinal}
         </h4>
         {target.sequent.context.hypotheses.length === 0 ? (
@@ -520,16 +520,21 @@ function ContextualSequentView({
         data-polarity="positive"
         aria-labelledby={conclusionId}
       >
-        <h4 id={conclusionId}>
+        <h4 id={conclusionId} className="visually-hidden">
           Conclusion for {targetLabel.toLowerCase()} {ordinal}
         </h4>
-        <StatementView
-          anchor={conclusionAnchor}
-          declarations={declarations}
-          expression={target.sequent.conclusion.expression}
-          label={`${targetLabel} ${ordinal} conclusion`}
-          environment={environment}
-        />
+        <div className={styles.conclusionRow}>
+          <span className={styles.turnstile} aria-hidden="true">
+            ⊢
+          </span>
+          <StatementView
+            anchor={conclusionAnchor}
+            declarations={declarations}
+            expression={target.sequent.conclusion.expression}
+            label={`${targetLabel} ${ordinal} conclusion`}
+            environment={environment}
+          />
+        </div>
       </section>
     </article>
   );
@@ -661,7 +666,9 @@ function SelectionSummary({ selection, resolved }: SelectionSummaryProps) {
         <span>{statementLabel}</span>
         {polarity === undefined ? null : <span>{POLARITY_LABELS[polarity]}</span>}
       </p>
-      <code>{selection.kind === "exact" ? `path ${path}` : `lens ${path}`}</code>
+      <code className={styles.selectionPath}>
+        {selection.kind === "exact" ? `path ${path}` : `lens ${path}`}
+      </code>
       <pre>
         {resolved.ok ? JSON.stringify(resolved.selection.fragment) : "Unavailable occurrence"}
       </pre>

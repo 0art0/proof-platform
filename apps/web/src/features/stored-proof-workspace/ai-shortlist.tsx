@@ -196,6 +196,9 @@ export function AiShortlist({
   const loading = state.kind === "loading";
   return (
     <div className={styles.aiShortlist} role="group" aria-label="AI ranking">
+      <span className={styles.aiChip} aria-hidden="true">
+        ✦ AI
+      </span>
       <label className={styles.aiAutoToggle}>
         <input
           type="checkbox"

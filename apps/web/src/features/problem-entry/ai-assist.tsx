@@ -297,13 +297,15 @@ export function AiAssist({
 
   return (
     <section className={styles.section} aria-label="Background and setup">
-      <h2>Background and setup</h2>
-      <p className={styles.sectionIntro}>
-        A model suggests the background your problem is set against, with the constants (operators
-        and notation) it needs. Once you accept a background, the variables, hypotheses and goals
-        are drafted and checked for you. Its answers are proposals: nothing changes until you accept
-        them, and you approve the setup before exploring starts.
-      </p>
+      <div className={styles.sectionHeader}>
+        <h2>Background and setup</h2>
+        <p className={styles.sectionIntro}>
+          A model suggests the background your problem is set against, with the constants (operators
+          and notation) it needs. Once you accept a background, the variables, hypotheses and goals
+          are drafted and checked for you. Its answers are proposals: nothing changes until you
+          accept them, and you approve the setup before exploring starts.
+        </p>
+      </div>
       {!anyAvailable ? (
         <p className={styles.hint} role="note">
           AI assistance is not configured on this proof service. You can enter the setup by hand
@@ -330,12 +332,12 @@ export function AiAssist({
               : "Suggest again"}
         </button>
         {!capabilities.background ? (
-          <em className={styles.hint}> Not configured.</em>
+          <em className={styles.reason}> Not configured.</em>
         ) : !statementFilled ? (
-          <em className={styles.hint}> Enter the problem statement first.</em>
+          <em className={styles.reason}> Enter the problem statement first.</em>
         ) : null}
         {status.kind === "failed" ? (
-          <p role="alert" className={styles.warning}>
+          <p role="alert" className={styles.error}>
             {status.message}
           </p>
         ) : null}
@@ -391,16 +393,16 @@ export function AiAssist({
               : "Draft the setup again"}
         </button>
         {!capabilities.formalizer ? (
-          <em className={styles.hint}> Not configured.</em>
+          <em className={styles.reason}> Not configured.</em>
         ) : missing.length > 0 ? (
-          <em className={styles.hint}>
+          <em className={styles.reason}>
             {" "}
             Accept a background first, or fill in {missing.map(({ field }) => field).join(", ")} by
             hand.
           </em>
         ) : null}
         {draft.kind === "failed" ? (
-          <p role="alert" className={styles.warning}>
+          <p role="alert" className={styles.error}>
             {draft.message}
           </p>
         ) : null}
@@ -456,7 +458,16 @@ function BackgroundProposal({
   const recording = decision.kind === "recording";
   const noFeedback = feedback.trim().length === 0;
   return (
-    <div className={styles.aiProposal} role="group" aria-label="Proposed background">
+    <div
+      className={styles.aiProposal}
+      data-state={accepted === undefined ? "proposed" : "accepted"}
+      role="group"
+      aria-label="Proposed background"
+    >
+      <div className={styles.proposalTags}>
+        <span className={styles.aiChip}>✦ AI proposal</span>
+        {accepted === undefined ? null : <span className={styles.successChip}>✓ Accepted</span>}
+      </div>
       <p className={styles.provenance}>
         {accepted === undefined
           ? "Proposed by AI from your problem statement. It has not been accepted."
@@ -505,7 +516,7 @@ function BackgroundProposal({
       {accepted === undefined ? null : <AcceptedNote accepted={accepted} onForget={onForget} />}
 
       <label className={styles.field}>
-        <span>Feedback for a revision</span>
+        <span className={styles.label}>Feedback for a revision</span>
         <textarea
           rows={2}
           placeholder="e.g. also allow the greatest common divisor"
@@ -524,7 +535,7 @@ function BackgroundProposal({
         </button>
         <button
           type="button"
-          className={styles.secondary}
+          className={styles.primary}
           disabled={accepted !== undefined || busy || recording}
           onClick={onAccept}
         >
@@ -540,12 +551,12 @@ function BackgroundProposal({
         </p>
       ) : null}
       {decision.kind === "unrecorded" ? (
-        <p role="alert" className={styles.warning}>
+        <p role="alert" className={styles.error}>
           Your acceptance was not recorded: {decision.message} Trying again is safe.
         </p>
       ) : null}
       {decision.kind === "refused" ? (
-        <p role="alert" className={styles.warning}>
+        <p role="alert" className={styles.error}>
           This proposal cannot be accepted: {decision.message}
         </p>
       ) : null}
@@ -560,7 +571,7 @@ function AcceptedNote({
 }: Readonly<{ accepted: AcceptedBackground; onForget: () => void; elsewhere?: boolean }>) {
   const count = accepted.constants.length;
   return (
-    <p role="status" className={styles.hint}>
+    <p role="status" className={styles.accepted}>
       {elsewhere ? "An earlier proposal is accepted and in use. " : "Accepted. "}
       {count === 0
         ? "Its background fills in the fields below; no constants are added."
@@ -619,6 +630,9 @@ function DraftProposal({
     input.format === "latex" ? input.latex : JSON.stringify(input.expression);
   return (
     <div className={styles.aiProposal} role="group" aria-label="Drafted setup">
+      <div className={styles.proposalTags}>
+        <span className={styles.aiChip}>✦ AI proposal</span>
+      </div>
       <p className={styles.provenance}>Drafted by AI. It has not been approved.</p>
       <div role="alert" className={styles.warning}>
         <p>The draft did not pass the setup check:</p>

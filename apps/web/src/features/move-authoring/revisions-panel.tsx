@@ -5,7 +5,7 @@ import type { AuthoredMoveRevision, AuthoredMoveSummary, ReviewDecision } from "
 import { describeAuthoringFailure, type AuthoringFailureView } from "./diagnostics";
 import { authoringCommandId, postReview, reviewEnvelope } from "./requests";
 import { DiagnosticList } from "./validation-panel";
-import { Help, Hint, WhyDisabled } from "./help";
+import { Help, Hint, StepHeading, WhyDisabled } from "./help";
 import styles from "./move-authoring.module.css";
 
 const DECISION_LABELS: Readonly<Record<ReviewDecision, string>> = Object.freeze({
@@ -56,7 +56,11 @@ export function RevisionsPanel({
 }: RevisionsPanelProps) {
   return (
     <section className={styles.panel} aria-label="Authored moves">
-      <h2>{numbered ? "6. Review and approve" : "Review and approve saved moves"}</h2>
+      {numbered ? (
+        <StepHeading step={6}>Review and approve</StepHeading>
+      ) : (
+        <h2>Review and approve saved moves</h2>
+      )}
       <Hint>
         A saved draft is never offered as a suggestion. A reviewer approves it, rejects it, or asks
         for changes; the decision and notes are recorded. Only an approved move (one step, or a
@@ -247,7 +251,7 @@ function ReviewForm({
       </Hint>
       <textarea id={notesId} value={notes} onChange={(event) => setNotes(event.target.value)} />
       <div className={styles.inline}>
-        <button type="submit" className={`${styles.button} ${styles.primary}`} disabled={blocked}>
+        <button type="submit" className={styles.primaryButton} disabled={blocked}>
           {pending ? "Recording…" : `Record: ${DECISION_LABELS[decision]}`}
         </button>
         <WhyDisabled reason={reason} />

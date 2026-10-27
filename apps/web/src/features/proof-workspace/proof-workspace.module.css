@@ -1,12 +1,13 @@
 /*
  * Colours come from the tokens in app/styles.css (light and dark). Each visual family is also
- * signalled by a glyph, a text label, and a border style, so colour is never the only cue:
- * variables use square marks, hypotheses a double left rule, goals a solid frame, and
- * obligations a dashed frame. Polarity uses inward (positive) and outward (negative) bevels.
+ * signalled by a glyph, a text label and a border style, so colour is never the only cue:
+ * goals are blue with a solid frame, obligations violet with a dashed frame, hypotheses orange
+ * with a square H1/H2 tag, and variables neutral. Polarity is named in the "Selected" pill and
+ * drawn as a faint inward (positive) or outward (negative) bevel on the selected statement.
  */
 .workspace {
   display: grid;
-  gap: 1.5rem;
+  gap: var(--space-4);
   color: var(--text);
 }
 
@@ -20,92 +21,86 @@
 
 .workspaceHeader {
   display: flex;
-  align-items: end;
+  flex-wrap: wrap;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 1.5rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 1rem;
+  gap: var(--space-2) var(--space-5);
 }
 
 .workspaceHeader h2 {
-  max-width: none;
-  margin: 0.2rem 0 0;
-  font-size: clamp(1.6rem, 3.5vw, 2.6rem);
-  line-height: 1.05;
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 1.4;
 }
 
-.eyebrow,
-.sequentKind {
-  margin-bottom: 0;
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.eyebrow {
+  composes: eyebrow from "../../ui/controls.module.css";
 }
 
 .snapshotFacts {
-  display: grid;
-  gap: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
   margin: 0;
 }
 
 .snapshotFacts div {
-  display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr);
-  gap: 0.6rem;
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
 }
 
 .snapshotFacts dt {
-  color: var(--text-muted);
-  font-size: 0.75rem;
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
 }
 
-.snapshotFacts dd {
+.snapshotFact {
+  composes: meta from "../../ui/controls.module.css";
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .workspaceBody {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.32fr);
-  gap: 1.25rem;
+  gap: var(--space-5);
   align-items: start;
 }
 
 .sequentColumn,
 .targetGroup {
   display: grid;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .targetGroup + .targetGroup {
-  margin-top: 0.5rem;
+  margin-top: var(--space-2);
 }
 
 .familyLegend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 0.9rem;
+  gap: var(--space-1) var(--space-4);
   margin: 0;
   padding: 0;
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: var(--text-sm);
   list-style: none;
 }
 
 .familyLegend li {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-1);
 }
 
 .familyGlyph {
   display: inline-grid;
   min-width: 1.2rem;
   place-items: center;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .familyGlyph[data-family="variable"] {
@@ -124,37 +119,30 @@
   color: var(--obligation-fg);
 }
 
+/* Polarity samples in the key: the same faint bevels the selected statement carries. */
 .bevelSample {
   display: inline-block;
   width: 1.1rem;
   height: 0.8rem;
-  border-radius: 0.2rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
   background: var(--surface-muted);
 }
 
-.bevelSample[data-polarity="positive"],
-.mathProjection[data-selection-polarity="positive"],
-.naturalLanguage[data-selection-polarity="positive"] {
-  box-shadow:
-    inset 2px 2px 3px var(--bevel-dark),
-    inset -2px -2px 3px var(--bevel-light);
+.bevelSample[data-polarity="positive"] {
+  box-shadow: inset 1px 1px 2px var(--bevel-dark);
 }
 
-.bevelSample[data-polarity="negative"],
-.mathProjection[data-selection-polarity="negative"],
-.naturalLanguage[data-selection-polarity="negative"] {
+.bevelSample[data-polarity="negative"] {
   box-shadow:
-    2px 2px 4px var(--bevel-dark),
-    -2px -2px 4px var(--bevel-light);
+    1px 1px 2px var(--bevel-dark),
+    -1px -1px 2px var(--bevel-light);
 }
 
 .viewNote {
+  composes: notice from "../../ui/controls.module.css";
   margin: 0;
-  border-left: 4px solid var(--border);
-  background: var(--surface-muted);
-  padding: 0.55rem 0.75rem;
   color: var(--text-muted);
-  font-size: 0.8rem;
 }
 
 .groupHeading,
@@ -162,179 +150,215 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .groupHeading h2,
 .selectionHeading h2 {
   margin: 0;
-  font-size: 1.35rem;
+  font-size: var(--text-lg);
+  line-height: 1.47;
 }
 
-.groupHeading span:last-child,
-.selectionCount {
-  display: grid;
-  min-width: 1.8rem;
-  min-height: 1.8rem;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-muted);
-  font-size: 0.76rem;
-  font-weight: 800;
+.count {
+  composes: chip from "../../ui/controls.module.css";
 }
 
+.groupHeading .count,
+.selectionHeading .count {
+  justify-content: center;
+  min-width: 1.375rem;
+  font-weight: 600;
+}
+
+/* A sequent: 1px family frame with a 3px band on top. Obligations are dashed (assumptions). */
 .sequent {
+  --family-fg: var(--goal-fg);
+  --family-border: var(--goal-border);
   display: grid;
-  gap: 1rem;
-  overflow: hidden;
-  border: 2px solid var(--goal-border);
-  border-radius: 1rem;
+  gap: var(--space-4);
+  border: 1px solid var(--family-border);
+  border-top: 3px solid var(--family-fg);
+  border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: 0 0.75rem 2.5rem rgb(34 48 39 / 6%);
+  padding: var(--space-5);
 }
 
 .sequent[data-family="obligation"] {
+  --family-fg: var(--obligation-fg);
+  --family-border: var(--obligation-border);
   border-style: dashed;
-  border-color: var(--obligation-border);
+  border-top-style: solid;
 }
 
 .sequentHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  border-bottom: 1px solid var(--border-soft);
-  padding: 1rem 1.15rem;
-  background: var(--goal-bg);
+  gap: var(--space-2) var(--space-4);
 }
 
-.sequent[data-family="goal"] .sequentKind {
-  color: var(--goal-fg);
+.sequentTitle {
+  composes: eyebrow from "../../ui/controls.module.css";
 }
 
-.sequent[data-family="obligation"] .sequentHeader {
-  background: var(--obligation-bg);
+.sequentHeader .sequentTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--family-fg);
+}
+
+.sequentKind {
+  composes: chipGoal from "../../ui/controls.module.css";
+  margin: 0;
 }
 
 .sequent[data-family="obligation"] .sequentKind {
+  border-style: dashed;
+  border-color: var(--obligation-border);
+  background: var(--obligation-bg);
   color: var(--obligation-fg);
-}
-
-.sequentHeader h3 {
-  margin: 0.15rem 0 0;
-  font-size: 1.35rem;
-}
-
-.sequentHeader code {
-  color: var(--text-muted);
-  font-size: 0.75rem;
 }
 
 .contextSection,
 .conclusionSection {
   display: grid;
-  gap: 0.65rem;
-  padding: 0 1.15rem;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-.conclusionSection {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 1rem;
-  padding-bottom: 1.15rem;
-}
-
-.contextSection h4,
-.conclusionSection h4 {
-  margin: 0;
+/* Declarations are one muted line of neutral chips, led by their section label. */
+.declarations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--text-muted);
-  font-family: inherit;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  font-size: var(--text-sm);
+}
+
+.declarationsLabel {
+  composes: eyebrow from "../../ui/controls.module.css";
 }
 
 .declarationList,
 .statementList,
 .selectionList {
   display: grid;
-  gap: 0.55rem;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.declarationList li {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.65rem;
-  align-items: center;
-  border: 1px solid var(--variable-border);
-  border-radius: 0.2rem;
-  background: var(--variable-bg);
-  padding: 0.7rem 0.8rem;
+.declarationList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
 }
 
-.declarationList li > span:nth-child(2) {
-  display: grid;
-  gap: 0.1rem;
+.declarationList li {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+  border: 1px solid var(--variable-border);
+  border-radius: var(--radius-control);
+  background: var(--variable-bg);
+  padding: 0 var(--space-2);
+  color: var(--variable-fg);
+  font-size: var(--text-xs);
+}
+
+.declarationList strong {
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+  font-style: italic;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .declarationList small {
-  color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
 }
 
 .declarationList code {
-  color: var(--variable-fg);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
+}
+
+/* Hypothesis rows: a square orange H-tag, then the typeset statement. */
+.statementList {
+  margin-inline: calc(-1 * var(--space-2));
+}
+
+.statementList li,
+.conclusionRow {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
 }
 
 .statementList li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.65rem;
-  align-items: center;
-  border-left: 4px double var(--hypothesis-border);
-  padding-left: 0.5rem;
+  padding-inline: var(--space-2);
 }
 
 .statementLabel {
-  display: grid;
-  width: 2rem;
-  height: 2rem;
-  place-items: center;
-  border: 1px solid var(--hypothesis-border);
-  border-radius: 999px;
-  background: var(--hypothesis-bg);
-  color: var(--hypothesis-fg);
-  font-size: 0.74rem;
-  font-weight: 800;
+  composes: chipHypothesis from "../../ui/controls.module.css";
+}
+
+.statementList .statementLabel {
+  justify-content: center;
+  border-color: transparent;
+  font-family: var(--font-mono);
+}
+
+.conclusionSection {
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+}
+
+.turnstile {
+  color: var(--family-fg);
+  font-family: var(--font-math);
+  font-size: 1.25rem;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .statement {
-  display: grid;
-  gap: 0.3rem;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.statement > :first-child {
+  min-width: 0;
+  flex: 1 1 14rem;
 }
 
 .mathProjection,
 .naturalLanguage {
-  min-height: 3.7rem;
+  min-height: 2rem;
   overflow-x: auto;
-  border: 1px solid var(--border-soft);
-  border-radius: 0.7rem;
-  background: var(--surface-strong);
-  padding: 0.55rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: var(--space-1) var(--space-2);
   color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .naturalLanguage {
   margin: 0;
   color: var(--text);
-  font-family: inherit;
-  font-size: 1.05rem;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
   line-height: 1.6;
 }
 
@@ -342,20 +366,49 @@
   font-size: 0.9em;
 }
 
+.mathProjection:hover:not([data-selected="true"]),
+.naturalLanguage:hover:not([data-selected="true"]) {
+  background: var(--surface-muted);
+}
+
+/*
+ * A selected statement: a faint highlighter tint with the selection ring. MathLive paints the
+ * selected occurrence inside it with the full highlighter, so a part stays distinguishable from
+ * the whole statement. Browsers without color-mix show the full highlighter instead.
+ */
 .mathProjection[data-selected="true"],
 .naturalLanguage[data-selected="true"] {
-  border: 2px solid var(--accent);
+  background: var(--select-bg);
+  background: color-mix(in srgb, var(--select-bg) 40%, transparent);
+  box-shadow: inset 0 0 0 1px var(--select-ring);
+}
+
+.mathProjection[data-selection-polarity="positive"],
+.naturalLanguage[data-selection-polarity="positive"] {
+  box-shadow:
+    inset 0 0 0 1px var(--select-ring),
+    inset 1px 1px 3px var(--bevel-dark);
+}
+
+.mathProjection[data-selection-polarity="negative"],
+.naturalLanguage[data-selection-polarity="negative"] {
+  box-shadow:
+    inset 0 0 0 1px var(--select-ring),
+    1px 1px 3px var(--bevel-dark),
+    -1px -1px 2px var(--bevel-light);
 }
 
 .selectedBadge {
-  justify-self: start;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  background: var(--accent-soft);
-  padding: 0.1rem 0.5rem;
-  color: var(--accent-text);
-  font-size: 0.7rem;
-  font-weight: 800;
+  composes: pill from "../../ui/controls.module.css";
+}
+
+.statement .selectedBadge {
+  min-width: 0;
+  border-color: var(--select-ring);
+  background: var(--select-bg);
+  color: var(--text);
+  font-weight: 600;
+  white-space: normal;
 }
 
 .mathField {
@@ -363,64 +416,57 @@
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: clamp(1.25rem, 3vw, 1.85rem);
+  font-size: 1.0625rem;
   --caret-color: var(--focus);
-  --selection-background-color: #ffd69e;
-  --selection-color: #18231d;
+  --selection-background-color: var(--select-bg);
+  --selection-color: var(--text);
+}
+
+.conclusionRow .mathField {
+  font-size: 1.25rem;
 }
 
 .selectionPanel {
   position: sticky;
-  top: 1rem;
+  /* Clear the sticky app bar. */
+  top: calc(3.5rem + var(--space-4));
   display: grid;
-  gap: 1rem;
-  border: 1px solid var(--border);
-  border-radius: 1rem;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
   background: var(--surface);
-  padding: 1rem;
+  padding: var(--space-4) 1.25rem;
 }
 
 .selectionList li {
   display: grid;
-  gap: 0.45rem;
-  border-left: 4px solid var(--accent);
-  border-radius: 0.45rem;
-  background: var(--accent-soft);
-  padding: 0.7rem;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--border-control);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: var(--space-2) var(--space-3);
 }
 
 .selectionList li[data-family="hypothesis"] {
-  border-left-style: double;
-  border-left-color: var(--hypothesis-border);
+  border-left-color: var(--hypothesis-fg);
 }
 
 .selectionList li[data-family="goal"] {
-  border-left-color: var(--goal-border);
+  border-left-color: var(--goal-fg);
 }
 
 .selectionList li[data-family="obligation"] {
   border-left-style: dashed;
-  border-left-color: var(--obligation-border);
-}
-
-.selectionList li[data-polarity="positive"] {
-  box-shadow:
-    inset 2px 2px 3px var(--bevel-dark),
-    inset -2px -2px 3px var(--bevel-light);
-}
-
-.selectionList li[data-polarity="negative"] {
-  box-shadow:
-    2px 2px 4px var(--bevel-dark),
-    -2px -2px 4px var(--bevel-light);
+  border-left-color: var(--obligation-fg);
 }
 
 .selectionList p {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.35rem;
+  gap: 0 var(--space-2);
   margin-bottom: 0;
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
 }
 
 .selectionList p span:not(:first-child) {
@@ -428,68 +474,55 @@
   color: var(--text-muted);
 }
 
-.selectionList code {
-  font-size: 0.72rem;
+.selectionPath {
+  composes: meta from "../../ui/controls.module.css";
 }
 
 .selectionList pre {
   max-width: 100%;
   margin: 0;
   overflow: auto;
-  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
   white-space: pre-wrap;
 }
 
 .clearButton {
-  border: 1px solid var(--accent);
-  border-radius: 0.6rem;
-  background: var(--accent-soft);
-  padding: 0.65rem 0.8rem;
-  color: var(--accent-text);
-  cursor: pointer;
+  composes: secondary small from "../../ui/controls.module.css";
+  justify-self: start;
 }
 
 .clearButton kbd {
-  margin-left: 0.35rem;
-  border: 1px solid currentcolor;
-  border-radius: 0.3rem;
-  padding: 0 0.3rem;
-  font-size: 0.7rem;
+  margin-left: var(--space-1);
 }
 
-.clearButton:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+.selectionNotice {
+  composes: hint from "../../ui/controls.module.css";
 }
 
-.selectionNotice,
-.emptySelection,
-.emptyGroup,
+.emptySelection {
+  composes: hint from "../../ui/controls.module.css";
+}
+
+.emptyGroup {
+  composes: hint from "../../ui/controls.module.css";
+}
+
 .emptyContext {
-  margin-bottom: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  line-height: 1.5;
+  composes: hint from "../../ui/controls.module.css";
 }
 
 .invalidWorkspace {
-  border: 1px solid var(--warning-border);
-  border-left-width: 4px;
-  border-radius: 0.75rem;
-  background: var(--warning-bg);
-  padding: 1rem;
-  color: var(--warning-text);
+  composes: noticeDanger from "../../ui/controls.module.css";
+}
+
+section.invalidWorkspace {
+  padding: var(--space-4);
 }
 
 @media (max-width: 52rem) {
-  .workspaceHeader,
   .workspaceBody {
-    grid-template-columns: 1fr;
-  }
-
-  .workspaceHeader {
-    display: grid;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .selectionPanel {
@@ -499,20 +532,21 @@
 
 .legendDetails {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--text-sm);
 }
 
 .legendDetails > summary {
   width: fit-content;
-  font-weight: 700;
-  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-control);
+  text-underline-offset: 3px;
 }
 
 .legendDetails > ul {
-  margin-top: 0.4rem;
+  margin-top: var(--space-2);
 }
 
 .suggestionsLink {
-  font-size: 0.82rem;
-  font-weight: 700;
+  font-size: var(--text-sm);
+  font-weight: 500;
 }

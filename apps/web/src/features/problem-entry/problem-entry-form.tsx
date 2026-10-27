@@ -347,10 +347,10 @@ export function ProblemEntryForm({
       />
 
       <HandSetup guided={guided} open={manualOpen} onToggle={setManualOpen}>
-        <Section title="Background knowledge">
-          <p className={styles.sectionIntro}>
-            Tell us what a reader may assume when exploring this problem.
-          </p>
+        <Section
+          title="Background knowledge"
+          intro="Tell us what a reader may assume when exploring this problem."
+        >
           <Field label="Assumed level" required>
             <input
               placeholder="first-year undergraduate"
@@ -368,7 +368,7 @@ export function ProblemEntryForm({
         </Section>
 
         <details className={styles.section}>
-          <summary className={styles.disclosure}>More setup choices (optional)</summary>
+          <summary className={styles.disclosureMain}>More setup choices (optional)</summary>
           <Field label="Specific background assumptions (one per line)">
             <textarea
               rows={2}
@@ -450,11 +450,10 @@ export function ProblemEntryForm({
           </fieldset>
         </details>
 
-        <Section title="What is known and what to prove">
-          <p className={styles.sectionIntro}>
-            Enter any assumptions and a goal. Add variables or objects if they appear in these
-            statements.
-          </p>
+        <Section
+          title="What is known and what to prove"
+          intro="Enter any assumptions and a goal. Add variables or objects if they appear in these statements."
+        >
           <fieldset className={styles.rows}>
             <legend>Variables and objects</legend>
             <p className={styles.sectionIntro}>
@@ -476,7 +475,7 @@ export function ProblemEntryForm({
             ))}
             <button
               type="button"
-              className={styles.secondary}
+              className={styles.addButton}
               onClick={() =>
                 update((f) => ({
                   ...f,
@@ -484,7 +483,7 @@ export function ProblemEntryForm({
                 }))
               }
             >
-              Add variable or object
+              <span aria-hidden="true">+</span> Add variable or object
             </button>
           </fieldset>
           <fieldset className={styles.rows}>
@@ -493,6 +492,7 @@ export function ProblemEntryForm({
               <StatementField
                 key={row.key}
                 label={`Hypothesis ${index + 1}`}
+                family="hypothesis"
                 row={row}
                 latex={latex}
                 onChange={(next) =>
@@ -505,7 +505,7 @@ export function ProblemEntryForm({
             ))}
             <button
               type="button"
-              className={styles.secondary}
+              className={styles.addButton}
               onClick={() =>
                 update((f) => ({
                   ...f,
@@ -513,7 +513,7 @@ export function ProblemEntryForm({
                 }))
               }
             >
-              Add hypothesis
+              <span aria-hidden="true">+</span> Add hypothesis
             </button>
           </fieldset>
           <fieldset className={styles.rows}>
@@ -522,6 +522,7 @@ export function ProblemEntryForm({
               <StatementField
                 key={row.key}
                 label={`Goal ${index + 1}`}
+                family="goal"
                 required={index === 0}
                 row={row}
                 latex={latex}
@@ -537,7 +538,7 @@ export function ProblemEntryForm({
             ))}
             <button
               type="button"
-              className={styles.secondary}
+              className={styles.addButton}
               onClick={() =>
                 update((f) => ({
                   ...f,
@@ -545,25 +546,32 @@ export function ProblemEntryForm({
                 }))
               }
             >
-              Add goal
+              <span aria-hidden="true">+</span> Add goal
             </button>
           </fieldset>
         </Section>
       </HandSetup>
 
       <div className={styles.actions}>
-        <button type="submit" className={styles.primary} disabled={busy !== undefined}>
-          {busy === "review" ? "Checking…" : "Check setup"}
-        </button>
+        {reviewed === undefined ? (
+          <p className={styles.gateNote} role="status">
+            A proof session is created only after you approve the checked setup.
+          </p>
+        ) : null}
+        <div className={styles.actionButtons}>
+          <button
+            type="submit"
+            className={reviewed !== undefined && approvable ? styles.secondary : styles.primary}
+            disabled={busy !== undefined}
+          >
+            {busy === "review" ? "Checking…" : "Check setup"}
+          </button>
+        </div>
       </div>
 
       {notice === undefined ? null : <NoticeView notice={notice} />}
 
-      {reviewed === undefined ? (
-        <p className={styles.gateNote} role="status">
-          A proof session is created only after you approve the checked setup.
-        </p>
-      ) : (
+      {reviewed === undefined ? null : (
         <ReviewPanel
           reviewed={reviewed}
           aiDraftCallId={aiDraftCallId}
@@ -742,19 +750,21 @@ function ReviewPanel({
           </ol>
         </dd>
       </dl>
-      {approvable ? null : (
-        <p role="alert" className={styles.warning}>
-          The setup changed after you checked it. Check it again before starting.
-        </p>
-      )}
-      <button
-        type="button"
-        className={styles.primary}
-        disabled={!approvable || busy}
-        onClick={onApprove}
-      >
-        {busy ? "Starting…" : "Start exploring"}
-      </button>
+      <div className={styles.reviewFooter}>
+        {approvable ? null : (
+          <p role="alert" className={styles.warning}>
+            The setup changed after you checked it. Check it again before starting.
+          </p>
+        )}
+        <button
+          type="button"
+          className={styles.primary}
+          disabled={!approvable || busy}
+          onClick={onApprove}
+        >
+          {busy ? "Starting…" : "Start exploring"}
+        </button>
+      </div>
     </section>
   );
 }
@@ -807,7 +817,7 @@ function DeclarationEditor({
           </option>
         ))}
       </select>
-      <button type="button" className={styles.linkButton} onClick={onRemove}>
+      <button type="button" className={styles.removeButton} onClick={onRemove}>
         Remove declaration {index + 1}
       </button>
     </div>
@@ -817,7 +827,7 @@ function DeclarationEditor({
 function NoticeView({ notice }: Readonly<{ notice: Notice }>) {
   if (notice.kind === "error") {
     return (
-      <p role="alert" className={styles.warning}>
+      <p role="alert" className={styles.error}>
         {notice.message}
       </p>
     );
@@ -830,7 +840,7 @@ function NoticeView({ notice }: Readonly<{ notice: Notice }>) {
           message,
         }));
   return (
-    <div role="alert" className={styles.warning}>
+    <div role="alert" className={styles.error}>
       <p>The setup cannot be checked yet:</p>
       <ul>
         {items.map((item, index) => (
@@ -843,10 +853,21 @@ function NoticeView({ notice }: Readonly<{ notice: Notice }>) {
   );
 }
 
-function Section({ title, children }: Readonly<{ title: string; children: ReactNode }>) {
+function Section({
+  title,
+  intro,
+  children,
+}: Readonly<{ title: string; intro?: string; children: ReactNode }>) {
   return (
     <section className={styles.section}>
-      <h2>{title}</h2>
+      {intro === undefined ? (
+        <h2>{title}</h2>
+      ) : (
+        <div className={styles.sectionHeader}>
+          <h2>{title}</h2>
+          <p className={styles.sectionIntro}>{intro}</p>
+        </div>
+      )}
       {children}
     </section>
   );
@@ -874,7 +895,7 @@ function HandSetup({
       open={open}
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >
-      <summary className={styles.disclosure}>Edit the background and setup by hand</summary>
+      <summary className={styles.disclosureMain}>Edit the background and setup by hand</summary>
       {children}
     </details>
   );
@@ -890,6 +911,7 @@ function Field({
   return (
     <label className={styles.field}>
       <span
+        className={styles.label}
         data-marker={required === true ? "required" : optional === true ? "optional" : undefined}
       >
         {label}

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { createInquiryExplainer } from "@proof/language";
 import type { InquiryRecord, ProofArtifact } from "@proof/protocol";
 import { NaturalLanguageText } from "../proof-workspace/presentation";
+import styles from "./discovery-viewer.module.css";
 import { inquiryExplanationContext } from "./inquiry-context";
 
 /** Render inquiry records with the template explainer, over the artifact's stored data only. */
@@ -23,7 +24,7 @@ export function InquiryRecordExplanation({
   explain: ReturnType<typeof useInquiryExplanations>;
 }>) {
   return (
-    <p data-record-id={record.id} data-record-kind={record.kind}>
+    <p className={styles.prose} data-record-id={record.id} data-record-kind={record.kind}>
       <NaturalLanguageText text={explain(record).text} />
     </p>
   );

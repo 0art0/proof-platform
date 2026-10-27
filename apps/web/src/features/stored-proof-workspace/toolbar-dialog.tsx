@@ -15,6 +15,8 @@ const FOCUSABLE =
 export type ToolbarDialogProps = Readonly<{
   title: string;
   description?: ReactNode;
+  /** Dialogs that hold lists or typeset statements use the wider panel. */
+  size?: "wide";
   onClose: () => void;
   children: ReactNode;
 }>;
@@ -24,7 +26,7 @@ export type ToolbarDialogProps = Readonly<{
  * Escape closes it; the Escape is consumed, so it never also clears the proof selection. Closing
  * returns focus to the control that opened it.
  */
-export function ToolbarDialog({ title, description, onClose, children }: ToolbarDialogProps) {
+export function ToolbarDialog({ title, description, size, onClose, children }: ToolbarDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -75,6 +77,7 @@ export function ToolbarDialog({ title, description, onClose, children }: Toolbar
       <div
         ref={panel}
         className={styles.dialog}
+        data-size={size}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -84,8 +87,14 @@ export function ToolbarDialog({ title, description, onClose, children }: Toolbar
       >
         <header className={styles.dialogHeader}>
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className={styles.closeButton} onClick={onClose}>
-            Close <kbd aria-hidden="true">Esc</kbd>
+          <button
+            type="button"
+            className={styles.closeButton}
+            aria-label="Close"
+            title="Close (Esc)"
+            onClick={onClose}
+          >
+            <span aria-hidden="true">×</span>
           </button>
         </header>
         {description === undefined ? null : (

@@ -3,7 +3,7 @@
 import type { Outcome } from "./requests";
 import type { TemplateDiagnosticView, TemplateValidation } from "./api-contract";
 import { groupDiagnostics } from "./diagnostics";
-import { DiagnosticItem, Hint, WhyDisabled } from "./help";
+import { DiagnosticItem, Hint, StepHeading, WhyDisabled } from "./help";
 import { CLASS_LABELS } from "./template-builder";
 import styles from "./move-authoring.module.css";
 
@@ -52,7 +52,7 @@ export type ValidationPanelProps = Readonly<{
 export function ValidationPanel({ state, unavailableReason, onValidate }: ValidationPanelProps) {
   return (
     <section className={styles.panel} aria-label="Validation">
-      <h2>4. Check your move</h2>
+      <StepHeading step={4}>Check your move</StepHeading>
       <Hint>
         Checking runs every example through the kernel in this session and compares what happens
         with what you expected. Nothing is saved by checking.
@@ -60,7 +60,7 @@ export function ValidationPanel({ state, unavailableReason, onValidate }: Valida
       <div className={styles.inline}>
         <button
           type="button"
-          className={`${styles.button} ${styles.primary}`}
+          className={styles.primaryButton}
           disabled={state.kind === "running" || unavailableReason !== undefined}
           onClick={onValidate}
         >

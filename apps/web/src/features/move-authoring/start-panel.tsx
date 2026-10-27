@@ -11,7 +11,7 @@ import {
   primitiveOptions,
   type TemplateDraft,
 } from "./template-builder";
-import { Help, Hint, WhyDisabled } from "./help";
+import { Help, Hint, StepHeading, WhyDisabled } from "./help";
 import styles from "./move-authoring.module.css";
 
 export type StartPanelProps = Readonly<{
@@ -98,7 +98,7 @@ export function StartPanel({
 
   return (
     <section className={styles.panel} aria-label="Start a move">
-      <h2>1. Start from something you already did</h2>
+      <StepHeading step={1}>Start from something you already did</StepHeading>
       <Hint>
         The easiest way to make a move is to repeat a step you already took in this session. Pick
         that step (or a run of steps) and the move is built from it.
@@ -167,7 +167,7 @@ export function StartPanel({
           <div className={styles.inline}>
             <button
               type="button"
-              className={`${styles.button} ${styles.primary}`}
+              className={styles.primaryButton}
               disabled={disabledReason !== undefined}
               onClick={startFromPath}
             >

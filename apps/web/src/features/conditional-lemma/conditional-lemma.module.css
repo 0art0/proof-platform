@@ -1,10 +1,14 @@
+/*
+ * "Save a finished step as a lemma" (Folio): a card of candidate steps, each a nested card with a
+ * secondary Preview button; the saving action is the one primary button in a preview.
+ * reviewSection is also rendered in the library drawer's detail view.
+ */
+
 .panel {
+  composes: card from "../../ui/controls.module.css";
   display: grid;
-  gap: 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: 1rem;
-  background: var(--surface);
-  padding: 1rem 1.15rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
 }
 
 .panel p,
@@ -16,53 +20,52 @@
   margin: 0;
 }
 
-.heading h2 {
-  font-size: 1.45rem;
+.heading {
+  display: grid;
+  gap: var(--space-1);
 }
 
 .meta,
-.empty,
+.empty {
+  composes: hint from "../../ui/controls.module.css";
+}
+
 .reason {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  line-height: 1.4;
+  composes: reason from "../../ui/controls.module.css";
 }
 
-.collapse summary {
-  cursor: pointer;
-  font-size: 0.9rem;
+.collapse > summary {
+  width: fit-content;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
-.status,
-.error {
-  border-left: 4px solid var(--border);
-  background: var(--surface-muted);
-  padding: 0.6rem 0.8rem;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  line-height: 1.45;
+.collapse[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.status {
+  composes: notice from "../../ui/controls.module.css";
 }
 
 .error {
-  border-color: var(--warning-border);
-  background: var(--warning-bg);
-  color: var(--warning-text);
+  composes: noticeDanger from "../../ui/controls.module.css";
 }
 
 .list {
   display: grid;
-  gap: 0.6rem;
-  margin: 0.6rem 0 0;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
   padding: 0;
   list-style: none;
 }
 
 .item {
+  composes: card from "../../ui/controls.module.css";
   display: grid;
-  gap: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 0.8rem;
-  padding: 0.65rem 0.8rem;
+  gap: var(--space-3);
+  padding: var(--space-3);
 }
 
 .itemHeader {
@@ -70,32 +73,49 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.6rem;
+  gap: var(--space-2) var(--space-3);
 }
 
 .action {
   display: grid;
-  gap: 0.2rem;
+  gap: var(--space-1);
   justify-items: start;
+}
+
+.toggleButton {
+  composes: secondary small from "../../ui/controls.module.css";
+}
+
+.saveButton {
+  composes: primary small from "../../ui/controls.module.css";
+}
+
+.rejectButton {
+  composes: secondary small from "../../ui/controls.module.css";
 }
 
 .preview {
   display: grid;
-  gap: 0.6rem;
-  border-top: 1px dashed var(--border);
-  padding-top: 0.6rem;
+  gap: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+}
+
+.preview h3 {
+  font-size: var(--text-md);
 }
 
 .statement {
-  font-size: 1.05rem;
-  line-height: 1.6;
+  font-family: var(--font-math);
+  font-size: var(--text-xl);
+  line-height: 1.5;
 }
 
 .hypotheses {
   display: grid;
-  gap: 0.3rem;
-  margin: 0;
-  padding-left: 1.2rem;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding-left: 1.25rem;
 }
 
 .unused {
@@ -104,19 +124,30 @@
 
 .reviewSection {
   display: grid;
-  gap: 0.5rem;
-  border-top: 1px dashed var(--border);
-  padding-top: 0.6rem;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+}
+
+.reviewSection h5 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.reviewSection label {
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .reviewSection textarea {
   width: 100%;
-  min-height: 3.5rem;
-  box-sizing: border-box;
+  min-height: 4.5rem;
+  resize: vertical;
 }
 
 .buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }

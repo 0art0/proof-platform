@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { StoredProofWorkspace } from "../../../features/stored-proof-workspace";
+import styles from "./page.module.css";
 import {
   ProofServiceError,
   readAiCapabilities,
@@ -41,7 +42,7 @@ export default async function SessionPage({
           background: metadata.background.summary,
         };
   return (
-    <main>
+    <main className={styles.workspacePage}>
       <StoredProofWorkspace
         session={session}
         node={loaded.node}

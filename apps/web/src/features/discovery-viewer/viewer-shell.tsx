@@ -41,36 +41,47 @@ export function ViewerShell({
     <div className={styles.viewer}>
       <header className={styles.viewerHeader}>
         <p className={styles.eyebrow}>Proof history</p>
-        <h1>{title}</h1>
-        <p className={styles.headerFacts}>
-          <span data-testid="solved-status" data-solved={artifact.final.solved}>
-            <span aria-hidden="true">{artifact.final.solved ? "✓ " : "○ "}</span>
-            {artifact.final.solved ? "Solved" : "Not solved"}
-          </span>
-          {artifact.provenance.kind === "import" ? (
-            <span data-testid="read-only-note">
-              <span aria-hidden="true">🔒 </span>Imported, read-only session
-            </span>
-          ) : null}
-        </p>
-        <nav aria-label="Stored views" className={styles.viewerNav}>
-          <Link href={`/sessions/${encodeURIComponent(sessionId)}`}>Back to the workspace</Link>
-          {VIEWS.map((view) => (
-            <Link
-              key={view.kind}
-              href={viewerHref(sessionId, view.kind)}
-              aria-current={view.kind === active ? "page" : undefined}
+        <div className={styles.titleRow}>
+          <h1>{title}</h1>
+          <p className={styles.headerFacts}>
+            <span
+              className={artifact.final.solved ? styles.statusSolved : styles.statusOpen}
+              data-testid="solved-status"
+              data-solved={artifact.final.solved}
             >
-              {view.label}
-            </Link>
-          ))}
+              <span aria-hidden="true">{artifact.final.solved ? "✓ " : "○ "}</span>
+              {artifact.final.solved ? "Solved" : "Not solved"}
+            </span>
+            {artifact.provenance.kind === "import" ? (
+              <span className={styles.chipOutline} data-testid="read-only-note">
+                <span aria-hidden="true">🔒 </span>Imported, read-only session
+              </span>
+            ) : null}
+          </p>
+        </div>
+        <nav aria-label="Stored views" className={styles.viewerNav}>
+          <div className={styles.viewTabs}>
+            {VIEWS.map((view) => (
+              <Link
+                key={view.kind}
+                href={viewerHref(sessionId, view.kind)}
+                className={styles.viewTab}
+                aria-current={view.kind === active ? "page" : undefined}
+              >
+                {view.label}
+              </Link>
+            ))}
+          </div>
+          <Link href={`/sessions/${encodeURIComponent(sessionId)}`} className={styles.backLink}>
+            <span aria-hidden="true">← </span>Back to the workspace
+          </Link>
         </nav>
         <p className={styles.viewDescription}>{activeView?.description}</p>
         <details className={styles.technicalDetails}>
           <summary>About this record</summary>
           <p>
-            Session <code>{sessionId}</code>. These views show stored snapshots, suggestions and
-            decisions; they do not recalculate the history.
+            Session <code className={styles.meta}>{sessionId}</code>. These views show stored
+            snapshots, suggestions and decisions; they do not recalculate the history.
           </p>
         </details>
       </header>

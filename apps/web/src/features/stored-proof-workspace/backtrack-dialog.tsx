@@ -108,6 +108,7 @@ export function BacktrackDialog({
   return (
     <ToolbarDialog
       title="Backtrack with information"
+      size="wide"
       description={
         <p>
           Go back to an earlier step and split the proof there into two cases: the selected
@@ -173,7 +174,7 @@ export function BacktrackDialog({
         </p>
       )}
       <div className={styles.dialogActions}>
-        <button type="button" onClick={onClose}>
+        <button type="button" className={styles.secondaryButton} onClick={onClose}>
           Cancel
         </button>
         <button

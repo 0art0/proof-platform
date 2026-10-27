@@ -3,7 +3,7 @@
 import { useId } from "react";
 import type { LibraryEntry } from "../library-drawer/api-contract";
 import type { TemplateDiagnosticView } from "./api-contract";
-import { Help, Hint, InlineDiagnostics, WhyDisabled } from "./help";
+import { Help, Hint, InlineDiagnostics, StepHeading, WhyDisabled } from "./help";
 import {
   CLASS_LABELS,
   changeFirstPrimitive,
@@ -77,7 +77,7 @@ export function TemplateForm({
 
   return (
     <section className={styles.panel} aria-label="Move template">
-      <h2>2. Name and describe your move</h2>
+      <StepHeading step={2}>Name and describe your move</StepHeading>
       <Hint>
         This is what other people see in the suggestion list. Say what the move does and when to use
         it.
@@ -128,7 +128,7 @@ export function TemplateForm({
       <InlineDiagnostics diagnostics={diagnostics} section="details" />
       {parsed.ok ? null : (
         <div role="note" aria-label="Template problems">
-          <p className={styles.error}>Not complete yet. To save, fix:</p>
+          <p className={styles.problemsLead}>Not complete yet. To save, fix:</p>
           <ul className={styles.diagnostics}>
             {parsed.problems.map((problem) => (
               <li key={problem} className={styles.diagnostic}>

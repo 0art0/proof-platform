@@ -1,101 +1,83 @@
 .panel {
   display: grid;
-  gap: 0.6rem;
+  gap: var(--space-3);
   align-content: start;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
   background: var(--surface);
-  padding: 1rem 1.15rem;
+  padding: var(--space-4) 1.25rem;
 }
 
 .panel h2 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: var(--text-lg);
+  line-height: 1.47;
 }
 
 .panel p {
   margin: 0;
 }
 
-.hint,
+.hint {
+  composes: hint from "../../ui/controls.module.css";
+}
+
 .reason {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  line-height: 1.45;
+  composes: hint from "../../ui/controls.module.css";
+}
+
+.reason:not(:empty)::before {
+  content: "ⓘ ";
 }
 
 .label {
-  font-size: 0.85rem;
-  font-weight: 750;
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .textarea {
   width: 100%;
-  box-sizing: border-box;
   resize: vertical;
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-control);
   background: var(--surface-strong);
-  padding: 0.55rem 0.65rem;
+  padding: var(--space-2) var(--space-3);
   color: var(--text);
   font: inherit;
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-.textarea:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  line-height: 1.57;
 }
 
 .textarea:disabled {
+  border-color: transparent;
+  background: var(--surface-muted);
+  color: var(--text-subtle);
   cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.55rem;
+  gap: var(--space-2);
 }
 
-.actions button {
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.7rem;
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 750;
-  cursor: pointer;
+/* Preview and Discard are secondary; Apply is the one primary action of a region. */
+.secondary {
+  composes: secondary small from "../../ui/controls.module.css";
 }
 
-.actions button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--surface-strong);
+.primary {
+  composes: primary small from "../../ui/controls.module.css";
 }
 
-.actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.actions button:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+.ghost {
+  composes: ghost small from "../../ui/controls.module.css";
 }
 
 .note {
-  border-left: 4px solid var(--accent);
-  background: var(--accent-soft);
-  padding: 0.6rem 0.7rem;
-  color: var(--accent-text);
-  font-size: 0.85rem;
-  line-height: 1.45;
+  composes: notice from "../../ui/controls.module.css";
+  line-height: 1.54;
   overflow-wrap: anywhere;
 }
 
@@ -106,30 +88,30 @@
 }
 
 .note p + p {
-  margin-top: 0.35rem;
+  margin-top: var(--space-1);
 }
 
 /* The composed class is the first thing to read in a preview. */
 .meaning {
-  font-size: 0.95rem;
-  font-weight: 750;
-  line-height: 1.4;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.47;
 }
 
 .steps {
-  margin: 0.3rem 0 0;
+  margin: var(--space-1) 0 0;
   padding-left: 1.25rem;
-  font-size: 0.85rem;
+  font-size: var(--text-md);
 }
 
 .steps li {
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--space-1);
 }
 
 /* The offer to turn an applied step into a reusable move: quiet, inline, dismissible. */
 .saveMove {
   display: grid;
-  gap: 0.4rem;
-  border-top: 1px solid var(--border);
-  padding-top: 0.6rem;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
 }

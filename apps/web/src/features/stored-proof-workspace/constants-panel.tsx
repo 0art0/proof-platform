@@ -54,7 +54,7 @@ export function ConstantsPanel({ view }: Readonly<{ view: ConstantsView }>) {
   return (
     <div className={styles.shell} data-testid="constants-panel">
       <details className={styles.panel}>
-        <summary>
+        <summary className={styles.summary}>
           Constants{" "}
           <span className={styles.count}>
             {constants.active.length} in use
@@ -66,83 +66,88 @@ export function ConstantsPanel({ view }: Readonly<{ view: ConstantsView }>) {
             </mark>
           ) : null}
         </summary>
-        <p className={styles.hint}>
-          Constants are the notation this proof works with, besides built-in mathematics. Applying a
-          library result that uses a constant the proof does not have yet adds that constant here.
-        </p>
-        {constants.active.length === 0 ? (
-          <p className={styles.empty}>
-            This proof uses no notation of its own yet, only built-in mathematics.
+        <div className={styles.body}>
+          <p className={styles.hint}>
+            Constants are the notation this proof works with, besides built-in mathematics. Applying
+            a library result that uses a constant the proof does not have yet adds that constant
+            here.
           </p>
-        ) : (
-          <ul className={styles.list} aria-label="Constants in use">
-            {constants.active.map(({ symbol, operator, origin }) => {
-              const described = describeConstant(operator);
-              const activation = activated.get(symbol);
-              const isNew = added.includes(symbol);
-              return (
-                <li
-                  key={symbol}
-                  className={styles.item}
-                  data-origin={origin}
-                  data-new={isNew ? "true" : undefined}
-                  data-constant={symbol}
-                >
-                  <span className={styles.notation}>
-                    <InlineLatex latex={described.latex} />
-                  </span>{" "}
-                  <strong>{described.name}</strong>
-                  <span className={styles.origin}>
-                    {origin === "setup"
-                      ? "from the problem setup"
-                      : activation?.resultName != null
-                        ? `added when ‘${activation.resultName}’ was applied`
-                        : "added when a library result was applied"}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <h4 className={styles.subheading}>Available from the library</h4>
-        {constants.available.length === 0 ? (
-          <p className={styles.empty}>
-            No further constants are waiting in the library. A new one appears here when the library
-            gains a result that uses it.
-          </p>
-        ) : (
-          <>
-            <p className={styles.hint}>
-              These are not part of the proof yet. Applying a result that uses one adds it.
+          {constants.active.length === 0 ? (
+            <p className={styles.empty}>
+              This proof uses no notation of its own yet, only built-in mathematics.
             </p>
-            <ul className={styles.list} aria-label="Constants available from the library">
-              {constants.available.map(({ symbol, operator, results }) => {
+          ) : (
+            <ul className={styles.list} aria-label="Constants in use">
+              {constants.active.map(({ symbol, operator, origin }) => {
                 const described = describeConstant(operator);
+                const activation = activated.get(symbol);
+                const isNew = added.includes(symbol);
                 return (
                   <li
                     key={symbol}
-                    className={`${styles.item} ${styles.available}`}
+                    className={styles.item}
+                    data-origin={origin}
+                    data-new={isNew ? "true" : undefined}
                     data-constant={symbol}
                   >
                     <span className={styles.notation}>
                       <InlineLatex latex={described.latex} />
                     </span>{" "}
                     <strong>{described.name}</strong>
-                    {results.length === 0 ? null : (
-                      <span className={styles.origin}>
-                        used by {quoted(results.slice(0, 3).map(({ name }) => name))}
-                        {results.length > 3 ? ` and ${results.length - 3} more` : ""}
-                      </span>
-                    )}
+                    <span className={styles.origin}>
+                      {origin === "setup"
+                        ? "from the problem setup"
+                        : activation?.resultName != null
+                          ? `added when ‘${activation.resultName}’ was applied`
+                          : "added when a library result was applied"}
+                    </span>
                   </li>
                 );
               })}
             </ul>
-          </>
-        )}
-        {constants.readOnly ? (
-          <p className={styles.hint}>This session is read-only, so its constants cannot change.</p>
-        ) : null}
+          )}
+          <h4 className={styles.subheading}>Available from the library</h4>
+          {constants.available.length === 0 ? (
+            <p className={styles.empty}>
+              No further constants are waiting in the library. A new one appears here when the
+              library gains a result that uses it.
+            </p>
+          ) : (
+            <>
+              <p className={styles.hint}>
+                These are not part of the proof yet. Applying a result that uses one adds it.
+              </p>
+              <ul className={styles.list} aria-label="Constants available from the library">
+                {constants.available.map(({ symbol, operator, results }) => {
+                  const described = describeConstant(operator);
+                  return (
+                    <li
+                      key={symbol}
+                      className={`${styles.item} ${styles.available}`}
+                      data-constant={symbol}
+                    >
+                      <span className={styles.notation}>
+                        <InlineLatex latex={described.latex} />
+                      </span>{" "}
+                      <strong>{described.name}</strong>
+                      {results.length === 0 ? null : (
+                        <span className={styles.origin}>
+                          used by {quoted(results.slice(0, 3).map(({ name }) => name))}
+                          {results.length > 3 ? ` and ${results.length - 3} more` : ""}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+          {constants.readOnly ? (
+            <p className={styles.hint}>
+              This session is read-only, so its constants cannot change.
+            </p>
+          ) : null}
+        </div>
       </details>
       {justAdded.length > 0 ? (
         <p className={styles.added} role="status" data-testid="constants-added">

@@ -15,7 +15,7 @@ export type WorkspaceToolbarProps = Readonly<{
   node: ProofNode;
   /** An imported artifact: authoring moves is disabled. */
   readOnly?: boolean | undefined;
-  /** The proof actions (N31), rendered as a second toolbar row. */
+  /** The proof actions (N31), library and constants: they share the toolbar's wrapping row. */
   children?: ReactNode;
 }>;
 
@@ -102,7 +102,7 @@ export function WorkspaceToolbar({
           Open full discovery tree
         </Link>
         <details className={styles.moreTools}>
-          <summary>More tools</summary>
+          <summary className={styles.disclosure}>More tools</summary>
           <div className={styles.moreToolsPanel}>
             <button type="button" className={styles.toolbarButton} onClick={() => void copyState()}>
               Copy proof state as JSON

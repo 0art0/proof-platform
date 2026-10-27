@@ -13,6 +13,10 @@ afterEach(cleanup);
 
 const ROOT = "node:contraposition-root";
 
+/** The outline button of one node: its visible label, then the node id and depth. */
+const nodeButton = (nodeId: string, depth: number) =>
+  screen.getByRole("button", { name: new RegExp(`, ${nodeId}, depth ${depth}$`) });
+
 describe("the shell", () => {
   it("links the three views, shows solved status and marks imported sessions read-only", () => {
     const { unmount } = render(<DiscoveryTreeView artifact={fixtureArtifact} />);
@@ -113,12 +117,10 @@ describe("DiscoveryTreeView", () => {
 
   it("shows the stored snapshot and the stored displayed suggestions of the selected node", () => {
     render(<DiscoveryTreeView artifact={fixtureArtifact} />);
-    fireEvent.click(screen.getByRole("button", { name: `Node ${ROOT}, depth 0` }));
+    fireEvent.click(nodeButton(ROOT, 0));
     const detail = screen.getByTestId("node-detail");
     expect(within(detail).getByRole("heading", { name: "Starting point" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: `Node ${ROOT}, depth 0` })).toHaveTextContent(
-      "Starting point",
-    );
+    expect(nodeButton(ROOT, 0)).toHaveTextContent("Starting point");
     expect(within(detail).getByTestId("state-snapshot")).toHaveTextContent("goal:main");
 
     const stored = fixtureArtifact.tree.suggestionSets.filter(({ nodeId }) => nodeId === ROOT);
@@ -139,7 +141,7 @@ describe("DiscoveryTreeView", () => {
 
   it("moves between nodes through the detail panel and switches statement view", () => {
     render(<DiscoveryTreeView artifact={fixtureArtifact} />);
-    fireEvent.click(screen.getByRole("button", { name: `Node ${ROOT}, depth 0` }));
+    fireEvent.click(nodeButton(ROOT, 0));
     const outgoing = screen.getByRole("list", { name: "Outgoing transitions" });
     fireEvent.click(
       outgoing.querySelector<HTMLButtonElement>(
@@ -149,9 +151,7 @@ describe("DiscoveryTreeView", () => {
     const detail = screen.getByTestId("node-detail");
     expect(within(detail).getByText("Recorded details")).toBeInTheDocument();
     expect(within(detail).getByText("introduce-implication")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: `Node node:command:contraposition-1, depth 1` }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(nodeButton("node:command:contraposition-1", 1)).toHaveAttribute("aria-pressed", "true");
 
     const natural = screen.getByRole("button", { name: "Natural language" });
     fireEvent.click(natural);
@@ -162,9 +162,20 @@ describe("DiscoveryTreeView", () => {
     );
   });
 
+  it("names every outline button with its visible label first (label in name)", () => {
+    render(<DiscoveryTreeView artifact={fixtureArtifact} />);
+    const buttons = within(screen.getByTestId("tree-outline")).getAllByRole("button");
+    expect(buttons).toHaveLength(fixtureArtifact.tree.nodes.length);
+    for (const button of buttons) {
+      const visible = button.textContent ?? "";
+      expect(visible).toMatch(/^(Starting point|State \d+)$/);
+      expect(button.getAttribute("aria-label")).toMatch(new RegExp(`^${visible}, node:`));
+    }
+  });
+
   it("moves focus through the outline with the arrow keys", () => {
     render(<DiscoveryTreeView artifact={fixtureArtifact} />);
-    const first = screen.getByRole("button", { name: `Node ${ROOT}, depth 0` });
+    const first = nodeButton(ROOT, 0);
     first.focus();
     fireEvent.keyDown(first, { key: "ArrowDown" });
     const second = within(screen.getByTestId("tree-outline")).getAllByRole("button")[1];

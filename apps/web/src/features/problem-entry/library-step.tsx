@@ -237,7 +237,7 @@ export function LibraryStep({
       >
         {loading ? "Building…" : "Build library"}
       </button>
-      {buildHint === null ? null : <em className={styles.hint}> {buildHint}</em>}
+      {buildHint === null ? null : <em className={styles.reason}> {buildHint}</em>}
       {approved !== undefined && !loading ? (
         <em className={styles.hint}>
           {" "}
@@ -245,13 +245,22 @@ export function LibraryStep({
         </em>
       ) : null}
       {status.kind === "failed" ? (
-        <p role="alert" className={styles.warning}>
+        <p role="alert" className={styles.error}>
           {status.message}
         </p>
       ) : null}
 
       {built === undefined ? null : (
-        <div className={styles.aiProposal} role="group" aria-label="Proposed library">
+        <div
+          className={styles.aiProposal}
+          data-state={isApproved ? "accepted" : "proposed"}
+          role="group"
+          aria-label="Proposed library"
+        >
+          <div className={styles.proposalTags}>
+            <span className={styles.aiChip}>✦ AI proposal</span>
+            {isApproved ? <span className={styles.successChip}>✓ Approved</span> : null}
+          </div>
           <p className={styles.provenance}>
             {isApproved
               ? "Proposed by AI and approved by you."
@@ -293,7 +302,7 @@ export function LibraryStep({
           )}
           {built.rejected.length === 0 ? null : (
             <details>
-              <summary>
+              <summary className={styles.disclosure}>
                 {built.rejected.length} proposed{" "}
                 {built.rejected.length === 1 ? "result" : "results"} did not pass checks
               </summary>
@@ -320,7 +329,7 @@ export function LibraryStep({
           <div className={styles.aiDecision}>
             <button
               type="button"
-              className={styles.secondary}
+              className={styles.primary}
               disabled={kept.length === 0 || recording || isApproved || staleBackground}
               onClick={() => void approve()}
             >
@@ -328,7 +337,7 @@ export function LibraryStep({
             </button>
           </div>
           {kept.length === 0 && built.results.length > 0 ? (
-            <p className={styles.hint}>Keep at least one result to approve a library.</p>
+            <p className={styles.reason}>Keep at least one result to approve a library.</p>
           ) : null}
           {!isApproved && kept.length > 0 && !staleBackground ? (
             <p className={styles.hint}>
@@ -337,7 +346,7 @@ export function LibraryStep({
             </p>
           ) : null}
           {isApproved && approved !== undefined ? (
-            <p role="status" className={styles.hint}>
+            <p role="status" className={styles.accepted}>
               Approved: {approved.results.length}{" "}
               {approved.results.length === 1 ? "result" : "results"}
               {approved.variantCount === 0 ? "" : ` and ${approved.variantCount} variants`} will be
@@ -349,12 +358,12 @@ export function LibraryStep({
             </p>
           ) : null}
           {decision.kind === "unrecorded" ? (
-            <p role="alert" className={styles.warning}>
+            <p role="alert" className={styles.error}>
               Your approval was not recorded: {decision.message} Trying again is safe.
             </p>
           ) : null}
           {decision.kind === "refused" ? (
-            <p role="alert" className={styles.warning}>
+            <p role="alert" className={styles.error}>
               This selection cannot be approved: {decision.message}
             </p>
           ) : null}
@@ -387,38 +396,40 @@ function ResultItem({
         removed ? `${styles.libraryItem} ${styles.libraryItemRemoved}` : styles.libraryItem
       }
     >
-      <strong>{artifact.name}</strong>
-      <span className={styles.rendered}>
-        <code>{statement.latex}</code>
-        <span className={styles.prose}>{statement.prose}</span>
-      </span>
-      {premises.length === 0 ? null : (
-        <span className={styles.hint}>
-          Assuming:{" "}
-          {premises.map((premise, index) => (
-            <code key={index} className={styles.token}>
-              {premise.latex}
-            </code>
-          ))}
+      <div className={styles.libraryBody}>
+        <strong>{artifact.name}</strong>
+        <span className={styles.rendered}>
+          <code>{statement.latex}</code>
+          <span className={styles.prose}>{statement.prose}</span>
         </span>
-      )}
-      <span className={styles.hint}>{artifact.description}</span>
-      {newConstantSymbols.length === 0 ? null : (
-        <span className={styles.hint}>Uses new notation: {newConstantSymbols.join(", ")}.</span>
-      )}
+        {premises.length === 0 ? null : (
+          <span className={styles.hint}>
+            Assuming:{" "}
+            {premises.map((premise, index) => (
+              <code key={index} className={styles.token}>
+                {premise.latex}
+              </code>
+            ))}
+          </span>
+        )}
+        <span className={styles.hint}>{artifact.description}</span>
+        {newConstantSymbols.length === 0 ? null : (
+          <span className={styles.hint}>Uses new notation: {newConstantSymbols.join(", ")}.</span>
+        )}
+        {removed ? (
+          <em className={styles.hint} data-note="removed">
+            Removed: it will not be added.
+          </em>
+        ) : null}
+      </div>
       <button
         type="button"
-        className={styles.linkButton}
+        className={styles.removeButton}
         aria-label={`${removed ? "Restore" : "Remove"} ${artifact.name}`}
         onClick={onToggle}
       >
         {removed ? "Restore" : "Remove"}
       </button>
-      {removed ? (
-        <em className={styles.hint} data-note="removed">
-          Removed: it will not be added.
-        </em>
-      ) : null}
     </li>
   );
 }

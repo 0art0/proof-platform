@@ -1,9 +1,13 @@
+/*
+ * Move authoring (Folio). Each numbered step is a card whose heading starts with an ink step
+ * marker; actions are small buttons (one primary per card); statuses are chips; ids are metadata.
+ * The page sits inside <main>, which already sets the width and the gutters.
+ */
+
 .page {
   display: grid;
-  gap: 1rem;
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
   color: var(--text);
 }
 
@@ -12,83 +16,144 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem 1rem;
+  gap: var(--space-2) var(--space-4);
 }
 
 .pageHeader h1 {
   margin: 0;
-  font-size: 1.5rem;
 }
 
 .pageHeader a {
-  color: var(--accent-text);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
+/* ---------- Step cards ---------- */
+
 .panel {
+  composes: card from "../../ui/controls.module.css";
   display: grid;
-  gap: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.9rem;
-  background: var(--surface);
-  padding: 0.9rem 1.05rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
 }
 
 .panel h2 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: var(--text-lg);
+  line-height: 1.47;
+  letter-spacing: 0;
 }
 
 .panel h3 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: var(--text-md);
+}
+
+.panel h4 {
+  margin: 0;
 }
 
 .panel p {
   margin: 0;
-  line-height: 1.45;
+}
+
+.stepHeading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The same 24px ink square as the wordmark, so every step reads as part of one sequence. */
+.stepNumber {
+  display: inline-grid;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1;
 }
 
 .muted {
-  color: var(--text-muted);
-  font-size: 0.8rem;
+  composes: hint from "../../ui/controls.module.css";
+}
+
+.hint {
+  composes: hint from "../../ui/controls.module.css";
+}
+
+/* Why a control is unavailable, with the ⓘ marker. */
+.reason {
+  composes: reason from "../../ui/controls.module.css";
+}
+
+.example {
+  composes: hint from "../../ui/controls.module.css";
 }
 
 .error {
-  color: var(--warning-text);
-  font-size: 0.85rem;
+  composes: noticeDanger from "../../ui/controls.module.css";
 }
 
 .notice {
-  color: var(--accent-text);
-  font-size: 0.85rem;
+  composes: notice from "../../ui/controls.module.css";
 }
+
+/* The lead-in line above a list of problems: the list items carry the notices. */
+.panel .problemsLead {
+  margin-bottom: var(--space-2);
+  color: var(--danger-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.empty {
+  composes: hint from "../../ui/controls.module.css";
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* ---------- Fields ---------- */
 
 .fieldGrid {
   display: grid;
   grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
-  gap: 0.5rem 0.75rem;
+  gap: var(--space-2) var(--space-3);
   align-items: center;
+}
+
+.fieldGrid > label,
+.inline > label {
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .fieldGrid input[type="text"],
 .fieldGrid textarea,
-.fieldGrid select,
-.inline select,
-.inline input[type="text"],
-.reviewForm textarea {
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: var(--surface-strong);
-  padding: 0.4rem 0.55rem;
-  color: var(--text);
-  font: inherit;
-  font-size: 0.85rem;
+.fieldGrid select {
+  width: 100%;
+  min-width: 0;
+}
+
+/* A field with a fixed prefix (the move ID) keeps prefix and input on one line. */
+.fieldGrid .inline {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.fieldGrid .inline input[type="text"] {
+  flex: 1 1 0;
+  width: auto;
 }
 
 .fieldGrid textarea,
 .reviewForm textarea {
-  min-height: 4rem;
+  min-height: 4.5rem;
   resize: vertical;
 }
 
@@ -96,44 +161,34 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.75rem;
+  gap: var(--space-2) var(--space-3);
 }
+
+.inline select {
+  max-width: 100%;
+}
+
+@media (max-width: 30rem) {
+  .fieldGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- Buttons ---------- */
 
 .button {
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.4rem 0.75rem;
-  color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
+  composes: secondary small from "../../ui/controls.module.css";
 }
 
-.button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
+.primaryButton {
+  composes: primary small from "../../ui/controls.module.css";
 }
 
-.button:focus-visible,
-.fieldGrid input:focus-visible,
-.fieldGrid select:focus-visible,
-.fieldGrid textarea:focus-visible,
-.inline select:focus-visible,
-.reviewForm textarea:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.primary {
-  border-color: var(--goal-border);
-  background: var(--goal-bg);
-  color: var(--goal-fg);
-}
+/* ---------- Lists, items and chips ---------- */
 
 .list {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -144,173 +199,143 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.4rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.65rem;
-  font-size: 0.85rem;
+  gap: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-md);
+}
+
+/* Applied and rejected examples differ by the style of the left rule, not by colour. */
+.item[data-outcome="applied"] {
+  border-left: 3px solid var(--border-control);
 }
 
 .item[data-outcome="rejected"] {
-  border-left: 4px solid var(--warning-border);
-}
-
-.item[data-outcome="applied"] {
-  border-left: 4px solid var(--goal-border);
+  border-left: 3px dashed var(--border-control);
 }
 
 .itemBody {
   display: grid;
-  gap: 0.15rem;
+  gap: var(--space-1);
   min-width: 0;
 }
 
+/* Ids, patterns and digests are metadata: mono, small, muted. */
 .code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8rem;
+  composes: meta from "../../ui/controls.module.css";
   overflow-wrap: anywhere;
 }
 
 .badge {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.05rem 0.55rem;
-  font-size: 0.72rem;
-  font-weight: 700;
+  composes: pill from "../../ui/controls.module.css";
 }
 
 .badge[data-status="approved"],
 .badge[data-retrievable="true"] {
-  border-color: var(--goal-border);
-  background: var(--goal-bg);
-  color: var(--goal-fg);
+  background: var(--success-bg);
+  color: var(--success-text);
 }
 
-.badge[data-status="rejected"],
-.badge[data-status="changes-requested"],
-.badge[data-retrievable="false"] {
-  border-color: var(--warning-border);
+.badge[data-status="rejected"] {
+  color: var(--danger-text);
+}
+
+.badge[data-status="changes-requested"] {
   background: var(--warning-bg);
   color: var(--warning-text);
 }
 
+/* ---------- Diagnostics and reports ---------- */
+
 .diagnostics {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .diagnostic {
-  border-left: 4px solid var(--warning-border);
-  border-radius: 0.3rem;
-  background: var(--warning-bg);
-  padding: 0.35rem 0.6rem;
-  color: var(--warning-text);
-  font-size: 0.82rem;
+  composes: noticeDanger from "../../ui/controls.module.css";
 }
 
 .diagnostic strong {
   display: block;
 }
 
-.report {
-  display: grid;
-  gap: 0.35rem;
-  border-left: 4px solid var(--goal-border);
-  border-radius: 0.3rem;
-  background: var(--goal-bg);
-  padding: 0.4rem 0.65rem;
-  color: var(--goal-fg);
-  font-size: 0.85rem;
+.advice {
+  display: block;
+  margin-top: var(--space-1);
 }
+
+.report {
+  composes: noticeSuccess from "../../ui/controls.module.css";
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* ---------- Review ---------- */
 
 .reviewForm {
   display: grid;
-  gap: 0.5rem;
-  border-top: 1px dashed var(--border);
-  padding-top: 0.6rem;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
 }
 
 .reviewForm fieldset {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 1rem;
+  gap: var(--space-1) var(--space-4);
   margin: 0;
   border: 0;
   padding: 0;
-  font-size: 0.85rem;
 }
 
 .snapshot {
   display: grid;
-  gap: 0.6rem;
+  gap: var(--space-3);
 }
 
 .revision {
   display: grid;
-  gap: 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  padding: 0.55rem 0.7rem;
-  font-size: 0.85rem;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  font-size: var(--text-md);
 }
 
-.hint {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  line-height: 1.4;
+.revision .revision {
+  border: 0;
+  background: var(--surface-muted);
 }
+
+/* ---------- Help ---------- */
 
 .help {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .help summary {
   width: fit-content;
-  color: var(--accent-text);
-  cursor: pointer;
-}
-
-.help summary:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .helpBody {
   display: grid;
-  gap: 0.35rem;
-  margin-top: 0.35rem;
-  border-left: 3px solid var(--border);
-  padding-left: 0.75rem;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-3);
   color: var(--text-muted);
-  line-height: 1.45;
+  line-height: 1.54;
 }
 
 .helpBody p,
 .helpBody ul {
   margin: 0;
-}
-
-.advice {
-  display: block;
-  margin-top: 0.15rem;
-  font-style: italic;
-}
-
-.example {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.empty {
-  border: 1px dashed var(--border);
-  border-radius: 0.6rem;
-  padding: 0.55rem 0.75rem;
-  color: var(--text-muted);
-  font-size: 0.85rem;
 }

@@ -6,7 +6,9 @@ import styles from "./suggestion-panel.module.css";
 /**
  * Badges for the suggestion panel. Following the workspace chrome (N29), no badge is
  * distinguished by colour alone: each carries a glyph (hidden from assistive technology) and a
- * text label, and exposes its stored value as a data attribute.
+ * text label, and exposes its stored value as a data attribute. They are neutral chips except the
+ * relation tags (equivalence outline, strengthening blue outline, weakening dashed warning) and
+ * the sorry evidence tag, the only filled warning chip.
  */
 
 type TransitionClass = ProofEdge["transitionClass"];
@@ -62,7 +64,7 @@ export function TransitionClassBadge({
       aria-label={`${transitionClass}: ${transitionMeaning(transitionClass)}`}
     >
       <Glyph glyph={TRANSITION_CLASSES[transitionClass].glyph} />
-      <span>{transitionClass}</span>
+      <span className={styles.transitionLabel}>{transitionClass}</span>
     </span>
   );
 }

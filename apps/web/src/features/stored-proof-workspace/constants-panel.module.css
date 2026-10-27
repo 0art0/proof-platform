@@ -1,32 +1,47 @@
+/*
+ * The constants disclosure sits in the workspace toolbar's wrapping row: the wrapper disappears
+ * from layout, the summary reads as a small ghost button, and an open list takes its own line.
+ */
 .shell {
-  display: grid;
-  gap: 0.4rem;
+  display: contents;
 }
 
 .panel {
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
-.panel > summary {
-  width: fit-content;
-  max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-  list-style-position: inside;
+.panel[open] {
+  flex-basis: 100%;
 }
 
-.panel > summary:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+.summary {
+  composes: ghost small from "../../ui/controls.module.css";
+  list-style: none;
 }
 
-.panel[open] > summary {
-  margin-bottom: 0.7rem;
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary::after {
+  content: "▾" / "";
+  font-size: var(--text-xs);
+}
+
+.panel[open] > .summary {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.panel[open] > .summary::after {
+  content: "▴" / "";
+}
+
+.panel > .body {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-1);
 }
 
 .count {
@@ -35,44 +50,35 @@
 }
 
 .newMark {
-  margin-left: 0.5rem;
-  border-radius: 0.4rem;
-  background: var(--accent-soft);
-  padding: 0.05rem 0.4rem;
-  color: var(--accent-text);
-  font-size: 0.7rem;
-  font-weight: 700;
+  composes: chipSuccess from "../../ui/controls.module.css";
 }
 
-.panel > p,
-.panel > h4 {
-  margin: 0 0 0.5rem;
+.hint {
+  composes: hint from "../../ui/controls.module.css";
+  overflow-wrap: anywhere;
 }
 
-.hint,
-.empty,
-.quiet {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.8rem;
+.empty {
+  composes: hint from "../../ui/controls.module.css";
   overflow-wrap: anywhere;
 }
 
 .quiet {
-  font-style: italic;
+  composes: hint from "../../ui/controls.module.css";
+  overflow-wrap: anywhere;
 }
 
 .subheading {
-  margin: 0.8rem 0 0.35rem;
+  margin: var(--space-2) 0 0;
   color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .list {
   display: grid;
-  gap: 0.3rem;
-  margin: 0 0 0.5rem;
+  gap: var(--space-1);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -81,25 +87,25 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.25rem 0.5rem;
+  gap: var(--space-1) var(--space-2);
   border-left: 3px solid var(--border-soft);
-  padding: 0.3rem 0.55rem;
+  padding: var(--space-1) var(--space-2);
   overflow-wrap: anywhere;
 }
 
 .item[data-origin="activated"] {
-  border-left-color: var(--accent);
+  border-left-color: var(--border-control);
 }
 
 /* A constant that arrived with the last step: a brief highlight that settles by itself. */
 .item[data-new="true"] {
-  border-left-color: var(--accent);
+  border-left-color: var(--select-ring);
   animation: constantAdded 3.5s ease-out;
 }
 
 @keyframes constantAdded {
   from {
-    background: var(--accent-soft);
+    background: var(--select-bg);
   }
 
   to {
@@ -109,8 +115,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .item[data-new="true"] {
+    background: var(--select-bg);
     animation: none;
-    background: var(--accent-soft);
   }
 }
 
@@ -125,15 +131,12 @@
 
 .origin {
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .added {
+  composes: noticeSuccess from "../../ui/controls.module.css";
+  flex-basis: 100%;
   margin: 0;
-  border-left: 4px solid var(--accent);
-  background: var(--accent-soft);
-  padding: 0.5rem 0.7rem;
-  color: var(--accent-text);
-  font-size: 0.8rem;
   overflow-wrap: anywhere;
 }

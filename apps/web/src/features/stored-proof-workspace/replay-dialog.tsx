@@ -273,6 +273,7 @@ export function ReplayDialog({
   return (
     <ToolbarDialog
       title="Replay a sequence here"
+      size="wide"
       description={
         <p>
           Choose a recorded path; its steps are matched again against the current node {node.id} and
@@ -370,13 +371,13 @@ export function ReplayDialog({
       )}
 
       <div className={styles.dialogActions}>
-        <button type="button" onClick={onClose}>
+        <button type="button" className={styles.secondaryButton} onClick={onClose}>
           Cancel
         </button>
         {report?.firstFailure === undefined ? null : (
           <button
             type="button"
-            className={styles.primaryButton}
+            className={styles.secondaryButton}
             disabled={pending || Object.keys(repairs).length === 0}
             onClick={previewWithRepairs}
           >

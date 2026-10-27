@@ -1,179 +1,199 @@
 .actionBar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 0.9rem;
+  gap: var(--space-2) var(--space-3);
   align-items: flex-start;
 }
 
 .action {
   display: inline-grid;
-  gap: 0.2rem;
+  gap: var(--space-1);
   max-width: 16rem;
 }
 
-.actionButton,
-.dialogActions button,
-.closeButton {
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.75rem;
-  color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.actionButton:disabled,
-.dialogActions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.actionButton:focus-visible,
-.dialogActions button:focus-visible,
-.closeButton:focus-visible,
-.choice input:focus-visible,
-.confirmation input:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+/* Proof actions are small ghost buttons; an unavailable one is filled grey and says why. */
+.actionButton {
+  composes: ghost small from "../../ui/controls.module.css";
 }
 
 .reason {
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  line-height: 1.35;
+  composes: reason from "../../ui/controls.module.css";
 }
 
+.readOnlyNote {
+  composes: notice from "../../ui/controls.module.css";
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* Dialogs: one shared look. Cancel (secondary) then the primary, right-aligned. */
 .backdrop {
   position: fixed;
   inset: 0;
   z-index: 50;
   display: grid;
   place-items: center;
-  background: rgb(0 0 0 / 0.45);
-  padding: 1rem;
+  background: var(--backdrop);
+  padding: var(--space-4);
 }
 
 .dialog {
   display: grid;
-  gap: 0.85rem;
-  width: min(44rem, 100%);
+  gap: var(--space-4);
+  width: min(32.5rem, 100%);
   max-height: calc(100vh - 2rem);
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
   background: var(--surface);
-  padding: 1rem 1.15rem;
+  box-shadow: var(--shadow-overlay);
+  padding: var(--space-5);
   color: var(--text);
+}
+
+.dialog[data-size="wide"] {
+  width: min(40rem, 100%);
 }
 
 .dialogHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .dialogHeader h2 {
   margin: 0;
-  font-size: 1.25rem;
+}
+
+.closeButton {
+  composes: ghost from "../../ui/controls.module.css";
+}
+
+.dialogHeader .closeButton {
+  width: var(--control-height-sm);
+  min-height: var(--control-height-sm);
+  flex: none;
+  padding: 0;
+  font-size: 1.125rem;
+  line-height: 1;
+}
+
+.dialogDescription {
+  color: var(--text-muted);
 }
 
 .dialogDescription p,
 .dialogBody p {
   margin: 0;
-  line-height: 1.45;
+  line-height: 1.57;
+}
+
+.dialogDescription p + p {
+  margin-top: var(--space-2);
 }
 
 .dialogBody {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-4);
 }
 
 .dialogActions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: var(--space-2);
+}
+
+.secondaryButton {
+  composes: secondary from "../../ui/controls.module.css";
 }
 
 .primaryButton {
-  border-color: var(--goal-border) !important;
-  background: var(--goal-bg) !important;
-  color: var(--goal-fg) !important;
+  composes: primary from "../../ui/controls.module.css";
 }
 
 .dangerButton {
-  border-color: var(--warning-border) !important;
-  background: var(--warning-bg) !important;
-  color: var(--warning-text) !important;
+  composes: danger from "../../ui/controls.module.css";
 }
 
 .facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
   margin: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-3) var(--space-4);
 }
 
 .facts dt {
   color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--text-sm);
+  line-height: 1.54;
 }
 
 .facts dd {
   margin: 0;
-  font-weight: 700;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.47;
 }
 
 .confirmation {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--space-2);
   align-items: flex-start;
-  border-left: 4px solid var(--warning-border);
-  background: var(--warning-bg);
-  padding: 0.6rem 0.75rem;
-  color: var(--warning-text);
-  font-weight: 600;
+}
+
+.confirmation input {
+  flex: none;
+  margin: 0.1875rem 0 0;
+}
+
+/* A caution (amber): deleted work leaves the discovery record, so backtracking keeps more. */
+.caution {
+  composes: noticeWarning from "../../ui/controls.module.css";
+}
+
+.dialogDescription p.caution {
+  margin-top: var(--space-3);
+  color: var(--text);
+  line-height: 1.54;
 }
 
 .error {
-  border-left: 4px solid var(--warning-border);
-  background: var(--warning-bg);
-  padding: 0.6rem 0.75rem;
-  color: var(--warning-text);
+  composes: noticeDanger from "../../ui/controls.module.css";
 }
 
 .muted {
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .proposition {
-  font-size: 1.05rem;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
 }
 
 .choices {
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-2);
   margin: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 0.6rem;
-  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
 }
 
 .choices legend {
-  padding: 0 0.3rem;
-  font-weight: 700;
+  padding: 0 var(--space-1);
+  font-weight: 600;
 }
 
 .choice {
   display: flex;
-  gap: 0.55rem;
+  gap: var(--space-2);
   align-items: flex-start;
 }
 
@@ -184,17 +204,17 @@
 .choiceDetail,
 .choiceReason {
   display: block;
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .choiceReason {
-  color: var(--warning-text);
+  color: var(--text-muted);
 }
 
 .fieldGrid {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: 0.5rem 0.75rem;
+  gap: var(--space-2) var(--space-3);
   align-items: center;
 }
 
@@ -204,23 +224,22 @@
 
 .reportSection {
   display: grid;
-  gap: 0.45rem;
+  gap: var(--space-2);
 }
 
 .reportSection h3 {
   margin: 0;
-  font-size: 1rem;
 }
 
 .stepList {
   display: grid;
-  gap: 0.3rem;
+  gap: var(--space-1);
   margin: 0;
   padding-left: 1.4rem;
 }
 
 .stepList li[data-step-status="failed"] {
-  color: var(--warning-text);
+  color: var(--danger-text);
 }
 
 .stepStatus {
@@ -231,11 +250,4 @@
   .fieldGrid {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-.readOnlyNote {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--warning-text);
-  font-size: 0.8rem;
 }

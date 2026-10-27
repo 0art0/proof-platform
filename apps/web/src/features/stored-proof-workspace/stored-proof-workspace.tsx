@@ -781,7 +781,7 @@ function StatefulStoredWorkspace({
         readOnly={readOnly}
       >
         <details className={styles.proofActions}>
-          <summary>More proof actions</summary>
+          <summary className={styles.disclosure}>More proof actions</summary>
           <ToolbarActionBar
             sessionId={session.id}
             readOnly={readOnly}
@@ -797,14 +797,14 @@ function StatefulStoredWorkspace({
             runCommand={runToolbarCommand}
           />
         </details>
+        <LibraryDrawer
+          sessionId={session.id}
+          presentation={catalogPresentation}
+          view={view}
+          gestures={drag.bindings}
+        />
+        <ConstantsPanel view={constantsRead.view} />
       </WorkspaceToolbar>
-      <LibraryDrawer
-        sessionId={session.id}
-        presentation={catalogPresentation}
-        view={view}
-        gestures={drag.bindings}
-      />
-      <ConstantsPanel view={constantsRead.view} />
       {notice ? (
         <p className={styles.actionNotice} data-state={notice.state} role="status">
           {notice.message}
@@ -935,7 +935,9 @@ function HistoryView({
           <h2>Proof-discovery tree</h2>
           <p>Backtracking preserves every existing branch.</p>
         </div>
-        {history.kind === "ready" ? <span>{history.edges.length} transitions</span> : null}
+        {history.kind === "ready" ? (
+          <span className={styles.historyCount}>{history.edges.length} transitions</span>
+        ) : null}
       </div>
       {history.kind === "loading" ? <p>Loading retained history…</p> : null}
       {history.kind === "rejected" ? (
@@ -968,6 +970,7 @@ function HistoryView({
                   <button
                     className={styles.historyNode}
                     data-current={node.id === currentNodeId}
+                    aria-current={node.id === currentNodeId ? "true" : undefined}
                     data-history-node-id={node.id}
                     disabled={node.id === currentNodeId || mutationPending}
                     type="button"

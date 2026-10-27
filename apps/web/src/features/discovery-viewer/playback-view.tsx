@@ -5,6 +5,7 @@ import type { ProofArtifact } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
 import { usePresentation } from "../proof-workspace/presentation";
 import { indexArtifact } from "./artifact-data";
+import { formatRecordedAt } from "./format-recorded-at";
 import styles from "./discovery-viewer.module.css";
 import { InquiryRecordExplanation, useInquiryExplanations } from "./inquiry-record-item";
 import {
@@ -29,7 +30,7 @@ function EntryDetail({
     const { edge } = entry;
     return (
       <>
-        <p>{edge.label}</p>
+        <p className={styles.prose}>{edge.label}</p>
         {edge.macro === undefined || edge.moveId === undefined ? null : (
           <p className={styles.muted}>
             One step of a multi-step move; this step applies {humanizeMoveId(edge.moveId)}.
@@ -40,17 +41,17 @@ function EntryDetail({
           <dl className={styles.facts} aria-label="Transition">
             <dt>Operation</dt>
             <dd>
-              <code>{edge.operationKind}</code>
+              <code className={styles.meta}>{edge.operationKind}</code>
             </dd>
             <dt>Transition class</dt>
             <dd>{edge.transitionClass}</dd>
             <dt>From node</dt>
             <dd>
-              <code>{edge.parentNodeId}</code>
+              <code className={styles.meta}>{edge.parentNodeId}</code>
             </dd>
             <dt>To node</dt>
             <dd>
-              <code>{edge.childNodeId}</code>
+              <code className={styles.meta}>{edge.childNodeId}</code>
             </dd>
           </dl>
         </details>
@@ -73,17 +74,24 @@ function EntryDetail({
       : [];
   return (
     <>
-      <p>
-        Recorded by <code>{event.actor.id}</code> ({event.actor.kind}) at{" "}
-        <time dateTime={event.recordedAt}>{event.recordedAt}</time>.
+      <p className={styles.prose}>
+        Recorded by <code className={styles.meta}>{event.actor.id}</code> ({event.actor.kind}) at{" "}
+        <time dateTime={event.recordedAt} title={event.recordedAt} className={styles.meta}>
+          {formatRecordedAt(event.recordedAt)}
+        </time>
+        .
       </p>
       {event.kind === "suggestions-displayed" ? (
         <>
-          <p>
-            Displayed from stored suggestion set <code>{event.suggestionSetId}</code>, in this
-            order:
+          <p className={styles.prose}>
+            Displayed from stored suggestion set{" "}
+            <code className={styles.meta}>{event.suggestionSetId}</code>, in this order:
           </p>
-          <ol aria-label="Displayed suggestions" data-testid="displayed-suggestions">
+          <ol
+            className={styles.displayedList}
+            aria-label="Displayed suggestions"
+            data-testid="displayed-suggestions"
+          >
             {displayed.map((suggestion) => (
               <li key={suggestion.id} data-suggestion-id={suggestion.id}>
                 {suggestion.name}
@@ -92,7 +100,7 @@ function EntryDetail({
           </ol>
         </>
       ) : null}
-      <details>
+      <details className={styles.technicalDetails}>
         <summary>Stored event payload</summary>
         <pre>{JSON.stringify(event, null, 2)}</pre>
       </details>
@@ -144,7 +152,7 @@ export function PlaybackView({ artifact }: Readonly<{ artifact: ProofArtifact }>
         <ViewToggle view={view} onChange={setView} />
       </div>
       {entry === undefined ? (
-        <p>The stored history has nothing to play back.</p>
+        <p className={styles.hint}>The stored history has nothing to play back.</p>
       ) : (
         <section
           className={styles.playback}
@@ -153,22 +161,42 @@ export function PlaybackView({ artifact }: Readonly<{ artifact: ProofArtifact }>
           data-testid="playback"
         >
           <div className={styles.controls} role="group" aria-label="Step controls">
-            <button type="button" onClick={() => go(0)} disabled={at === 0}>
+            <button
+              type="button"
+              className={styles.controlButton}
+              onClick={() => go(0)}
+              disabled={at === 0}
+            >
               First
             </button>
-            <button type="button" onClick={() => go(at - 1)} disabled={at === 0}>
+            <button
+              type="button"
+              className={styles.controlButton}
+              onClick={() => go(at - 1)}
+              disabled={at === 0}
+            >
               Previous
             </button>
-            <button type="button" onClick={() => go(at + 1)} disabled={at === total - 1}>
+            <button
+              type="button"
+              className={styles.controlButton}
+              onClick={() => go(at + 1)}
+              disabled={at === total - 1}
+            >
               Next
             </button>
-            <button type="button" onClick={() => go(total - 1)} disabled={at === total - 1}>
+            <button
+              type="button"
+              className={styles.controlButton}
+              onClick={() => go(total - 1)}
+              disabled={at === total - 1}
+            >
               Last
             </button>
-            <span aria-live="polite" data-testid="step-status">
+            <span className={styles.stepStatus} aria-live="polite" data-testid="step-status">
               Step {at + 1} of {total}
             </span>
-            <span className={styles.muted}>Keyboard: left and right arrows, Home, End.</span>
+            <span className={styles.keyHint}>Keyboard: left and right arrows, Home, End.</span>
           </div>
           <div className={styles.treeLayout}>
             <nav aria-label="Playback steps" className={styles.outline}>
@@ -177,10 +205,11 @@ export function PlaybackView({ artifact }: Readonly<{ artifact: ProofArtifact }>
                   <li key={item.key} data-kind={item.kind}>
                     <button
                       type="button"
+                      className={styles.stepButton}
                       aria-current={itemIndex === at ? "step" : undefined}
                       onClick={() => go(itemIndex)}
                     >
-                      <span className={styles.chip}>{PLAYBACK_KIND_LABELS[item.kind]}</span>{" "}
+                      <span className={styles.stepChip}>{PLAYBACK_KIND_LABELS[item.kind]}</span>{" "}
                       {item.title}
                     </button>
                   </li>
@@ -188,16 +217,20 @@ export function PlaybackView({ artifact }: Readonly<{ artifact: ProofArtifact }>
               </ol>
             </nav>
             <section className={styles.detail} aria-label="Step detail" data-testid="step-detail">
-              <h2>
-                {PLAYBACK_KIND_LABELS[entry.kind]}: {entry.title}
-              </h2>
-              <EntryDetail entry={entry} artifact={artifact} explain={explain} />
-              <h3>Proof state at this point</h3>
-              {node === undefined ? (
-                <p>This node is not retained in the artifact.</p>
-              ) : (
-                <StateSnapshotView state={node.state} presentation={presentation} view={view} />
-              )}
+              <div className={styles.detailSection}>
+                <h2>
+                  {PLAYBACK_KIND_LABELS[entry.kind]}: {entry.title}
+                </h2>
+                <EntryDetail entry={entry} artifact={artifact} explain={explain} />
+              </div>
+              <div className={styles.detailSection}>
+                <h3>Proof state at this point</h3>
+                {node === undefined ? (
+                  <p className={styles.hint}>This node is not retained in the artifact.</p>
+                ) : (
+                  <StateSnapshotView state={node.state} presentation={presentation} view={view} />
+                )}
+              </div>
             </section>
           </div>
         </section>

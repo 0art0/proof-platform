@@ -15,7 +15,7 @@ import {
   removeExample,
   type TemplateDraft,
 } from "./template-builder";
-import { Help, Hint, WhyDisabled } from "./help";
+import { Help, Hint, StepHeading, WhyDisabled } from "./help";
 import styles from "./move-authoring.module.css";
 
 export type ExamplesPanelProps = Readonly<{
@@ -66,7 +66,7 @@ export function ExamplesPanel({
 
   return (
     <section className={styles.panel} aria-label="Examples">
-      <h2>3. Show it working and failing (examples)</h2>
+      <StepHeading step={3}>Show it working and failing (examples)</StepHeading>
       <Hint>
         Examples are how the kernel proves your move does what you say. Add two that should work and
         one that shouldn&apos;t.

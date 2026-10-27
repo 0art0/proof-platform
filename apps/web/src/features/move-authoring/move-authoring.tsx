@@ -8,7 +8,7 @@ import { READ_ONLY_REASON, type HistoryEdge } from "../stored-proof-workspace/to
 import type { AuthoredMoveProvenance, AuthoredMoves, TemplateDiagnosticView } from "./api-contract";
 import { describeAuthoringFailure, type AuthoringFailureView } from "./diagnostics";
 import { ExamplesPanel } from "./examples-panel";
-import { Help, Hint, WhyDisabled } from "./help";
+import { Help, Hint, StepHeading, WhyDisabled } from "./help";
 import {
   readStashedMoveProposal,
   requestMoveProposal,
@@ -430,7 +430,7 @@ export function MoveAuthoring({ session, proposalId, canRevise = false }: MoveAu
                 onValidate={() => void validate()}
               />
               <section className={styles.panel} aria-label="Save">
-                <h2>5. Save as a draft</h2>
+                <StepHeading step={5}>Save as a draft</StepHeading>
                 <Hint>
                   Saving records your move in this session as a draft. A draft is never offered as a
                   suggestion until it has been reviewed and approved below. You can save before the
@@ -439,7 +439,7 @@ export function MoveAuthoring({ session, proposalId, canRevise = false }: MoveAu
                 <div className={styles.inline}>
                   <button
                     type="button"
-                    className={`${styles.button} ${styles.primary}`}
+                    className={styles.primaryButton}
                     disabled={saving || saveReason !== undefined}
                     onClick={() => void save()}
                   >

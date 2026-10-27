@@ -65,9 +65,10 @@ export function ArtifactUpload({
   }
 
   return (
-    <form className={styles.fetchForm} onSubmit={(event) => void submit(event)}>
+    <form className={styles.cardForm} onSubmit={(event) => void submit(event)}>
       <input
         type="file"
+        className={styles.fileInput}
         accept="application/json,.json"
         aria-label="Artifact file"
         onChange={(event) => {
@@ -75,16 +76,23 @@ export function ArtifactUpload({
           setNotice({ kind: "idle" });
         }}
       />
-      <button type="submit" disabled={file === undefined || notice.kind === "uploading"}>
-        Open proof file
-      </button>
+      <div className={styles.formActions}>
+        <button
+          type="submit"
+          className={styles.secondary}
+          disabled={file === undefined || notice.kind === "uploading"}
+        >
+          Open proof file
+        </button>
+        {file === undefined ? <p className={styles.reason}>Choose a file first.</p> : null}
+      </div>
       {notice.kind === "uploading" ? <p role="status">Revalidating the artifact…</p> : null}
       {notice.kind === "failed" ? (
-        <div role="alert" className={styles.warning}>
+        <div role="alert" className={styles.error}>
           <p>{notice.message}</p>
           {notice.diagnostics.length > 0 ? (
             <details className={styles.details}>
-              <summary>Technical details</summary>
+              <summary className={styles.disclosure}>Technical details</summary>
               <ul>
                 {notice.diagnostics.map((diagnostic, index) => (
                   <li key={index} data-code={diagnostic.code}>
@@ -144,8 +152,9 @@ export function ArtifactDownload({
   }
 
   return (
-    <form className={styles.fetchForm} onSubmit={(event) => void submit(event)}>
+    <form className={styles.inlineForm} onSubmit={(event) => void submit(event)}>
       <input
+        className={styles.idInput}
         aria-label="Saved proof ID to download"
         placeholder="session:…"
         required
@@ -156,11 +165,16 @@ export function ArtifactDownload({
           setState({ kind: "idle" });
         }}
       />
-      <button type="submit" disabled={state.kind === "checking"} data-hydrated={hydrated}>
+      <button
+        type="submit"
+        className={styles.secondary}
+        disabled={state.kind === "checking"}
+        data-hydrated={hydrated}
+      >
         Download artifact
       </button>
       {state.kind === "failed" ? (
-        <p role="alert" className={styles.warning}>
+        <p role="alert" className={styles.error}>
           {state.message}
         </p>
       ) : null}
@@ -168,18 +182,25 @@ export function ArtifactDownload({
         <div role="alert" className={styles.warning}>
           <p>This session is private. Export it anyway?</p>
           <p>The file contains the whole proof state, including the problem and background.</p>
-          <button
-            type="button"
-            onClick={() => {
-              setState({ kind: "idle" });
-              navigate(exportHref(state.id, true));
-            }}
-          >
-            Export anyway
-          </button>{" "}
-          <button type="button" onClick={() => setState({ kind: "idle" })}>
-            Cancel
-          </button>
+          <div className={styles.noticeActions}>
+            <button
+              type="button"
+              className={`${styles.secondary} ${styles.small}`}
+              onClick={() => {
+                setState({ kind: "idle" });
+                navigate(exportHref(state.id, true));
+              }}
+            >
+              Export anyway
+            </button>
+            <button
+              type="button"
+              className={`${styles.ghost} ${styles.small}`}
+              onClick={() => setState({ kind: "idle" })}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       ) : null}
     </form>

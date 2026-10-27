@@ -164,7 +164,7 @@ export function ConstructionTaskActions(props: ConstructionTaskActionsProps) {
           <div className={styles.choiceActions}>
             <button
               type="button"
-              className={styles.actionButton}
+              className={styles.confirmButton}
               disabled={busy || itemId === undefined}
               onClick={() => send(form, CONFIRM[form].replace("Record ", "Add "), itemId)}
             >
@@ -172,7 +172,7 @@ export function ConstructionTaskActions(props: ConstructionTaskActionsProps) {
             </button>
             <button
               type="button"
-              className={styles.actionButton}
+              className={styles.cancelButton}
               onClick={() => {
                 setForm(undefined);
                 setItemId(undefined);
@@ -247,7 +247,7 @@ function TaskButton({
       >
         {label}
       </button>
-      <span id={noteId} className={styles.reason}>
+      <span id={noteId} className={availability.ok ? styles.hint : styles.reason}>
         {availability.ok ? hint : availability.reason}
       </span>
     </span>

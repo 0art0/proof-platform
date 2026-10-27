@@ -1,106 +1,493 @@
+/*
+ * Landing page, problem entry and not-found pages. Buttons, cards, chips and hints come from the
+ * shared primitives; this file only lays them out. `page`, `primary`, `lead` and `warning` keep
+ * their names because other modules import them.
+ */
+
+/* Page frame and header. The shared `main` rule supplies width, gutters and padding. */
 .page {
-  max-width: 60rem;
-  margin: 0 auto;
-  padding: 2rem 1rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
 }
 
-.page h1 {
-  margin: 0 0 0.5rem;
+.page p {
+  margin-bottom: 0;
+}
+
+.pageHeader {
+  display: flex;
+  max-width: 47.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.eyebrow {
+  composes: eyebrow from "../../ui/controls.module.css";
+}
+
+/* The panel-sized title used on the problem entry page (the home page keeps the display title). */
+.pageTitle {
+  font-family: var(--font-ui);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .lead {
+  margin: 0;
   color: var(--text-muted);
-  margin: 0 0 1.5rem;
 }
 
-.actionsGrid {
+.back {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.back:hover {
+  color: var(--text);
+}
+
+/* Buttons. */
+.primary {
+  composes: primary from "../../ui/controls.module.css";
+}
+
+.secondary {
+  composes: secondary from "../../ui/controls.module.css";
+}
+
+.ghost {
+  composes: ghost from "../../ui/controls.module.css";
+}
+
+.small {
+  composes: small from "../../ui/controls.module.css";
+}
+
+.removeButton {
+  composes: ghost small from "../../ui/controls.module.css";
+}
+
+.linkButton {
+  composes: link from "../../ui/controls.module.css";
+}
+
+.addButton {
+  composes: ghost small from "../../ui/controls.module.css";
+  align-self: flex-start;
+  /* Line the label up with the legend above rather than the button's padding. */
+  margin-left: -0.625rem;
+}
+
+/* Text pieces. */
+.hint {
+  composes: hint from "../../ui/controls.module.css";
+  font-style: normal;
+}
+
+.reason {
+  composes: reason from "../../ui/controls.module.css";
+  font-style: normal;
+}
+
+.label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.54;
+}
+
+/* The marker is generated so the label's text stays exactly the label (tests and scripts match it). */
+.label[data-marker="required"]::after {
+  content: " Required";
+}
+
+.label[data-marker="optional"]::after {
+  content: " Optional";
+}
+
+.label[data-marker]::after {
+  color: var(--text-subtle);
+  font-weight: 400;
+}
+
+/* Notices. `warning` is caution, `error` is a failure; both keep the alert role in markup. */
+.warning {
+  composes: noticeWarning from "../../ui/controls.module.css";
+  margin: 0;
+}
+
+.warning ul,
+.error ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.25rem;
+}
+
+.error {
+  composes: noticeDanger from "../../ui/controls.module.css";
+  margin: 0;
+}
+
+.accepted {
+  composes: noticeSuccess from "../../ui/controls.module.css";
+  margin: 0;
+}
+
+/* Chips. */
+.aiChip {
+  composes: chipOutline from "../../ui/controls.module.css";
+}
+
+.successChip {
+  composes: chipSuccess from "../../ui/controls.module.css";
+  border-radius: var(--radius-pill);
+}
+
+.count {
+  composes: chip from "../../ui/controls.module.css";
+}
+
+/* Disclosures: a summary with a chevron that turns when open. */
+.disclosure {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1.54;
+  list-style: none;
+  cursor: pointer;
+}
+
+.disclosure::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure::before {
+  content: "";
+  width: 0.4375rem;
+  height: 0.4375rem;
+  flex: none;
+  margin: 0 var(--space-1) 0 2px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+}
+
+details[open] > .disclosure::before {
+  transform: rotate(45deg);
+}
+
+.disclosure:hover {
+  color: var(--text);
+}
+
+.disclosureMain {
+  composes: disclosure;
+  color: var(--text);
+  font-size: var(--text-md);
+  line-height: 1.57;
+}
+
+.details {
+  margin: 0;
+}
+
+.details > :not(summary) {
+  margin-top: var(--space-2);
+}
+
+/* Landing: the primary "New problem" card and the two equal cards below it. */
+.newProblemCard {
+  composes: card from "../../ui/controls.module.css";
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-color: var(--ink);
+}
+
+.cardHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cardHeader h2 {
+  font-size: var(--text-lg);
+  line-height: 1.47;
+  letter-spacing: normal;
+}
+
+.newProblemCard .cardHeader h2 {
+  font-size: var(--text-xl);
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.statementForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.statementForm textarea {
+  display: block;
+  width: 100%;
+  resize: vertical;
+}
+
+.statementForm .formActions {
+  margin-top: var(--space-2);
+}
+
+.otherWays {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: var(--space-5);
 }
 
 .actionCard {
+  composes: card from "../../ui/controls.module.css";
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 1.25rem;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: var(--surface);
+  gap: var(--space-3);
 }
 
-.actionCard h2 {
-  margin: 0;
-  font-size: 1.15rem;
+/* A card's form fills the space between its header and its footer, so actions sit at the bottom. */
+.cardForm {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
-.actionCard p {
-  margin: 0;
+.formActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin-top: auto;
+}
+
+/* Room for a disabled reason, so buttons in neighbouring cards line up whether or not it shows. */
+.cardForm .formActions {
+  min-height: 3.75rem;
+}
+
+.cardMore {
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+}
+
+.moreBody {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.moreBody > form {
+  align-self: stretch;
+}
+
+/* Forms made of one input and one button that sit on a row. */
+.inlineForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.inlineForm > input:not([type="file"]) {
+  min-width: 0;
+  flex: 1 1 12rem;
+}
+
+.inlineForm > p,
+.inlineForm > div {
+  flex-basis: 100%;
+}
+
+.noticeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.idInput {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.cardForm .idInput {
+  width: 100%;
+}
+
+/* A native file input styled as a drop area; the browser still handles choosing and dropping. */
+.fileInput {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 1px dashed var(--border-control);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: var(--space-3) var(--space-4);
   color: var(--text-muted);
+  cursor: pointer;
 }
 
-.actionCard[aria-disabled="true"] {
-  border-style: dashed;
+.fileInput::file-selector-button {
+  min-height: var(--control-height-sm);
+  margin-right: var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-control);
+  background: var(--surface-strong);
+  padding: 0 0.625rem;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
 }
 
+.fileInput::file-selector-button:hover {
+  background: var(--surface-muted);
+}
+
+/* Recent proofs. */
+.recent {
+  composes: card from "../../ui/controls.module.css";
+  overflow: hidden;
+  padding: 0;
+}
+
+.recentHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) 1.25rem;
+}
+
+.recentHeader h2 {
+  font-size: var(--text-lg);
+  line-height: 1.47;
+  letter-spacing: normal;
+}
+
+.recentList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recentItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-3) 1.25rem;
+}
+
+.recentLink {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+  line-height: 1.4;
+}
+
+/* A session without a title is listed by its ID, which is metadata. */
+.recentLinkId {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.recentId {
+  composes: meta from "../../ui/controls.module.css";
+  overflow-wrap: anywhere;
+}
+
+/* Problem entry form. */
 .entry {
   display: flex;
+  max-width: 54rem;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: var(--space-4);
 }
 
 .section {
+  composes: card from "../../ui/controls.module.css";
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid var(--border-soft);
-  border-radius: 0.75rem;
-  background: var(--surface);
+  gap: var(--space-4);
 }
 
-.section h2 {
+.section > h2,
+.sectionHeader h2 {
+  font-size: var(--text-lg);
+  line-height: 1.47;
+  letter-spacing: normal;
+}
+
+.sectionHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sectionIntro {
+  composes: hint from "../../ui/controls.module.css";
+}
+
+/* A card that is itself a disclosure: its content follows the summary at the card's rhythm. */
+details.section {
+  display: block;
+}
+
+details.section > summary {
   margin: 0;
-  font-size: 1.1rem;
+}
+
+details.section[open] > :not(summary) {
+  margin-top: var(--space-4);
 }
 
 .field {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 0.25rem;
-  font-weight: 600;
+  gap: var(--space-2);
 }
 
 .field input,
 .field textarea,
-.field select,
-.declaration input,
-.declaration select,
-.statementHeader select,
-.mathInput,
-.fetchForm input,
-.statementForm textarea {
-  font: inherit;
-  font-weight: 400;
-  padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
-  background: var(--surface-strong);
-  color: var(--text);
+.field select {
+  width: 100%;
+  min-width: 0;
 }
 
 .mathInput {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   width: 100%;
-  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
 .choices,
 .rows {
-  min-width: 0;
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-3);
   border: 0;
   margin: 0;
   padding: 0;
@@ -108,349 +495,354 @@
 
 .choices legend,
 .rows legend {
-  font-weight: 700;
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--space-2);
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.choices {
+  gap: 0;
+}
+
+.choices > legend + p {
+  margin-bottom: var(--space-2);
 }
 
 .choice {
   display: flex;
-  gap: 0.5rem;
   align-items: flex-start;
+  gap: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-3) 0;
 }
 
-.hint {
-  color: var(--text-muted);
+.choice > input {
+  flex: none;
+  margin: 0.1875rem 0 0;
 }
 
 .declaration {
   display: flex;
-  gap: 0.5rem;
-  align-items: center;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 }
 
+.declaration input {
+  width: 7rem;
+  max-width: 100%;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+  font-style: italic;
+}
+
+.declaration select {
+  width: 12.5rem;
+  max-width: 100%;
+}
+
+/* A statement row; goals and hypotheses sit in their family's tint. */
 .statementRow {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  padding: var(--space-3) var(--space-4);
+}
+
+.statementRow[data-family="goal"] {
+  border-color: var(--goal-border);
+  background: var(--goal-bg);
+}
+
+.statementRow[data-family="goal"] .label {
+  color: var(--goal-fg);
+}
+
+.statementRow[data-family="hypothesis"] {
+  border-color: var(--hypothesis-border);
+  background: var(--hypothesis-bg);
+}
+
+.statementRow[data-family="hypothesis"] .label {
+  color: var(--hypothesis-fg);
 }
 
 .statementHeader {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
   align-items: center;
-  font-weight: 600;
+  gap: var(--space-2) var(--space-3);
+}
+
+.statementHeader select {
+  width: auto;
+  max-width: 100%;
+  min-height: var(--control-height-sm);
+  font-size: var(--text-sm);
+}
+
+.statementHeader .removeButton {
+  margin-left: auto;
 }
 
 .feedback {
   margin: 0;
-  font-size: 0.9rem;
   color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.54;
   overflow-wrap: anywhere;
 }
 
 .feedback[data-kind="parsed"] {
-  color: var(--accent-text);
+  color: var(--success-text);
+  font-weight: 500;
 }
 
 .feedback[data-kind="error"] {
-  color: var(--warning-text);
+  color: var(--danger-text);
 }
 
+/* The bar with "Check setup": the gate note on the left, the action on the right. */
 .actions {
   display: flex;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
 }
 
-.primary,
-.secondary,
-.fetchForm button {
-  font: inherit;
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--accent);
-  cursor: pointer;
+.actionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 
-.primary {
-  background: var(--accent);
-  color: var(--surface-strong);
-  font-weight: 600;
+.gateNote {
+  composes: hint from "../../ui/controls.module.css";
+  flex: 1 1 18rem;
 }
 
-.secondary,
-.fetchForm button {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  align-self: flex-start;
+.handSetup {
+  min-width: 0;
 }
 
-.primary:disabled,
-.secondary:disabled,
-.fetchForm button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+.handSetup[open] > :not(summary) {
+  margin-top: var(--space-4);
 }
 
-.linkButton {
-  font: inherit;
-  font-weight: 400;
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--accent-text);
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.warning {
-  margin: 0;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--warning-border);
-  border-radius: 0.5rem;
-  background: var(--warning-bg);
-  color: var(--warning-text);
-}
-
-.warning ul {
-  margin: 0.25rem 0 0;
-}
-
+/* AI assistance. */
 .aiStep {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.5rem;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-4);
 }
 
 .aiStep h3 {
-  margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-md);
+  line-height: 1.57;
+}
+
+.aiStep > .sectionIntro {
+  margin-bottom: var(--space-1);
 }
 
 .aiProposal {
   display: flex;
   flex-direction: column;
   align-self: stretch;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border: 1px dashed var(--border);
-  border-radius: 0.5rem;
+  gap: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+}
+
+.aiProposal[data-state="accepted"] {
+  border-color: var(--success-border);
+}
+
+.proposalTags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.provenance {
+  composes: hint from "../../ui/controls.module.css";
 }
 
 .constantList {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  margin: 0.25rem 0 0;
-  padding-left: 1.25rem;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.constantList li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
 }
 
 .aiDecision {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: center;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
 }
 
 .libraryList {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
   margin: 0;
   padding: 0;
   list-style: none;
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .libraryItem {
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-3) 0;
+}
+
+.libraryBody {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 15rem;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.25rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-1);
 }
 
-.libraryItem:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-
-.libraryItemRemoved > :not(button):not([data-note]) {
-  opacity: 0.6;
+.libraryItemRemoved .libraryBody > :not([data-note]) {
+  color: var(--text-subtle);
   text-decoration: line-through;
 }
 
 .rejectedList {
-  margin: 0.5rem 0 0;
+  margin: var(--space-2) 0 0;
   padding-left: 1.25rem;
 }
 
-.provenance {
-  margin: 0;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.gateNote {
-  margin: 0;
-  color: var(--text-muted);
-}
-
+/* Review and typeset pieces. */
 .review {
+  composes: card from "../../ui/controls.module.css";
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border: 2px solid var(--accent);
-  border-radius: 0.75rem;
-  background: var(--surface);
-}
-
-.review h2 {
-  margin: 0;
+  gap: var(--space-4);
+  border-color: var(--ink);
 }
 
 .reviewList {
   display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.5rem 1rem;
+  grid-template-columns: minmax(7rem, 10rem) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
   margin: 0;
 }
 
 .reviewList dt {
-  font-weight: 700;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.54;
 }
 
 .reviewList dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.reviewList ol,
+.reviewList ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.reviewList dd p {
   margin: 0;
 }
 
-.reviewList ol {
-  margin: 0;
-  padding-left: 1.25rem;
+.reviewFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-4);
+}
+
+.reviewFooter .warning {
+  flex: 1 1 18rem;
 }
 
 .token {
   display: inline-block;
-  margin-right: 0.5rem;
+  margin: 0 var(--space-2) var(--space-1) 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 0 0.375rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .rendered {
   display: flex;
+  min-width: 0;
   flex-direction: column;
+  align-items: flex-start;
+}
+
+.rendered code {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 
 .prose {
   color: var(--text-muted);
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
 }
 
-.fetchForm {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.secondaryActions {
-  display: grid;
-  gap: 0.5rem;
-  color: var(--text-muted);
-  font-size: 0.95rem;
-}
-
-.secondaryActions summary,
-.disclosure {
-  color: var(--accent-text);
-  cursor: pointer;
-}
-
-.secondaryActions p {
-  margin: 0.5rem 0;
-}
-
-.disclosure {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 0.75rem;
-}
-
-.sectionIntro {
-  margin: 0;
-  color: var(--text-muted);
-  font-weight: 400;
-}
-
-.fetchForm input[type="file"] {
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-.recent {
-  margin: 0 0 1.5rem;
-}
-
-.recent h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.15rem;
-}
-
-.recent ul {
-  margin: 0;
-  padding-left: 1.25rem;
-}
-
-.recentId {
-  margin-left: 0.5rem;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  overflow-wrap: anywhere;
-}
-
-.details {
-  margin: 0;
-}
-
-.details summary {
-  cursor: pointer;
-  color: var(--accent-text);
-}
-
-.field [data-marker="required"]::after,
-.statementHeader [data-marker="required"]::after {
-  content: " (required)";
-  color: var(--warning-text);
-  font-weight: 400;
-  font-size: 0.85rem;
-}
-
-.field [data-marker="optional"]::after {
-  content: " (optional)";
-  color: var(--text-muted);
-  font-weight: 400;
-  font-size: 0.85rem;
-}
-
+/* Not-found pages. */
 .notFoundLinks {
   display: flex;
-  gap: 0.75rem;
   flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-2);
 }
 
-.handSetup[open] {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
+@media (max-width: 40rem) {
+  .reviewList {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 
-.handSetup > .disclosure {
-  border-top: none;
-  padding-top: 0;
-}
+  .reviewList dd {
+    margin-bottom: var(--space-2);
+  }
 
-.statementForm {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  .newProblemCard {
+    padding: var(--space-4);
+  }
 }

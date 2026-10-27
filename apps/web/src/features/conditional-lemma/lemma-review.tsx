@@ -106,6 +106,7 @@ function PendingReview({
       <div className={styles.buttons}>
         <button
           type="button"
+          className={styles.saveButton}
           disabled={readOnly || pending}
           {...(readOnly ? { "aria-describedby": reasonId } : {})}
           onClick={() => void decide("approved")}
@@ -114,6 +115,7 @@ function PendingReview({
         </button>
         <button
           type="button"
+          className={styles.rejectButton}
           disabled={readOnly || pending || needsNotes}
           aria-describedby={reasonId}
           onClick={() => void decide("rejected")}

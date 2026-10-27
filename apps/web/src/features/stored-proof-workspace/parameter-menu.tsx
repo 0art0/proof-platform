@@ -153,10 +153,10 @@ export function ParameterMenu({
         );
       })}
       <div className={styles.menuActions}>
-        <button type="submit" disabled={!complete || pending}>
+        <button type="submit" className={styles.menuSubmit} disabled={!complete || pending}>
           {pending ? "Previewing…" : "Preview with these inputs"}
         </button>
-        <button type="button" onClick={onCancel} disabled={pending}>
+        <button type="button" className={styles.menuCancel} onClick={onCancel} disabled={pending}>
           Cancel
         </button>
       </div>

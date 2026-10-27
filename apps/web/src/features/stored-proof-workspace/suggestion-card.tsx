@@ -122,6 +122,7 @@ export function SuggestionCard({
       data-suggestion-id={suggestion.id}
       data-source={suggestion.source}
       data-category={category}
+      data-active={active ? "true" : undefined}
     >
       <header className={styles.cardHeader}>
         <div>
@@ -285,6 +286,7 @@ export function SuggestionCard({
       <div className={styles.cardActions}>
         <button
           type="button"
+          className={styles.previewButton}
           disabled={mutationPending || !previewable || (active && move.kind !== "rejected")}
           title={previewReason}
           {...(previewReason === undefined ? {} : { "aria-describedby": reasonId })}
@@ -296,6 +298,7 @@ export function SuggestionCard({
         </button>
         <button
           type="button"
+          className={styles.applyButton}
           disabled={mutationPending || preview === undefined}
           onClick={actions.onApply}
         >

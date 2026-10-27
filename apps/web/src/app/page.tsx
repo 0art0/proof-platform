@@ -8,10 +8,13 @@ export const revalidate = 0;
 export default function HomePage() {
   return (
     <main className={styles.page}>
-      <h1>Proof Platform</h1>
-      <p className={styles.lead}>
-        Explore a proof, pick up where you left off, or start a new problem.
-      </p>
+      <header className={styles.pageHeader}>
+        <p className={styles.eyebrow}>Proof Platform</p>
+        <h1>Explore a proof, or begin a new one.</h1>
+        <p className={styles.lead}>
+          Describe a problem, open an exported proof, or pick up where you left off.
+        </p>
+      </header>
       <LandingActions developmentSessionId={configuredProofSessionId()} />
     </main>
   );

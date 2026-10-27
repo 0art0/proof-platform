@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ProofArtifact } from "@proof/protocol";
 import type { WorkspaceView } from "../proof-workspace";
 import { usePresentation } from "../proof-workspace/presentation";
 import { indexArtifact } from "./artifact-data";
 import styles from "./discovery-viewer.module.css";
+import { EvidenceTag, TransitionTag } from "./edge-tags";
 import { SuggestionSetView, StateSnapshotView, ViewToggle } from "./statement-views";
 import {
   ROUTE_STATUS_LABELS,
@@ -17,25 +18,16 @@ import {
 import { humanizeMoveId, macroDisplayName } from "../macro-labels";
 import { ViewerShell } from "./viewer-shell";
 
-const EVIDENCE_LABELS = {
-  structural: "Structural",
-  "library-result": "Library result",
-  "background-inference": "Background inference",
-  sorry: "Sorry",
-} as const;
-
 function EdgeSummary({ edge }: Readonly<{ edge: TreeEdgeView }>) {
   return (
     <span className={styles.edgeSummary} data-edge-id={edge.edgeId}>
-      <span aria-hidden="true">↳ </span>
+      <span aria-hidden="true">↳</span>
       <strong>{edge.label}</strong>
       {edge.moveId === undefined || edge.macro === undefined ? null : (
         <span className={styles.chip}>{humanizeMoveId(edge.moveId)}</span>
       )}
-      <span className={styles.chip}>{edge.transitionClass}</span>
-      {edge.evidence === undefined ? null : (
-        <span className={styles.chip}>{EVIDENCE_LABELS[edge.evidence]}</span>
-      )}
+      <TransitionTag transitionClass={edge.transitionClass} />
+      {edge.evidence === undefined ? null : <EvidenceTag evidence={edge.evidence} />}
     </span>
   );
 }
@@ -44,20 +36,20 @@ function NodeBadges({ row }: Readonly<{ row: TreeRowView }>) {
   return (
     <span className={styles.badges}>
       {row.isRoot ? <span className={styles.chip}>Root</span> : null}
-      {row.isCurrent ? <span className={styles.chip}>Current node</span> : null}
+      {row.isCurrent ? <span className={styles.chipOutline}>Current node</span> : null}
       <span className={styles.chip} data-route-status={row.routeStatus}>
         <span aria-hidden="true">
           {row.routeStatus === "abandoned"
             ? "✕ "
             : row.routeStatus === "solved-route"
-              ? "✓ "
+              ? "● "
               : "◐ "}
         </span>
         {ROUTE_STATUS_LABELS[row.routeStatus]}
       </span>
       {row.assumptionCount > 0 ? (
-        <span className={styles.chip}>
-          <span aria-hidden="true">△ </span>
+        <span className={styles.chipWarning}>
+          <span aria-hidden="true">⊘ </span>
           {row.assumptionCount} {row.assumptionCount === 1 ? "assumption" : "assumptions"}
         </span>
       ) : null}
@@ -104,35 +96,41 @@ export function DiscoveryTreeView({ artifact }: Readonly<{ artifact: ProofArtifa
       <div className={styles.treeLayout}>
         <nav aria-label="Discovery tree outline" className={styles.outline}>
           <ol ref={outline} onKeyDown={moveFocus} data-testid="tree-outline">
-            {layout.rows.map((row, position) => (
-              <li
-                key={row.nodeId}
-                data-node-id={row.nodeId}
-                data-depth={row.depth}
-                style={{ paddingInlineStart: `${row.depth * 1.1}rem` }}
-              >
-                {row.parentEdge?.macro?.stepIndex !== 1 ? null : (
-                  <span className={styles.macroGroup} data-macro-application>
-                    Macro {macroDisplayName(row.parentEdge.macro.moveId)}:{" "}
-                    {row.parentEdge.macro.stepCount} steps applied as one move
-                  </span>
-                )}
-                {row.parentEdge === undefined ? null : <EdgeSummary edge={row.parentEdge} />}
-                <button
-                  type="button"
-                  aria-pressed={row.nodeId === selectedId}
-                  aria-label={`Node ${row.nodeId}, depth ${row.depth}`}
-                  onClick={() => setSelectedId(row.nodeId)}
+            {layout.rows.map((row, position) => {
+              const label = row.isRoot ? "Starting point" : `State ${position + 1}`;
+              return (
+                <li
+                  key={row.nodeId}
+                  className={styles.treeRow}
+                  data-node-id={row.nodeId}
+                  data-depth={row.depth}
+                  data-route-status={row.routeStatus}
+                  style={{ "--depth": row.depth } as CSSProperties}
                 >
-                  {row.isRoot ? "Starting point" : `State ${position + 1}`}
-                </button>
-                <NodeBadges row={row} />
-                <span className={styles.muted}>
-                  {row.goalCount} {row.goalCount === 1 ? "goal" : "goals"}, {row.obligationCount}{" "}
-                  {row.obligationCount === 1 ? "obligation" : "obligations"}
-                </span>
-              </li>
-            ))}
+                  {row.parentEdge?.macro?.stepIndex !== 1 ? null : (
+                    <span className={styles.macroGroup} data-macro-application>
+                      Macro {macroDisplayName(row.parentEdge.macro.moveId)}:{" "}
+                      {row.parentEdge.macro.stepCount} steps applied as one move
+                    </span>
+                  )}
+                  {row.parentEdge === undefined ? null : <EdgeSummary edge={row.parentEdge} />}
+                  <button
+                    type="button"
+                    className={styles.nodeButton}
+                    aria-pressed={row.nodeId === selectedId}
+                    aria-label={`${label}, ${row.nodeId}, depth ${row.depth}`}
+                    onClick={() => setSelectedId(row.nodeId)}
+                  >
+                    {label}
+                  </button>
+                  <NodeBadges row={row} />
+                  <span className={styles.muted}>
+                    {row.goalCount} {row.goalCount === 1 ? "goal" : "goals"}, {row.obligationCount}{" "}
+                    {row.obligationCount === 1 ? "obligation" : "obligations"}
+                  </span>
+                </li>
+              );
+            })}
           </ol>
         </nav>
         <section className={styles.detail} aria-label="Node detail" data-testid="node-detail">
@@ -140,76 +138,93 @@ export function DiscoveryTreeView({ artifact }: Readonly<{ artifact: ProofArtifa
             <p>This node is not stored in the artifact.</p>
           ) : (
             <>
-              <h2>
-                {selectedId === artifact.tree.rootNodeId ? "Starting point" : "Selected state"}
-              </h2>
-              {selectedEdge === undefined ? (
-                <p>This is where the proof began.</p>
-              ) : (
-                <>
-                  <p>Reached by {treeEdgeView(index, selectedEdge).label}.</p>
-                  <button type="button" onClick={() => setSelectedId(selectedEdge.parentNodeId)}>
-                    View previous state
-                  </button>
-                </>
-              )}
-              <h3>Proof state here</h3>
-              <StateSnapshotView
-                state={selectedNode.state}
-                presentation={presentation}
-                view={view}
-              />
-              <h3>Suggestions shown here</h3>
-              {suggestionSets.length === 0 ? (
-                <p>No suggestions were shown here.</p>
-              ) : (
-                suggestionSets.map((set) => (
-                  <SuggestionSetView key={set.id} set={set} chosenSuggestionIds={chosenIds} />
-                ))
-              )}
-              <h3>Next steps tried</h3>
-              {outgoing.length === 0 ? (
-                <p>No further steps were tried here.</p>
-              ) : (
-                <ul aria-label="Outgoing transitions">
-                  {outgoing.map((edge) => (
-                    <li key={edge.id}>
-                      <EdgeSummary edge={treeEdgeView(index, edge)} />{" "}
-                      <button
-                        type="button"
-                        data-child-node-id={edge.childNodeId}
-                        aria-label={`View state after ${treeEdgeView(index, edge).label}`}
-                        onClick={() => setSelectedId(edge.childNodeId)}
-                      >
-                        View this state
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <details className={styles.technicalDetails}>
-                <summary>Recorded details</summary>
-                <dl className={styles.facts} aria-label="Incoming transition">
-                  <dt>Node</dt>
-                  <dd>
-                    <code>{selectedNode.id}</code>
-                  </dd>
+              <div className={styles.detailSection}>
+                <div className={styles.detailHeader}>
+                  <h2>
+                    {selectedId === artifact.tree.rootNodeId ? "Starting point" : "Selected state"}
+                  </h2>
                   {selectedEdge === undefined ? null : (
-                    <>
-                      <dt>Operation</dt>
-                      <dd>
-                        <code>{selectedEdge.operation.kind}</code>
-                      </dd>
-                      <dt>Transition class</dt>
-                      <dd>{selectedEdge.transitionClass}</dd>
-                      <dt>Command</dt>
-                      <dd>
-                        <code>{selectedEdge.commandId}</code>
-                      </dd>
-                    </>
+                    <button
+                      type="button"
+                      className={styles.ghostAction}
+                      onClick={() => setSelectedId(selectedEdge.parentNodeId)}
+                    >
+                      <span aria-hidden="true">← </span>View previous state
+                    </button>
                   )}
-                </dl>
-              </details>
+                </div>
+                {selectedEdge === undefined ? (
+                  <p>This is where the proof began.</p>
+                ) : (
+                  <p>Reached by {treeEdgeView(index, selectedEdge).label}.</p>
+                )}
+              </div>
+              <div className={styles.detailSection}>
+                <h3>Proof state here</h3>
+                <StateSnapshotView
+                  state={selectedNode.state}
+                  presentation={presentation}
+                  view={view}
+                />
+              </div>
+              <div className={styles.detailSection}>
+                <h3>Suggestions shown here</h3>
+                {suggestionSets.length === 0 ? (
+                  <p className={styles.hint}>No suggestions were shown here.</p>
+                ) : (
+                  suggestionSets.map((set) => (
+                    <SuggestionSetView key={set.id} set={set} chosenSuggestionIds={chosenIds} />
+                  ))
+                )}
+              </div>
+              <div className={styles.detailSection}>
+                <h3>Next steps tried</h3>
+                {outgoing.length === 0 ? (
+                  <p className={styles.hint}>No further steps were tried here.</p>
+                ) : (
+                  <ul aria-label="Outgoing transitions" className={styles.nextSteps}>
+                    {outgoing.map((edge) => (
+                      <li key={edge.id}>
+                        <EdgeSummary edge={treeEdgeView(index, edge)} />{" "}
+                        <button
+                          type="button"
+                          className={styles.action}
+                          data-child-node-id={edge.childNodeId}
+                          aria-label={`View state after ${treeEdgeView(index, edge).label}`}
+                          onClick={() => setSelectedId(edge.childNodeId)}
+                        >
+                          View this state
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className={styles.detailSection}>
+                <details className={styles.technicalDetails}>
+                  <summary>Recorded details</summary>
+                  <dl className={styles.facts} aria-label="Incoming transition">
+                    <dt>Node</dt>
+                    <dd>
+                      <code className={styles.meta}>{selectedNode.id}</code>
+                    </dd>
+                    {selectedEdge === undefined ? null : (
+                      <>
+                        <dt>Operation</dt>
+                        <dd>
+                          <code className={styles.meta}>{selectedEdge.operation.kind}</code>
+                        </dd>
+                        <dt>Transition class</dt>
+                        <dd>{selectedEdge.transitionClass}</dd>
+                        <dt>Command</dt>
+                        <dd>
+                          <code className={styles.meta}>{selectedEdge.commandId}</code>
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                </details>
+              </div>
             </>
           )}
         </section>

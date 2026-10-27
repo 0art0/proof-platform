@@ -5,13 +5,18 @@ import styles from "./problem-entry.module.css";
 export function NotFoundView({ title, message }: Readonly<{ title: string; message: string }>) {
   return (
     <main className={styles.page}>
-      <h1>{title}</h1>
-      <p className={styles.lead}>{message}</p>
+      <header className={styles.pageHeader}>
+        <p className={styles.eyebrow}>404</p>
+        <h1>{title}</h1>
+        <p className={styles.lead}>{message}</p>
+      </header>
       <div className={styles.notFoundLinks}>
         <Link className={styles.primary} href="/">
           Back to the start
         </Link>
-        <Link href="/problems/new">Enter a new problem</Link>
+        <Link className={styles.secondary} href="/problems/new">
+          Enter a new problem
+        </Link>
       </div>
     </main>
   );

@@ -12,11 +12,19 @@ export function RecentSessionsList() {
   if (sessions.length === 0) return null;
   return (
     <section className={styles.recent} aria-labelledby="recent-sessions">
-      <h2 id="recent-sessions">Recent proofs</h2>
-      <ul>
+      <div className={styles.recentHeader}>
+        <h2 id="recent-sessions">Recent proofs</h2>
+        <span className={styles.count}>{sessions.length}</span>
+      </div>
+      <ul className={styles.recentList}>
         {sessions.map((session) => (
-          <li key={session.id}>
+          <li key={session.id} className={styles.recentItem}>
             <Link
+              className={
+                session.title === undefined
+                  ? `${styles.recentLink} ${styles.recentLinkId}`
+                  : styles.recentLink
+              }
               href={`/sessions/${encodeURIComponent(session.id)}`}
               title={session.id}
               onClick={() => recordRecentSession(session)}

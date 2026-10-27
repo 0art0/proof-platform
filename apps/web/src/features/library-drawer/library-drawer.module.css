@@ -1,43 +1,30 @@
+/*
+ * The drawer lives in the workspace toolbar's wrapping row: its wrapper disappears from layout so
+ * the toggle reads as one more small ghost button, and the opened panel takes its own line.
+ */
 .drawerShell {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.toggle,
-.closeButton,
-.tabs button {
-  border: 1px solid var(--border);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.75rem;
-  color: var(--text);
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
+  display: contents;
 }
 
 .toggle {
-  justify-self: start;
+  composes: ghost small from "../../ui/controls.module.css";
 }
 
 .toggle[aria-expanded="true"] {
-  background: var(--accent);
-  color: var(--surface-strong);
-}
-
-.toggle[aria-expanded="true"]::before {
-  content: "✓ " / "";
+  background: var(--surface-muted);
+  color: var(--text);
 }
 
 .panel {
   display: grid;
-  gap: 0.75rem;
+  flex-basis: 100%;
+  gap: var(--space-3);
   max-height: 32rem;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 1rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
   background: var(--surface);
-  padding: 1rem 1.15rem;
+  padding: var(--space-4) 1.25rem;
 }
 
 .panel h3,
@@ -51,63 +38,81 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: var(--space-3);
 }
 
+.closeButton {
+  composes: ghost small from "../../ui/controls.module.css";
+}
+
+/* Library sections: a segmented control, like the workspace's view switch. */
 .tabs {
   display: inline-flex;
-  gap: 0.4rem;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-self: start;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 2px;
+}
+
+.tabs button {
+  min-height: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.tabs button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
 }
 
 .tabs button[aria-pressed="true"] {
-  background: var(--accent);
-  color: var(--surface-strong);
-}
-
-.tabs button[aria-pressed="true"]::before {
-  content: "✓ " / "";
+  border-color: var(--border-soft);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
 }
 
 .muted,
 .layerSummary,
 .itemMeta {
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 
 .failure {
-  border: 1px solid var(--warning-border);
-  border-radius: 0.6rem;
-  background: var(--warning-bg);
-  padding: 0.5rem 0.75rem;
-  color: var(--warning-text);
+  composes: noticeDanger from "../../ui/controls.module.css";
 }
 
 .filters {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.4rem 0.6rem;
+  gap: var(--space-2) var(--space-3);
   align-items: center;
-  font-size: 0.85rem;
+  font-size: var(--text-md);
 }
 
 .filters input,
 .filters select {
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
-  background: var(--surface-strong);
-  padding: 0.3rem 0.5rem;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
   color: var(--text);
 }
 
 .layerHeading {
-  margin: 0.5rem 0 0.25rem;
-  font-size: 0.85rem;
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: var(--text-md);
 }
 
 .list {
   display: grid;
-  gap: 0.35rem;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -115,68 +120,67 @@
 
 .item {
   display: grid;
-  gap: 0.1rem;
   width: 100%;
+  justify-content: stretch;
+  align-items: start;
+  justify-items: start;
+  gap: 2px;
   border: 1px solid var(--border-soft);
-  border-radius: 0.6rem;
-  background: var(--surface-strong);
-  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: var(--space-2) var(--space-3);
   color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
 .item:hover {
-  border-color: var(--accent);
+  border-color: var(--border-control);
+  background: var(--surface-muted);
 }
 
 .itemName {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .linkButton {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent-text);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
+  composes: link from "../../ui/controls.module.css";
 }
 
 .detail {
   display: grid;
-  gap: 0.6rem;
+  gap: var(--space-3);
 }
 
 .detail h5 {
-  margin-bottom: 0.2rem;
-  font-size: 0.8rem;
+  margin-bottom: var(--space-1);
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
 }
 
 .detailTitle {
-  font-size: 1.05rem;
+  font-size: var(--text-lg);
 }
 
 .facts {
   display: grid;
-  gap: 0.2rem;
+  gap: var(--space-1);
   margin: 0;
 }
 
 .fact {
   display: grid;
   grid-template-columns: 6rem minmax(0, 1fr);
-  gap: 0.5rem;
-  font-size: 0.85rem;
+  gap: var(--space-2);
+  font-size: var(--text-md);
 }
 
 .fact dt {
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .fact dd {
@@ -185,12 +189,20 @@
 }
 
 .description {
-  font-size: 0.9rem;
+  font-size: var(--text-md);
 }
 
 .statement,
 .premises li {
   overflow-x: auto;
+  font-family: var(--font-math);
+  font-size: 1.0625rem;
+}
+
+/* Ids are metadata: mono, muted, small. */
+.panel code {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
 }
 
 .premises {
@@ -200,7 +212,7 @@
 
 .events {
   display: grid;
-  gap: 0.6rem;
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -208,23 +220,24 @@
 
 .event {
   display: grid;
-  gap: 0.25rem;
+  gap: var(--space-1);
   border: 1px solid var(--border-soft);
-  border-radius: 0.6rem;
-  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-3);
+}
+
+.eventHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .badge {
-  display: inline-block;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.05rem 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 700;
+  composes: chip from "../../ui/controls.module.css";
 }
 
-.badge[data-decision="rejected"] {
-  border-color: var(--warning-border);
+.event .badge[data-decision="rejected"] {
   background: var(--warning-bg);
   color: var(--warning-text);
 }
@@ -232,5 +245,5 @@
 .diagnostics {
   margin: 0;
   padding-left: 1.25rem;
-  font-size: 0.85rem;
+  font-size: var(--text-md);
 }

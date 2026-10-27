@@ -10,7 +10,7 @@ import { recordRecentSession } from "./recent-sessions";
 export function OpenSessionForm() {
   return (
     <form
-      className={styles.fetchForm}
+      className={styles.cardForm}
       action="/sessions"
       method="get"
       onSubmit={(event) => {
@@ -18,14 +18,22 @@ export function OpenSessionForm() {
         if (typeof id === "string" && id.trim().length > 0) recordRecentSession({ id: id.trim() });
       }}
     >
+      <label className={styles.label} htmlFor="resume-session-id">
+        Saved proof ID
+      </label>
       <input
+        id="resume-session-id"
+        className={styles.idInput}
         name="id"
-        aria-label="Saved proof ID"
         placeholder="session:…"
         required
         pattern="[A-Za-z0-9][A-Za-z0-9._:/\-]*"
       />
-      <button type="submit">Resume proof</button>
+      <div className={styles.formActions}>
+        <button type="submit" className={styles.secondary}>
+          Resume proof
+        </button>
+      </div>
     </form>
   );
 }

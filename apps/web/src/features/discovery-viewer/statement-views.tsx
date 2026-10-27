@@ -1,5 +1,6 @@
 "use client";
 
+import type { ComponentProps } from "react";
 import type { Presentation } from "@proof/language";
 import type { AdditionalAssumption, ContextualSequent, ProofState } from "@proof/mathjson-model";
 import type { DisplayedSuggestionSet } from "@proof/protocol";
@@ -12,7 +13,7 @@ const VIEW_OPTIONS: readonly Readonly<{ view: WorkspaceView; label: string }>[] 
   { view: "natural-language", label: "Natural language" },
 ];
 
-/** The LaTeX / natural-language switch, with the pressed state shown by a check mark and a label. */
+/** The LaTeX / natural-language switch: a segmented control whose pressed segment is a raised pill. */
 export function ViewToggle({
   view,
   onChange,
@@ -35,7 +36,19 @@ export function ViewToggle({
 
 type ViewProps = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
 
-/** One stored sequent: its hypotheses and conclusion. */
+/**
+ * One typeset statement in a container that scrolls sideways rather than overflowing the page,
+ * so a long formula never widens the viewer.
+ */
+export function Statement(props: ComponentProps<typeof StatementView>) {
+  return (
+    <span className={styles.statement} data-view={props.view}>
+      <StatementView {...props} />
+    </span>
+  );
+}
+
+/** One stored sequent: its hypotheses (H1, H2, ...) and, below a hairline, the conclusion. */
 export function SequentView({
   sequent,
   presentation,
@@ -46,10 +59,13 @@ export function SequentView({
     <div className={styles.sequent}>
       {sequent.context.hypotheses.length > 0 ? (
         <ul className={styles.hypotheses} aria-label="Hypotheses">
-          {sequent.context.hypotheses.map((hypothesis) => (
+          {sequent.context.hypotheses.map((hypothesis, position) => (
             <li key={hypothesis.id} data-role="hypothesis">
-              <span className={styles.roleTag}>Hypothesis</span>{" "}
-              <StatementView
+              <span className={styles.hypothesisTag}>
+                <span aria-hidden="true">H{position + 1}</span>
+                <span className="visually-hidden">Hypothesis {position + 1}</span>
+              </span>
+              <Statement
                 expression={hypothesis.statement.expression}
                 declarations={declarations}
                 presentation={presentation}
@@ -59,15 +75,18 @@ export function SequentView({
           ))}
         </ul>
       ) : null}
-      <p data-role="conclusion">
-        <span className={styles.roleTag}>Conclusion</span>{" "}
-        <StatementView
+      <div data-role="conclusion" className={styles.conclusion}>
+        <span className={styles.turnstile}>
+          <span aria-hidden="true">⊢</span>
+          <span className="visually-hidden">Conclusion</span>
+        </span>
+        <Statement
           expression={sequent.conclusion.expression}
           declarations={declarations}
           presentation={presentation}
           view={view}
         />
-      </p>
+      </div>
     </div>
   );
 }
@@ -81,7 +100,7 @@ export function StateSnapshotView({
   return (
     <div className={styles.snapshot} data-testid="state-snapshot">
       {state.goals.length === 0 && state.obligations.length === 0 ? (
-        <p>No open goals or obligations in this snapshot.</p>
+        <p className={styles.hint}>No open goals or obligations in this snapshot.</p>
       ) : null}
       {state.goals.map((goal) => (
         <section
@@ -90,8 +109,11 @@ export function StateSnapshotView({
           data-kind="goal"
           aria-label={`Goal ${goal.id}`}
         >
-          <h4>
-            <span aria-hidden="true">◎ </span>Goal <code>{goal.id}</code>
+          <h4 className={styles.targetHeading}>
+            <span>
+              <span aria-hidden="true">◎ </span>Goal
+            </span>{" "}
+            <code className={styles.meta}>{goal.id}</code>
           </h4>
           <SequentView sequent={goal.sequent} presentation={presentation} view={view} />
         </section>
@@ -103,8 +125,11 @@ export function StateSnapshotView({
           data-kind="obligation"
           aria-label={`Obligation ${obligation.id}`}
         >
-          <h4>
-            <span aria-hidden="true">◇ </span>Obligation <code>{obligation.id}</code>
+          <h4 className={styles.targetHeading}>
+            <span>
+              <span aria-hidden="true">◇ </span>Obligation
+            </span>{" "}
+            <code className={styles.meta}>{obligation.id}</code>
           </h4>
           <SequentView sequent={obligation.sequent} presentation={presentation} view={view} />
         </section>
@@ -131,23 +156,22 @@ export function AssumptionList({
     <ul className={styles.assumptions} aria-label={label}>
       {assumptions.map((assumption) => (
         <li key={assumption.id} data-assumption-id={assumption.id}>
-          <span className={styles.roleTag}>
-            <span aria-hidden="true">△ </span>
+          <span className={styles.sorryTag}>
+            <span aria-hidden="true">{assumption.origin.kind === "sorry" ? "⊘ " : "△ "}</span>
             {assumption.origin.kind === "sorry" ? "Sorry, assumed without proof" : "Assumption"}
-          </span>{" "}
-          <StatementView
+          </span>
+          <Statement
             expression={assumption.statement.expression}
             declarations={assumption.declarations}
             presentation={presentation}
             view={view}
           />
-          <br />
-          <small>
-            <code>{assumption.id}</code>
+          <span className={styles.assumptionMeta}>
+            <code className={styles.meta}>{assumption.id}</code>
             {assumption.origin.kind === "sorry"
               ? ` for ${assumption.origin.sourceTarget.kind} ${assumption.origin.sourceTarget.id}`
               : null}
-          </small>
+          </span>
         </li>
       ))}
     </ul>
@@ -168,36 +192,40 @@ export function SuggestionSetView({
       aria-label={`Displayed suggestion set ${set.id}`}
       data-suggestion-set-id={set.id}
     >
-      <h4>
-        Displayed suggestion set <code>{set.id}</code>
+      <h4 className={styles.setHeading}>
+        Displayed suggestion set <code className={styles.meta}>{set.id}</code>
       </h4>
       <p className={styles.muted}>
         Stored selection:{" "}
         {set.selection.kind === "selection-query" ? "a selection query" : "one selection"} ·{" "}
         {set.suggestions.length} {set.suggestions.length === 1 ? "suggestion" : "suggestions"}
       </p>
-      {set.suggestions.length === 0 ? <p>No suggestions were displayed.</p> : null}
-      <ol>
+      {set.suggestions.length === 0 ? (
+        <p className={styles.hint}>No suggestions were displayed.</p>
+      ) : null}
+      <ol className={styles.suggestionList}>
         {set.suggestions.map((suggestion) => (
           <li key={suggestion.id} data-suggestion-id={suggestion.id}>
-            <strong>{suggestion.name}</strong>{" "}
-            <span className={styles.chip}>
-              {suggestion.source === "move" ? "Move" : "Library result"}
-            </span>{" "}
-            <span className={styles.chip}>
-              {suggestion.applicability === "applicable" ? "Applicable" : "Requires input"}
-            </span>{" "}
-            <span className={styles.chip}>
-              {suggestion.exactRepresentationMatch ? "Exact match" : "Non-exact match"}
+            <span className={styles.suggestionHead}>
+              <strong>{suggestion.name}</strong>{" "}
+              <span className={styles.chip}>
+                {suggestion.source === "move" ? "Move" : "Library result"}
+              </span>{" "}
+              <span className={styles.chip}>
+                {suggestion.applicability === "applicable" ? "Applicable" : "Requires input"}
+              </span>{" "}
+              <span className={styles.chip}>
+                {suggestion.exactRepresentationMatch ? "Exact match" : "Non-exact match"}
+              </span>
+              {chosenSuggestionIds.has(suggestion.id) ? (
+                <>
+                  {" "}
+                  <span className={styles.chosen}>
+                    <span aria-hidden="true">✓ </span>Chosen
+                  </span>
+                </>
+              ) : null}
             </span>
-            {chosenSuggestionIds.has(suggestion.id) ? (
-              <>
-                {" "}
-                <span className={styles.chosen}>
-                  <span aria-hidden="true">✓ </span>Chosen
-                </span>
-              </>
-            ) : null}
             <ul className={styles.reasons} aria-label={`Reasons for ${suggestion.name}`}>
               {suggestion.reasons.map((reason, position) => (
                 <li key={position}>{reason}</li>

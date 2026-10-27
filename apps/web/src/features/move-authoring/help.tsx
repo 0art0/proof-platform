@@ -30,9 +30,25 @@ export function Help({ summary, children }: Readonly<{ summary: string; children
 /** Why a control is disabled, shown beside it. Renders nothing when the control is usable. */
 export function WhyDisabled({ reason }: Readonly<{ reason: string | undefined }>) {
   return reason === undefined ? null : (
-    <span className={styles.muted} data-testid="why-disabled">
+    <span className={styles.reason} data-testid="why-disabled">
       {reason}
     </span>
+  );
+}
+
+/**
+ * The heading of a numbered step card. The visible marker is decorative; the heading's accessible
+ * name keeps the "1. Start …" text in one hidden run, since browsers may insert a space around an
+ * absolutely positioned fragment inside the number.
+ */
+export function StepHeading({ step, children }: Readonly<{ step: number; children: ReactNode }>) {
+  return (
+    <h2 className={styles.stepHeading}>
+      <span className={styles.stepNumber} aria-hidden="true">
+        {step}
+      </span>
+      <span className="visually-hidden">{`${step}.`}</span> {children}
+    </h2>
   );
 }
 

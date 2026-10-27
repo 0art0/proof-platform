@@ -77,7 +77,9 @@ describe("static viewers do not recompute", () => {
   it("renders and navigates the discovery tree from stored snapshots and menus only", () => {
     render(<DiscoveryTreeView artifact={fixtureArtifact} />);
     for (const set of fixtureArtifact.tree.suggestionSets) {
-      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^Node ${set.nodeId},`) }));
+      fireEvent.click(
+        screen.getByRole("button", { name: new RegExp(`, ${set.nodeId}, depth \\d+$`) }),
+      );
       const region = screen.getByRole("region", { name: `Displayed suggestion set ${set.id}` });
       const shown = [...region.querySelectorAll("li[data-suggestion-id]")].map((item) => [
         item.getAttribute("data-suggestion-id"),
