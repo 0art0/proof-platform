@@ -53,6 +53,7 @@ import {
 } from "@proof/protocol";
 import type { ResolvedProofSelection } from "@proof/selections";
 import { z } from "zod";
+import { readBoundedText } from "../read-bounded-text";
 import {
   backtrackRequestSchema,
   moveChoiceRequestSchema,
@@ -92,51 +93,23 @@ const DEFAULT_PROOF_HTTP_ORIGIN = "http://127.0.0.1:8787";
 const DEFAULT_PROOF_SESSION_ID = "session:development";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
-const repositoryDiagnosticCodeSchema = z.enum([
-  "invalid-initial-session",
-  "session-not-found",
-  "invalid-session-record",
-  "current-node-not-found",
-  "invalid-current-node",
-  "invalid-command-record",
-  "invalid-suggestion-set-record",
-  "suggestion-set-not-found",
-  "suggestion-set-rejected",
-  "invalid-preview-record",
-  "preview-not-found",
-  "preview-rejected",
-  "command-rejected",
-  "serialized-stale-command",
-  "storage-failure",
-  "commit-unknown",
-  "invalid-edge-record",
-  "invalid-proof-history",
-  "backtrack-target-not-found",
-  "backtrack-rejected",
-  "serialized-stale-backtrack",
-  // The dry runs (backtrack analysis, replay preview) relay these refusals.
-  "backtrack-with-information-rejected",
-  "replay-rejected",
-  "replay-conflict",
-  "invalid-replay-record",
-  "invalid-request",
-  "not-found",
-  "internal-error",
-  "invalid-catalog",
-  "interaction-event-rejected",
-  "interaction-event-conflict",
-  "invalid-interaction-event-record",
-  "session-read-only",
-  // A later step of an approved multi-step macro did not re-match (HTTP 422); nothing was written.
-  "macro-step-failed",
-]);
+/**
+ * A worker diagnostic code: lower-case words joined by hyphens, as every code the worker emits is
+ * (`command-deleted`, `lemma-not-closed`, ...). The worker owns the set of codes and adds to it on
+ * several routes, so a well-formed code passes through with its message instead of being turned
+ * into a bad-gateway answer. Underscored codes are reserved for this boundary's own errors.
+ */
+const diagnosticCodeSchema = z
+  .string()
+  .max(100)
+  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
 
 const proofServiceFailureSchema = z
   .object({
     diagnostics: z.tuple([
       z
         .object({
-          code: repositoryDiagnosticCodeSchema,
+          code: diagnosticCodeSchema,
           message: z.string().min(1),
         })
         .strict(),
@@ -271,13 +244,18 @@ export type BacktrackedProofSession = Readonly<{
   replayed: boolean;
 }>;
 
+/**
+ * The codes this boundary produces or branches on, plus any other well-formed worker code (the
+ * `string & Record<never, never>` member keeps editor completion for the named ones).
+ */
 export type ProofServiceErrorCode =
-  | z.infer<typeof repositoryDiagnosticCodeSchema>
-  | "invalid_request"
+  | "macro-step-failed"
   | "requires-input"
   | "preview-regenerated"
+  | "invalid_request"
   | "service_unavailable"
-  | "invalid_upstream_response";
+  | "invalid_upstream_response"
+  | (string & Record<never, never>);
 
 export class ProofServiceError extends Error {
   readonly code: ProofServiceErrorCode;
@@ -294,13 +272,6 @@ export class ProofServiceError extends Error {
 type ProofServiceRequestOptions = Readonly<{
   signal?: AbortSignal;
 }>;
-
-/** Load the product session selected for the web workspace. */
-export function readConfiguredProofSession(
-  options: ProofServiceRequestOptions = {},
-): Promise<CurrentProofSession> {
-  return readCurrentProofSession(process.env.PROOF_SESSION_ID ?? DEFAULT_PROOF_SESSION_ID, options);
-}
 
 /** Read and revalidate the current persisted node using its stored operator environment. */
 export async function readCurrentProofSession(
@@ -965,17 +936,10 @@ async function readValidatedEnvelope(
   const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType !== "application/json") throw invalidUpstreamResponse();
 
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw invalidUpstreamResponse();
-  }
   let text: string;
   try {
-    text = await response.text();
+    text = await readBoundedText(response, maxBytes);
   } catch {
-    throw invalidUpstreamResponse();
-  }
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
     throw invalidUpstreamResponse();
   }
   try {
@@ -1003,10 +967,10 @@ function failureForResponse(status: number, value: unknown): ProofServiceError {
   const failure = proofServiceFailureSchema.safeParse(value);
   if (!failure.success || status < 400 || status > 599) throw invalidUpstreamResponse();
   const diagnostic = failure.data.diagnostics[0];
-  // A later macro step did not re-match: well-formed, refused, nothing written (not a bad gateway).
-  if (status === 422 && diagnostic.code === "macro-step-failed") {
-    return new ProofServiceError(diagnostic.code, diagnostic.message, 422);
-  }
+  // A 422 is a well-formed refusal of a request the worker could not act on (a macro step that
+  // did not re-match, a lemma that is not closed, ...): nothing was written, and it is not a bad
+  // gateway.
+  if (status === 422) return new ProofServiceError(diagnostic.code, diagnostic.message, 422);
   return new ProofServiceError(diagnostic.code, diagnostic.message, publicFailureStatus(status));
 }
 
@@ -1105,7 +1069,7 @@ function jsonEquals(left: unknown, right: unknown): boolean {
 // Manual problem and session creation (roadmap N26)
 // ---------------------------------------------------------------------------------------------
 
-/** The session ID `readConfiguredProofSession` loads (the development session by default). */
+/** The configured development session ID (`session:development` unless `PROOF_SESSION_ID` is set). */
 export function configuredProofSessionId(): string {
   return process.env.PROOF_SESSION_ID ?? DEFAULT_PROOF_SESSION_ID;
 }
@@ -1141,7 +1105,7 @@ const problemSetupFailureSchema = z.union([
  * worker resolves from storage for the setup check and the session approval. The browser never
  * sends operator declarations.
  */
-export const approvedBackgroundReferenceSchema = z
+const approvedBackgroundReferenceSchema = z
   .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
   .strict();
 
@@ -1150,7 +1114,7 @@ export const approvedBackgroundReferenceSchema = z
  * resolves from the stored librarian call for the setup check and the session approval. The
  * browser never sends library artifacts.
  */
-export const approvedLibraryReferenceSchema = z
+const approvedLibraryReferenceSchema = z
   .object({ constructionId: stableIdentifierSchema, decisionId: stableIdentifierSchema })
   .strict();
 
@@ -1479,7 +1443,7 @@ const privateExportRefusalSchema = z
   })
   .strict();
 
-export const sessionVisibilitySchema = z.enum(["private", "shared"]);
+const sessionVisibilitySchema = z.enum(["private", "shared"]);
 export type SessionVisibility = z.infer<typeof sessionVisibilitySchema>;
 
 const sessionVisibilityEnvelopeSchema = z
@@ -1652,15 +1616,13 @@ export async function previewConditionalLemma(
 // ---------------------------------------------------------------------------------------------
 
 /** The model roles the worker can serve; every other role is unimplemented. */
-export const AI_ROLES = [
-  "background-proposer",
-  "librarian",
-  "proof-state-formalizer",
-  "move-shortlister",
-  "move-executor",
-  "move-author",
-] as const;
-export type AiRole = (typeof AI_ROLES)[number];
+export type AiRole =
+  | "background-proposer"
+  | "librarian"
+  | "proof-state-formalizer"
+  | "move-shortlister"
+  | "move-executor"
+  | "move-author";
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
 export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "background-proposer": false,

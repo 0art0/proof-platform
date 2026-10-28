@@ -35,6 +35,29 @@ export function statementFeedback(
     : { kind: "error", message: parsed.diagnostics.map(({ message }) => message).join(" ") };
 }
 
+const rowFeedbackCache = new WeakMap<LatexRenderer, WeakMap<StatementRow, StatementFeedback>>();
+
+/**
+ * `statementFeedback` of a form row, remembered per row object and renderer. The form replaces a
+ * row when it is edited, so a keystroke parses only the edited row again.
+ */
+export function cachedStatementFeedback(
+  row: StatementRow,
+  latex: LatexRenderer,
+): StatementFeedback {
+  let rows = rowFeedbackCache.get(latex);
+  if (rows === undefined) {
+    rows = new WeakMap();
+    rowFeedbackCache.set(latex, rows);
+  }
+  let feedback = rows.get(row);
+  if (feedback === undefined) {
+    feedback = statementFeedback(row, latex);
+    rows.set(row, feedback);
+  }
+  return feedback;
+}
+
 function recognized(expression: PlainMathJson, latex: LatexRenderer): StatementFeedback {
   const mathJson = JSON.stringify(expression);
   try {

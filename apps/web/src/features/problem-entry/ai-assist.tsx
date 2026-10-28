@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { createPresentation } from "@proof/language";
 import {
   backgroundProfileSchema,
@@ -238,17 +238,24 @@ export function AiAssist({
   };
 
   // Runs after the accepted background has reached the form, so the draft request carries it.
-  useEffect(() => {
+  const draftAfterAccept = useEffectEvent(() => {
     if (accepted === undefined || draftAfter.current !== accepted.decisionId) return;
     draftAfter.current = undefined;
     if (missing.length === 0) void draftSetup();
   });
-
   useEffect(() => {
+    draftAfterAccept();
+  }, [accepted]);
+
+  // Suggests a background once, when the form opens with a statement already typed.
+  const proposeWhenOpened = useEffectEvent(() => {
     if (proposedOnOpen.current || !proposeOnOpen || !capabilities.background) return;
     proposedOnOpen.current = true;
     if (statementFilled) void ask("propose");
   });
+  useEffect(() => {
+    proposeWhenOpened();
+  }, [proposeOnOpen, capabilities.background]);
 
   const draftSetup = async () => {
     setDraft({ kind: "loading" });

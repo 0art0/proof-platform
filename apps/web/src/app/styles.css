@@ -25,7 +25,6 @@
   --space-3: 0.75rem;
   --space-4: 1rem;
   --space-5: 1.5rem;
-  --space-6: 2rem;
   --space-7: 3rem;
   --space-8: 4rem;
 
@@ -50,9 +49,6 @@
   --ink: #15171c;
   --ink-hover: #2a2d35;
   --on-ink: #fff;
-  --accent: var(--ink);
-  --accent-soft: #f0f0ec;
-  --accent-text: #15171c;
   --select-bg: #ffe68a;
   --select-ring: #c99a00;
   --success-bg: #eaf6ee;
@@ -107,8 +103,6 @@
     --ink: #e8e9ec;
     --ink-hover: #fff;
     --on-ink: #0f1115;
-    --accent-soft: #1e222a;
-    --accent-text: #e8e9ec;
     --select-bg: #4a3d0a;
     --select-ring: #c99a00;
     --success-bg: #13291b;
