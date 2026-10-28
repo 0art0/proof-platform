@@ -35,6 +35,17 @@ async function renderReady() {
 }
 
 describe("MathJSON interaction spike", () => {
+  it("names the statement field, the target group and the replacement control", async () => {
+    await renderReady();
+    expect(document.querySelector("math-field")).toHaveAttribute(
+      "aria-label",
+      "Interactive MathJSON statement",
+    );
+    expect(screen.getByRole("group", { name: "Deterministic selection targets" })).toBeVisible();
+    expect(screen.getByLabelText("Replacement MathJSON")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Replace selection" })).toBeDisabled();
+  });
+
   it("shows exact paths and expands to a semantic parent", async () => {
     await renderReady();
     fireEvent.click(screen.getByRole("button", { name: "Select x²" }));

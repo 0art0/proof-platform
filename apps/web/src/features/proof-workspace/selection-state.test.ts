@@ -249,16 +249,26 @@ describe("selection feedback messages", () => {
     );
   });
 
-  it("announces a snapped fallback before the outcome", () => {
-    expect(
-      describeSelectionFeedback({
-        outcome: "replaced",
-        repeatable: false,
-        fallbackReason: "The range was widened to the smallest containing subtree.",
-      }),
-    ).toBe(
-      "Snapped to nearest subtree (The range was widened to the smallest containing subtree). Selected the occurrence.",
-    );
+  it("leads with the fallback reason, with or without its closing full stop", () => {
+    const snapped =
+      "The displayed range was not an exact subtree or a supported contiguous associative range, so it was snapped to the nearest subtree";
+    for (const fallbackReason of [snapped, `${snapped}.`]) {
+      expect(
+        describeSelectionFeedback({ outcome: "replaced", repeatable: false, fallbackReason }),
+      ).toBe(`${snapped}. Selected the occurrence.`);
+    }
+  });
+
+  it("does not call a whole-expression fallback a snap to the nearest subtree", () => {
+    const reason =
+      "The requested fragment's leaves do not all occur in the expression, so no subtree could be matched and the selection fell back to the whole expression.";
+    const message = describeSelectionFeedback({
+      outcome: "replaced",
+      repeatable: false,
+      fallbackReason: reason,
+    });
+    expect(message).toBe(`${reason} Selected the occurrence.`);
+    expect(message).not.toMatch(/nearest subtree/i);
   });
 });
 
