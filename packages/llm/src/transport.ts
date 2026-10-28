@@ -5,6 +5,7 @@ import {
   NONE_RELEVANT_CHOICE_ID,
   NONE_RELEVANT_CRITERION,
   preparedLlmCallSchema,
+  translatorQuestions,
   type LlmTransport,
   type LlmTransportFailureSubcode,
   type PreparedLlmCall,
@@ -33,6 +34,12 @@ export const DEFAULT_EXECUTOR_MAX_OUTPUT_TOKENS = 16_000;
 export const DEFAULT_MOVE_AUTHOR_MODEL = DEFAULT_FORMALIZER_MODEL;
 export const DEFAULT_MOVE_AUTHOR_REASONING_EFFORT = "high" as const;
 export const DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS = 32_000;
+export const DEFAULT_PLANNER_MODEL = DEFAULT_FORMALIZER_MODEL;
+export const DEFAULT_PLANNER_REASONING_EFFORT = "xhigh" as const;
+export const DEFAULT_PLANNER_MAX_OUTPUT_TOKENS = 32_000;
+export const DEFAULT_PLANNER_TIMEOUT_MS = 600_000;
+export const DEFAULT_TRANSLATOR_MODEL = DEFAULT_SHORTLISTER_MODEL;
+export const DEFAULT_TRANSLATOR_MIN_CONFIDENCE = 0.5;
 
 const DEFAULT_LLM_MAX_ATTEMPTS = 3;
 const DEFAULT_LLM_RETRY_BASE_DELAY_MS = 500;
@@ -225,6 +232,60 @@ export function createVercelJevShortlisterTransport(
   };
 }
 
+export type VercelJevStepTranslatorOptions = Readonly<{
+  apiKey: string;
+  model?: string;
+  timeoutMs?: number;
+  retry?: LlmRetryOptions;
+  fetch?: FetchLike;
+  baseUrl?: string;
+}>;
+
+/**
+ * The step translator's Jev transport (`docs/motivated-proof-plans.md` section 4). The questions
+ * are derived from the envelope alone (`translatorQuestions`), one Choice question for an action
+ * call and one per menu for a menus call; the answers are checked again by validateLlmOutput.
+ */
+export function createVercelJevStepTranslatorTransport(
+  options: VercelJevStepTranslatorOptions,
+): LlmTransport {
+  const fetcher = options.fetch ?? fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+  const model = options.model ?? DEFAULT_TRANSLATOR_MODEL;
+  return async (callInput) => {
+    const call = preparedLlmCallSchema.parse(callInput);
+    if (call.role !== "step-translator") return null;
+    const envelope = llmContextEnvelopeSchema.parse(call.envelope);
+    if (envelope.role !== "step-translator") return null;
+    const questions = translatorQuestions(envelope.context);
+    const providerRequest = { model, state: envelope, questions };
+    const body = await postJson({
+      fetcher,
+      url: `${trimSlash(options.baseUrl ?? VERCEL_AI_GATEWAY_BASE_URL)}/v1/evaluate`,
+      apiKey: options.apiKey,
+      timeoutMs,
+      retry: options.retry,
+      payload: providerRequest,
+    });
+    const responseBody = asRecord(body);
+    const answers = asRecord(responseBody?.answers);
+    const providerOutput: Record<string, unknown> = {};
+    for (const questionId of Object.keys(questions)) {
+      const answer = asRecord(answers?.[questionId]);
+      const confidence = extractJevConfidence(responseBody, answer, questionId);
+      if (answer !== undefined && confidence === undefined) {
+        throw new LlmTransportError("missing-confidence");
+      }
+      providerOutput[questionId] = {
+        choice: answer?.choice ?? null,
+        probabilities: answer?.probabilities ?? null,
+        confidence: confidence ?? null,
+      };
+    }
+    return { kind: "jev-choices", providerRequest, providerOutput };
+  };
+}
+
 /**
  * Jev confidence is read from the first location that holds a number: the answer itself, the
  * gateway's `providerMetadata.typesafe.confidence.shortlist`, then a scalar
@@ -233,12 +294,13 @@ export function createVercelJevShortlisterTransport(
 function extractJevConfidence(
   responseBody: Record<string, unknown> | undefined,
   answer: Record<string, unknown> | undefined,
+  questionId = "shortlist",
 ): number | undefined {
   if (typeof answer?.confidence === "number") return answer.confidence;
   const gatewayConfidence = asRecord(
     asRecord(responseBody?.providerMetadata)?.typesafe,
   )?.confidence;
-  const perQuestion = asRecord(gatewayConfidence)?.shortlist;
+  const perQuestion = asRecord(gatewayConfidence)?.[questionId];
   if (typeof perQuestion === "number") return perQuestion;
   return typeof gatewayConfidence === "number" ? gatewayConfidence : undefined;
 }

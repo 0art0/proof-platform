@@ -1,0 +1,92 @@
+/* The plan reads as Lamport's hierarchical proof: numbered steps, indented by level. */
+.tree {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  gap: 2px;
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.step[aria-current="step"] {
+  border-left-color: var(--ink);
+  background: var(--surface-muted);
+}
+
+.stepHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.number {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.keyword {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.detail {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.status {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+/* Reported statuses carry a word and a mark, never colour alone. */
+.status[data-status="no-move"],
+.status[data-status="missing-construction"],
+.status[data-status="unsupported"],
+.status[data-status="stuck"],
+.status[data-status="uncertain"] {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.card {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+}
+
+.alternatives {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.report {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.report pre {
+  max-height: 16rem;
+  margin: 0;
+  overflow: auto;
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+}

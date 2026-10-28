@@ -1638,7 +1638,9 @@ export type AiRole =
   | "proof-state-formalizer"
   | "move-shortlister"
   | "move-executor"
-  | "move-author";
+  | "move-author"
+  | "proof-planner"
+  | "step-translator";
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
 export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "background-proposer": false,
@@ -1647,6 +1649,8 @@ export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "move-shortlister": false,
   "move-executor": false,
   "move-author": false,
+  "proof-planner": false,
+  "step-translator": false,
 });
 
 const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
@@ -1671,6 +1675,8 @@ export async function readAiCapabilities(
       "move-shortlister": roles["move-shortlister"] === true,
       "move-executor": roles["move-executor"] === true,
       "move-author": roles["move-author"] === true,
+      "proof-planner": roles["proof-planner"] === true,
+      "step-translator": roles["step-translator"] === true,
     };
   } catch {
     return NO_AI_CAPABILITIES;
@@ -1700,7 +1706,11 @@ export type AiEndpoint =
   | Readonly<{ kind: "execute"; sessionId: string }>
   | Readonly<{ kind: "execute-apply"; sessionId: string }>
   | Readonly<{ kind: "move-author"; sessionId: string }>
-  | Readonly<{ kind: "library-top-up"; sessionId: string }>;
+  | Readonly<{ kind: "library-top-up"; sessionId: string }>
+  | Readonly<{ kind: "proof-plan"; sessionId: string }>
+  | Readonly<{ kind: "proof-plan-read"; sessionId: string; callId: string }>
+  | Readonly<{ kind: "proof-plan-translate"; sessionId: string }>
+  | Readonly<{ kind: "proof-plan-apply"; sessionId: string }>;
 
 function aiEndpointPath(endpoint: AiEndpoint): string {
   if (endpoint.kind === "background") return "/ai/background";
@@ -1714,6 +1724,12 @@ function aiEndpointPath(endpoint: AiEndpoint): string {
   if (endpoint.kind === "execute-apply") return `${base}/execute/apply`;
   if (endpoint.kind === "move-author") return `${base}/move-author`;
   if (endpoint.kind === "library-top-up") return `${base}/library/top-up`;
+  if (endpoint.kind === "proof-plan") return `${base}/proof-plan`;
+  if (endpoint.kind === "proof-plan-read") {
+    return `${base}/proof-plan/${encodeURIComponent(parseIdentifier(endpoint.callId, "LLM call"))}`;
+  }
+  if (endpoint.kind === "proof-plan-translate") return `${base}/proof-plan/translate`;
+  if (endpoint.kind === "proof-plan-apply") return `${base}/proof-plan/apply`;
   return `${base}/shortlist`;
 }
 
@@ -1729,12 +1745,18 @@ export async function relayAiRequest(
 ): Promise<ProtocolServiceAnswer> {
   const body = aiRequestBodySchema.safeParse(bodyInput);
   if (!body.success) throw invalidRequest("The AI request must be a JSON object.");
-  const response = await requestProofService(aiEndpointPath(endpoint), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body.data),
-    ...signalOption(options.signal),
-  });
+  // Reading a stored plan back is the one AI read; it has no body.
+  const response = await requestProofService(
+    aiEndpointPath(endpoint),
+    endpoint.kind === "proof-plan-read"
+      ? { method: "GET", ...signalOption(options.signal) }
+      : {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body.data),
+          ...signalOption(options.signal),
+        },
+  );
   // A library proposal carries up to 40 results with their variants, which can exceed the usual
   // bound for an AI answer.
   const value = await readValidatedEnvelope(
@@ -1743,7 +1765,8 @@ export async function relayAiRequest(
   );
   const parsed = aiAnswerSchema.safeParse(value);
   if (!parsed.success) throw invalidUpstreamResponse();
-  if (response.status === 200 || response.status === 201) {
+  // 202: a proof plan that is still being written; it is read back by its call ID.
+  if (response.status === 200 || response.status === 201 || response.status === 202) {
     return { ok: true, status: response.status, body: parsed.data };
   }
   const first = parsed.data.diagnostics?.[0];

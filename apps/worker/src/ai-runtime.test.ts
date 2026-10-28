@@ -41,7 +41,9 @@ describe("createAiRuntime", () => {
       "move-author",
       "move-executor",
       "move-shortlister",
+      "proof-planner",
       "proof-state-formalizer",
+      "step-translator",
       "topic-extractor",
     ]);
     expect(DEFAULT_LIBRARIAN_MODEL).toBe("openai/gpt-6-luna");
@@ -88,6 +90,19 @@ describe("createAiRuntime", () => {
       reasoningEffort: DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
     });
     expect(typeof runtime["move-author"]?.transport).toBe("function");
+    expect(runtime["proof-planner"]?.dispatch).toEqual({
+      provider: "vercel-ai-gateway",
+      model: "openai/gpt-6-luna",
+      promptVersion: "proof-planner-v1",
+      maxOutputTokens: 32_000,
+      reasoningEffort: "xhigh",
+    });
+    expect(runtime["step-translator"]?.dispatch).toEqual({
+      provider: "vercel-ai-gateway-evaluation",
+      model: "typesafe-ai/jev",
+      promptVersion: "step-translator-jev-v1",
+      minimumConfidence: 0.5,
+    });
     expect(runtime["topic-extractor"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_TOPIC_EXTRACTOR_MODEL,
@@ -191,6 +206,9 @@ describe("createAiRuntime", () => {
     ["librarian reasoning effort", { PROOF_AI_LIBRARIAN_REASONING_EFFORT: "maximal" }],
     ["move author max output tokens", { PROOF_AI_MOVE_AUTHOR_MAX_OUTPUT_TOKENS: "0" }],
     ["move author reasoning effort", { PROOF_AI_MOVE_AUTHOR_REASONING_EFFORT: "maximal" }],
+    ["planner timeout", { PROOF_AI_PLANNER_TIMEOUT_MS: "0" }],
+    ["planner reasoning effort", { PROOF_AI_PLANNER_REASONING_EFFORT: "maximal" }],
+    ["translator minimum confidence", { PROOF_AI_TRANSLATOR_MIN_CONFIDENCE: "-0.1" }],
   ])("rejects an invalid %s override", (_name, config) => {
     expect(() => createAiRuntime({ AI_GATEWAY_API_KEY: "test-credential", ...config })).toThrow();
   });

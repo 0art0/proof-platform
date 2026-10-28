@@ -464,3 +464,16 @@ test("the move-instruction box is visible and explains why it is off without an 
   // Nothing in the existing flow is displaced: the suggestion panel is still there.
   await expect(page.getByRole("region", { name: "Available suggestions" })).toBeVisible();
 });
+
+test("the proof-plan panel is visible and explains why it is off without an AI provider", async ({
+  page,
+}) => {
+  await page.goto("/sessions/session%3Adevelopment");
+  await waitForWorkspace(page);
+
+  const panel = page.getByRole("region", { name: "Proof plan" });
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("writes the whole proof as numbered steps");
+  await expect(panel.getByRole("button", { name: "Write a proof plan" })).toBeDisabled();
+  await expect(panel).toContainText("the planner or the step translator is not configured");
+});
