@@ -136,6 +136,42 @@ export function parseClaim(
   return parsed.ok ? parsed.expression : undefined;
 }
 
+/**
+ * The plan's statements as LaTeX serialized from their parsed MathJSON, by step: the only LaTeX a
+ * client typesets. The model's own LaTeX is text; a statement that does not parse is `null`.
+ */
+export function renderedLatex(
+  plan: Readonly<{ theorem: ProofPlanStep["claim"]; steps: readonly ProofPlanStep[] }>,
+  operators: Operators,
+): Readonly<{
+  theorem: string | null;
+  steps: Readonly<
+    Record<
+      string,
+      Readonly<{ claim: string | null; term: string | null; assumptions: (string | null)[] }>
+    >
+  >;
+}> {
+  const latex = latexRenderer(operators);
+  const render = (source: string | null | undefined) => {
+    const parsed = parseClaim(source, operators);
+    return parsed === undefined ? null : latex.serialize(parsed);
+  };
+  return {
+    theorem: render(plan.theorem?.latex),
+    steps: Object.fromEntries(
+      plan.steps.map((step) => [
+        step.id,
+        {
+          claim: render(step.claim?.latex),
+          term: render(step.term?.latex),
+          assumptions: step.assumptions.map(({ latex: source }) => render(source)),
+        },
+      ]),
+    ),
+  };
+}
+
 /** The claims, assumptions and witnesses of a plan whose LaTeX does not parse, by step. */
 export function unparsedLatex(
   steps: readonly ProofPlanStep[],
@@ -232,7 +268,9 @@ export function checkRealization(input: CheckInput): Realization {
 
   switch (step.form) {
     case "qed":
-      return focus.successors.length === 0 && movesApplied > 0
+      // The goal was open at the unit's start; once it and everything since are closed, the QED
+      // holds, even when an earlier step's move closed it.
+      return focus.successors.length === 0
         ? { realized: true, outputs: { produced: [] } }
         : NOT_YET;
     case "have": {

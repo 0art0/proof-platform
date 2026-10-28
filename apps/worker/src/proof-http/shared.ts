@@ -54,6 +54,8 @@ export type ServiceContext = Readonly<{
   ai?: AiRuntime | undefined;
   /** Cost guard for provider calls. */
   aiLimiter?: AiLimiter | undefined;
+  /** How long a proof-plan request waits before answering that planning continues. */
+  planAnswerWaitMs?: number | undefined;
 }>;
 
 const operandPathSchema = z.array(z.number().int().nonnegative());

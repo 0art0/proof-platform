@@ -143,6 +143,12 @@ Each new role adds `<PREFIX>MODEL`, `<PREFIX>REASONING_EFFORT` and `<PREFIX>MAX_
 reports itself in `GET /ai/capabilities`, and shares the cost guard. A role whose transport is not
 configured disables its UI controls, and each disabled control explains why.
 
+## Proof plans
+
+Two further roles, the proof planner (`proof-planner`, a stateful proof agent) and the step
+translator (`step-translator`, Jev), write a structured motivated proof and walk it with the
+platform's own moves. `docs/motivated-proof-plans.md` is their design.
+
 ## Migrations
 
 These numbers are pre-assigned so that parallel work does not collide. Each migration widens

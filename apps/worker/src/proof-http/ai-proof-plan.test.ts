@@ -148,7 +148,13 @@ function scriptedJev(script: {
 }
 
 async function startScenario(
-  options: { plan?: unknown; jev?: ReturnType<typeof scriptedJev>; ai?: boolean } = {},
+  options: {
+    plan?: unknown;
+    jev?: ReturnType<typeof scriptedJev>;
+    ai?: boolean;
+    planner?: LlmTransport;
+    planAnswerWaitMs?: number;
+  } = {},
 ) {
   const store = new InspectableMemoryProofStore();
   const llmCalls = new MemoryLlmCallStore();
@@ -164,9 +170,11 @@ async function startScenario(
   const jev = options.jev ?? scriptedJev({ prefer: [] });
   const ai: AiRuntime = {
     "proof-planner": {
-      transport: async () => ({
-        result: { ...((options.plan as ProofPlanProposal | undefined) ?? PLAN), kind: "proof" },
-      }),
+      transport:
+        options.planner ??
+        (async () => ({
+          result: { ...((options.plan as ProofPlanProposal | undefined) ?? PLAN), kind: "proof" },
+        })),
       dispatch: { provider: "fixture", model: "fixture-planner", promptVersion: "test" },
     },
     "step-translator": {
@@ -182,6 +190,9 @@ async function startScenario(
   const service = createProofHttpService(store as ProofStore, {
     llmCalls,
     ...(options.ai === false ? {} : { ai }),
+    ...(options.planAnswerWaitMs === undefined
+      ? {}
+      : { planAnswerWaitMs: options.planAnswerWaitMs }),
   });
   services.push(service);
   const { origin } = await service.listen();
@@ -283,6 +294,39 @@ describe("proof plans", () => {
     expect(read.body.plan).toEqual(PLAN);
   });
 
+  it("answers 202 while a slow planner works, and serves the plan by its call ID once stored", async () => {
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const scenario = await startScenario({
+      planAnswerWaitMs: 20,
+      planner: async () => {
+        await released;
+        return { result: { ...PLAN, kind: "proof" } };
+      },
+    });
+    const started = await scenario.post("/ai/proof-plan", {
+      id: "llm-call:plan-slow",
+      expectedCurrentNodeId: ROOT_ID,
+    });
+    expect(started).toMatchObject({
+      status: 202,
+      body: { status: "planning", callId: "llm-call:plan-slow" },
+    });
+    expect((await scenario.get("/ai/proof-plan/llm-call:plan-slow")).body.status).toBe("planning");
+    release();
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const read = await scenario.get("/ai/proof-plan/llm-call:plan-slow");
+      if (read.body.status !== "planning") {
+        expect(read.body).toMatchObject({ status: "planned", plan: PLAN });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("The plan was never stored.");
+  });
+
   it("walks the plan to a solved proof with Jev's choices, applied as the planning agent", async () => {
     const jev = scriptedJev({
       prefer: [
@@ -312,6 +356,34 @@ describe("proof plans", () => {
     });
     // Sorries are never offered.
     expect(seen).not.toContain("move:mark-sorry");
+  });
+
+  it("realizes a QED without a move when an earlier step's move already closed its goal", async () => {
+    const jev = scriptedJev({
+      prefer: [
+        "move:expand-hypothesis-conjunction",
+        "move:split-goal-conjunction",
+        "move:close-by-hypothesis",
+      ],
+    });
+    const scenario = await startScenario({ jev });
+    const planned = await scenario.post("/ai/proof-plan", {
+      id: "llm-call:plan-1",
+      expectedCurrentNodeId: ROOT_ID,
+    });
+    // Walk have-q and have-p, then close the goal by walking the QED once; a second QED request
+    // started at the root still finds the goal closed.
+    await walk(scenario, planned.body.callId, planned.body.units);
+    const translated = await scenario.post("/ai/proof-plan/translate", {
+      id: "llm-call:translate-again",
+      planCallId: planned.body.callId,
+      stepId: "qed",
+      expectedCurrentNodeId: await scenario.currentNodeId(),
+      start: { nodeId: ROOT_ID, focusTargetId: "goal:main" },
+      movesSoFar: [],
+      refs: {},
+    });
+    expect(translated.body).toMatchObject({ status: "realized", outputs: { produced: [] } });
   });
 
   it("reports a missing move when Jev finds no displayed action for the step", async () => {

@@ -50,6 +50,7 @@ async function workspaceProps() {
       aiExecutor: boolean;
       aiLibrarian: boolean;
       aiMoveAuthor: boolean;
+      aiPlanner: boolean;
     }>;
   }>;
   expect(isValidElement(page)).toBe(true);
@@ -65,6 +66,8 @@ describe("the session page", () => {
       "move-shortlister": true,
       "move-executor": true,
       "move-author": true,
+      "proof-planner": true,
+      "step-translator": true,
     });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue({
@@ -84,6 +87,7 @@ describe("the session page", () => {
     expect(props.aiExecutor).toBe(true);
     expect(props.aiLibrarian).toBe(true);
     expect(props.aiMoveAuthor).toBe(true);
+    expect(props.aiPlanner).toBe(true);
   });
 
   it("opens a session without stored metadata under its id", async () => {
@@ -94,6 +98,8 @@ describe("the session page", () => {
       "move-shortlister": false,
       "move-executor": false,
       "move-author": false,
+      "proof-planner": true,
+      "step-translator": false,
     });
     readCurrentProofSession.mockResolvedValue({ session, node });
     readProofSessionMetadata.mockResolvedValue(undefined);
@@ -103,5 +109,7 @@ describe("the session page", () => {
     expect(props.aiExecutor).toBe(false);
     expect(props.aiLibrarian).toBe(false);
     expect(props.aiMoveAuthor).toBe(false);
+    // Walking a plan needs both roles.
+    expect(props.aiPlanner).toBe(false);
   });
 });

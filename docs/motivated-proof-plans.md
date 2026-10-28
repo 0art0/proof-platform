@@ -353,3 +353,31 @@ role constraint in migration `0020_llm_proof_plan_roles.sql`.
 - **Planner–platform vocabulary.** The planner is not told the move catalog, deliberately: the
   plan should be the motivated proof a mathematician would write, so that gaps show up. Whether a
   "platform-aware" planning mode is also useful is for evaluation.
+
+## 8. Implementation status
+
+Implemented as designed; `docs/ai-endpoints.md` ("Proof plans") documents the routes. Where the
+implementation refines the design:
+
+- **Asynchronous planning.** An `xhigh` plan can outlast an HTTP exchange (Node's `fetch` stops
+  waiting for headers after 300 s). The plan request waits 15 s and otherwise answers
+  `202 planning`; the durable call continues and the plan is read back by its call ID, which the
+  panel polls.
+- **Typeset LaTeX.** The model's LaTeX is text. The worker parses each statement in the session's
+  notation and returns LaTeX serialized from the parsed MathJSON (`rendered`); the panel typesets
+  only that, and shows prose for the rest.
+- **Stateless walk.** The worker keeps no walk state. Each translation request says which unit is
+  being translated, the node and goal where it started, the moves applied so far, and the hypotheses
+  earlier units reported for their labels; the browser keeps that state (tab session storage). Every
+  claim in it is checked against the stored plan and the session's nodes.
+- **Verifiable apply.** The stored action call lists the selection sets and, for each candidate, its
+  set and position, so apply re-derives the command from storage alone and checks the recorded
+  suggestion still matches the candidate.
+- **Provenance.** No schema change: a translated move is an ordinary suggestion command whose actor
+  is `actor:proof-planner` (kind `agent`) when Jev chose it confidently and `actor:web` when the
+  person chose another candidate; its suggestion-set ID names the translation call.
+- **Bounds.** At most 64 selection sets and 48 candidates per action call, 8 menus of 48 items per
+  menu call, three menu rounds and four moves per unit.
+
+Not yet done: a live evaluation over the benchmark corpus (how often steps translate, and which
+moves are reported missing). The live smoke test does not exercise these roles yet.

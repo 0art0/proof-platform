@@ -48,6 +48,7 @@ import { useLibraryTopUp } from "./library-top-up";
 import { useSessionConstants } from "./use-session-constants";
 import { useWideLayout } from "./use-wide-layout";
 import { MoveInstructions } from "./move-instructions";
+import { ProofPlanPanel } from "./proof-plan-panel";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
@@ -82,6 +83,8 @@ export type StoredProofWorkspaceProps = Readonly<{
   aiLibrarian?: boolean | undefined;
   /** Whether the proof service can propose a general move from an applied step with a model. */
   aiMoveAuthor?: boolean | undefined;
+  /** Whether the proof service can write a proof plan and translate its steps with models. */
+  aiPlanner?: boolean | undefined;
 }>;
 type Notice = Readonly<{ state: "committed" | "rejected"; message: string }>;
 type SuggestionId = string;
@@ -103,6 +106,7 @@ function StatefulStoredWorkspace({
   aiExecutor = false,
   aiLibrarian = false,
   aiMoveAuthor = false,
+  aiPlanner = false,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -684,6 +688,31 @@ function StatefulStoredWorkspace({
     [loadHistory, rejectShownPreview, resetTransientState, session.id],
   );
 
+  const adoptPlanMove = useCallback(
+    async ({ nodeId, name }: Readonly<{ nodeId: string; name: string }>) => {
+      const current = await readCurrentSession(session.id);
+      if (!current.ok || current.value.node.id !== nodeId) {
+        setNotice({
+          state: "rejected",
+          message:
+            "The move was applied, but the new current node could not be loaded; reload the page.",
+        });
+        void loadHistory();
+        return;
+      }
+      rejectShownPreview("superseded");
+      setSession(current.value.session);
+      setNode(current.value.node);
+      resetTransientState();
+      setNotice({
+        state: "committed",
+        message: `Applied “${name}” from the proof plan; now at ${nodeId}.`,
+      });
+      void loadHistory();
+    },
+    [loadHistory, rejectShownPreview, resetTransientState, session.id],
+  );
+
   const breadcrumb = useMemo(() => {
     if (history.kind === "loading") return { kind: "loading" } as const;
     const crumbs =
@@ -764,6 +793,16 @@ function StatefulStoredWorkspace({
         onApplyStart={beginExecutorApply}
         onApplyEnd={endExecutorApply}
         onApplied={adoptExecutorResult}
+      />
+      <ProofPlanPanel
+        sessionId={session.id}
+        node={node}
+        enabled={aiPlanner}
+        readOnly={readOnly}
+        busy={mutationPending}
+        onApplyStart={beginExecutorApply}
+        onApplyEnd={endExecutorApply}
+        onApplied={adoptPlanMove}
       />
     </div>
   );

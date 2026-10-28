@@ -50,6 +50,7 @@ export default async function SessionPage({
         aiExecutor={capabilities["move-executor"]}
         aiLibrarian={capabilities.librarian}
         aiMoveAuthor={capabilities["move-author"]}
+        aiPlanner={capabilities["proof-planner"] && capabilities["step-translator"]}
       />
     </main>
   );

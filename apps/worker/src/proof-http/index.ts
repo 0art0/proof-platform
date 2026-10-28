@@ -288,6 +288,11 @@ export type ProofHttpServiceOptions = Readonly<{
   /** Cost guard for AI provider calls; defaults to the documented in-process limits. */
   aiLimiter?: AiLimiter;
   /**
+   * How long a proof-plan request waits for the planner before answering `202 planning`; the call
+   * continues and its plan is read back by ID. Defaults to 15 seconds.
+   */
+  planAnswerWaitMs?: number;
+  /**
    * Bearer token and extra `Host` names (see `access-control`). The default is no token and
    * loopback names only; the ambient environment is never read. A non-loopback `listen` host
    * requires a token of at least 32 characters.
@@ -310,6 +315,9 @@ export function createProofHttpService(
     llmCalls: options.llmCalls,
     ai: options.ai,
     aiLimiter: options.aiLimiter ?? createAiLimiter(),
+    ...(options.planAnswerWaitMs === undefined
+      ? {}
+      : { planAnswerWaitMs: options.planAnswerWaitMs }),
   };
   const access = options.access ?? DEFAULT_HTTP_ACCESS_POLICY;
   let bindHost: string | undefined;

@@ -26,7 +26,8 @@ PROOF_STORE=memory node --env-file=.env.local --import tsx apps/worker/src/main.
 
 For an existing PostgreSQL database, apply migrations `0013_llm_formalizer_role.sql`,
 `0015_llm_background_proposer_role.sql`, `0016_llm_librarian_role.sql` and
-`0017_llm_move_executor_role.sql` and `0019_llm_move_author_role.sql` before starting the updated
+`0017_llm_move_executor_role.sql`, `0019_llm_move_author_role.sql` and
+`0020_llm_proof_plan_roles.sql` before starting the updated
 worker (each widens the `llm_calls`
 role constraint; background and library decisions reuse the `llm_topic_decisions` table). A
 single-instance deployment can use `PROOF_AUTO_MIGRATE=true`; the normal migration runner is
@@ -53,6 +54,13 @@ long high-effort generations; the executor shares `PROOF_AI_TIMEOUT_MS`). The co
 defaults
 to `0.55`; Jev's native confidence and candidate probabilities are included in the stored structured
 evidence. Missing credentials disable these routes. No model fallback is silently selected.
+
+The proof planner defaults to `openai/gpt-6-luna` with `xhigh` reasoning effort, a 32,000 token
+output limit and its own 600000 ms budget (`PROOF_AI_PLANNER_MODEL`,
+`PROOF_AI_PLANNER_REASONING_EFFORT`, `PROOF_AI_PLANNER_MAX_OUTPUT_TOKENS`,
+`PROOF_AI_PLANNER_TIMEOUT_MS`). The step translator defaults to `typesafe-ai/jev` with a confidence
+threshold of `0.5` (`PROOF_AI_TRANSLATOR_MODEL`, `PROOF_AI_TRANSLATOR_MIN_CONFIDENCE`) and shares
+`PROOF_AI_TIMEOUT_MS`.
 
 ## Cost guard and status codes
 
@@ -894,6 +902,104 @@ approved. The link grants no authority. Review is the ordinary `review-move-draf
 against the generality questions of refinement section 7.2; the proposed move is retrievable and
 applicable in the session only after an approval, with its provenance intact.
 
+## Proof plans (proof planner and step translator)
+
+`docs/motivated-proof-plans.md` is the design; this section is the routes as they ship. A strong
+model writes one structured proof in Lamport's style; the platform walks it one unit at a time, and
+Jev turns each unit into displayed suggestions and menu items. Every route is session-scoped and
+refuses a read-only session (`409 session-read-only`) and a stale node (`409 stale-evidence`).
+
+### Write a plan
+
+`POST /proof-sessions/:sessionId/ai/proof-plan` accepts `{ "id", "expectedCurrentNodeId" }`. The
+worker builds the planner's context deterministically: the session's problem statement and
+background (from its metadata; without metadata `409 plan-context-unavailable`), its effective
+operators, up to 64 library results (results first, then variants), and the first open goal with its
+declarations and hypotheses, labelled `H1`, `H2`, ... in order. The planner is a stateful proof agent
+(design plan §15.1), the one role that sees the original problem.
+
+The output is validated as section 2.5 of the design says: form rules, the QED rule, contiguous
+sub-proofs, depth and size limits, and Lamport's scope for every `by.facts` and `actsOn` entry; every
+`by.results` entry must be a result the planner was shown. A plan that breaks a rule is recorded and
+answered `422` with the diagnostic naming the step.
+
+The request waits up to 15 seconds (the service option `planAnswerWaitMs`). A plan written in time
+is answered `200`; otherwise `202 { status: "planning", callId }`, while the durable call continues.
+`GET /proof-sessions/:sessionId/ai/proof-plan/:callId` then answers `{ status: "planning" }` until the
+call is stored, and the plan afterwards. A plan is answered as `status: "planned"` with:
+
+- `plan`: the stored plan (`theorem`, `sketch`, `steps`);
+- `numbers`: each step's Lamport number (`⟨level⟩index`) and level;
+- `units`: the walking order, each with its focus key (`theorem` or `case:<label>`) and, for a local
+  `assume` lemma or a `have` proved by backward steps, why it is `unsupported`;
+- `rendered`: each statement's LaTeX serialized from its parsed MathJSON, or `null` when it does not
+  parse. Clients typeset only this, never the model's own LaTeX;
+- `warnings`: the fields whose LaTeX does not parse in the session's notation.
+
+`insufficient-context` and `declined` are answered `200` with the planner's `result`.
+
+### Translate one move
+
+`POST /proof-sessions/:sessionId/ai/proof-plan/translate` accepts:
+
+```json
+{
+  "id": "llm-call:translate-1",
+  "planCallId": "llm-call:plan-1",
+  "stepId": "have-q",
+  "expectedCurrentNodeId": "node:current",
+  "start": { "nodeId": "node:unit-start", "focusTargetId": "goal:main" },
+  "movesSoFar": ["Expand conjunction hypothesis — on p\\land q"],
+  "refs": { "intro": ["statement:..."] },
+  "chosenCandidateId": "candidate:3"
+}
+```
+
+The plan is read from the stored call, never from the request. `start` is where the unit began; the
+worker follows its focus to the current node (a goal keeps its ID when a move updates it and is
+replaced by the goals a move creates). `refs` names the hypotheses earlier units reported for their
+step labels, so `actsOn` entries resolve to statements. The answer is `200` with one `status`:
+
+- `realized`: the deterministic check of section 3.3 found the unit's effect, with no model call;
+  `outputs` gives the goal later steps work on (`focusTargetId`), the case goals (`caseTargets`) and
+  the hypotheses the step's label now names (`produced`).
+- `unsupported` (the unit's `reason`) and `stuck` (four moves were applied without realizing the
+  unit, or its goal is closed but its claim is not established).
+- `no-move`: no displayed suggestion applies to the focused goal (no model call), or Jev chose
+  `outcome:no-move` with enough confidence.
+- `uncertain`: Jev's best answer is below the threshold; `alternatives` are its three best
+  candidates.
+- `missing-construction`: the chosen move needs a menu value and Jev chose `outcome:no-fitting-item`
+  (or was unsure), with the menu.
+- `proposed`: a previewed move. `choice` is the candidate (label, artifact, selected fragments in
+  LaTeX), `alternatives` the next best, `menuChoices` the items Jev chose, `actor` who stands behind
+  it, and `preview` the ordinary move preview. Nothing was committed.
+
+Candidates are computed as section 3.2 says, through the same pure retrieval as a suggestion request,
+recording nothing; `move:mark-sorry` and `move:close-by-accepted-inference` are never offered, nor is
+a suggestion with an unresolved selection slot. The action call's envelope (role `step-translator`,
+`kind: "action"`) carries the selection sets and, for each candidate, its set and its position in
+that set's list, so the stored call alone says what each candidate is. For the chosen candidate the
+worker records its suggestion set (`suggestion-set:<callId>:<set>`) and previews command
+`command:<callId>:<candidate>`; when the preview asks for menus, one more Jev call per round
+(`<callId>:menus:<candidate>:<round>`, `kind: "menus"`, at most three rounds) chooses the items.
+`chosenCandidateId` previews another candidate of the same stored action call (a replay, so no model
+call); the person then stands behind the move. Jev never sees the problem, the rest of the plan or
+other branches.
+
+### Apply
+
+`POST /proof-sessions/:sessionId/ai/proof-plan/apply` accepts `{ "callId", "candidateId",
+"expectedCurrentNodeId" }`. The worker reads the action call, the recorded suggestion set and the
+menu calls, re-derives the command, and commits it through the ordinary command path: as
+`actor:proof-planner` (kind `agent`) when the candidate is Jev's confident choice, otherwise as the
+person (`actor:web`). `201 { status: "applied", nodeId, receipt }`; a retry replays the recorded
+command (`200`). A call that is not a validated translation is `409 move-not-applicable`, one that was
+not previewed `409 move-not-previewed`, and one translated at another node `409 stale-evidence`.
+
+The calls are session-owned evidence and are exported with the session artifact under `llmCalls`.
+Edges keep their ordinary suggestion references; the suggestion-set ID names the translation call.
+
 ## Web interface
 
 The web application relays these routes through same-origin proxies (`/api/ai/background`,
@@ -986,6 +1092,20 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
   notation. A preview that would add a constant says so in the preview card. Top-ups appear in the library drawer as ordinary
   additions (origin `service`), with no AI badge.
 - A role that is not configured shows its control disabled with an explanation.
+- **Proof plan.** A panel under the move instructions, relayed through
+  `/api/proof-sessions/:sessionId/ai-proof-plan` (and `…/ai-proof-plan/:callId` to read a plan back),
+  `…/ai-proof-plan-translate` and `…/ai-proof-plan-apply`. It is enabled when both the planner and the
+  step translator are configured, and says why otherwise. "Write a proof plan" asks for a plan and
+  polls every three seconds while it is being written. The plan is shown as Lamport's tree: number,
+  form keyword, statement (typeset from `rendered`, prose otherwise), "Why:" (the motivation) and
+  "By:" (the justification), with the current step marked and every step's status in words.
+  "Next move" translates one move and shows it with Jev's confidence, the transition class and the
+  alternatives; "Apply" commits it, "Choose this instead" previews an alternative as the person's
+  own choice, "Skip step" moves on, and "Run to the end" repeats until a step stops. A stopped step
+  says why ("This step needs a move the platform does not have.", …) and still offers its
+  alternatives. "Missing moves" lists the reported steps and copies them as JSON. The walk is kept in
+  the tab's session storage; when the proof changed outside the plan, the panel says so and offers
+  "Continue from here".
 
 - **Save as reusable move.** After a described step is applied, the move-instructions panel offers
   "Save as reusable move" inline (with the hint "Turn this step into a general move you can reuse.

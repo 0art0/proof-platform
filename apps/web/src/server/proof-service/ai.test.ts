@@ -35,6 +35,8 @@ describe("readAiCapabilities", () => {
           "move-shortlister": true,
           "move-executor": true,
           "move-author": true,
+          "proof-planner": true,
+          "step-translator": false,
           attestor: true,
         },
       },
@@ -47,6 +49,8 @@ describe("readAiCapabilities", () => {
       "move-shortlister": true,
       "move-executor": true,
       "move-author": true,
+      "proof-planner": true,
+      "step-translator": false,
     });
   });
 
@@ -78,12 +82,34 @@ describe("relayAiRequest", () => {
     ["execute-apply", "/proof-sessions/session%3Aa/ai/execute/apply"],
     ["move-author", "/proof-sessions/session%3Aa/ai/move-author"],
     ["library-top-up", "/proof-sessions/session%3Aa/ai/library/top-up"],
+    ["proof-plan", "/proof-sessions/session%3Aa/ai/proof-plan"],
+    ["proof-plan-translate", "/proof-sessions/session%3Aa/ai/proof-plan/translate"],
+    ["proof-plan-apply", "/proof-sessions/session%3Aa/ai/proof-plan/apply"],
   ] as const)("posts a %s request to its worker path", async (kind, path) => {
     const fetchMock = stubWorker({ status: "previewed", callId: "llm-call:x" }, 200);
     await relayAiRequest({ kind, sessionId: "session:a" }, { id: 1 });
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(String(url)).toBe(`http://proof-worker.test${path}`);
     expect(init.method).toBe("POST");
+  });
+
+  it("reads a stored plan back with a GET and relays a 202 planning answer", async () => {
+    const fetchMock = stubWorker({ status: "planning", callId: "llm-call:p" }, 202);
+    const answer = await relayAiRequest(
+      { kind: "proof-plan-read", sessionId: "session:a", callId: "llm-call:p" },
+      {},
+    );
+    expect(answer).toEqual({
+      ok: true,
+      status: 202,
+      body: { status: "planning", callId: "llm-call:p" },
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe(
+      "http://proof-worker.test/proof-sessions/session%3Aa/ai/proof-plan/llm-call%3Ap",
+    );
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
   });
 
   it.each([

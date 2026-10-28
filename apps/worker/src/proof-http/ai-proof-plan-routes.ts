@@ -11,6 +11,7 @@
  *   re-derived from the stored calls and the recorded suggestion set, never taken from the client.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   DEFAULT_TRANSLATOR_MIN_CONFIDENCE,
   MAX_TRANSLATOR_MENUS,
@@ -48,6 +49,7 @@ import {
   followFocus,
   latexRenderer,
   plannerContext,
+  renderedLatex,
   unparsedLatex,
 } from "../proof-plan-walk";
 import {
@@ -77,6 +79,7 @@ const WEB_ACTOR = actorSchema.parse({ id: "actor:web", kind: "human" });
 
 /** A unit that needs more moves than this is reported as stuck. */
 export const MAX_MOVES_PER_UNIT = 4;
+const DEFAULT_PLAN_ANSWER_WAIT_MS = 15_000;
 const MAX_MENU_ROUNDS = 3;
 const ALTERNATIVES_SHOWN = 3;
 
@@ -224,6 +227,7 @@ function planView(
       field,
       message: `The LaTeX of ${field} does not parse in this session's notation; it is kept as prose.`,
     })),
+    rendered: renderedLatex(plan, operators),
   };
 }
 
@@ -328,7 +332,25 @@ export async function writeProofPlan(
   if (!envelope.ok) return writeJson(response, 400, { diagnostics: envelope.diagnostics });
   const prepared = prepareLlmCall(envelope.envelope);
   if (!prepared.ok) return writeJson(response, 400, { diagnostics: prepared.diagnostics });
-  const run = await runCall(context, sessionId, prepared.call, configured);
+  // Writing a whole proof can outlast an HTTP exchange. The durable call keeps running; a request
+  // that is not answered in time says so, and the plan is read back by its call ID.
+  const pending = runCall(context, sessionId, prepared.call, configured).catch((): RunOutcome => ({
+    ok: false,
+    outcome: { status: 500, body: problem("Planning failed.") },
+  }));
+  const stopWaiting = new AbortController();
+  const waited = delay(context.planAnswerWaitMs ?? DEFAULT_PLAN_ANSWER_WAIT_MS, undefined, {
+    signal: stopWaiting.signal,
+  }).catch(() => undefined);
+  const run = await Promise.race([pending, waited]);
+  stopWaiting.abort();
+  if (run === undefined) {
+    return writeJson(response, 202, {
+      status: "planning",
+      callId: prepared.call.id,
+      diagnostics: [],
+    });
+  }
   if (!run.ok) return replyRun(response, run);
   writePlanEvidence(response, run.record, run.replayed, operators);
 }
@@ -390,6 +412,9 @@ export async function readProofPlan(
   const read = await readLlmCall(context.llmCalls, sessionOwner(sessionId), callId);
   if (read.status !== "found")
     return writeJson(response, repositoryStatus(read), { diagnostics: read.diagnostics });
+  if (read.record.role === "proof-planner" && read.record.status === "dispatching") {
+    return writeJson(response, 200, { status: "planning", callId, diagnostics: [] });
+  }
   if (read.record.role !== "proof-planner" || read.record.status !== "completed") {
     return reply(
       response,
