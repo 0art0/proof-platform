@@ -55,14 +55,8 @@ import {
   type StoredLlmCall,
 } from "../llm-call-repository";
 import { loadCurrentProofSession, type ProofSession } from "../proof-repository";
-import {
-  admitProviderCall,
-  LIMIT_MESSAGE,
-  problem,
-  readBody,
-  repositoryStatus,
-  writeJson,
-} from "./ai-http";
+import { admitProviderCall, LIMIT_MESSAGE, problem, readBody, repositoryStatus } from "./ai-http";
+import { writeJson } from "./http-util";
 import {
   proofHttpSelectionDescriptorSchema,
   repositoryFailureStatus,

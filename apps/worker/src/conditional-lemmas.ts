@@ -32,7 +32,6 @@ import {
   type ConservativeHypothesisUse,
   type ProofNode,
 } from "@proof/protocol";
-import type { DefinitionCatalog } from "./approved-catalog";
 import {
   addLibraryArtifact,
   listLibrary,
@@ -41,7 +40,6 @@ import {
   type LibraryStore,
 } from "./library-repository";
 import type { ProofSession } from "./proof-repository";
-import { withSessionResults } from "./session-results";
 
 export type LemmaFailureCode =
   | "lemma-target-not-found"
@@ -479,12 +477,4 @@ export function approvedDerivedResults(
       result.review?.decision === "approved" &&
       drafts.has(result.review.reviewOf),
   );
-}
-
-/** A definition catalog whose approved results also include the session's approved lemmas. */
-export function withApprovedLemmas(
-  base: DefinitionCatalog,
-  lemmas: readonly LibraryResult[],
-): DefinitionCatalog {
-  return withSessionResults(base, lemmas);
 }

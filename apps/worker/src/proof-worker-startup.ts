@@ -43,13 +43,14 @@ export type ProofStoreSelection =
 export function selectProofStore(env: ProofWorkerEnvironment): ProofStoreSelection {
   const requested = env.PROOF_STORE === undefined ? undefined : env.PROOF_STORE.trim();
   if (requested === "memory") {
-    const store = new MemoryLibraryStore();
+    const llmCalls = new MemoryLlmCallStore();
+    const store = new MemoryLibraryStore({ llmCalls });
     return Object.freeze({
       ok: true as const,
       kind: "memory" as const,
       store,
       library: store,
-      llmCalls: new MemoryLlmCallStore(),
+      llmCalls,
       prepareSchema: async () => undefined,
       close: async () => undefined,
     });

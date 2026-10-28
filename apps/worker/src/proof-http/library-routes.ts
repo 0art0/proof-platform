@@ -26,6 +26,7 @@ import {
   type ProofSessionId,
 } from "../proof-repository";
 import { readSessionConstants } from "./ai-library-top-up-routes";
+import { pathSegments, writeJson } from "./http-util";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 export type LibraryEntrySource = "approved-catalog" | "stored-library";
@@ -173,22 +174,4 @@ async function readEvents(
 
 function failure(code: string, message: string): Failure {
   return { status: "rejected", diagnostics: [{ code, message }] };
-}
-
-function pathSegments(requestTarget: string | undefined): string[] | undefined {
-  try {
-    return new URL(requestTarget ?? "/", "http://proof.local").pathname
-      .split("/")
-      .filter((segment) => segment.length > 0)
-      .map((segment) => decodeURIComponent(segment));
-  } catch {
-    return undefined;
-  }
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(body));
 }

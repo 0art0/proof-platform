@@ -43,6 +43,7 @@ import {
 import type { ApprovedInitialLibrary } from "../library-proposal";
 import { approveProblemSession, problemSetupOptions, validateProblemDraft } from "../problem-setup";
 import { proofSessionSchema, type ProofSession } from "../proof-repository";
+import { readJsonBody, writeJson } from "./http-util";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
@@ -300,32 +301,9 @@ async function readStrictJson<Output>(
   request: IncomingMessage,
   schema: z.ZodType<Output>,
 ): Promise<StrictJson<Output>> {
-  const mediaType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
-  if (mediaType !== "application/json") {
-    return { ok: false, status: 415, message: "Content-Type must be application/json." };
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  try {
-    for await (const input of request) {
-      const chunk = Buffer.isBuffer(input) ? input : Buffer.from(input as Uint8Array);
-      size += chunk.byteLength;
-      if (size <= MAX_REQUEST_BODY_BYTES) chunks.push(chunk);
-    }
-  } catch {
-    return { ok: false, status: 400, message: "The JSON request body could not be read." };
-  }
-  if (size > MAX_REQUEST_BODY_BYTES) {
-    return { ok: false, status: 413, message: "The JSON request body is too large." };
-  }
-  if (size === 0) return { ok: false, status: 400, message: "A JSON request body is required." };
-  let value: unknown;
-  try {
-    value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  } catch {
-    return { ok: false, status: 400, message: "The JSON request body is malformed." };
-  }
-  const parsed = schema.safeParse(value);
+  const body = await readJsonBody(request, { maxBytes: MAX_REQUEST_BODY_BYTES });
+  if (!body.ok) return body;
+  const parsed = schema.safeParse(body.value);
   return parsed.success
     ? { ok: true, value: parsed.data }
     : { ok: false, status: 400, message: "The JSON request does not match its strict schema." };
@@ -333,13 +311,6 @@ async function readStrictJson<Output>(
 
 function invalidRequest(message: string): unknown {
   return { diagnostics: [{ code: "invalid-request", message }] };
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(body));
 }
 
 function writeValidatedJson<Output>(

@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { validateMoveTemplate } from "@proof/moves/authoring";
 import { readAuthoredMoves, sessionDefinitions } from "../move-authoring";
 import { loadSession, proofSessionIdSchema, transactionFailure } from "../proof-repository";
+import { pathSegments, writeJson, readJsonBody } from "./http-util";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -112,7 +113,7 @@ async function handleValidate(
   response: ServerResponse,
   sessionId: string,
 ): Promise<void> {
-  const body = await readBody(request);
+  const body = await readJsonBody(request, { maxBytes: MAX_BODY_BYTES });
   if (!body.ok) {
     writeJson(response, body.status, {
       diagnostics: [{ code: "invalid-request", message: body.message }],
@@ -150,47 +151,4 @@ async function handleValidate(
       ? { sessionId, ok: true, report: validation.report }
       : { sessionId, ok: false, diagnostics: validation.diagnostics },
   );
-}
-
-type Body =
-  Readonly<{ ok: true; value: unknown }> | Readonly<{ ok: false; status: number; message: string }>;
-
-async function readBody(request: IncomingMessage): Promise<Body> {
-  const contentType = request.headers["content-type"] ?? "";
-  if (!contentType.toLowerCase().startsWith("application/json")) {
-    return { ok: false, status: 415, message: "Content-Type must be application/json." };
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.from(chunk as Uint8Array);
-    size += buffer.length;
-    if (size > MAX_BODY_BYTES) {
-      return { ok: false, status: 413, message: "The request body is too large." };
-    }
-    chunks.push(buffer);
-  }
-  try {
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "The request body is not valid JSON." };
-  }
-}
-
-function pathSegments(requestTarget: string | undefined): string[] | undefined {
-  try {
-    return new URL(requestTarget ?? "/", "http://proof.local").pathname
-      .split("/")
-      .filter((segment) => segment.length > 0)
-      .map((segment) => decodeURIComponent(segment));
-  } catch {
-    return undefined;
-  }
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(body));
 }

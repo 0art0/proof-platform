@@ -26,14 +26,8 @@ import { readLlmCall, runDurableLlmCall, type LlmCallOwner } from "../llm-call-r
 import { runExecutorPlan } from "../move-executor";
 import { executeProposalPlan, loadCurrentProofSession } from "../proof-repository";
 import { catalogOperators, sequenceConstants } from "../session-constants";
-import {
-  admitProviderCall,
-  LIMIT_MESSAGE,
-  problem,
-  readBody,
-  repositoryStatus,
-  writeJson,
-} from "./ai-http";
+import { admitProviderCall, LIMIT_MESSAGE, problem, readBody, repositoryStatus } from "./ai-http";
+import { writeJson } from "./http-util";
 import {
   proofHttpSelectionDescriptorSchema,
   repositoryFailureStatus,

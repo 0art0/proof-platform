@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { proofSessionIdSchema } from "../proof-repository";
 import { deleteProofSession, readSessionVisibility, setSessionVisibility } from "../session-admin";
+import { pathSegments, readJsonBody, writeJson } from "./http-util";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 const MAX_BODY_BYTES = 4 * 1024;
@@ -60,12 +61,7 @@ export async function handleSessionAdminRoute(
     methodNotAllowed(response, "GET, PATCH");
     return true;
   }
-  const mediaType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
-  if (mediaType !== "application/json") {
-    writeInvalid(response, 415, "Content-Type must be application/json.");
-    return true;
-  }
-  const body = await readJson(request);
+  const body = await readJsonBody(request, { maxBytes: MAX_BODY_BYTES });
   if (!body.ok) {
     writeInvalid(response, body.status, body.message);
     return true;
@@ -91,41 +87,6 @@ function writeVisibility(
   writeJson(response, 200, { sessionId: result.sessionId, visibility: result.visibility });
 }
 
-function pathSegments(requestTarget: string | undefined): string[] | undefined {
-  try {
-    return new URL(requestTarget ?? "/", "http://proof.local").pathname
-      .split("/")
-      .filter((segment) => segment.length > 0)
-      .map((segment) => decodeURIComponent(segment));
-  } catch {
-    return undefined;
-  }
-}
-
-type JsonBody =
-  | Readonly<{ ok: true; value: unknown }>
-  | Readonly<{ ok: false; status: 400 | 413; message: string }>;
-
-async function readJson(request: IncomingMessage): Promise<JsonBody> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  try {
-    for await (const input of request) {
-      const chunk = Buffer.isBuffer(input) ? input : Buffer.from(input as Uint8Array);
-      size += chunk.byteLength;
-      if (size <= MAX_BODY_BYTES) chunks.push(chunk);
-    }
-  } catch {
-    return { ok: false, status: 400, message: "The request body could not be read." };
-  }
-  if (size > MAX_BODY_BYTES) return { ok: false, status: 413, message: "The body is too large." };
-  try {
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "A valid JSON body is required." };
-  }
-}
-
 function writeInvalid(response: ServerResponse, status: number, message: string): void {
   writeJson(response, status, { diagnostics: [{ code: "invalid-request", message }] });
 }
@@ -135,11 +96,4 @@ function methodNotAllowed(response: ServerResponse, allow: string): void {
   writeJson(response, 405, {
     diagnostics: [{ code: "method-not-allowed", message: `Use ${allow}.` }],
   });
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(body));
 }

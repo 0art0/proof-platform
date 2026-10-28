@@ -52,12 +52,11 @@ import {
   WEB_REVIEWER_ID,
   admitProviderCall,
   methodNotAllowed,
-  pathSegments,
   problem,
   readBody,
   repositoryStatus,
-  writeJson,
 } from "./ai-http";
+import { pathSegments, writeJson } from "./http-util";
 import { decideLibrary, proposeLibrary } from "./ai-library-routes";
 import { topUpLibrary } from "./ai-library-top-up-routes";
 import {

@@ -17,6 +17,7 @@ import {
   type TransitionEvent,
 } from "@proof/protocol";
 import type { SemanticReplayStepRecord } from "@proof/protocol";
+import type { MemoryLlmCallStore } from "./memory-llm-call-store";
 import {
   ProofStoreTransactionError,
   guardReadOnlySessions,
@@ -126,6 +127,13 @@ export class MemoryProofStore implements ProofStore {
   };
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
+  /**
+   * @param options.llmCalls The in-memory LLM evidence store of the same worker. PostgreSQL keeps
+   *   that evidence in the same database and `deleteSession` removes what the session owns; sharing
+   *   the store here makes the memory deletion remove the same evidence.
+   */
+  constructor(private readonly options: Readonly<{ llmCalls?: MemoryLlmCallStore }> = {}) {}
+
   async transaction<Result>(
     work: (transaction: ProofStoreTransaction) => Promise<Result>,
   ): Promise<Result> {
@@ -145,7 +153,10 @@ export class MemoryProofStore implements ProofStore {
         );
       }
       context.commit();
-      if (context.deletedSessions.size > 0) this.sessionsDeleted(context.deletedSessions);
+      if (context.deletedSessions.size > 0) {
+        this.sessionsDeleted(context.deletedSessions);
+        await this.options.llmCalls?.deleteProofSessionEvidence(context.deletedSessions);
+      }
       return result;
     } finally {
       context.close();

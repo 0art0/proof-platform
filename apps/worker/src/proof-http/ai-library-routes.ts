@@ -41,8 +41,8 @@ import {
   problem,
   readBody,
   repositoryStatus,
-  writeJson,
 } from "./ai-http";
+import { writeJson } from "./http-util";
 import { type ServiceContext } from "./shared";
 
 const libraryRequestSchema = z
