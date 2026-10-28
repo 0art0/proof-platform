@@ -675,13 +675,6 @@ export function parseStatementView(
   return parsed.success ? parsed.data : undefined;
 }
 
-export function isStatementView(
-  value: unknown,
-  environment: StatementEnvironment = {},
-): value is StatementView {
-  return createStatementViewSchema(environment).safeParse(value).success;
-}
-
 type ValidatedStatementEnvironment = Readonly<{
   declarations: readonly Declaration[];
   operators: readonly OperatorDeclaration[];
@@ -1683,8 +1676,6 @@ export function createContextualSequentSchema(
     addStatementIssues(sequent, operators, context);
   });
 }
-
-export const contextualSequentSchema = createContextualSequentSchema();
 
 function addStatementIssues(
   sequent: ContextualSequent,

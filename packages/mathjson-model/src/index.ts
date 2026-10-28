@@ -211,7 +211,11 @@ export function mathJsonEquals(left: PlainMathJson, right: PlainMathJson): boole
   return leftKeys.every((key) => jsonValueEquals(leftRecord[key], rightRecord[key]));
 }
 
-function jsonValueEquals(left: unknown, right: unknown): boolean {
+/**
+ * Structural equality of plain JSON data, independent of object key order. Records must be plain
+ * objects; a key whose value is `undefined` still counts as a key.
+ */
+export function jsonValueEquals(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
     return (
@@ -230,6 +234,17 @@ function jsonValueEquals(left: unknown, right: unknown): boolean {
       (key, index) => key === rightKeys[index] && jsonValueEquals(left[key], right[key]),
     )
   );
+}
+
+/** Recursively freezes own data properties in place (cycle-safe) and returns the same value. */
+export function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  seen.add(value);
+  Reflect.ownKeys(value).forEach((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
+  });
+  return Object.freeze(value);
 }
 
 /**

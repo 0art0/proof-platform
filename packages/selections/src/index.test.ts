@@ -192,6 +192,112 @@ describe("visible fallback semantics", () => {
       path: [0],
     });
   });
+
+  it("snaps to the smallest subtree that contains every requested leaf", () => {
+    expect(resolveSelection(statement, ["Subtract", 3, "y"])).toMatchObject({
+      kind: "fallback",
+      path: [0, 1],
+      fragment: ["Multiply", 3, "y"],
+      reason: expect.stringContaining("snapped to the nearest subtree"),
+    });
+  });
+
+  it("says so when a requested leaf is absent from the expression", () => {
+    const requested: PlainMathJson = ["Subtract", 2, "absent"];
+    const resolved = resolveSelection(statement, requested);
+
+    expect(resolved).toMatchObject({
+      kind: "fallback",
+      path: [],
+      fragment: statement,
+      requestedFragment: requested,
+    });
+    if (resolved.kind !== "fallback") throw new Error("expected a fallback selection");
+    expect(resolved.reason).toContain("do not all occur in the expression");
+    expect(resolved.reason).not.toContain("snapped to the nearest subtree");
+
+    expect(resolveSelection(statement, "absent")).toMatchObject({
+      kind: "fallback",
+      path: [],
+      reason: expect.stringContaining("do not all occur in the expression"),
+    });
+  });
+
+  it("does not report a miss when the hinted paths place the range", () => {
+    const resolved = resolveSelection(statement, ["Subtract", 2, "absent"], {
+      paths: [[0, 0, 1]],
+    });
+    expect(resolved).toMatchObject({ kind: "fallback", path: [0, 0, 1] });
+    if (resolved.kind !== "fallback") throw new Error("expected a fallback selection");
+    expect(resolved.reason).toContain("snapped to the nearest subtree");
+  });
+});
+
+describe("associative range matching", () => {
+  it("chooses among repeated windows by occurrence", () => {
+    const expression: PlainMathJson = ["Add", "a", "b", "a", "b", "c"];
+    expect(resolveSelection(expression, ["Add", "a", "b"])).toMatchObject({
+      kind: "associative",
+      startOperand: 0,
+      endOperand: 2,
+    });
+    expect(resolveSelection(expression, ["Add", "a", "b"], { occurrence: 1 })).toMatchObject({
+      kind: "associative",
+      startOperand: 2,
+      endOperand: 4,
+    });
+  });
+
+  it("only matches a range whose operator is the container's", () => {
+    expect(resolveSelection(["Add", "a", "b", "c"], ["Multiply", "a", "b"])).toMatchObject({
+      kind: "fallback",
+      path: [],
+    });
+    expect(resolveSelection(["Add", "a", "b", "c"], ["Add", "a", "c"])).toMatchObject({
+      kind: "fallback",
+    });
+  });
+
+  it("keeps an object-form container's metadata in the lens fragment", () => {
+    const expression: PlainMathJson = { fn: ["Add", "a", "b", "c"], comment: "kept" };
+    expect(resolveSelection(expression, ["Add", "b", "c"])).toMatchObject({ kind: "fallback" });
+    expect(resolveSelection(expression, { fn: ["Add", "b", "c"], comment: "kept" })).toMatchObject({
+      kind: "associative",
+      startOperand: 1,
+      endOperand: 3,
+    });
+  });
+
+  it("finds the first matching window of any integer list", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 3, maxLength: 9 }),
+        fc.nat(),
+        fc.nat(),
+        (operands, startSeed, widthSeed) => {
+          const width = 2 + (widthSeed % (operands.length - 1));
+          const start = startSeed % (operands.length - width + 1);
+          const window = operands.slice(start, start + width);
+          const expression: PlainMathJson = ["Add", ...operands];
+          const fragment: PlainMathJson = ["Add", ...window];
+
+          const first = operands.findIndex((_value, index) =>
+            window.every((value, offset) => operands[index + offset] === value),
+          );
+          const resolved = resolveSelection(expression, fragment);
+          if (width === operands.length) {
+            expect(resolved).toMatchObject({ kind: "exact", path: [] });
+          } else {
+            expect(resolved).toMatchObject({
+              kind: "associative",
+              startOperand: first,
+              endOperand: first + width,
+            });
+          }
+        },
+      ),
+    );
+  });
 });
 
 const realSort = { kind: "named", id: "sort:real" } as const;

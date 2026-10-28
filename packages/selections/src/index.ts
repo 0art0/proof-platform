@@ -3,6 +3,7 @@ import {
   builtinBinderSorts,
   constructionPlaceholderOperators,
   createProofStateSchema,
+  deepFreeze,
   mathJsonEquals,
   readBinderDeclaration,
   operatorDeclarationsSchema,
@@ -320,14 +321,17 @@ export function resolveSelection(
   const associative = findAssociativeSelections(expression, requestedFragment, hint.displayRange);
   if (associative.length > 0) return chooseLens(associative, hint);
 
-  const fallbackPath = fallbackPathFor(expression, requestedFragment, hint.paths ?? []);
+  const snappedPath = fallbackPathFor(expression, requestedFragment, hint.paths ?? []);
+  const fallbackPath = snappedPath ?? [];
   return {
     kind: "fallback",
     path: fallbackPath,
     fragment: expressionAtPath(expression, fallbackPath) ?? expression,
     requestedFragment,
     reason:
-      "The displayed range was not an exact subtree or a supported contiguous associative range, so it was snapped to the nearest subtree.",
+      snappedPath === undefined
+        ? "The requested fragment's leaves do not all occur in the expression, so no subtree could be matched and the selection fell back to the whole expression."
+        : "The displayed range was not an exact subtree or a supported contiguous associative range, so it was snapped to the nearest subtree.",
     ...(hint.displayRange === undefined ? {} : { displayRange: hint.displayRange }),
   };
 }
@@ -361,17 +365,31 @@ function findAssociativeSelections(
   fragment: PlainMathJson,
   displayRange?: DisplayRange,
 ): readonly AssociativeSelectionLens[] {
+  const fragmentParts = functionParts(fragment);
+  if (
+    !fragmentParts ||
+    !isAssociativeOperator(fragmentParts.operator) ||
+    fragmentParts.operands.length < 2
+  ) {
+    return [];
+  }
+  const width = fragmentParts.operands.length;
   const matches: AssociativeSelectionLens[] = [];
 
   walkExpressions(expression, [], (candidate, path) => {
     const parts = functionParts(candidate);
-    if (!parts || !isAssociativeOperator(parts.operator)) return;
+    if (!parts || parts.operator !== fragmentParts.operator) return;
 
-    for (let start = 0; start < parts.operands.length; start += 1) {
-      for (let end = start + 2; end <= parts.operands.length; end += 1) {
-        const lens = createAssociativeSelection(expression, path, start, end, displayRange);
-        if (lens && mathJsonEquals(lens.fragment, fragment)) matches.push(lens);
-      }
+    // Only a window as wide as the fragment can match, and only when its operands are equal one by
+    // one. The lens fragment is still compared whole, because an object-form container carries
+    // its own metadata into the fragment.
+    for (let start = 0; start + width <= parts.operands.length; start += 1) {
+      const sameOperands = fragmentParts.operands.every((operand, offset) =>
+        mathJsonEquals(parts.operands[start + offset] as PlainMathJson, operand),
+      );
+      if (!sameOperands) continue;
+      const lens = createAssociativeSelection(expression, path, start, start + width, displayRange);
+      if (lens && mathJsonEquals(lens.fragment, fragment)) matches.push(lens);
     }
   });
 
@@ -393,30 +411,54 @@ function chooseLens(
   return candidates[occurrence] ?? candidates[0] ?? lenses[0]!;
 }
 
+/**
+ * The subtree a range snaps to: the common ancestor of the hinted paths, else the smallest (then
+ * deepest, then leftmost) subtree whose leaves contain the requested leaves. Undefined when no
+ * subtree, not even the root, contains them.
+ */
 function fallbackPathFor(
   expression: PlainMathJson,
   requestedFragment: PlainMathJson,
   hintedPaths: readonly OperandPath[],
-): OperandPath {
+): OperandPath | undefined {
   const validHints = hintedPaths.filter(
     (path) => expressionPathIsUsable(path) && expressionAtPath(expression, path) !== undefined,
   );
   if (validHints.length > 0) return commonAncestor(validHints);
 
-  const requestedLeaves = leafCounts(requestedFragment);
+  const requested = leafCounts(requestedFragment).counts;
   let best: Readonly<{ path: OperandPath; leafCount: number }> | undefined;
-  walkExpressions(expression, [], (candidate, path) => {
-    const candidateLeaves = leafCounts(candidate);
-    if (!containsCounts(candidateLeaves.counts, requestedLeaves.counts)) return;
-    if (
-      !best ||
-      candidateLeaves.total < best.leafCount ||
-      (candidateLeaves.total === best.leafCount && path.length > best.path.length)
-    ) {
-      best = { path, leafCount: candidateLeaves.total };
+  // Leaf counts are accumulated bottom-up in one walk, tracking only the requested leaves.
+  const visit = (
+    candidate: PlainMathJson,
+    path: OperandPath,
+  ): Readonly<{ counts: ReadonlyMap<string, number>; total: number }> => {
+    const parts = functionParts(candidate);
+    const counts = new Map<string, number>();
+    let total = 0;
+    if (parts) {
+      parts.operands.forEach((operand, index) => {
+        const child = visit(operand, [...path, index]);
+        total += child.total;
+        for (const [key, count] of child.counts) counts.set(key, (counts.get(key) ?? 0) + count);
+      });
+    } else {
+      total = 1;
+      const key = JSON.stringify(candidate);
+      if (requested.has(key)) counts.set(key, 1);
     }
-  });
-  return best?.path ?? [];
+    if (
+      containsCounts(counts, requested) &&
+      (!best ||
+        total < best.leafCount ||
+        (total === best.leafCount && path.length > best.path.length))
+    ) {
+      best = { path, leafCount: total };
+    }
+    return { counts, total };
+  };
+  visit(expression, []);
+  return best?.path;
 }
 
 function commonAncestor(paths: readonly OperandPath[]): OperandPath {
@@ -1088,16 +1130,6 @@ function freezeDetached<Value>(value: Value): Value | undefined {
   } catch {
     return undefined;
   }
-}
-
-function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
 }
 
 const RELATION_OPERATORS = new Set([

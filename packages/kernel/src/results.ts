@@ -2,6 +2,7 @@ import {
   createStatementViewSchema,
   declarationIdSchema,
   declarationsSchema,
+  deepFreeze,
   freeSymbolNames,
   freshSymbolName,
   mathJsonEquals,
@@ -671,14 +672,4 @@ function instanceFailure(
 
 function matchFailure(code: ResultMatchDiagnostic["code"], message: string): ResultMatch {
   return { ok: false, diagnostics: [{ code, message }] };
-}
-
-function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
 }

@@ -5,6 +5,8 @@ import {
   applyTransition,
   KERNEL_TRANSITION_CLASSES,
   declaredTransitionClass,
+  hasExactKeys,
+  isStrictRecord,
   kernelOperationSchema,
   type ConstructionOperationKind,
   type KernelEnvironment,
@@ -20,6 +22,7 @@ import {
   type LibraryArtifactReference,
 } from "@proof/library";
 import {
+  deepFreeze,
   plainMathJsonSchema,
   stableIdentifierSchema,
   type ExecutableProofState,
@@ -1152,23 +1155,6 @@ function moveFailure(code: MovePlanDiagnosticCode, message: string): MovePlanRes
   return { ok: false, diagnostics: [{ code, message }] };
 }
 
-function isStrictRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  return Object.values(Object.getOwnPropertyDescriptors(value)).every(
-    (descriptor) => descriptor.enumerable && "value" in descriptor,
-  );
-}
-
-function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
-  const actual = Reflect.ownKeys(value);
-  if (actual.some((key) => typeof key !== "string")) return false;
-  const sorted = (actual as string[]).sort();
-  const expected = [...keys].sort();
-  return sorted.length === expected.length && sorted.every((key, index) => key === expected[index]);
-}
-
 function isJsonData(value: unknown, ancestors: ReadonlySet<object> = new Set()): boolean {
   if (
     value === null ||
@@ -1222,16 +1208,6 @@ function freezeDetached<Value>(value: Value): Value | undefined {
   } catch {
     return undefined;
   }
-}
-
-function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
 }
 
 export * from "./result-adapter";

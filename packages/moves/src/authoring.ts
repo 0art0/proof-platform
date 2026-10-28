@@ -36,6 +36,7 @@
  */
 import {
   alphaEquivalent,
+  functionParts,
   KERNEL_OPERATION_KINDS,
   kernelOperationSchema,
   matchExpressionPattern,
@@ -51,6 +52,7 @@ import {
   constructionRequirementEvidenceSchema,
   createExecutableProofStateSchema,
   RESERVED_BUILTIN_SYMBOLS,
+  jsonValueEquals,
   plainMathJsonSchema,
   sortSchema,
   stableIdentifierSchema,
@@ -62,7 +64,7 @@ import {
 } from "@proof/mathjson-model";
 import { z } from "zod";
 import { instantiateTemplate, metavariablesOf } from "./construction";
-import { expressionAtPath, functionParts } from "./context-terms";
+import { expressionAtPath } from "./context-terms";
 import {
   HAND_AUTHORED_MOVES,
   constructibleParameterKind,
@@ -765,7 +767,7 @@ export function runMovePlan(
   const transitionClass = composeTransitionClasses(classes);
   if (
     chained.preview.transitionClass !== transitionClass ||
-    JSON.stringify(chained.preview.state) !== JSON.stringify(state)
+    !jsonValueEquals(chained.preview.state, state)
   ) {
     return runFailure(
       "plan-inconsistent",
@@ -1121,7 +1123,7 @@ function slotCandidates(
           rank: [
             targetRank,
             statementRank,
-            JSON.stringify(found.occurrence) === JSON.stringify(selection.occurrence) ? 0 : 1,
+            jsonValueEquals(found.occurrence, selection.occurrence) ? 0 : 1,
             entryIndex,
             order,
           ],
@@ -1268,7 +1270,7 @@ function originCorresponds(
           ? candidate.statement.kind === "conclusion"
           : candidate.statement.kind === "hypothesis" &&
             candidate.statement.id === mapped(recorded.statement.id);
-      return same && JSON.stringify(candidate.path) === JSON.stringify(recorded.path);
+      return same && jsonValueEquals(candidate.path, recorded.path);
     }
     case "result":
       return candidate.kind === "result" && candidate.resultId === recorded.resultId;
@@ -1340,7 +1342,7 @@ function valuesEqual(
   ) {
     return alphaEquivalent(left.expression, right.expression, { operators });
   }
-  return JSON.stringify(left) === JSON.stringify(right);
+  return jsonValueEquals(left, right);
 }
 
 function symbolName(expression: PlainMathJson): string | undefined {
@@ -2275,9 +2277,4 @@ function situationShape(
     ];
   });
   return JSON.stringify(statements);
-}
-
-/** The move ID brand of a template, for callers that hold a parsed template. */
-export function authoredMoveId(template: AuthoredMoveTemplate): MoveId {
-  return template.id;
 }

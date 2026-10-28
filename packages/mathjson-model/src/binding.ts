@@ -284,18 +284,30 @@ function substituteExpression(
   if (binding === undefined) return expression;
 
   const renamings = new Map<string, string>();
-  for (const boundName of binding.names) {
-    const captureRisk = [...substitutions.keys()].some((target) => {
-      if (blocked.has(target) || binding.names.has(target)) return false;
-      const replacementNames = replacementFreeSymbols.get(target);
-      if (replacementNames?.has(boundName) !== true) return false;
-      return binding.scopedOperandIndices.some((index) => {
+  const liveTargets = [...substitutions.keys()].filter(
+    (target) => !blocked.has(target) && !binding.names.has(target),
+  );
+  // The symbols free in the scoped operands (with this binder's names bound) do not depend on the
+  // bound name or the target, so collect them at most once, and only if a replacement could clash.
+  let scopedFreeSymbols: ReadonlySet<string> | undefined;
+  const scopedFree = (): ReadonlySet<string> => {
+    if (scopedFreeSymbols === undefined) {
+      const namesBlockedHere = new Set([...blocked, ...binding.names]);
+      const free = new Set<string>();
+      for (const index of binding.scopedOperandIndices) {
         const operand = parts.operands[index];
-        if (operand === undefined) return false;
-        const namesBlockedHere = new Set([...blocked, ...binding.names]);
-        return collectFreeSymbolNames(operand, environment, namesBlockedHere).has(target);
-      });
-    });
+        if (operand !== undefined)
+          collectFreeSymbolNames(operand, environment, namesBlockedHere, free);
+      }
+      scopedFreeSymbols = free;
+    }
+    return scopedFreeSymbols;
+  };
+  for (const boundName of binding.names) {
+    const captureRisk = liveTargets.some(
+      (target) =>
+        replacementFreeSymbols.get(target)?.has(boundName) === true && scopedFree().has(target),
+    );
     if (!captureRisk) continue;
     const fresh = freshSymbolName(boundName, usedNames);
     usedNames.add(fresh);

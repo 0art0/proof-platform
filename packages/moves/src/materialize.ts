@@ -26,9 +26,12 @@ import {
   alphaEquivalent,
   applyTransition,
   freeResultParameters,
+  functionParts,
   kernelOperationSchema,
   matchResultConclusion,
+  operatorOperands,
   parseKernelResultCatalog,
+  symbolValue,
   type KernelEnvironment,
   type KernelOperation,
   type KernelResult,
@@ -45,6 +48,7 @@ import {
   builtinBinderSorts,
   constructionPlaceholderOperators,
   createExecutableProofStateSchema,
+  deepFreeze,
   freeSymbolNames,
   isOpenConstructionTask,
   mathJsonEquals,
@@ -71,12 +75,9 @@ import {
   boundSymbolsAtPath,
   dedupeBy,
   expressionAtPath,
-  functionParts,
-  operatorOperands,
   propositionFilter,
   sortFilter,
   statementOccurrences,
-  symbolValue,
 } from "./context-terms";
 import { bindPatterns, instantiateTemplate } from "./construction";
 import { HAND_AUTHORED_MOVES, type MoveDefinition, type MoveOperationKind } from "./index";
@@ -2424,14 +2425,4 @@ function materializationFailure(
 
 function freezeDetached<Value>(value: Value): Value {
   return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
 }

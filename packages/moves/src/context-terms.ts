@@ -1,4 +1,9 @@
-import type { TransitionStatementTarget } from "@proof/kernel";
+import {
+  functionParts,
+  symbolValue,
+  type FunctionParts,
+  type TransitionStatementTarget,
+} from "@proof/kernel";
 import {
   binderShape,
   createStatementViewSchema,
@@ -13,55 +18,6 @@ import {
   type PlainMathJson,
   type Sort,
 } from "@proof/mathjson-model";
-
-/** Structural view of a MathJSON function node in array or `{ fn }` form. */
-export type FunctionParts = Readonly<{
-  operator: string;
-  operands: readonly PlainMathJson[];
-  rebuild: (operands: readonly PlainMathJson[]) => PlainMathJson;
-}>;
-
-export function functionParts(expression: PlainMathJson): FunctionParts | undefined {
-  if (Array.isArray(expression)) {
-    const operator = expression[0];
-    return typeof operator === "string"
-      ? {
-          operator,
-          operands: expression.slice(1) as readonly PlainMathJson[],
-          rebuild: (operands) => [operator, ...operands],
-        }
-      : undefined;
-  }
-  if (typeof expression !== "object" || expression === null || !("fn" in expression)) {
-    return undefined;
-  }
-  const operator = expression.fn[0];
-  return typeof operator === "string"
-    ? {
-        operator,
-        operands: expression.fn.slice(1),
-        rebuild: (operands) => ({ ...expression, fn: [operator, ...operands] }),
-      }
-    : undefined;
-}
-
-export function operatorOperands(
-  expression: PlainMathJson,
-  operator: string,
-): readonly PlainMathJson[] | undefined {
-  const parts = functionParts(expression);
-  return parts?.operator === operator ? parts.operands : undefined;
-}
-
-export function symbolValue(expression: PlainMathJson): string | undefined {
-  if (typeof expression === "string") return expression;
-  return typeof expression === "object" &&
-    expression !== null &&
-    !Array.isArray(expression) &&
-    "sym" in expression
-    ? expression.sym
-    : undefined;
-}
 
 function binderFor(
   parts: FunctionParts,

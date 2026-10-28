@@ -5,7 +5,12 @@ import {
   type ResultApplicationDirection,
 } from "@proof/kernel";
 import type { LibraryResult } from "@proof/library";
-import type { OperatorDeclaration, PlainMathJson, StatementView } from "@proof/mathjson-model";
+import {
+  deepFreeze,
+  type OperatorDeclaration,
+  type PlainMathJson,
+  type StatementView,
+} from "@proof/mathjson-model";
 
 export type ResultAdapterDiagnostic = Readonly<{
   code: "invalid-result";
@@ -143,14 +148,4 @@ function binaryOperands(
 ): readonly [PlainMathJson, PlainMathJson] | undefined {
   const found = operands(expression, operator);
   return found?.length === 2 ? [found[0] as PlainMathJson, found[1] as PlainMathJson] : undefined;
-}
-
-function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
 }

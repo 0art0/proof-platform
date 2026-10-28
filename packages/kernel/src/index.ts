@@ -68,6 +68,8 @@ import {
 import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 
 export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equivalence";
+export { functionParts, operatorOperands, symbolValue, type FunctionParts } from "./expression";
+export { hasExactKeys, isStrictRecord } from "./runtime";
 export { sorryClosure, type SorryClosure, type SorryClosureResult } from "./obligations";
 export type { RewriteLens, RewriteSource } from "./deep-rewrite";
 export {

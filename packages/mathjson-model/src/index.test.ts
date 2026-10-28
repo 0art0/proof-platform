@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  deepFreeze,
   isPlainMathJson,
+  jsonValueEquals,
   mathJsonEquals,
   parsePlainMathJson,
   renderMathJson,
@@ -78,6 +80,31 @@ describe("plain MathJSON", () => {
     const expression: PlainMathJson = { fn: ["Add", { sym: "x" }, 1], comment: "raw" };
     expect(mathJsonEquals(expression, { comment: "raw", fn: ["Add", { sym: "x" }, 1] })).toBe(true);
     expect(mathJsonEquals(expression, ["Add", "x", 1])).toBe(false);
+  });
+});
+
+describe("plain data helpers", () => {
+  it("compares plain JSON data regardless of key order", () => {
+    expect(jsonValueEquals({ kind: "exact", path: [0, 1] }, { path: [0, 1], kind: "exact" })).toBe(
+      true,
+    );
+    expect(jsonValueEquals({ a: { b: [1, { c: 2 }] } }, { a: { b: [1, { c: 2 }] } })).toBe(true);
+    expect(jsonValueEquals([0, 1], [1, 0])).toBe(false);
+    expect(jsonValueEquals({ a: 1 }, { a: 1, b: 2 })).toBe(false);
+    expect(jsonValueEquals({ a: undefined }, {})).toBe(false);
+    expect(jsonValueEquals([], {})).toBe(false);
+    expect(jsonValueEquals(null, {})).toBe(false);
+  });
+
+  it("freezes nested data in place, including cycles, and returns the same value", () => {
+    const value: { inner: { list: number[] }; self?: unknown } = { inner: { list: [1, 2] } };
+    value.self = value;
+    expect(deepFreeze(value)).toBe(value);
+    expect(Object.isFrozen(value)).toBe(true);
+    expect(Object.isFrozen(value.inner)).toBe(true);
+    expect(Object.isFrozen(value.inner.list)).toBe(true);
+    expect(deepFreeze(3)).toBe(3);
+    expect(deepFreeze(null)).toBeNull();
   });
 });
 

@@ -19,7 +19,11 @@ import {
   type TransitionEvidence,
   composeTransitionClasses,
 } from "@proof/kernel";
-import { stableIdentifierSchema, type ExecutableProofState } from "@proof/mathjson-model";
+import {
+  deepFreeze,
+  stableIdentifierSchema,
+  type ExecutableProofState,
+} from "@proof/mathjson-model";
 import { z } from "zod";
 import { PRIMITIVE_TRANSITION_CLASSES, PRIMITIVE_TRANSITION_EVIDENCE } from "./index";
 
@@ -192,14 +196,4 @@ function sequenceFailure(
     ok: false,
     diagnostics: [{ code, message, ...(stepIndex === undefined ? {} : { stepIndex }) }],
   };
-}
-
-function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
 }

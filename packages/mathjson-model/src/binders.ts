@@ -36,16 +36,6 @@ export type BinderDeclaration = Readonly<{
   outerOperands: readonly number[];
 }>;
 
-/** Built-in binder heads beyond the logical quantifiers (design plan §5.2). */
-export const BUILTIN_BINDER_HEADS: ReadonlySet<string> = new Set([
-  "ForAll",
-  "Exists",
-  "Function",
-  "Sum",
-  "Product",
-  "Integrate",
-]);
-
 const DECLARATION_HEADS: ReadonlyMap<string, Exclude<BinderDeclarationForm, "symbol">> = new Map([
   ["Element", "element"],
   ["Limits", "limits"],
@@ -144,17 +134,6 @@ export function readBinderDeclaration(
     symbol,
     outerOperands: form === "element" ? [1] : [1, 2],
   };
-}
-
-/** Names declared by a binder node's readable bound operands, in binding order. */
-export function binderDeclarations(
-  operands: readonly PlainMathJson[],
-  shape: BinderShape,
-): readonly (BinderDeclaration | undefined)[] {
-  return shape.boundOperands.map((index) => {
-    const operand = operands[index];
-    return operand === undefined ? undefined : readBinderDeclaration(operand, shape.forms);
-  });
 }
 
 function symbolName(expression: PlainMathJson): string | undefined {
