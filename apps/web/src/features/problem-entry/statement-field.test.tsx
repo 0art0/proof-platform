@@ -4,7 +4,12 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLatexRenderer } from "@proof/language";
-import { StatementField, StatementPreview, statementFeedback } from "./statement-field";
+import {
+  StatementField,
+  StatementPreview,
+  cachedStatementFeedback,
+  statementFeedback,
+} from "./statement-field";
 import type { StatementRow } from "./draft-form";
 
 afterEach(cleanup);
@@ -44,6 +49,28 @@ describe("statementFeedback", () => {
     expect(statementFeedback({ format: "latex", text: "  " }, latex)).toEqual({ kind: "empty" });
     expect(statementFeedback({ format: "latex", text: "p \\lor" }, latex).kind).toBe("error");
     expect(statementFeedback({ format: "mathjson", text: '["Or", "p"' }, latex).kind).toBe("error");
+  });
+});
+
+describe("cachedStatementFeedback", () => {
+  it("parses a row object once per renderer and parses an edited row again", () => {
+    // The shared renderer is frozen, so count through a copy of it.
+    const parse = vi.fn(latex.parse);
+    const counted = { ...latex, parse };
+    const row: StatementRow = { key: 1, format: "latex", text: "p \\lor q" };
+
+    const first = cachedStatementFeedback(row, counted);
+    expect(first).toEqual(statementFeedback(row, latex));
+    expect(parse).toHaveBeenCalledOnce();
+    expect(cachedStatementFeedback(row, counted)).toBe(first);
+    expect(parse).toHaveBeenCalledOnce();
+
+    const edited = cachedStatementFeedback({ ...row, text: "p \\land q" }, counted);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(edited).toMatchObject({ kind: "parsed", mathJson: '["And","p","q"]' });
+
+    expect(cachedStatementFeedback(row, { ...counted })).not.toBe(first);
+    expect(parse).toHaveBeenCalledTimes(3);
   });
 });
 

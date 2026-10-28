@@ -264,7 +264,13 @@ describe("proof-service adapter", () => {
   });
 
   it.each([
-    ["unknown diagnostic", { diagnostics: [{ code: "invented", message: "No." }] }],
+    ["malformed diagnostic code", { diagnostics: [{ code: "Not A Code", message: "No." }] }],
+    ["empty diagnostic code", { diagnostics: [{ code: "", message: "No." }] }],
+    [
+      "diagnostic code reserved for this boundary",
+      { diagnostics: [{ code: "invalid_request", message: "No." }] },
+    ],
+    ["empty diagnostic message", { diagnostics: [{ code: "not-found", message: "" }] }],
     ["extra diagnostic field", { diagnostics: [{ code: "not-found", message: "No.", x: 1 }] }],
     [
       "multiple diagnostics",
@@ -283,6 +289,29 @@ describe("proof-service adapter", () => {
       code: "invalid_upstream_response",
     });
   });
+
+  it.each([
+    ["command-deleted", 409, 409, "This command's move was deleted; issue a new command ID."],
+    ["draft-already-reviewed", 409, 409, "The draft was already reviewed."],
+    ["library-admission-rejected", 422, 422, "The library did not admit the result."],
+    ["lemma-not-closed", 422, 422, "The target still has open assumptions."],
+    ["a-code-the-web-has-not-seen", 400, 400, "A refusal with a code added later."],
+    ["internal-error", 500, 502, "The worker failed."],
+  ])(
+    "passes the worker refusal %s through with its message and a public status",
+    async (code, workerStatus, publicStatus, message) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(jsonResponse({ diagnostics: [{ code, message }] }, workerStatus)),
+      );
+
+      await expect(executeStoredProofCommand(SESSION_ID, choice)).rejects.toMatchObject({
+        code,
+        message,
+        status: publicStatus,
+      });
+    },
+  );
 
   it("proxies only the exact descriptor and verifies the complete returned identity", async () => {
     const fetchMock = vi
@@ -904,6 +933,34 @@ describe("proof-service adapter", () => {
     await expect(readCurrentProofSession(SESSION_ID)).rejects.toEqual(
       new ProofServiceError("service_unavailable", "The proof service could not be reached.", 503),
     );
+  });
+
+  it("stops reading an upstream body that declares no length once it passes the limit", async () => {
+    const chunk = new TextEncoder().encode(" ".repeat(64 * 1024));
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    expect(response.headers.get("content-length")).toBeNull();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(readCurrentProofSession(SESSION_ID)).rejects.toMatchObject({
+      code: "invalid_upstream_response",
+    });
+    expect(cancelled).toBe(true);
+    // 2 MiB is 32 chunks; reading stops right after the chunk that crosses the limit.
+    expect(pulls).toBeLessThan(40);
   });
 
   it("reports a regenerated preview and returns the regeneration provenance", async () => {

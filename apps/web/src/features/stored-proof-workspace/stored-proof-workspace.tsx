@@ -1,17 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  createMovePreviewSchema,
-  createProofEdgeSchema,
-  createProofNodeSchema,
   commandIdSchema,
   suggestionIdSchema,
   type DisplayedSuggestionSet,
   type MenuChoices,
   type MovePreview,
   type OperatorDeclaration,
-  type ProofEdge,
   type ProofNode,
 } from "@proof/protocol";
 import { resolveProofSelection, type AnchoredProofSelection } from "@proof/selections";
@@ -24,34 +20,27 @@ import {
   type AbstractSelectionAction,
   type AbstractSelectionState,
 } from "../proof-workspace/selection-state";
-import { StatementView, usePresentation } from "../proof-workspace/presentation";
-import type { Presentation } from "@proof/language";
+import { usePresentation } from "../proof-workspace/presentation";
 import { LibraryDrawer } from "../library-drawer";
 import { ConditionalLemmaPanel } from "../conditional-lemma";
 import { InquiryPanel } from "../inquiry-panel";
 import { GestureTray, useDragGestures } from "../gestures";
-import {
-  explainMacroFailure,
-  macroDisplayName,
-  macroStepLabel,
-  humanizeMoveId,
-} from "../macro-labels";
 import { recordRecentSession } from "../problem-entry/recent-sessions";
-import { macroNames, useMacroInfo, type MacroInfoMap } from "./macro-info";
+import { macroNames, useMacroInfo } from "./macro-info";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
 import { WorkspaceToolbar, movesHref } from "./workspace-toolbar";
 import { requestParameterMenus } from "./parameter-menu-request";
 import type { MoveState, PendingMenus } from "./suggestion-card";
 import { SUGGESTION_PANEL_ID, SuggestionPanel, type SuggestionState } from "./suggestion-panel";
+import { suggestionRequestSchema, type MoveChoiceRequest } from "./api-contract";
+import { HistoryView, type HistoryState } from "./history-view";
 import {
-  backtrackApiResponseSchema,
-  commandApiResponseSchema,
-  movePreviewApiResponseSchema,
-  proofHistoryApiResponseSchema,
-  suggestionApiResponseSchema,
-  suggestionRequestSchema,
-  type MoveChoiceRequest,
-} from "./api-contract";
+  requestApply,
+  requestBacktrack,
+  requestHistory,
+  requestMovePreview,
+  requestSuggestions,
+} from "./stored-proof-requests";
 import { toDescriptor } from "./selection-descriptor";
 import { createInteractionRecorder } from "./interaction-recorder";
 import { ConstantsPanel } from "./constants-panel";
@@ -94,13 +83,8 @@ export type StoredProofWorkspaceProps = Readonly<{
   /** Whether the proof service can propose a general move from an applied step with a model. */
   aiMoveAuthor?: boolean | undefined;
 }>;
-type HistoryState =
-  | Readonly<{ kind: "loading" }>
-  | Readonly<{ kind: "ready"; nodes: readonly ProofNode[]; edges: readonly HistoryEdge[] }>
-  | Readonly<{ kind: "rejected"; message: string }>;
 type Notice = Readonly<{ state: "committed" | "rejected"; message: string }>;
 type SuggestionId = string;
-type HistoryEdge = Readonly<{ edge: ProofEdge; name: string }>;
 
 /** Bind a validated stored snapshot to the reusable interactive proof-state view. */
 export function StoredProofWorkspace(props: StoredProofWorkspaceProps) {
@@ -925,147 +909,6 @@ function StatefulStoredWorkspace({
   );
 }
 
-type ReadOnlyPresentation = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
-
-function HistoryView({
-  history,
-  currentNodeId,
-  macros,
-  mutationPending,
-  presentation,
-  view,
-  onBacktrack,
-}: ReadOnlyPresentation &
-  Readonly<{
-    history: HistoryState;
-    currentNodeId: string;
-    macros: MacroInfoMap;
-    mutationPending: boolean;
-    onBacktrack: (id: string) => Promise<void>;
-  }>) {
-  return (
-    <section className={styles.historyPanel} aria-label="Proof-discovery tree">
-      <div className={styles.historyHeading}>
-        <div>
-          <h2>Proof-discovery tree</h2>
-          <p>Backtracking preserves every existing branch.</p>
-        </div>
-        {history.kind === "ready" ? (
-          <span className={styles.historyCount}>{history.edges.length} transitions</span>
-        ) : null}
-      </div>
-      {history.kind === "loading" ? <p>Loading retained history…</p> : null}
-      {history.kind === "rejected" ? (
-        <p role="alert">History unavailable: {history.message}</p>
-      ) : null}
-      {history.kind === "ready" ? (
-        <ol className={styles.historyList}>
-          {orderedHistory(history.nodes, history.edges).map(({ node, incoming, depth }) => {
-            const link = incoming?.edge.macro;
-            return (
-              <Fragment key={node.id}>
-                {link === undefined || link.stepIndex !== 1 ? null : (
-                  <li
-                    className={styles.historyMacroHeader}
-                    data-macro-application={link.previewId}
-                    style={{ paddingLeft: `${depth * 1.1}rem` }}
-                  >
-                    <strong>Macro: {macroDisplayName(link.moveId, macroNames(macros))}</strong>{" "}
-                    <span>
-                      {link.stepCount} steps applied as one move. Deleting the previous move removes
-                      them all.
-                    </span>
-                  </li>
-                )}
-                <li
-                  className={styles.historyItem}
-                  data-macro-step={link?.stepIndex}
-                  style={{ paddingLeft: `${depth * 1.1}rem` }}
-                >
-                  <button
-                    className={styles.historyNode}
-                    data-current={node.id === currentNodeId}
-                    aria-current={node.id === currentNodeId ? "true" : undefined}
-                    data-history-node-id={node.id}
-                    disabled={node.id === currentNodeId || mutationPending}
-                    type="button"
-                    onClick={() => void onBacktrack(node.id)}
-                  >
-                    <span>
-                      <HistoryNodeLabel node={node} presentation={presentation} view={view} />
-                    </span>
-                    <small>
-                      {incoming === undefined
-                        ? `Root · ${node.id}`
-                        : link === undefined
-                          ? `${incoming.name} · ${incoming.edge.transitionClass}${proposalNote(incoming.edge)} · ${node.id}`
-                          : `${macroStepLabel(link, macroNames(macros))} · ${humanizeMoveId(incoming.name)} · ${incoming.edge.transitionClass} · ${node.id}`}
-                    </small>
-                  </button>
-                </li>
-              </Fragment>
-            );
-          })}
-        </ol>
-      ) : null}
-    </section>
-  );
-}
-
-/** A step a model proposed and the user confirmed says so in the history. */
-function proposalNote(edge: ProofEdge): string {
-  if (edge.proposal === undefined) return "";
-  const origin =
-    edge.proposal.source === "user-proposal"
-      ? "from your description"
-      : "from a suggested technique";
-  return ` · AI step ${edge.proposal.stepIndex} of ${edge.proposal.stepCount} ${origin}`;
-}
-
-function orderedHistory(nodes: readonly ProofNode[], edges: readonly HistoryEdge[]) {
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const incoming = new Map(edges.map((record) => [record.edge.childNodeId, record]));
-  const children = new Map<string, HistoryEdge[]>();
-  for (const record of edges)
-    children.set(record.edge.parentNodeId, [
-      ...(children.get(record.edge.parentNodeId) ?? []),
-      record,
-    ]);
-  const root = nodes.find((candidate) => !incoming.has(candidate.id));
-  if (root === undefined) return [];
-  const result: Array<{ node: ProofNode; incoming: HistoryEdge | undefined; depth: number }> = [];
-  const visit = (current: ProofNode, edge: HistoryEdge | undefined, depth: number) => {
-    result.push({ node: current, incoming: edge, depth });
-    for (const childEdge of children.get(current.id) ?? []) {
-      const child = byId.get(childEdge.edge.childNodeId);
-      if (child !== undefined) visit(child, childEdge, depth + 1);
-    }
-  };
-  visit(root, undefined, 0);
-  return result;
-}
-
-function HistoryNodeLabel({
-  node,
-  presentation,
-  view,
-}: ReadOnlyPresentation & Readonly<{ node: ProofNode }>) {
-  const goal = node.state.goals[0];
-  const first = goal ?? node.state.obligations[0];
-  if (first === undefined) return <>No open goals</>;
-  return (
-    <>
-      {goal === undefined ? "Obligation: " : "Goal: "}
-      <StatementView
-        expression={first.sequent.conclusion.expression}
-        declarations={first.sequent.context.declarations}
-        presentation={presentation}
-        view={view}
-      />
-    </>
-  );
-}
-
 /** The role of the selected occurrence (proposition, term or binder), or undefined if unresolved. */
 function selectionRole(
   state: ProofNode["state"],
@@ -1084,168 +927,6 @@ function stableAttemptId(prefix: string, stateId: string): string {
   return `${prefix}-${stateId.replace(/[^A-Za-z0-9._:/-]/g, "-")}-${crypto.randomUUID()}`;
 }
 
-async function requestSuggestions(sessionId: string, request: unknown, signal: AbortSignal) {
-  try {
-    const response = await fetch(
-      `/api/proof-sessions/${encodeURIComponent(sessionId)}/suggestion-sets`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(request),
-        cache: "no-store",
-        signal,
-      },
-    );
-    const parsed = suggestionApiResponseSchema.safeParse(await response.json());
-    return !parsed.success || parsed.data.ok !== response.ok
-      ? invalidBrowserResponse()
-      : parsed.data;
-  } catch (error) {
-    return {
-      ok: false as const,
-      error: {
-        code:
-          error instanceof DOMException && error.name === "AbortError" ? "aborted" : "unavailable",
-        message: "The suggestion service could not be reached.",
-      },
-    };
-  }
-}
-
-async function requestMovePreview(
-  sessionId: string,
-  choice: MoveChoiceRequest,
-  operators: readonly OperatorDeclaration[],
-): Promise<{ ok: true; preview: MovePreview } | ActionFailure> {
-  try {
-    const response = await postChoice(sessionId, "move-previews", choice);
-    const parsed = movePreviewApiResponseSchema.safeParse(await response.json());
-    if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
-    if (!parsed.data.ok) {
-      return {
-        ok: false,
-        code: parsed.data.error.code,
-        message: explainMacroFailure(parsed.data.error.code, parsed.data.error.message),
-      };
-    }
-    const preview = createMovePreviewSchema({ operators }).safeParse(parsed.data.data.preview);
-    return preview.success ? { ok: true, preview: preview.data } : invalidActionResponse();
-  } catch {
-    return { ok: false, message: "The preview service could not be reached." };
-  }
-}
-
-async function requestApply(sessionId: string, choice: MoveChoiceRequest) {
-  try {
-    const response = await postChoice(sessionId, "commands", choice);
-    const parsed = commandApiResponseSchema.safeParse(await response.json());
-    if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
-    if (!parsed.data.ok) {
-      return {
-        ok: false as const,
-        code: parsed.data.error.code,
-        message: explainMacroFailure(parsed.data.error.code, parsed.data.error.message),
-      };
-    }
-    // A step that applied a library result may have added constants to the proof: the node is
-    // read in the operators the answer's session states, which include them.
-    const node = createProofNodeSchema({
-      operators: parsed.data.data.session.operators,
-    }).safeParse(parsed.data.data.node);
-    if (!node.success || parsed.data.data.session.currentNodeId !== node.data.id)
-      return invalidActionResponse();
-    return {
-      ok: true as const,
-      session: parsed.data.data.session,
-      node: node.data,
-      receipt: parsed.data.data.receipt,
-    };
-  } catch {
-    return { ok: false as const, message: "The command service could not be reached." };
-  }
-}
-
-async function requestHistory(sessionId: string) {
-  try {
-    const response = await fetch(`/api/proof-sessions/${encodeURIComponent(sessionId)}/history`, {
-      cache: "no-store",
-    });
-    const parsed = proofHistoryApiResponseSchema.safeParse(await response.json());
-    if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
-    if (!parsed.data.ok) return { ok: false as const, message: parsed.data.error.message };
-    // The history is read in the operators its session states: later nodes may use constants
-    // that steps added.
-    const stated = parsed.data.data.session.operators;
-    const nodes = parsed.data.data.nodes.map((value) =>
-      createProofNodeSchema({ operators: stated }).safeParse(value),
-    );
-    const edges = parsed.data.data.edges.map(({ edge, name }) => ({
-      name,
-      parsed: createProofEdgeSchema({ operators: stated }).safeParse(edge),
-    }));
-    if (nodes.some((value) => !value.success) || edges.some(({ parsed }) => !parsed.success))
-      return invalidActionResponse();
-    return {
-      ok: true as const,
-      nodes: nodes.map((value) => value.data as ProofNode),
-      edges: edges.map(({ name, parsed }) => ({ name, edge: parsed.data as ProofEdge })),
-    };
-  } catch {
-    return { ok: false as const, message: "The proof history could not be reached." };
-  }
-}
-
-async function requestBacktrack(
-  sessionId: string,
-  request: Readonly<{ expectedCurrentNodeId: string; targetNodeId: string }>,
-) {
-  try {
-    const response = await fetch(`/api/proof-sessions/${encodeURIComponent(sessionId)}/backtrack`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(request),
-      cache: "no-store",
-    });
-    const parsed = backtrackApiResponseSchema.safeParse(await response.json());
-    if (!parsed.success || parsed.data.ok !== response.ok) return invalidActionResponse();
-    if (!parsed.data.ok) return { ok: false as const, message: parsed.data.error.message };
-    const node = createProofNodeSchema({
-      operators: parsed.data.data.session.operators,
-    }).safeParse(parsed.data.data.node);
-    if (!node.success || parsed.data.data.session.currentNodeId !== node.data.id)
-      return invalidActionResponse();
-    return { ok: true as const, session: parsed.data.data.session, node: node.data };
-  } catch {
-    return { ok: false as const, message: "The backtrack service could not be reached." };
-  }
-}
-
-function postChoice(
-  sessionId: string,
-  resource: string,
-  choice: MoveChoiceRequest,
-): Promise<Response> {
-  return fetch(`/api/proof-sessions/${encodeURIComponent(sessionId)}/${resource}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(choice),
-    cache: "no-store",
-  });
-}
-
-type ActionFailure = { ok: false; message: string; code?: string };
-function invalidBrowserResponse() {
-  return {
-    ok: false as const,
-    error: {
-      code: "invalid_response",
-      message: "The suggestion service returned an invalid response.",
-    },
-  };
-}
-function invalidActionResponse(): ActionFailure {
-  return { ok: false, message: "The proof service returned an invalid response." };
-}
 function isStaleFailure(code: string, message: string) {
   return code === "stale_snapshot" || /stale|older|does not match proof state/i.test(message);
 }

@@ -1,4 +1,5 @@
 import { ProofServiceError } from "../../../server/proof-service";
+import { BoundedBodyError, readBoundedText } from "../../../server/read-bounded-text";
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0",
@@ -89,18 +90,14 @@ export async function readBoundedJson(
   request: Request,
   maxBytes: number = MAX_REQUEST_BYTES,
 ): Promise<unknown> {
-  const declaredLength = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new RequestBodyError("The JSON request body is too large.", 413);
-  }
   let text: string;
   try {
-    text = await request.text();
-  } catch {
+    text = await readBoundedText(request, maxBytes);
+  } catch (error) {
+    if (error instanceof BoundedBodyError && error.reason === "too-large") {
+      throw new RequestBodyError("The JSON request body is too large.", 413);
+    }
     throw new RequestBodyError("The JSON request body could not be read.", 400);
-  }
-  if (new TextEncoder().encode(text).byteLength > maxBytes) {
-    throw new RequestBodyError("The JSON request body is too large.", 413);
   }
   if (text.length === 0) throw new RequestBodyError("A JSON request body is required.", 400);
   try {

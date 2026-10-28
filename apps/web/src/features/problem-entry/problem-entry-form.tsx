@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
 import { createLatexRenderer, createPresentation } from "@proof/language";
 import {
   BACKGROUND_LEVELS,
@@ -35,7 +43,7 @@ import {
 import { recordRecentSession } from "./recent-sessions";
 import { SETUP_SECTION, deriveSetupProgress, type SetupStep } from "./setup-progress";
 import { SetupProgressPanel } from "./setup-progress-panel";
-import { StatementField, StatementPreview, statementFeedback } from "./statement-field";
+import { StatementField, StatementPreview, cachedStatementFeedback } from "./statement-field";
 import { Formula } from "./typeset";
 import styles from "./problem-entry.module.css";
 
@@ -162,20 +170,26 @@ export function ProblemEntryForm({
   }, [previewOperators, selectedOperators]);
 
   const current = useMemo(() => formToDraft(form, options), [form, options]);
+  // The draft is serialized only while a review is showing, and once per draft.
+  const hasReview = reviewed !== undefined;
+  const currentDraftKey = useMemo(
+    () => (hasReview && current.ok ? JSON.stringify(current.draft) : undefined),
+    [hasReview, current],
+  );
   const approvable =
     reviewed !== undefined &&
-    current.ok &&
-    JSON.stringify(current.draft) === reviewed.draftKey &&
+    currentDraftKey === reviewed.draftKey &&
     reviewed.accepted?.decisionId === accepted?.decisionId &&
     reviewed.library?.decisionId === approvedLibrary?.decisionId;
 
   // How each statement row reads; the fields show it and the setup progress is derived from it.
+  // Only an edited row is parsed again.
   const hypothesisFeedback = useMemo(
-    () => form.hypotheses.map((row) => statementFeedback(row, latex)),
+    () => form.hypotheses.map((row) => cachedStatementFeedback(row, latex)),
     [form.hypotheses, latex],
   );
   const goalFeedback = useMemo(
-    () => form.goals.map((row) => statementFeedback(row, latex)),
+    () => form.goals.map((row) => cachedStatementFeedback(row, latex)),
     [form.goals, latex],
   );
   const progress = deriveSetupProgress({
@@ -270,11 +284,14 @@ export function ProblemEntryForm({
     }
   };
 
-  useEffect(() => {
-    if (!checkLoaded) return;
+  // A drafted setup was loaded into the form: check it as it now stands.
+  const checkLoadedSetup = useEffectEvent(() => {
     setCheckLoaded(false);
     void review();
   });
+  useEffect(() => {
+    if (checkLoaded) checkLoadedSetup();
+  }, [checkLoaded]);
 
   const approve = async () => {
     if (reviewed === undefined || !approvable) return;
