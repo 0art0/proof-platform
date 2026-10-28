@@ -1,9 +1,21 @@
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildTopicExtractorContext,
+  llmCallIdSchema,
+  prepareLlmCall,
+  type TopicManifestProposal,
+} from "@proof/llm";
 import type { ProofArtifact } from "@proof/protocol";
 import { importProofArtifact, importedSessionId } from "./artifact-import";
 import { ARTIFACT_SESSION_ID, buildArtifactScenario, FIXED_NOW } from "./artifact.testing";
 import { DEVELOPMENT_ROOT_NODE } from "./development-session";
+import {
+  recordTopicProposalDecision,
+  runDurableLlmCall,
+  type LlmCallOwner,
+} from "./llm-call-repository";
 import { MemoryLibraryStore } from "./memory-library-store";
+import { MemoryLlmCallStore } from "./memory-llm-call-store";
 import { MemoryProofStore } from "./memory-proof-store";
 import {
   PostgresProofStore,
@@ -208,6 +220,138 @@ describe("session deletion in the memory store", () => {
       }),
     ).rejects.toThrow();
     expect(remainingRows(source, ARTIFACT_SESSION_ID)).toEqual(before);
+  });
+});
+
+describe("session deletion and LLM evidence in the memory store", () => {
+  const dispatch = { provider: "test", model: "test-model", promptVersion: "test-v1" } as const;
+  const proposal: TopicManifestProposal = {
+    kind: "topic-manifest",
+    domains: [],
+    objectKinds: [],
+    vocabulary: [],
+    notation: [],
+    backgroundTopics: [],
+    customOperators: [],
+  };
+
+  /** A completed topic call plus an approved review of it, both owned by `owner`. */
+  async function recordEvidence(llmCalls: MemoryLlmCallStore, owner: LlmCallOwner): Promise<void> {
+    const built = buildTopicExtractorContext({
+      id: "llm-call:topic",
+      problem: "Show that p implies p.",
+      background: { level: "basic", summary: "Basic logic.", assumptions: [] },
+    });
+    if (!built.ok) throw new Error(built.diagnostics[0].message);
+    const prepared = prepareLlmCall(built.envelope);
+    if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+    await runDurableLlmCall(llmCalls, { owner, call: prepared.call, dispatch }, async () => {
+      return proposal;
+    });
+    expect(
+      await recordTopicProposalDecision(llmCalls, {
+        id: "decision:topic",
+        owner,
+        callId: prepared.call.id,
+        reviewerId: "user:reviewer",
+        decidedAt: "2026-09-10T05:00:00+00:00",
+        proposal,
+        rationale: "The manifest is broad and contains no disguised solution.",
+        decision: "approved",
+        approvedManifestId: "manifest:approved",
+      }),
+    ).toMatchObject({ status: "recorded", replayed: false });
+  }
+
+  /** How many calls and decisions the owner holds. */
+  async function evidenceOf(llmCalls: MemoryLlmCallStore, owner: LlmCallOwner): Promise<number> {
+    const calls = await llmCalls.listCallsForOwner(owner);
+    const decision = await llmCalls.transaction((transaction) =>
+      transaction.readDecisionForUpdate(owner, "decision:topic"),
+    );
+    return calls.length + (decision === undefined ? 0 : 1);
+  }
+
+  const proofOwner = (sessionId: string) =>
+    ({ kind: "proof-session", id: sessionId }) as const satisfies LlmCallOwner;
+
+  async function withEvidence() {
+    const llmCalls = new MemoryLlmCallStore();
+    const store = new MemoryLibraryStore({ llmCalls });
+    const sessions = ["session:doomed", "session:kept"] as const;
+    for (const session of sessions) {
+      await initializeProofSession(store, {
+        sessionId: id(session),
+        rootNode: DEVELOPMENT_ROOT_NODE,
+      });
+      await recordEvidence(llmCalls, proofOwner(session));
+    }
+    // Same identifier as the deleted session, but another owner kind: not the session's evidence.
+    const construction = { kind: "construction", id: "session:doomed" } as const;
+    await recordEvidence(llmCalls, construction);
+    return { llmCalls, store, construction };
+  }
+
+  it("removes the calls and decisions the session owns, and only those", async () => {
+    const { llmCalls, store, construction } = await withEvidence();
+    expect(await evidenceOf(llmCalls, proofOwner("session:doomed"))).toBe(2);
+
+    expect(await deleteProofSession(store, "session:doomed")).toMatchObject({ status: "deleted" });
+
+    expect(await evidenceOf(llmCalls, proofOwner("session:doomed"))).toBe(0);
+    expect(await evidenceOf(llmCalls, proofOwner("session:kept"))).toBe(2);
+    expect(await evidenceOf(llmCalls, construction)).toBe(2);
+  });
+
+  it("keeps the evidence when the deletion rolls back or the session does not exist", async () => {
+    const { llmCalls, store } = await withEvidence();
+
+    await expect(
+      store.transaction(async (transaction) => {
+        await transaction.deleteSession(id("session:doomed"));
+        throw new Error("abort");
+      }),
+    ).rejects.toThrow();
+    expect(await evidenceOf(llmCalls, proofOwner("session:doomed"))).toBe(2);
+
+    // Evidence owned by a session that was never stored is not touched by deleting a missing one.
+    await recordEvidence(llmCalls, proofOwner("session:orphan"));
+    expect(await deleteProofSession(store, "session:orphan")).toMatchObject({
+      status: "rejected",
+    });
+    expect(await evidenceOf(llmCalls, proofOwner("session:orphan"))).toBe(2);
+  });
+
+  it("waits for an open LLM transaction so a late write cannot bring evidence back", async () => {
+    const { llmCalls, store } = await withEvidence();
+    const doomed = proofOwner("session:doomed");
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const open = llmCalls.transaction(async (transaction) => {
+      await gate;
+      await transaction.insertDecision({
+        id: "decision:late",
+        owner: doomed,
+        callId: llmCallIdSchema.parse("llm-call:topic"),
+        reviewerId: "user:reviewer",
+        decidedAt: "2026-09-10T05:00:00+00:00",
+        proposal,
+        rationale: "Reviewed while the session was being deleted.",
+        decision: "rejected",
+      });
+    });
+    const deletion = deleteProofSession(store, "session:doomed");
+    release();
+    await Promise.all([open, deletion]);
+
+    expect(await evidenceOf(llmCalls, doomed)).toBe(0);
+    expect(
+      await llmCalls.transaction((transaction) =>
+        transaction.readDecisionForUpdate(doomed, "decision:late"),
+      ),
+    ).toBeUndefined();
   });
 });
 

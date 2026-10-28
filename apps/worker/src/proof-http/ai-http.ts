@@ -1,13 +1,14 @@
 /**
  * Small HTTP helpers shared by the AI routes (`ai-routes.ts`, `ai-execute-routes.ts`,
- * `ai-library-routes.ts`): bounded JSON bodies, JSON answers, the cost-guard admission and the
- * status of an LLM-call repository failure.
+ * `ai-library-routes.ts`): the bounded JSON body, the cost-guard admission and the status of an
+ * LLM-call repository failure.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readLlmCall, type LlmCallOwner } from "../llm-call-repository";
+import { readJsonBody, writeJson, type JsonBodyResult } from "./http-util";
 import { type ServiceContext } from "./shared";
 
-export const MAX_AI_REQUEST_BYTES = 256 * 1024;
+const MAX_AI_REQUEST_BYTES = 256 * 1024;
 
 /** The single human actor of the web application; reviews are recorded under it. */
 export const WEB_REVIEWER_ID = "actor:web";
@@ -36,40 +37,9 @@ export async function admitProviderCall(
   return limiter.tryAcquire();
 }
 
-export type BodyResult =
-  | Readonly<{ ok: true; value: unknown }>
-  | Readonly<{ ok: false; status: 400 | 413 | 415; message: string }>;
-
-export async function readBody(request: IncomingMessage): Promise<BodyResult> {
-  if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
-    return { ok: false, status: 415, message: "Content-Type must be application/json." };
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.byteLength;
-    if (size > MAX_AI_REQUEST_BYTES) {
-      return { ok: false, status: 413, message: "The AI request is too large." };
-    }
-    chunks.push(bytes);
-  }
-  try {
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "The request body is not valid JSON." };
-  }
-}
-
-export function pathSegments(requestTarget: string | undefined): string[] | undefined {
-  try {
-    return new URL(requestTarget ?? "/", "http://proof.local").pathname
-      .split("/")
-      .filter(Boolean)
-      .map(decodeURIComponent);
-  } catch {
-    return undefined;
-  }
+/** The AI routes' JSON body, bounded at `MAX_AI_REQUEST_BYTES`. */
+export function readBody(request: IncomingMessage): Promise<JsonBodyResult> {
+  return readJsonBody(request, { maxBytes: MAX_AI_REQUEST_BYTES });
 }
 
 export function methodNotAllowed(response: ServerResponse, method: string): true {
@@ -77,12 +47,6 @@ export function methodNotAllowed(response: ServerResponse, method: string): true
     diagnostics: [{ code: "method-not-allowed", message: `Use ${method} for this resource.` }],
   });
   return true;
-}
-
-export function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(body));
 }
 
 export function problem(message: string) {

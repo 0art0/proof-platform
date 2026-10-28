@@ -4,6 +4,7 @@ import {
   DEVELOPMENT_ROOT_NODE,
   ensureDevelopmentProofSession,
 } from "./development-session";
+import { llmCallIdSchema } from "@proof/llm";
 import { MemoryProofStore, MemoryProofStoreConstraintError } from "./memory-proof-store";
 import {
   proofSessionIdSchema,
@@ -13,6 +14,7 @@ import {
 } from "./proof-repository";
 import type { PrepareProofCommandSuccess, ProofEdge } from "@proof/protocol";
 import { selectProofStore } from "./proof-worker-startup";
+import { deleteProofSession } from "./session-admin";
 
 function session(id = "session:memory"): ProofSession {
   return proofSessionSchema.parse({
@@ -308,6 +310,45 @@ describe("selectProofStore", () => {
     expect(
       selectProofStore({ PROOF_STORE: "memory", PROOF_DATABASE_URL: "postgres://unused" }),
     ).toMatchObject({ ok: true, kind: "memory" });
+  });
+
+  it("shares the memory LLM evidence store with the proof store so deletion reaches it", async () => {
+    const selection = selectProofStore({ PROOF_STORE: "memory" });
+    if (!selection.ok) throw new Error(selection.message);
+    expect(await ensureDevelopmentProofSession(selection.store)).toMatchObject({
+      status: "ready",
+    });
+    const owner = { kind: "proof-session", id: DEVELOPMENT_PROOF_SESSION_ID } as const;
+    await selection.llmCalls.transaction((transaction) =>
+      transaction.insertDecision({
+        id: "decision:topic",
+        owner,
+        callId: llmCallIdSchema.parse("llm-call:topic"),
+        reviewerId: "user:reviewer",
+        decidedAt: "2026-09-10T05:00:00+00:00",
+        proposal: {
+          kind: "topic-manifest",
+          domains: [],
+          objectKinds: [],
+          vocabulary: [],
+          notation: [],
+          backgroundTopics: [],
+          customOperators: [],
+        },
+        rationale: "Reviewed.",
+        decision: "rejected",
+      }),
+    );
+    const readDecision = () =>
+      selection.llmCalls.transaction((transaction) =>
+        transaction.readDecisionForUpdate(owner, "decision:topic"),
+      );
+    expect(await readDecision()).toBeDefined();
+
+    expect(await deleteProofSession(selection.store, DEVELOPMENT_PROOF_SESSION_ID)).toMatchObject({
+      status: "deleted",
+    });
+    expect(await readDecision()).toBeUndefined();
   });
 
   it("fails clearly without a database URL or with an unknown store", () => {

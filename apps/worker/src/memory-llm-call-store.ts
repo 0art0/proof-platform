@@ -16,13 +16,7 @@ export class MemoryLlmCallStore implements LlmCallStore {
   async transaction<Result>(
     work: (transaction: LlmCallStoreTransaction) => Promise<Result>,
   ): Promise<Result> {
-    let release = (): void => undefined;
-    const previous = this.queue;
-    this.queue = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
+    return this.serialized(async () => {
       const calls = new Map(this.calls);
       const decisions = new Map(this.decisions);
       const result = await work({
@@ -45,9 +39,7 @@ export class MemoryLlmCallStore implements LlmCallStore {
       this.calls = calls;
       this.decisions = decisions;
       return result;
-    } finally {
-      release();
-    }
+    });
   }
 
   async listCallsForOwner(owner: LlmCallOwner): Promise<readonly unknown[]> {
@@ -57,6 +49,39 @@ export class MemoryLlmCallStore implements LlmCallStore {
         .filter(([, record]) => record.owner.kind === owner.kind && record.owner.id === owner.id)
         .map(([, record]) => clone(record)),
     );
+  }
+
+  /**
+   * Remove every call and decision owned by the given proof sessions, as
+   * `PostgresProofStore.deleteSession` does with `owner_kind = 'proof-session' AND owner_id = $1`
+   * on `llm_topic_decisions` and `llm_calls`. It queues behind any open transaction, so a write in
+   * flight cannot bring a deleted session's evidence back.
+   */
+  async deleteProofSessionEvidence(sessionIds: ReadonlySet<string>): Promise<void> {
+    const ownedByDeletedSession = ({ owner }: { owner: LlmCallOwner }): boolean =>
+      owner.kind === "proof-session" && sessionIds.has(owner.id);
+    await this.serialized(async () => {
+      for (const [key, record] of this.decisions) {
+        if (ownedByDeletedSession(record)) this.decisions.delete(key);
+      }
+      for (const [key, record] of this.calls) {
+        if (ownedByDeletedSession(record)) this.calls.delete(key);
+      }
+    });
+  }
+
+  private async serialized<Result>(work: () => Promise<Result>): Promise<Result> {
+    let release = (): void => undefined;
+    const previous = this.queue;
+    this.queue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
   }
 }
 

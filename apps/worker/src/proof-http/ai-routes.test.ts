@@ -98,6 +98,7 @@ describe("AI HTTP route safety", () => {
         body: JSON.stringify({ padding: "x".repeat(300 * 1024) }),
       });
       expect(oversize.status).toBe(413);
+      expect(oversize.headers.get("cache-control")).toBe("no-store");
       const wrongType = await fetch(`${origin}${path}`, {
         method: "POST",
         headers: { "content-type": "text/plain" },

@@ -22,14 +22,8 @@ import {
   type ProposalEnvironment,
 } from "../move-author-proposal";
 import { loadCurrentProofSession, proposalPlanApplied } from "../proof-repository";
-import {
-  admitProviderCall,
-  LIMIT_MESSAGE,
-  problem,
-  readBody,
-  repositoryStatus,
-  writeJson,
-} from "./ai-http";
+import { admitProviderCall, LIMIT_MESSAGE, problem, readBody, repositoryStatus } from "./ai-http";
+import { writeJson } from "./http-util";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 const requestSchema = z

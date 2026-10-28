@@ -22,6 +22,7 @@ import { importProofArtifact } from "../artifact-import";
 import { listLlmCalls } from "../llm-call-repository";
 import { proofSessionIdSchema } from "../proof-repository";
 import { readSessionVisibility } from "../session-admin";
+import { pathSegments, readJsonBody, writeJson } from "./http-util";
 import { repositoryFailureStatus, type ServiceContext } from "./shared";
 
 /** Upload limit for one artifact; stored snapshots make artifacts much larger than commands. */
@@ -41,7 +42,7 @@ export async function handleArtifactRoute(
       methodNotAllowed(response, "POST");
       return true;
     }
-    const body = await readArtifactBody(request);
+    const body = await readJsonBody(request, { maxBytes: MAX_ARTIFACT_BYTES });
     if (!body.ok) {
       writeJson(response, body.status, {
         diagnostics: [{ code: "invalid-request", message: body.message }],
@@ -162,60 +163,11 @@ export function artifactFileName(sessionId: string): string {
   return `${sessionId.replace(/[^A-Za-z0-9._-]/g, "-")}.proof-artifact.json`;
 }
 
-function pathSegments(requestTarget: string | undefined): string[] | undefined {
-  try {
-    return new URL(requestTarget ?? "/", "http://proof.local").pathname
-      .split("/")
-      .filter((segment) => segment.length > 0)
-      .map((segment) => decodeURIComponent(segment));
-  } catch {
-    return undefined;
-  }
-}
-
-type ArtifactBody =
-  | Readonly<{ ok: true; value: unknown }>
-  | Readonly<{ ok: false; status: 400 | 413 | 415; message: string }>;
-
-async function readArtifactBody(request: IncomingMessage): Promise<ArtifactBody> {
-  const mediaType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
-  if (mediaType !== "application/json") {
-    return { ok: false, status: 415, message: "Content-Type must be application/json." };
-  }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  try {
-    for await (const input of request) {
-      const chunk = Buffer.isBuffer(input) ? input : Buffer.from(input as Uint8Array);
-      size += chunk.byteLength;
-      if (size <= MAX_ARTIFACT_BYTES) chunks.push(chunk);
-    }
-  } catch {
-    return { ok: false, status: 400, message: "The artifact body could not be read." };
-  }
-  if (size > MAX_ARTIFACT_BYTES) {
-    return { ok: false, status: 413, message: "The artifact is too large." };
-  }
-  if (size === 0) return { ok: false, status: 400, message: "An artifact body is required." };
-  try {
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "The artifact is not valid JSON." };
-  }
-}
-
 function methodNotAllowed(response: ServerResponse, allow: string): void {
   response.setHeader("allow", allow);
   writeJson(response, 405, {
     diagnostics: [{ code: "method-not-allowed", message: `Use ${allow}.` }],
   });
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(body));
 }
 
 function writeValidatedJson<Output>(

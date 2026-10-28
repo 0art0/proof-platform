@@ -44,6 +44,7 @@ import { handleAiRoute } from "./ai-routes";
 import { handleArtifactRoute } from "./artifact-routes";
 import { handleConditionalLemmaRoute } from "./conditional-lemma-routes";
 import { handleAuthoredMoveRoute, requestSessionId, scopedContext } from "./authored-move-routes";
+import { readJsonBody, writeJson } from "./http-util";
 import { handleLibraryRoute } from "./library-routes";
 import { handleSessionAdminRoute } from "./session-admin-routes";
 import { handleProblemSetupRoute } from "./problem-setup-routes";
@@ -388,11 +389,7 @@ async function handleRequest(
   }
 
   if (route.kind === "suggestion-collection" && request.method === "POST") {
-    if (!hasJsonContentType(request)) {
-      writeJson(response, 415, invalidRequest("Content-Type must be application/json."));
-      return;
-    }
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, { maxBytes: MAX_REQUEST_BODY_BYTES });
     if (!body.ok) {
       writeJson(response, body.status, invalidRequest(body.message));
       return;
@@ -1081,10 +1078,6 @@ function inquiryRecordQuery(
   }
 }
 
-type JsonBodyResult =
-  | Readonly<{ ok: true; value: unknown }>
-  | Readonly<{ ok: false; status: 400 | 413; message: string }>;
-
 type StrictJsonRequestResult<Output> =
   | Readonly<{ ok: true; value: Output }>
   | Readonly<{ ok: false; status: 400 | 413 | 415; message: string }>;
@@ -1093,43 +1086,12 @@ async function readStrictJsonRequest<Output>(
   request: IncomingMessage,
   schema: z.ZodType<Output>,
 ): Promise<StrictJsonRequestResult<Output>> {
-  if (!hasJsonContentType(request)) {
-    return { ok: false, status: 415, message: "Content-Type must be application/json." };
-  }
-  const body = await readJsonBody(request);
+  const body = await readJsonBody(request, { maxBytes: MAX_REQUEST_BODY_BYTES });
   if (!body.ok) return body;
   const parsed = schema.safeParse(body.value);
   return parsed.success
     ? { ok: true, value: parsed.data }
     : { ok: false, status: 400, message: "The JSON request does not match its strict schema." };
-}
-
-async function readJsonBody(request: IncomingMessage): Promise<JsonBodyResult> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  let tooLarge = false;
-  try {
-    for await (const input of request) {
-      const chunk = Buffer.isBuffer(input) ? input : Buffer.from(input as Uint8Array);
-      size += chunk.byteLength;
-      if (size > MAX_REQUEST_BODY_BYTES) {
-        tooLarge = true;
-      } else {
-        chunks.push(chunk);
-      }
-    }
-    if (tooLarge) return { ok: false, status: 413, message: "The JSON request body is too large." };
-    if (size === 0) return { ok: false, status: 400, message: "A JSON request body is required." };
-    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
-  } catch {
-    return { ok: false, status: 400, message: "The JSON request body is malformed." };
-  }
-}
-
-function hasJsonContentType(request: IncomingMessage): boolean {
-  return (
-    request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() === "application/json"
-  );
 }
 
 function writeRepositoryFailure(
@@ -1145,13 +1107,6 @@ function invalidRequest(message: string): unknown {
 
 function notFound(message: string): unknown {
   return { diagnostics: [{ code: "not-found", message }] };
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(JSON.stringify(body));
 }
 
 function writeValidatedJson<Output>(
