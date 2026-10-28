@@ -779,283 +779,45 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
     case "close-true":
     case "close-reflexive-equality":
       return {};
-    case "introduce-universal": {
-      const quantified = quantifierSort(
-        context,
-        context.entry.sequent.conclusion.expression,
-        "ForAll",
-      );
-      if (quantified === undefined) {
-        return notApplicable(walk, "The target conclusion is not a universal statement.");
-      }
-      if (!quantified.typed) return {};
-      const parameterDeclarationId = generatedDeclarationId(
-        context,
-        walk,
-        "parameterDeclarationId",
-        "parameter",
-      );
-      const ids = generated(
-        context,
-        walk,
-        "membershipHypothesisId",
-        "statement",
-        "membership-hypothesis",
-        1,
-      );
-      return parameterDeclarationId === undefined || ids === undefined
-        ? undefined
-        : { parameterDeclarationId, membershipHypothesisId: ids[0] };
-    }
-    case "close-by-hypothesis": {
-      const hypothesisId = selectedHypothesis(context, walk, "fact");
-      return hypothesisId === undefined ? undefined : { hypothesisId };
-    }
-    case "close-false-hypothesis": {
-      const hypothesisId = selectedHypothesis(context, walk, "false");
-      return hypothesisId === undefined ? undefined : { hypothesisId };
-    }
-    case "close-by-contradiction": {
-      const hypothesisId = selectedHypothesis(context, walk, "fact");
-      const negationHypothesisId = selectedHypothesis(context, walk, "negation");
-      return hypothesisId === undefined || negationHypothesisId === undefined
-        ? undefined
-        : { hypothesisId, negationHypothesisId };
-    }
-    case "drop-hypothesis": {
-      const hypothesisId = selectedHypothesis(context, walk, "dropped");
-      return hypothesisId === undefined ? undefined : { hypothesisId };
-    }
-    case "close-by-accepted-inference": {
-      const chosen = choose(
-        context,
-        walk,
-        menu(
-          "attestationId",
-          "Attestation",
-          context.attestationIds.map((attestationId) =>
-            menuItem(
-              "attestationId",
-              { kind: "attestation", attestationId },
-              { kind: "text", text: attestationId },
-              { kind: "attestation" },
-            ),
-          ),
-        ),
-      );
-      return chosen?.value.kind === "attestation"
-        ? { attestationId: chosen.value.attestationId }
-        : undefined;
-    }
+    case "introduce-universal":
+      return introduceUniversalFields(context, walk);
+    case "close-by-hypothesis":
+      return hypothesisIdFields(context, walk, "fact");
+    case "close-false-hypothesis":
+      return hypothesisIdFields(context, walk, "false");
+    case "close-by-contradiction":
+      return closeByContradictionFields(context, walk);
+    case "drop-hypothesis":
+      return hypothesisIdFields(context, walk, "dropped");
+    case "close-by-accepted-inference":
+      return closeByAcceptedInferenceFields(context, walk);
     case "introduce-implication":
-    case "introduce-negation": {
-      const ids = generated(context, walk, "hypothesisId", "statement", "hypothesis", 1);
-      return ids === undefined ? undefined : { hypothesisId: ids[0] };
-    }
-    case "split-goal-conjunction": {
-      const count = operatorOperands(context.entry.sequent.conclusion.expression, "And")?.length;
-      if (count === undefined) return notApplicable(walk, "The target is not a conjunction.");
-      const childIds = generated(context, walk, "childIds", "statement", "child", count);
-      return childIds === undefined ? undefined : { childIds };
-    }
-    case "expand-hypothesis-conjunction": {
-      const hypothesisId = selectedHypothesis(context, walk, "conjunction");
-      if (hypothesisId === undefined) return undefined;
-      const count = hypothesisOperandCount(context, hypothesisId, "And");
-      if (count === undefined) return notApplicable(walk, "The hypothesis is not a conjunction.");
-      const expandedHypothesisIds = generated(
-        context,
-        walk,
-        "expandedHypothesisIds",
-        "statement",
-        "expanded-hypothesis",
-        count,
-      );
-      return expandedHypothesisIds === undefined
-        ? undefined
-        : { hypothesisId, expandedHypothesisIds };
-    }
-    case "split-hypothesis-disjunction": {
-      const hypothesisId = selectedHypothesis(context, walk, "disjunction");
-      if (hypothesisId === undefined) return undefined;
-      const count = hypothesisOperandCount(context, hypothesisId, "Or");
-      if (count === undefined) return notApplicable(walk, "The hypothesis is not a disjunction.");
-      const childIds = generated(context, walk, "childIds", "statement", "child", count);
-      const branchHypothesisIds = generated(
-        context,
-        walk,
-        "branchHypothesisIds",
-        "statement",
-        "branch-hypothesis",
-        count,
-      );
-      return childIds === undefined || branchHypothesisIds === undefined
-        ? undefined
-        : { hypothesisId, childIds, branchHypothesisIds };
-    }
-    case "apply-implication-hypothesis": {
-      const implicationHypothesisId = selectedHypothesis(context, walk, "implication");
-      const antecedentHypothesisId = selectedHypothesis(context, walk, "antecedent");
-      const ids = generated(
-        context,
-        walk,
-        "resultHypothesisId",
-        "statement",
-        "result-hypothesis",
-        1,
-      );
-      return implicationHypothesisId === undefined ||
-        antecedentHypothesisId === undefined ||
-        ids === undefined
-        ? undefined
-        : { implicationHypothesisId, antecedentHypothesisId, resultHypothesisId: ids[0] };
-    }
-    case "unpack-existential-hypothesis": {
-      const hypothesisId = selectedHypothesis(context, walk, "existential");
-      const ids = generated(
-        context,
-        walk,
-        "resultHypothesisId",
-        "statement",
-        "result-hypothesis",
-        1,
-      );
-      if (hypothesisId === undefined || ids === undefined) return undefined;
-      const quantified = quantifierSort(
-        context,
-        statementExpression(context.entry, { kind: "hypothesis", id: hypothesisId }),
-        "Exists",
-      );
-      if (quantified?.typed !== true) return { hypothesisId, resultHypothesisId: ids[0] };
-      const witnessDeclarationId = generatedDeclarationId(
-        context,
-        walk,
-        "witnessDeclarationId",
-        "witness",
-      );
-      const membership = generated(
-        context,
-        walk,
-        "membershipHypothesisId",
-        "statement",
-        "membership-hypothesis",
-        1,
-      );
-      return witnessDeclarationId === undefined || membership === undefined
-        ? undefined
-        : {
-            hypothesisId,
-            resultHypothesisId: ids[0],
-            witnessDeclarationId,
-            membershipHypothesisId: membership[0],
-          };
-    }
-    case "choose-goal-disjunct": {
-      const disjuncts = operatorOperands(context.entry.sequent.conclusion.expression, "Or") ?? [];
-      const chosen = choose(
-        context,
-        walk,
-        menu(
-          "disjunctIndex",
-          "Disjunct",
-          disjuncts.map((disjunct, index) =>
-            menuItem(
-              "disjunctIndex",
-              { kind: "index", index },
-              { kind: "math", expression: disjunct },
-              { kind: "subterm-of", statement: { kind: "conclusion" }, path: [index] },
-            ),
-          ),
-        ),
-      );
-      return chosen?.value.kind === "index" ? { disjunctIndex: chosen.value.index } : undefined;
-    }
-    case "split-classical-cases": {
-      const proposition = chooseProposition(context, walk, "Case proposition");
-      const childIds = generated(context, walk, "childIds", "statement", "child", 2);
-      const branchHypothesisIds = generated(
-        context,
-        walk,
-        "branchHypothesisIds",
-        "statement",
-        "branch-hypothesis",
-        2,
-      );
-      return proposition === undefined ||
-        childIds === undefined ||
-        branchHypothesisIds === undefined
-        ? undefined
-        : { proposition, childIds, branchHypothesisIds };
-    }
-    case "assume-hypothesis": {
-      const proposition = chooseProposition(context, walk, "Assumed proposition");
-      const ids = generated(context, walk, "hypothesisId", "statement", "hypothesis", 1);
-      return proposition === undefined || ids === undefined
-        ? undefined
-        : { proposition, hypothesisId: ids[0] };
-    }
-    case "replace-goal": {
-      const proposition = chooseProposition(context, walk, "Replacement conclusion", true);
-      return proposition === undefined ? undefined : { proposition };
-    }
-    case "suffices": {
-      const proposition = chooseProposition(context, walk, "Sufficient proposition");
-      const ids = generated(context, walk, "obligationId", "statement", "obligation", 1);
-      return proposition === undefined || ids === undefined
-        ? undefined
-        : { proposition, obligationId: ids[0] };
-    }
-    case "instantiate-universal-hypothesis": {
-      const hypothesisId = selectedHypothesis(context, walk, "universal");
-      if (hypothesisId === undefined) return undefined;
-      const quantified = quantifierSort(
-        context,
-        statementExpression(context.entry, { kind: "hypothesis", id: hypothesisId }),
-        "ForAll",
-      );
-      if (quantified === undefined) {
-        return notApplicable(walk, "The hypothesis is not a universal statement.");
-      }
-      const term = chooseTerm(context, walk, "term", "Instantiation term", quantified.sort);
-      const ids = generated(
-        context,
-        walk,
-        "resultHypothesisId",
-        "statement",
-        "result-hypothesis",
-        1,
-      );
-      if (term === undefined || ids === undefined) return undefined;
-      if (!quantified.typed) return { hypothesisId, term, resultHypothesisId: ids[0] };
-      const obligation = generated(
-        context,
-        walk,
-        "membershipObligationId",
-        "statement",
-        "membership-obligation",
-        1,
-      );
-      return obligation === undefined
-        ? undefined
-        : {
-            hypothesisId,
-            term,
-            resultHypothesisId: ids[0],
-            membershipObligationId: obligation[0],
-          };
-    }
-    case "choose-existential-witness": {
-      const quantified = quantifierSort(
-        context,
-        context.entry.sequent.conclusion.expression,
-        "Exists",
-      );
-      if (quantified === undefined) {
-        return notApplicable(walk, "The target conclusion is not existential.");
-      }
-      const witness = chooseTerm(context, walk, "witness", "Witness term", quantified.sort);
-      return witness === undefined ? undefined : { witness };
-    }
+    case "introduce-negation":
+      return introducedHypothesisFields(context, walk);
+    case "split-goal-conjunction":
+      return splitGoalConjunctionFields(context, walk);
+    case "expand-hypothesis-conjunction":
+      return expandHypothesisConjunctionFields(context, walk);
+    case "split-hypothesis-disjunction":
+      return splitHypothesisDisjunctionFields(context, walk);
+    case "apply-implication-hypothesis":
+      return applyImplicationHypothesisFields(context, walk);
+    case "unpack-existential-hypothesis":
+      return unpackExistentialHypothesisFields(context, walk);
+    case "choose-goal-disjunct":
+      return chooseGoalDisjunctFields(context, walk);
+    case "split-classical-cases":
+      return splitClassicalCasesFields(context, walk);
+    case "assume-hypothesis":
+      return assumeHypothesisFields(context, walk);
+    case "replace-goal":
+      return replaceGoalFields(context, walk);
+    case "suffices":
+      return sufficesFields(context, walk);
+    case "instantiate-universal-hypothesis":
+      return instantiateUniversalHypothesisFields(context, walk);
+    case "choose-existential-witness":
+      return chooseExistentialWitnessFields(context, walk);
     case "rewrite-with-equality":
       return rewriteWithEquality(context, walk);
     case "rewrite-with-equivalence":
@@ -1065,10 +827,8 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
       return applyResultBackward(context, walk);
     case "apply-result-forward":
       return applyResultForward(context, walk);
-    case "mark-sorry": {
-      const ids = generated(context, walk, "assumptionId", "assumption", "sorry", 1);
-      return ids === undefined ? undefined : { assumptionId: ids[0] };
-    }
+    case "mark-sorry":
+      return markSorryFields(context, walk);
     case "close-by-assumption":
       return closeByAssumption(context, walk);
     case "introduce-placeholder":
@@ -1082,6 +842,320 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
     case "abandon-placeholder":
       return abandonPlaceholderFields(context, walk);
   }
+}
+
+function introduceUniversalFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const quantified = quantifierSort(context, context.entry.sequent.conclusion.expression, "ForAll");
+  if (quantified === undefined) {
+    return notApplicable(walk, "The target conclusion is not a universal statement.");
+  }
+  if (!quantified.typed) return {};
+  const parameterDeclarationId = generatedDeclarationId(
+    context,
+    walk,
+    "parameterDeclarationId",
+    "parameter",
+  );
+  const ids = generated(
+    context,
+    walk,
+    "membershipHypothesisId",
+    "statement",
+    "membership-hypothesis",
+    1,
+  );
+  return parameterDeclarationId === undefined || ids === undefined
+    ? undefined
+    : { parameterDeclarationId, membershipHypothesisId: ids[0] };
+}
+
+/** The operation fields of a move that names one selected hypothesis in the given slot. */
+function hypothesisIdFields(
+  context: Context,
+  walk: Walk,
+  slotId: string,
+): Readonly<Record<string, unknown>> | undefined {
+  const hypothesisId = selectedHypothesis(context, walk, slotId);
+  return hypothesisId === undefined ? undefined : { hypothesisId };
+}
+
+function closeByContradictionFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const hypothesisId = selectedHypothesis(context, walk, "fact");
+  const negationHypothesisId = selectedHypothesis(context, walk, "negation");
+  return hypothesisId === undefined || negationHypothesisId === undefined
+    ? undefined
+    : { hypothesisId, negationHypothesisId };
+}
+
+function closeByAcceptedInferenceFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const chosen = choose(
+    context,
+    walk,
+    menu(
+      "attestationId",
+      "Attestation",
+      context.attestationIds.map((attestationId) =>
+        menuItem(
+          "attestationId",
+          { kind: "attestation", attestationId },
+          { kind: "text", text: attestationId },
+          { kind: "attestation" },
+        ),
+      ),
+    ),
+  );
+  return chosen?.value.kind === "attestation"
+    ? { attestationId: chosen.value.attestationId }
+    : undefined;
+}
+
+/** `introduce-implication` and `introduce-negation` only name the hypothesis they introduce. */
+function introducedHypothesisFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const ids = generated(context, walk, "hypothesisId", "statement", "hypothesis", 1);
+  return ids === undefined ? undefined : { hypothesisId: ids[0] };
+}
+
+function splitGoalConjunctionFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const count = operatorOperands(context.entry.sequent.conclusion.expression, "And")?.length;
+  if (count === undefined) return notApplicable(walk, "The target is not a conjunction.");
+  const childIds = generated(context, walk, "childIds", "statement", "child", count);
+  return childIds === undefined ? undefined : { childIds };
+}
+
+function expandHypothesisConjunctionFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const hypothesisId = selectedHypothesis(context, walk, "conjunction");
+  if (hypothesisId === undefined) return undefined;
+  const count = hypothesisOperandCount(context, hypothesisId, "And");
+  if (count === undefined) return notApplicable(walk, "The hypothesis is not a conjunction.");
+  const expandedHypothesisIds = generated(
+    context,
+    walk,
+    "expandedHypothesisIds",
+    "statement",
+    "expanded-hypothesis",
+    count,
+  );
+  return expandedHypothesisIds === undefined ? undefined : { hypothesisId, expandedHypothesisIds };
+}
+
+function splitHypothesisDisjunctionFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const hypothesisId = selectedHypothesis(context, walk, "disjunction");
+  if (hypothesisId === undefined) return undefined;
+  const count = hypothesisOperandCount(context, hypothesisId, "Or");
+  if (count === undefined) return notApplicable(walk, "The hypothesis is not a disjunction.");
+  const childIds = generated(context, walk, "childIds", "statement", "child", count);
+  const branchHypothesisIds = generated(
+    context,
+    walk,
+    "branchHypothesisIds",
+    "statement",
+    "branch-hypothesis",
+    count,
+  );
+  return childIds === undefined || branchHypothesisIds === undefined
+    ? undefined
+    : { hypothesisId, childIds, branchHypothesisIds };
+}
+
+function applyImplicationHypothesisFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const implicationHypothesisId = selectedHypothesis(context, walk, "implication");
+  const antecedentHypothesisId = selectedHypothesis(context, walk, "antecedent");
+  const ids = generated(context, walk, "resultHypothesisId", "statement", "result-hypothesis", 1);
+  return implicationHypothesisId === undefined ||
+    antecedentHypothesisId === undefined ||
+    ids === undefined
+    ? undefined
+    : { implicationHypothesisId, antecedentHypothesisId, resultHypothesisId: ids[0] };
+}
+
+function unpackExistentialHypothesisFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const hypothesisId = selectedHypothesis(context, walk, "existential");
+  const ids = generated(context, walk, "resultHypothesisId", "statement", "result-hypothesis", 1);
+  if (hypothesisId === undefined || ids === undefined) return undefined;
+  const quantified = quantifierSort(
+    context,
+    statementExpression(context.entry, { kind: "hypothesis", id: hypothesisId }),
+    "Exists",
+  );
+  if (quantified?.typed !== true) return { hypothesisId, resultHypothesisId: ids[0] };
+  const witnessDeclarationId = generatedDeclarationId(
+    context,
+    walk,
+    "witnessDeclarationId",
+    "witness",
+  );
+  const membership = generated(
+    context,
+    walk,
+    "membershipHypothesisId",
+    "statement",
+    "membership-hypothesis",
+    1,
+  );
+  return witnessDeclarationId === undefined || membership === undefined
+    ? undefined
+    : {
+        hypothesisId,
+        resultHypothesisId: ids[0],
+        witnessDeclarationId,
+        membershipHypothesisId: membership[0],
+      };
+}
+
+function chooseGoalDisjunctFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const disjuncts = operatorOperands(context.entry.sequent.conclusion.expression, "Or") ?? [];
+  const chosen = choose(
+    context,
+    walk,
+    menu(
+      "disjunctIndex",
+      "Disjunct",
+      disjuncts.map((disjunct, index) =>
+        menuItem(
+          "disjunctIndex",
+          { kind: "index", index },
+          { kind: "math", expression: disjunct },
+          { kind: "subterm-of", statement: { kind: "conclusion" }, path: [index] },
+        ),
+      ),
+    ),
+  );
+  return chosen?.value.kind === "index" ? { disjunctIndex: chosen.value.index } : undefined;
+}
+
+function splitClassicalCasesFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const proposition = chooseProposition(context, walk, "Case proposition");
+  const childIds = generated(context, walk, "childIds", "statement", "child", 2);
+  const branchHypothesisIds = generated(
+    context,
+    walk,
+    "branchHypothesisIds",
+    "statement",
+    "branch-hypothesis",
+    2,
+  );
+  return proposition === undefined || childIds === undefined || branchHypothesisIds === undefined
+    ? undefined
+    : { proposition, childIds, branchHypothesisIds };
+}
+
+function assumeHypothesisFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const proposition = chooseProposition(context, walk, "Assumed proposition");
+  const ids = generated(context, walk, "hypothesisId", "statement", "hypothesis", 1);
+  return proposition === undefined || ids === undefined
+    ? undefined
+    : { proposition, hypothesisId: ids[0] };
+}
+
+function replaceGoalFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const proposition = chooseProposition(context, walk, "Replacement conclusion", true);
+  return proposition === undefined ? undefined : { proposition };
+}
+
+function sufficesFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const proposition = chooseProposition(context, walk, "Sufficient proposition");
+  const ids = generated(context, walk, "obligationId", "statement", "obligation", 1);
+  return proposition === undefined || ids === undefined
+    ? undefined
+    : { proposition, obligationId: ids[0] };
+}
+
+function instantiateUniversalHypothesisFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const hypothesisId = selectedHypothesis(context, walk, "universal");
+  if (hypothesisId === undefined) return undefined;
+  const quantified = quantifierSort(
+    context,
+    statementExpression(context.entry, { kind: "hypothesis", id: hypothesisId }),
+    "ForAll",
+  );
+  if (quantified === undefined) {
+    return notApplicable(walk, "The hypothesis is not a universal statement.");
+  }
+  const term = chooseTerm(context, walk, "term", "Instantiation term", quantified.sort);
+  const ids = generated(context, walk, "resultHypothesisId", "statement", "result-hypothesis", 1);
+  if (term === undefined || ids === undefined) return undefined;
+  if (!quantified.typed) return { hypothesisId, term, resultHypothesisId: ids[0] };
+  const obligation = generated(
+    context,
+    walk,
+    "membershipObligationId",
+    "statement",
+    "membership-obligation",
+    1,
+  );
+  return obligation === undefined
+    ? undefined
+    : {
+        hypothesisId,
+        term,
+        resultHypothesisId: ids[0],
+        membershipObligationId: obligation[0],
+      };
+}
+
+function chooseExistentialWitnessFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const quantified = quantifierSort(context, context.entry.sequent.conclusion.expression, "Exists");
+  if (quantified === undefined) {
+    return notApplicable(walk, "The target conclusion is not existential.");
+  }
+  const witness = chooseTerm(context, walk, "witness", "Witness term", quantified.sort);
+  return witness === undefined ? undefined : { witness };
+}
+
+function markSorryFields(
+  context: Context,
+  walk: Walk,
+): Readonly<Record<string, unknown>> | undefined {
+  const ids = generated(context, walk, "assumptionId", "assumption", "sorry", 1);
+  return ids === undefined ? undefined : { assumptionId: ids[0] };
 }
 
 // ---------------------------------------------------------------------------------------------
