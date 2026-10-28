@@ -488,6 +488,40 @@ describe("proof-state formalizer structured boundary", () => {
 });
 
 describe("validated LLM call boundary", () => {
+  it("accepts a recorded envelope whose object keys come back in another order", () => {
+    // An object-form MathJSON node keeps whatever key order storage hands back.
+    const conjunct = { sym: "p", comment: "the first conjunct" };
+    const current = node(["And", conjunct, "q"]);
+    const envelope = shortlisterEnvelope(current, suggestionSet(current, { fragment: conjunct }));
+    if (!envelope.ok) throw new Error(envelope.diagnostics[0].message);
+    expect(JSON.stringify(envelope.envelope)).toContain('"comment":"the first conjunct"');
+    const prepared = prepareLlmCall(envelope.envelope);
+    if (!prepared.ok) throw new Error(prepared.diagnostics[0].message);
+    const reversed = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reversed)
+        : typeof value === "object" && value !== null
+          ? Object.fromEntries(
+              Object.entries(value)
+                .reverse()
+                .map(([k, v]) => [k, reversed(v)]),
+            )
+          : value;
+    const call = prepared.call;
+    const reordered = { ...call, envelope: reversed(call.envelope) };
+    expect(JSON.stringify(reordered.envelope)).not.toBe(call.messages[1].content);
+    expect(preparedLlmCallSchema.safeParse(reordered).success).toBe(true);
+    const tampered = (content: string) => ({
+      ...call,
+      messages: [call.messages[0], { role: "user", content }],
+    });
+    expect(preparedLlmCallSchema.safeParse(tampered("not json")).success).toBe(false);
+    expect(
+      preparedLlmCallSchema.safeParse(tampered(JSON.stringify({ ...call.envelope, extra: true })))
+        .success,
+    ).toBe(false);
+  });
+
   it("accepts only strict pending topic proposals", () => {
     const envelope = topicEnvelope();
     if (!envelope.ok) throw new Error(envelope.diagnostics[0].message);

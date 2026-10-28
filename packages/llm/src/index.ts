@@ -21,7 +21,7 @@ import {
   type DisplayedSuggestionSet,
   type ProofNode,
 } from "@proof/protocol";
-import { jsonValueEquals } from "@proof/mathjson-model";
+import { canonicalJsonEquals, jsonValueEquals } from "@proof/mathjson-model";
 import { z } from "zod";
 import {
   BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
@@ -1282,7 +1282,7 @@ export const preparedLlmCallSchema = z
     if (!acceptsSystemMessage(call.role, call.messages[0].content)) {
       context.addIssue({ code: "custom", message: "The system message must match the role." });
     }
-    if (call.messages[1].content !== JSON.stringify(call.envelope)) {
+    if (!encodesEnvelope(call.messages[1].content, call.envelope)) {
       context.addIssue({
         code: "custom",
         message: "The user message must contain the exact envelope.",
@@ -1290,6 +1290,21 @@ export const preparedLlmCallSchema = z
     }
   });
 export type PreparedLlmCall = z.infer<typeof preparedLlmCallSchema>;
+
+/**
+ * Whether a recorded user message is the JSON text of the envelope. The comparison is structural,
+ * not textual: a stored envelope can come back with its MathJSON object keys in another order
+ * (PostgreSQL JSONB does this), while the recorded message keeps the text that was sent.
+ */
+function encodesEnvelope(content: string, envelope: unknown): boolean {
+  let sent: unknown;
+  try {
+    sent = JSON.parse(content);
+  } catch {
+    return false;
+  }
+  return canonicalJsonEquals(sent, envelope);
+}
 
 export function prepareLlmCall(
   envelopeInput: unknown,
