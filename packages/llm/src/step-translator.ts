@@ -72,12 +72,44 @@ const focusSchema = z
   })
   .strict();
 
+/** An exact-occurrence selection, as the suggestion request takes it. */
+export const translatorSelectionSchema = z
+  .object({
+    kind: z.literal("exact"),
+    anchor: z
+      .object({
+        stateId: stableIdentifierSchema,
+        target: z
+          .object({ kind: z.enum(["goal", "obligation"]), id: stableIdentifierSchema })
+          .strict(),
+        statement: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("conclusion") }).strict(),
+          z.object({ kind: z.literal("hypothesis"), id: stableIdentifierSchema }).strict(),
+        ]),
+      })
+      .strict(),
+    path: z.array(z.number().int().nonnegative()).max(64),
+  })
+  .strict();
+export type TranslatorSelection = z.infer<typeof translatorSelectionSchema>;
+
+/** One suggestion request the platform ran; candidates name the set they were displayed in. */
+const selectionSetSchema = z
+  .object({
+    id: stableIdentifierSchema,
+    selections: z.array(translatorSelectionSchema).min(1).max(8),
+  })
+  .strict();
+
 const candidateSchema = z
   .object({
     id: stableIdentifierSchema,
     label: labelSchema,
     source: z.enum(["result", "move"]),
     artifactId: stableIdentifierSchema,
+    selectionSetId: stableIdentifierSchema,
+    /** The suggestion's position in that set's deterministic list. */
+    suggestionIndex: z.number().int().nonnegative(),
     selections: z.array(latexSchema).min(1).max(8),
     reasons: z.array(z.string().min(1).max(500)).max(16),
   })
@@ -99,11 +131,13 @@ export type TranslatorMenu = z.infer<typeof menuSchema>;
 const actionContextSchema = z
   .object({
     kind: z.literal("action"),
+    nodeId: stableIdentifierSchema,
     plan: planReferenceSchema,
     step: translatorStepSchema,
     enclosingClaim: proofPlanClaimSchema,
     focus: focusSchema,
     movesSoFar: z.array(labelSchema).max(8),
+    selectionSets: z.array(selectionSetSchema).max(64),
     candidates: z.array(candidateSchema).max(MAX_TRANSLATOR_CANDIDATES),
     /** Whether `outcome:step-realized` is offered (only after a move, when no check decides). */
     offerRealized: z.boolean(),
@@ -113,6 +147,10 @@ const actionContextSchema = z
 const menusContextSchema = z
   .object({
     kind: z.literal("menus"),
+    nodeId: stableIdentifierSchema,
+    /** The action call and candidate whose menus these are. */
+    actionCallId: stableIdentifierSchema,
+    candidateId: stableIdentifierSchema,
     plan: planReferenceSchema,
     step: translatorStepSchema,
     focus: focusSchema,
@@ -134,8 +172,20 @@ export const stepTranslatorContextSchema = z
         message: "A choice cannot use a reserved outcome ID.",
       });
     }
-    if (context.kind === "action" && new Set(ids).size !== ids.length) {
-      refinement.addIssue({ code: "custom", message: "Candidate IDs must be unique." });
+    if (context.kind === "action") {
+      if (new Set(ids).size !== ids.length) {
+        refinement.addIssue({ code: "custom", message: "Candidate IDs must be unique." });
+      }
+      const sets = new Set(context.selectionSets.map(({ id }) => id));
+      if (
+        sets.size !== context.selectionSets.length ||
+        context.candidates.some(({ selectionSetId }) => !sets.has(selectionSetId))
+      ) {
+        refinement.addIssue({
+          code: "custom",
+          message: "Every candidate names one of the unique selection sets.",
+        });
+      }
     }
     if (context.kind === "menus") {
       const parameters = context.menus.map(({ parameterId }) => parameterId);

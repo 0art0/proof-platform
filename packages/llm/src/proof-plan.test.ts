@@ -396,7 +396,7 @@ describe("proofPlanUnits", () => {
 
   it("gives every step except a case exactly one unit, and is deterministic (fast-check)", () => {
     // Random well-formed plans: nested have/qed sub-proofs and cases, each list ending in qed.
-    type Shape = { form: "have" | "suffices" | "cases"; children: Shape[] };
+    type Shape = { form: "have" | "suffices" | "cases"; children: readonly Shape[] };
     const shape: fc.Arbitrary<Shape[]> = fc.letrec<{ list: Shape[]; item: Shape }>((tie) => ({
       item: fc.record({
         form: fc.constantFrom("have", "suffices", "cases") as fc.Arbitrary<Shape["form"]>,
@@ -412,7 +412,7 @@ describe("proofPlanUnits", () => {
       fc.property(shape, (shapes) => {
         const steps: ProofPlanStep[] = [];
         let counter = 0;
-        const emit = (list: Shape[], parent: string | null, depth: number) => {
+        const emit = (list: readonly Shape[], parent: string | null, depth: number) => {
           for (const entry of list) {
             if (depth >= 4) break;
             const id = `s${(counter += 1)}`;

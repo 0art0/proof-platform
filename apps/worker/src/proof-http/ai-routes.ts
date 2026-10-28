@@ -45,6 +45,12 @@ import {
   readDisplayedSuggestionSet,
 } from "../proof-repository";
 import { applyExecutedMove, executeMove } from "./ai-execute-routes";
+import {
+  applyPlanStep,
+  readProofPlan,
+  translatePlanStep,
+  writeProofPlan,
+} from "./ai-proof-plan-routes";
 import { authorMove } from "./ai-move-author-routes";
 import { type ServiceContext } from "./shared";
 import {
@@ -215,6 +221,27 @@ export async function handleAiRoute(
     if (path.length === 5 && path[2] === "ai" && path[3] === "library" && path[4] === "top-up") {
       if (request.method !== "POST") return methodNotAllowed(response, "POST");
       await topUpLibrary(context, parsedSessionId.data, request, response);
+      return true;
+    }
+    if (path[2] === "ai" && path[3] === "proof-plan" && (path.length === 4 || path.length === 5)) {
+      const action = path[4];
+      if (action === "translate" || action === "apply") {
+        if (request.method !== "POST") return methodNotAllowed(response, "POST");
+        await (action === "translate" ? translatePlanStep : applyPlanStep)(
+          context,
+          parsedSessionId.data,
+          request,
+          response,
+        );
+        return true;
+      }
+      if (action === undefined) {
+        if (request.method !== "POST") return methodNotAllowed(response, "POST");
+        await writeProofPlan(context, parsedSessionId.data, request, response);
+        return true;
+      }
+      if (request.method !== "GET") return methodNotAllowed(response, "GET");
+      await readProofPlan(context, parsedSessionId.data, action, response);
       return true;
     }
     if (path.length === 4 && path[2] === "ai" && path[3] === "move-author") {

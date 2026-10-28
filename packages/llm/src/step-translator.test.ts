@@ -38,8 +38,20 @@ const FOCUS = {
   ],
 };
 
+const SELECTION = {
+  kind: "exact" as const,
+  anchor: {
+    stateId: "state:1",
+    target: { kind: "goal" as const, id: "goal:main" },
+    statement: { kind: "hypothesis" as const, id: "hypothesis:h1" },
+  },
+  path: [],
+};
+
 const ACTION: StepTranslatorContext = {
   kind: "action",
+  nodeId: "node:1",
+  selectionSets: [{ id: "selection-set:1", selections: [SELECTION] }],
   plan: PLAN,
   step: STEP,
   enclosingClaim: { latex: String.raw`\neg p`, prose: "not p" },
@@ -51,6 +63,8 @@ const ACTION: StepTranslatorContext = {
       label: String.raw`Modus tollens on p \implies q`,
       source: "result",
       artifactId: "result:modus-tollens",
+      selectionSetId: "selection-set:1",
+      suggestionIndex: 0,
       selections: [String.raw`p \implies q`],
       reasons: ["The selection matches the result's premise."],
     },
@@ -59,6 +73,8 @@ const ACTION: StepTranslatorContext = {
       label: String.raw`Drop hypothesis p \implies q`,
       source: "move",
       artifactId: "move:drop-hypothesis",
+      selectionSetId: "selection-set:1",
+      suggestionIndex: 1,
       selections: [String.raw`p \implies q`],
       reasons: ["Any hypothesis can be dropped."],
     },
@@ -68,6 +84,9 @@ const ACTION: StepTranslatorContext = {
 
 const MENUS: StepTranslatorContext = {
   kind: "menus",
+  nodeId: "node:1",
+  actionCallId: "llm-call:translate-0",
+  candidateId: "candidate:1",
   plan: PLAN,
   step: STEP,
   focus: FOCUS,
@@ -138,6 +157,13 @@ describe("translatorQuestions", () => {
 
   it("refuses a context that reuses a reserved ID", () => {
     const candidates = [{ ...ACTION.candidates[0]!, id: NO_MOVE_CHOICE_ID }];
+    expect(
+      buildStepTranslatorContext({ id: "llm-call:x", context: { ...ACTION, candidates } }).ok,
+    ).toBe(false);
+  });
+
+  it("refuses a candidate whose selection set is not listed", () => {
+    const candidates = [{ ...ACTION.candidates[0]!, selectionSetId: "selection-set:9" }];
     expect(
       buildStepTranslatorContext({ id: "llm-call:x", context: { ...ACTION, candidates } }).ok,
     ).toBe(false);

@@ -1,5 +1,6 @@
 import {
   createVercelJevShortlisterTransport,
+  createVercelJevStepTranslatorTransport,
   createVercelStructuredOutputTransport,
   DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
   DEFAULT_BACKGROUND_PROPOSER_MODEL,
@@ -17,6 +18,12 @@ import {
   DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS,
   DEFAULT_MOVE_AUTHOR_MODEL,
   DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
+  DEFAULT_PLANNER_MAX_OUTPUT_TOKENS,
+  DEFAULT_PLANNER_MODEL,
+  DEFAULT_PLANNER_REASONING_EFFORT,
+  DEFAULT_PLANNER_TIMEOUT_MS,
+  DEFAULT_TRANSLATOR_MIN_CONFIDENCE,
+  DEFAULT_TRANSLATOR_MODEL,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   DEFAULT_SHORTLISTER_MODEL,
   DEFAULT_TOPIC_EXTRACTOR_MAX_OUTPUT_TOKENS,
@@ -106,8 +113,30 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_LIBRARIAN_REASONING_EFFORT,
     DEFAULT_LIBRARIAN_REASONING_EFFORT,
   );
+  const plannerModel = nonEmpty(env.PROOF_AI_PLANNER_MODEL) ?? DEFAULT_PLANNER_MODEL;
+  const plannerTokens = positiveInteger(
+    env.PROOF_AI_PLANNER_MAX_OUTPUT_TOKENS,
+    DEFAULT_PLANNER_MAX_OUTPUT_TOKENS,
+  );
+  const plannerReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_PLANNER_REASONING_EFFORT",
+    env.PROOF_AI_PLANNER_REASONING_EFFORT,
+    DEFAULT_PLANNER_REASONING_EFFORT,
+  );
+  // Writing a whole proof at high effort takes minutes, so the planner has its own budget.
+  const plannerTimeoutMs = positiveInteger(
+    env.PROOF_AI_PLANNER_TIMEOUT_MS,
+    DEFAULT_PLANNER_TIMEOUT_MS,
+  );
+  const translatorModel = nonEmpty(env.PROOF_AI_TRANSLATOR_MODEL) ?? DEFAULT_TRANSLATOR_MODEL;
+  const translatorConfidence = boundedNumber(
+    "PROOF_AI_TRANSLATOR_MIN_CONFIDENCE",
+    env.PROOF_AI_TRANSLATOR_MIN_CONFIDENCE,
+    DEFAULT_TRANSLATOR_MIN_CONFIDENCE,
+  );
   const shortlisterModel = nonEmpty(env.PROOF_AI_SHORTLISTER_MODEL) ?? DEFAULT_SHORTLISTER_MODEL;
   const minimumConfidence = boundedNumber(
+    "PROOF_AI_SHORTLISTER_MIN_CONFIDENCE",
     env.PROOF_AI_SHORTLISTER_MIN_CONFIDENCE,
     DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
   );
@@ -209,6 +238,35 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         reasoningEffort: authorReasoningEffort,
       }),
     },
+    "proof-planner": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: plannerModel,
+        reasoningEffort: plannerReasoningEffort,
+        maxOutputTokens: plannerTokens,
+        timeoutMs: plannerTimeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: plannerModel,
+        promptVersion: "proof-planner-v1",
+        maxOutputTokens: plannerTokens,
+        reasoningEffort: plannerReasoningEffort,
+      }),
+    },
+    "step-translator": {
+      transport: createVercelJevStepTranslatorTransport({
+        apiKey: key.apiKey,
+        model: translatorModel,
+        timeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway-evaluation",
+        model: translatorModel,
+        promptVersion: "step-translator-jev-v1",
+        minimumConfidence: translatorConfidence,
+      }),
+    },
     "move-shortlister": {
       transport: createVercelJevShortlisterTransport({
         apiKey: key.apiKey,
@@ -249,11 +307,11 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
-function boundedNumber(value: string | undefined, fallback: number): number {
+function boundedNumber(name: string, value: string | undefined, fallback: number): number {
   if (value === undefined || value.trim() === "") return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
-    throw new Error("PROOF_AI_SHORTLISTER_MIN_CONFIDENCE must be between 0 and 1.");
+    throw new Error(`${name} must be between 0 and 1.`);
   }
   return parsed;
 }
