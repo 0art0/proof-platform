@@ -22,10 +22,11 @@
  * earliest-final-edge rule.
  */
 import type { KernelOperation, TransitionClass } from "@proof/kernel";
-import type {
-  AdditionalAssumption,
-  ExecutableProofState,
-  StatementId,
+import {
+  jsonValueEquals,
+  type AdditionalAssumption,
+  type ExecutableProofState,
+  type StatementId,
 } from "@proof/mathjson-model";
 import { PRIMITIVE_TRANSITION_EVIDENCE } from "@proof/moves";
 import type { ProofEdge, ProofEdgeId, ProofNode, ProofNodeId } from "./index";
@@ -388,7 +389,7 @@ function pureAddedHypotheses(
   after: ExecutableProofState,
   target: DiscoveryTarget,
 ): readonly StatementId[] | undefined {
-  if (!jsonEquals(before.assumptions ?? [], after.assumptions ?? [])) return undefined;
+  if (!jsonValueEquals(before.assumptions ?? [], after.assumptions ?? [])) return undefined;
   const beforeTargets = targetsOf(before);
   const afterTargets = targetsOf(after);
   if (
@@ -399,7 +400,7 @@ function pureAddedHypotheses(
   }
   for (const other of beforeTargets) {
     if (targetKey(other) === targetKey(target)) continue;
-    if (!jsonEquals(findEntry(before, other), findEntry(after, other))) return undefined;
+    if (!jsonValueEquals(findEntry(before, other), findEntry(after, other))) return undefined;
   }
   const old = findEntry(before, target);
   const next = findEntry(after, target);
@@ -409,11 +410,11 @@ function pureAddedHypotheses(
   const { sequent: oldSequent, ...oldRest } = old;
   const { sequent: newSequent, ...newRest } = next;
   if (
-    !jsonEquals(oldRest, newRest) ||
-    !jsonEquals(oldSequent.conclusion, newSequent.conclusion) ||
-    !jsonEquals(oldContext, newContext) ||
+    !jsonValueEquals(oldRest, newRest) ||
+    !jsonValueEquals(oldSequent.conclusion, newSequent.conclusion) ||
+    !jsonValueEquals(oldContext, newContext) ||
     newHypotheses.length <= oldHypotheses.length ||
-    !oldHypotheses.every((hypothesis, index) => jsonEquals(hypothesis, newHypotheses[index]))
+    !oldHypotheses.every((hypothesis, index) => jsonValueEquals(hypothesis, newHypotheses[index]))
   ) {
     return undefined;
   }
@@ -640,25 +641,6 @@ function findEntry(state: ExecutableProofState, target: DiscoveryTarget): Entry 
 
 function failure(code: DiscoveryTreeDiagnosticCode, message: string): DiscoveryTreeAnalysisResult {
   return freezeDetached({ ok: false, diagnostics: [{ code, message }] });
-}
-
-function jsonEquals(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonEquals(value, right[index]))
-    );
-  }
-  if (!isRecord(left) || !isRecord(right)) return false;
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every((key, index) => key === rightKeys[index] && jsonEquals(left[key], right[key]))
-  );
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

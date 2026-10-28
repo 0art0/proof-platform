@@ -1,3 +1,4 @@
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import type { DisplayedSuggestionSet, MovePreview } from "@proof/protocol";
 
 /**
@@ -79,7 +80,7 @@ function collectionChanges(
       collection,
       before: previous,
       after: target,
-      conclusionChanged: !sameJson(
+      conclusionChanged: !canonicalJsonEquals(
         previous.sequent.conclusion.expression,
         target.sequent.conclusion.expression,
       ),
@@ -98,11 +99,10 @@ function collectionChanges(
 }
 
 function sameHypothesis(left: Hypothesis, right: Hypothesis | undefined): boolean {
-  return right !== undefined && sameJson(left.statement.expression, right.statement.expression);
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return (
+    right !== undefined &&
+    canonicalJsonEquals(left.statement.expression, right.statement.expression)
+  );
 }
 
 /** The kernel's evidence kinds (`TransitionEvidence`), kept visibly distinct in the panel. */

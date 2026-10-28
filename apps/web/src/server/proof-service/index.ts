@@ -1,5 +1,6 @@
 import "server-only";
 
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import {
   backtrackAnalysisRequestSchema,
   backtrackAnalysisSchema,
@@ -1035,7 +1036,7 @@ function suggestionSetMatchesRequest(
       descriptor !== undefined &&
       subject.id === `selection:request-${index + 1}` &&
       // The abstraction is stored exactly as requested (static history).
-      jsonEquals(subject.abstraction ?? null, descriptor.abstraction ?? null) &&
+      canonicalJsonEquals(subject.abstraction ?? null, descriptor.abstraction ?? null) &&
       resolvedSelectionMatchesDescriptor(subject.selection, descriptor)
     );
   });
@@ -1045,24 +1046,23 @@ function resolvedSelectionMatchesDescriptor(
   resolved: ResolvedProofSelection,
   descriptor: ProofSelectionDescriptor,
 ): boolean {
-  if (resolved.kind !== descriptor.kind || !jsonEquals(resolved.anchor, descriptor.anchor)) {
+  if (
+    resolved.kind !== descriptor.kind ||
+    !canonicalJsonEquals(resolved.anchor, descriptor.anchor)
+  ) {
     return false;
   }
   if (resolved.kind === "exact" && descriptor.kind === "exact") {
-    return jsonEquals(resolved.path, descriptor.path);
+    return canonicalJsonEquals(resolved.path, descriptor.path);
   }
   return (
     resolved.kind === "associative" &&
     descriptor.kind === "associative" &&
-    jsonEquals(resolved.containerPath, descriptor.containerPath) &&
+    canonicalJsonEquals(resolved.containerPath, descriptor.containerPath) &&
     resolved.startOperand === descriptor.startOperand &&
     resolved.endOperand === descriptor.endOperand &&
-    jsonEquals(resolved.displayRange, descriptor.displayRange)
+    canonicalJsonEquals(resolved.displayRange, descriptor.displayRange)
   );
-}
-
-function jsonEquals(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 // ---------------------------------------------------------------------------------------------

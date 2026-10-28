@@ -30,6 +30,7 @@ import {
   type LibraryLayer,
   type LibraryOperatorRegistration,
 } from "@proof/library";
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import {
   proofSessionMetadataSchema,
   type OperatorDeclaration,
@@ -419,7 +420,7 @@ export async function reviseBackground(
       }
       const existing = revisions.find((revision) => revision.id === request.id);
       if (existing !== undefined) {
-        return sameJson(
+        return canonicalJsonEquals(
           { ...existing, sessionId, sequence: existing.sequence },
           {
             ...request,
@@ -439,7 +440,7 @@ export async function reviseBackground(
               "The revision ID is bound to another revision.",
             );
       }
-      if (!sameJson(metadata.background, request.previous)) {
+      if (!canonicalJsonEquals(metadata.background, request.previous)) {
         return failure(
           "rejected",
           "stale-background",
@@ -523,7 +524,7 @@ export async function registerLibraryOperator(
       }
       const same = existing.find(({ operator }) => operator.id === registration.operator.id);
       if (same !== undefined) {
-        return sameJson(same, registration)
+        return canonicalJsonEquals(same, registration)
           ? freezeDetached({ status: "registered" as const, registration: same, replayed: true })
           : failure("rejected", "operator-id-conflict", "The operator ID is already registered.");
       }
@@ -618,7 +619,7 @@ async function sessionBackground(
     return failure("rejected", "library-record-invalid", "A stored revision is invalid.");
   }
   const last = revisions.at(-1);
-  if (last !== undefined && !sameJson(last.revised, metadata?.background)) {
+  if (last !== undefined && !canonicalJsonEquals(last.revised, metadata?.background)) {
     return failure(
       "rejected",
       "library-record-invalid",
@@ -662,8 +663,8 @@ function sameRequest(event: LibraryAdditionEvent, request: LibraryAdditionReques
     event.sessionId === request.sessionId &&
     event.layer === request.layer &&
     event.occurredAt === request.occurredAt &&
-    sameJson(event.origin, request.origin) &&
-    sameJson(event.artifact, request.artifact)
+    canonicalJsonEquals(event.origin, request.origin) &&
+    canonicalJsonEquals(event.artifact, request.artifact)
   );
 }
 
@@ -704,22 +705,6 @@ function safeParse<Output>(schema: z.ZodType<Output>, input: unknown): Output | 
   } catch {
     return undefined;
   }
-}
-
-/** Key-order-insensitive JSON equality, so JSONB round trips compare equal. */
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => compareStrings(left, right))
-      .map(([key, entry]) => [key, canonical(entry)]),
-  );
 }
 
 function freezeDetached<Value>(value: Value): Value {

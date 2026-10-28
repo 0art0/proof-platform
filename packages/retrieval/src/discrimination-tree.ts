@@ -1,4 +1,4 @@
-import type { PlainMathJson } from "@proof/mathjson-model";
+import { canonicalJson, type PlainMathJson } from "@proof/mathjson-model";
 import {
   functionParts,
   groupedAssociativeOperands,
@@ -207,17 +207,4 @@ function groupedFunctionKey(operator: string): string {
 
 function literalKey(expression: PlainMathJson): string {
   return `lit:${canonicalJson(expression)}`;
-}
-
-/** JSON with sorted object keys, so structurally equal literals share one edge. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const record = value as Readonly<Record<string, unknown>>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }

@@ -11,7 +11,11 @@
  * Schemas that depend on `./index` are wrapped in `z.lazy` because `./index` re-exports this module
  * and is still evaluating when this module first runs.
  */
-import { operatorDeclarationSchema, stableIdentifierSchema } from "@proof/mathjson-model";
+import {
+  canonicalJsonEquals,
+  operatorDeclarationSchema,
+  stableIdentifierSchema,
+} from "@proof/mathjson-model";
 import { z } from "zod";
 import {
   backgroundClassificationSchema,
@@ -125,14 +129,14 @@ export function createLibraryAdditionEventSchema(
           path: ["layer"],
         });
       }
-      if (!sameJson(event.artifact.classification, event.classification)) {
+      if (!canonicalJsonEquals(event.artifact.classification, event.classification)) {
         context.addIssue({
           code: "custom",
           message: "The event classification must be the artifact's classification.",
           path: ["classification"],
         });
       }
-      if (!sameJson(event.artifact.approval, event.approval)) {
+      if (!canonicalJsonEquals(event.artifact.approval, event.approval)) {
         context.addIssue({
           code: "custom",
           message: "The event approval must be the artifact's approval.",
@@ -166,7 +170,7 @@ export const backgroundRevisionEventSchema = z
   })
   .strict()
   .superRefine((event, context) => {
-    if (sameJson(event.previous, event.revised)) {
+    if (canonicalJsonEquals(event.previous, event.revised)) {
       context.addIssue({
         code: "custom",
         message: "A background revision must change the profile.",
@@ -213,7 +217,7 @@ export function applyBackgroundRevisions(
     if (revision.sequence <= previousSequence) {
       return revisionFailure("Background revisions must be in strictly increasing sequence order.");
     }
-    if (!sameJson(revision.previous, profile)) {
+    if (!canonicalJsonEquals(revision.previous, profile)) {
       return revisionFailure(`Revision ${revision.id} does not revise the current profile.`);
     }
     previousSequence = revision.sequence;
@@ -426,22 +430,6 @@ function revisionFailure(message: string): BackgroundRevisionResult {
     ok: false,
     diagnostics: [{ code: "background-revision-invalid" as const, message }] as const,
   });
-}
-
-/** Key-order-insensitive JSON equality, so JSONB round trips compare equal. */
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, entry]) => [key, canonical(entry)]),
-  );
 }
 
 function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {

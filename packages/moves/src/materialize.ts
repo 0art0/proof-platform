@@ -46,6 +46,7 @@ import {
 import {
   attestationIdSchema,
   builtinBinderSorts,
+  canonicalJson,
   constructionPlaceholderOperators,
   createExecutableProofStateSchema,
   deepFreeze,
@@ -2383,18 +2384,6 @@ function closeByAssumption(
   bindFromHypotheses(context, analysis.binders, analysis.premises, bindings);
   const instantiation = completeInstantiation(context, walk, analysis.binders, bindings);
   return instantiation === undefined ? undefined : { assumptionId, instantiation };
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const record = value as Readonly<Record<string, unknown>>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 /** Two independent 32-bit FNV-1a hashes: a stable, platform-independent 16-hex-digit digest. */

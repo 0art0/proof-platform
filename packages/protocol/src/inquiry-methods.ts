@@ -30,7 +30,12 @@
  *   records an observation naming the lemma and its dependence on that subtree.
  */
 import type { KernelOperation } from "@proof/kernel";
-import type { ProofContext, ProofState, StatementView } from "@proof/mathjson-model";
+import {
+  canonicalJson,
+  type ProofContext,
+  type ProofState,
+  type StatementView,
+} from "@proof/mathjson-model";
 import { analyzeDiscoveryTree } from "./discovery-tree";
 import {
   currentInquiryStatus,
@@ -669,18 +674,6 @@ function sameTarget(left: InquiryTarget, right: InquiryTarget): boolean {
 
 function targetKey(target: InquiryTarget): string {
   return `${target.kind}\u0000${target.id}`;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    return `{${Object.entries(value)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }
 
 function failure(

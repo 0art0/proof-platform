@@ -1,10 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { CLOSURE_OPERATOR_DECLARATIONS, SET_OPERATOR_DECLARATIONS } from "@proof/library";
+import { canonicalJson } from "@proof/mathjson-model";
 import {
   ARTIFACT_SESSION_ID_FIELDS,
   PROOF_ARTIFACT_VERSION,
-  canonicalArtifactJson,
   deriveArtifactFinalMaterial,
   deriveTranslationDictionary,
   parseProofArtifact,
@@ -152,7 +152,7 @@ describe("parseProofArtifact", () => {
   });
 });
 
-describe("canonicalArtifactJson", () => {
+describe("canonicalJson (the artifact digest serialization)", () => {
   it("is independent of key order and drops undefined properties (property)", () => {
     const value = fc.letrec((tie) => ({
       leaf: fc.oneof(fc.string(), fc.integer(), fc.boolean(), fc.constant(null)),
@@ -176,13 +176,11 @@ describe("canonicalArtifactJson", () => {
     };
     fc.assert(
       fc.property(value, (input) => {
-        expect(canonicalArtifactJson(reversed(input))).toBe(canonicalArtifactJson(input));
-        expect(JSON.parse(canonicalArtifactJson(input))).toEqual(JSON.parse(JSON.stringify(input)));
+        expect(canonicalJson(reversed(input))).toBe(canonicalJson(input));
+        expect(JSON.parse(canonicalJson(input))).toEqual(JSON.parse(JSON.stringify(input)));
       }),
     );
-    expect(canonicalArtifactJson({ b: 1, a: undefined, c: [undefined] })).toBe(
-      '{"b":1,"c":[null]}',
-    );
+    expect(canonicalJson({ b: 1, a: undefined, c: [undefined] })).toBe('{"b":1,"c":[null]}');
   });
 
   it("produces exactly the bytes artifact digests were computed over (golden)", () => {
@@ -199,18 +197,18 @@ describe("canonicalArtifactJson", () => {
       m: [["Add", 1, { sym: "x" }], { fn: ["Sin", "Pi"] }, [], {}],
       emoji: "😀 \ud800",
     };
-    expect(canonicalArtifactJson(input)).toBe(
+    expect(canonicalJson(input)).toBe(
       '{"a":{"":null,"10":true,"2":false,"B":"upper","b":"lower",' +
         '"é":"ünïcødé ∀x. x≥0   \\"quoted\\" \\\\ \\n\\t\\u0001"},' +
         '"emoji":"😀 \\ud800",' +
         '"m":[["Add",1,{"sym":"x"}],{"fn":["Sin","Pi"]},[],{}],' +
         '"z":[3,-1.5,1e+21,0.1,0,2e-7,123456789012345680000]}',
     );
-    expect(canonicalArtifactJson({ b: 1, a: undefined, c: [undefined, { d: undefined }] })).toBe(
+    expect(canonicalJson({ b: 1, a: undefined, c: [undefined, { d: undefined }] })).toBe(
       '{"b":1,"c":[null,{}]}',
     );
-    expect(canonicalArtifactJson(undefined)).toBe("null");
-    expect(canonicalArtifactJson("x")).toBe('"x"');
+    expect(canonicalJson(undefined)).toBe("null");
+    expect(canonicalJson("x")).toBe('"x"');
   });
 });
 

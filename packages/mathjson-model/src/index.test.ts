@@ -1,5 +1,8 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalJson,
+  canonicalJsonEquals,
   deepFreeze,
   isPlainMathJson,
   jsonValueEquals,
@@ -94,6 +97,84 @@ describe("plain data helpers", () => {
     expect(jsonValueEquals({ a: undefined }, {})).toBe(false);
     expect(jsonValueEquals([], {})).toBe(false);
     expect(jsonValueEquals(null, {})).toBe(false);
+  });
+
+  it("writes canonical JSON with sorted keys and a JSON.stringify undefined policy (golden)", () => {
+    // Persisted digests and IDs hash these bytes; see also the artifact and menu-item goldens.
+    expect(
+      canonicalJson({
+        z: [3, -1.5, 1e21, 0.1, -0, 2e-7, 123456789012345680000],
+        a: {
+          é: 'ünïcødé ∀x. x≥0   "quoted" \\ \n\t\u0001',
+          "10": true,
+          "2": false,
+          "": null,
+          B: "upper",
+          b: "lower",
+        },
+        m: [["Add", 1, { sym: "x" }], { fn: ["Sin", "Pi"] }, [], {}],
+        emoji: "😀 \ud800",
+      }),
+    ).toBe(
+      '{"a":{"":null,"10":true,"2":false,"B":"upper","b":"lower",' +
+        '"é":"ünïcødé ∀x. x≥0   \\"quoted\\" \\\\ \\n\\t\\u0001"},' +
+        '"emoji":"😀 \\ud800",' +
+        '"m":[["Add",1,{"sym":"x"}],{"fn":["Sin","Pi"]},[],{}],' +
+        '"z":[3,-1.5,1e+21,0.1,0,2e-7,123456789012345680000]}',
+    );
+    expect(canonicalJson({ b: 1, a: undefined, c: [undefined, { d: undefined }] })).toBe(
+      '{"b":1,"c":[null,{}]}',
+    );
+    const sparse: unknown[] = [1];
+    sparse[2] = 2;
+    expect(canonicalJson(sparse)).toBe(JSON.stringify(sparse));
+    expect(canonicalJson(undefined)).toBe("null");
+    expect(canonicalJson(Number.NaN)).toBe("null");
+    expect(canonicalJsonEquals({ a: 1, b: undefined }, { a: 1 })).toBe(true);
+    expect(canonicalJsonEquals({ a: 1, b: 2 }, { b: 2, a: 1 })).toBe(true);
+    expect(canonicalJsonEquals([1, 2], [2, 1])).toBe(false);
+  });
+
+  it("is invariant under key permutation and agrees with jsonValueEquals (property)", () => {
+    const permuted = (value: unknown, seed: number): unknown => {
+      if (Array.isArray(value)) return value.map((item, index) => permuted(item, seed + index));
+      if (typeof value !== "object" || value === null) return value;
+      const entries = Object.entries(value).map(
+        ([key, child], index) => [key, permuted(child, seed + index)] as const,
+      );
+      const rotation = entries.length === 0 ? 0 : seed % entries.length;
+      const reordered = [...entries.slice(rotation), ...entries.slice(0, rotation)];
+      return Object.fromEntries(seed % 2 === 0 ? reordered : reordered.reverse());
+    };
+    const json = fc.jsonValue({ maxDepth: 4 });
+    fc.assert(
+      fc.property(json, fc.nat(), (value, seed) => {
+        const other = permuted(value, seed);
+        expect(canonicalJson(other)).toBe(canonicalJson(value));
+        expect(jsonValueEquals(other, value)).toBe(true);
+        expect(JSON.parse(canonicalJson(value))).toEqual(value);
+      }),
+    );
+    // Equal canonical text exactly when the values are structurally equal. The small domain makes
+    // equal (but differently ordered) pairs common.
+    const small = fc.letrec((tie) => ({
+      leaf: fc.constantFrom<unknown>(0, 1, "a", "b", true, null),
+      node: fc.oneof(
+        { depthSize: "small" },
+        tie("leaf"),
+        fc.array(tie("node"), { maxLength: 2 }),
+        fc.dictionary(fc.constantFrom("a", "b", "c"), tie("node"), { maxKeys: 3 }),
+      ),
+    })).node;
+    const value = fc.oneof(json, small);
+    fc.assert(
+      fc.property(value, value, fc.nat(), (left, right, seed) => {
+        expect(canonicalJson(left) === canonicalJson(permuted(right, seed))).toBe(
+          jsonValueEquals(left, right),
+        );
+      }),
+      { numRuns: 500 },
+    );
   });
 
   it("freezes nested data in place, including cycles, and returns the same value", () => {

@@ -21,6 +21,7 @@ import {
   type DisplayedSuggestionSet,
   type ProofNode,
 } from "@proof/protocol";
+import { jsonValueEquals } from "@proof/mathjson-model";
 import { z } from "zod";
 import {
   BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
@@ -1511,9 +1512,9 @@ export function validateLlmOutput(
     const probabilityTotal = Object.values(probabilities).reduce((sum, value) => sum + value, 0);
     const highestProbability = Math.max(...Object.values(probabilities));
     const validJevResult =
-      jsonDataEquals(jevResult.providerRequest.state, call.envelope) &&
-      jsonDataEquals(criteria, expectedCriteria) &&
-      jsonDataEquals(probabilityIds, expectedIds) &&
+      jsonValueEquals(jevResult.providerRequest.state, call.envelope) &&
+      jsonValueEquals(criteria, expectedCriteria) &&
+      jsonValueEquals(probabilityIds, expectedIds) &&
       Math.abs(probabilityTotal - 1) <= 0.02 &&
       probabilities[jevResult.providerOutput.choice] === highestProbability;
     if (!validJevResult) {
@@ -1633,39 +1634,11 @@ function formalizerDraftMatchesContext(
 ): boolean {
   if (output.kind !== "formalization") return true;
   return (
-    jsonDataEquals(output.draft.problem, context.problem) &&
-    jsonDataEquals(output.draft.background, context.background) &&
-    jsonDataEquals(output.draft.preferences, context.preferences) &&
-    jsonDataEquals(output.draft.libraryLayerIds, context.libraryLayerIds) &&
-    jsonDataEquals(output.draft.packs, context.packs)
-  );
-}
-
-function jsonDataEquals(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonDataEquals(value, right[index]))
-    );
-  }
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
-    return false;
-  }
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key, index) =>
-        key === rightKeys[index] &&
-        jsonDataEquals(
-          (left as Record<string, unknown>)[key],
-          (right as Record<string, unknown>)[key],
-        ),
-    )
+    jsonValueEquals(output.draft.problem, context.problem) &&
+    jsonValueEquals(output.draft.background, context.background) &&
+    jsonValueEquals(output.draft.preferences, context.preferences) &&
+    jsonValueEquals(output.draft.libraryLayerIds, context.libraryLayerIds) &&
+    jsonValueEquals(output.draft.packs, context.packs)
   );
 }
 

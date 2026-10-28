@@ -29,8 +29,9 @@
  * - `interactionEvents` (including backtracking-with-information events) and `inquiryRecords`.
  * - `final` and `translationDictionary` (derived), and `llmCalls` (stored LLM call records, if any).
  *
- * `digest` is `sha256:` of `canonicalArtifactJson` of the artifact without `digest`. The digest
- * detects accidental corruption only; an importer must revalidate every section.
+ * `digest` is `sha256:` of `canonicalJson` (`@proof/mathjson-model`) of the artifact without
+ * `digest`. The digest detects accidental corruption only; an importer must revalidate every
+ * section.
  *
  * Session identity. The only fields that name the exporting session are listed in
  * `ARTIFACT_SESSION_ID_FIELDS`; `withArtifactSessionId` rewrites exactly those, so two artifacts of
@@ -46,6 +47,7 @@ import {
   type LibraryArtifact,
 } from "@proof/library";
 import {
+  canonicalJsonEquals,
   operatorDeclarationsSchema,
   operatorPresentationSchema,
   stableIdentifierSchema,
@@ -311,21 +313,21 @@ function createProofArtifactSchema(
           path: ["initialState", "rootNodeId"],
         });
       }
-      if (!sameJson(artifact.initialState.operators, environment.operators)) {
+      if (!canonicalJsonEquals(artifact.initialState.operators, environment.operators)) {
         context.addIssue({
           code: "custom",
           message: "The session operators differ from the parsing environment.",
           path: ["initialState", "operators"],
         });
       }
-      if (!sameJson(artifact.constantActivations, activations)) {
+      if (!canonicalJsonEquals(artifact.constantActivations, activations)) {
         context.addIssue({
           code: "custom",
           message: "The constant activations differ from the parsing environment.",
           path: ["constantActivations"],
         });
       }
-      if (!sameJson(artifact.library.operators, environment.libraryOperators)) {
+      if (!canonicalJsonEquals(artifact.library.operators, environment.libraryOperators)) {
         context.addIssue({
           code: "custom",
           message: "The library operators differ from the parsing environment.",
@@ -336,7 +338,7 @@ function createProofArtifactSchema(
         artifact.library.operators.map((operator) => [operator.symbol, operator]),
       );
       effective.operators.forEach((operator, index) => {
-        if (!sameJson(libraryOperators.get(operator.symbol), operator)) {
+        if (!canonicalJsonEquals(libraryOperators.get(operator.symbol), operator)) {
           context.addIssue({
             code: "custom",
             message: `The library environment must declare the session operator ${operator.symbol} identically.`,
@@ -457,22 +459,6 @@ export function parseProofArtifact(input: unknown): ParseProofArtifactResult {
   }
 }
 
-/** Canonical JSON: object keys sorted, undefined properties dropped, no whitespace. */
-export function canonicalArtifactJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => (item === undefined ? "null" : canonicalArtifactJson(item))).join(",")}]`;
-  }
-  if (typeof value === "object" && value !== null) {
-    const entries = Object.entries(value)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    return `{${entries
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalArtifactJson(child)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 /** The content a digest covers: the artifact without its `digest` field. */
 export function proofArtifactContent(
   artifact: ProofArtifact | ProofArtifactContent,
@@ -579,7 +565,8 @@ export function deriveTranslationDictionary(
       packIds: packs
         .filter((pack) =>
           pack.operators.some(
-            (declared) => declared.symbol === operator.symbol && sameJson(declared, operator),
+            (declared) =>
+              declared.symbol === operator.symbol && canonicalJsonEquals(declared, operator),
           ),
         )
         .map(({ id }) => id),
@@ -787,10 +774,6 @@ function parseFailure(
 
 function toJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value) ?? "null") as JsonValue;
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return canonicalArtifactJson(left) === canonicalArtifactJson(right);
 }
 
 function compareStrings(left: string, right: string): number {

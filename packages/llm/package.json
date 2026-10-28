@@ -15,6 +15,7 @@
   "dependencies": {
     "@proof/kernel": "*",
     "@proof/library": "*",
+    "@proof/mathjson-model": "*",
     "@proof/moves": "*",
     "@proof/protocol": "*",
     "zod": "^4.5.4"

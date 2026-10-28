@@ -33,6 +33,7 @@
  * initialized while this module's top level runs.
  */
 import {
+  canonicalJsonEquals,
   operatorDeclarationsSchema,
   operatorIdSchema,
   sortSchema,
@@ -856,7 +857,7 @@ export function libraryPacksForOperators(
   return packs.filter((pack) =>
     pack.operators.every((operator) => {
       const existing = declared.get(operator.symbol);
-      return existing !== undefined && sameJson(existing, operator);
+      return existing !== undefined && canonicalJsonEquals(existing, operator);
     }),
   );
 }
@@ -988,21 +989,6 @@ function admit(result: LibraryResult, operators: readonly OperatorDeclaration[])
     );
   }
   return admission.artifact;
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, entry]) => [key, canonical(entry)]),
-  );
 }
 
 function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {

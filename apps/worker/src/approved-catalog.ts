@@ -5,6 +5,7 @@ import {
   type VariantFamily,
 } from "@proof/library";
 import { createHash } from "node:crypto";
+import { canonicalJson } from "@proof/mathjson-model";
 import { HAND_AUTHORED_MOVES, approvedKernelResults, type MoveDefinition } from "@proof/moves";
 import type { AuthoredMoveTemplate } from "@proof/moves/authoring";
 import type { DefinitionHash, ProtocolEnvironment } from "@proof/protocol";
@@ -103,15 +104,4 @@ export function adaptApprovedCatalog(
 /** `sha256:` hex digest of a definition's canonical JSON (object keys sorted, no whitespace). */
 export function definitionHash(definition: unknown): DefinitionHash {
   return `sha256:${createHash("sha256").update(canonicalJson(definition)).digest("hex")}`;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const entries = Object.entries(value)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }
