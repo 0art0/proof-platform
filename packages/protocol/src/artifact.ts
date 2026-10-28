@@ -113,7 +113,7 @@ export type JsonValue =
   null | boolean | number | string | readonly JsonValue[] | Readonly<{ [key: string]: JsonValue }>;
 export type JsonObject = Readonly<{ [key: string]: JsonValue }>;
 
-export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.null(),
     z.boolean(),
@@ -123,9 +123,9 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
     z.record(z.string(), jsonValueSchema),
   ]),
 );
-export const jsonObjectSchema: z.ZodType<JsonObject> = z.record(z.string(), jsonValueSchema);
+const jsonObjectSchema: z.ZodType<JsonObject> = z.record(z.string(), jsonValueSchema);
 
-export const proofArtifactProvenanceSchema = z.discriminatedUnion("kind", [
+const proofArtifactProvenanceSchema = z.discriminatedUnion("kind", [
   /** Exported from a session built in this service. */
   z.object({ kind: z.literal("session") }).strict(),
   /** Exported from a read-only session that was created by importing another artifact. */
@@ -139,7 +139,7 @@ export const proofArtifactProvenanceSchema = z.discriminatedUnion("kind", [
 ]);
 export type ProofArtifactProvenance = z.infer<typeof proofArtifactProvenanceSchema>;
 
-export const translationDictionaryEntrySchema = z
+const translationDictionaryEntrySchema = z
   .object({
     operatorId: stableIdentifierSchema,
     symbol: z.string().min(1),
@@ -156,7 +156,7 @@ export type TranslationDictionaryEntry = Readonly<{
   packIds: readonly string[];
 }>;
 
-export const translationDictionarySchema = z
+const translationDictionarySchema = z
   .object({
     activePackIds: z.array(stableIdentifierSchema),
     entries: z.array(translationDictionaryEntrySchema),
@@ -167,7 +167,7 @@ export type TranslationDictionary = Readonly<{
   entries: readonly TranslationDictionaryEntry[];
 }>;
 
-export const artifactFinalMaterialSchema = z
+const artifactFinalMaterialSchema = z
   .object({
     solved: z.boolean(),
     /** The N17 `analyzeDiscoveryTree` result over the stored tree. */
@@ -233,7 +233,7 @@ export type ProofArtifact = Readonly<{
 /** The artifact without its digest: the content the digest covers. */
 export type ProofArtifactContent = Omit<ProofArtifact, "digest">;
 
-export type ProofArtifactEnvironment = Readonly<{
+type ProofArtifactEnvironment = Readonly<{
   /** The session's setup operators (`initialState.operators`). */
   operators: readonly OperatorDeclaration[];
   /** The activated constants (`constantActivations`); snapshots are read in both. */
@@ -246,7 +246,7 @@ export type ProofArtifactEnvironment = Readonly<{
  * The strict artifact schema for one operator environment. Use `parseProofArtifact` for input
  * whose environment is not yet known; it reads the environment from the artifact first.
  */
-export function createProofArtifactSchema(
+function createProofArtifactSchema(
   environment: ProofArtifactEnvironment,
 ): z.ZodType<ProofArtifact> {
   const activations = environment.activations ?? [];
@@ -378,7 +378,7 @@ export function createProofArtifactSchema(
     }) as unknown as z.ZodType<ProofArtifact>;
 }
 
-export const proofArtifactDiagnosticSchema = z
+const proofArtifactDiagnosticSchema = z
   .object({
     code: z.string().min(1),
     message: z.string().min(1),
@@ -597,7 +597,6 @@ export const proofArtifactImportResponseSchema = z
     replayed: z.boolean(),
   })
   .strict();
-export type ProofArtifactImportResponse = z.infer<typeof proofArtifactImportResponseSchema>;
 
 /** `POST /artifacts` rejection (422): every diagnostic names what failed revalidation. */
 export const proofArtifactRejectionResponseSchema = z

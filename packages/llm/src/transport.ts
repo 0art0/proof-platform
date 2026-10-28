@@ -34,9 +34,9 @@ export const DEFAULT_MOVE_AUTHOR_MODEL = DEFAULT_FORMALIZER_MODEL;
 export const DEFAULT_MOVE_AUTHOR_REASONING_EFFORT = "high" as const;
 export const DEFAULT_MOVE_AUTHOR_MAX_OUTPUT_TOKENS = 32_000;
 
-export const DEFAULT_LLM_MAX_ATTEMPTS = 3;
-export const DEFAULT_LLM_RETRY_BASE_DELAY_MS = 500;
-export const DEFAULT_LLM_RETRY_MAX_DELAY_MS = 8_000;
+const DEFAULT_LLM_MAX_ATTEMPTS = 3;
+const DEFAULT_LLM_RETRY_BASE_DELAY_MS = 500;
+const DEFAULT_LLM_RETRY_MAX_DELAY_MS = 8_000;
 
 export type JsonSchemaObject = Readonly<Record<string, unknown>>;
 export type FetchLike = typeof fetch;
@@ -230,7 +230,7 @@ export function createVercelJevShortlisterTransport(
  * gateway's `providerMetadata.typesafe.confidence.shortlist`, then a scalar
  * `providerMetadata.typesafe.confidence`.
  */
-export function extractJevConfidence(
+function extractJevConfidence(
   responseBody: Record<string, unknown> | undefined,
   answer: Record<string, unknown> | undefined,
 ): number | undefined {
@@ -270,7 +270,7 @@ async function postJson(input: PostJsonInput): Promise<unknown> {
   for (let attempt = 1; ; attempt += 1) {
     const remaining = deadline - now();
     if (remaining <= 0) throw new LlmTransportError("timeout");
-    const outcome = await attemptOnce(input, serialized, remaining);
+    const outcome = await attemptOnce(input, serialized, remaining, now);
     if (outcome.ok) return outcome.body;
     if (!outcome.retryable || attempt >= maxAttempts) throw new LlmTransportError(outcome.subcode);
     const backoff = Math.min(maxDelay, baseDelay * 2 ** (attempt - 1));
@@ -294,6 +294,7 @@ async function attemptOnce(
   input: PostJsonInput,
   serialized: string,
   budgetMs: number,
+  now: () => number,
 ): Promise<AttemptOutcome> {
   const controller = new AbortController();
   let timedOut = false;
@@ -316,7 +317,7 @@ async function attemptOnce(
         : { ok: false, subcode: "network", retryable: true };
     }
     if (!response.ok) {
-      const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"), now);
       return {
         ok: false,
         ...classifyStatus(response.status),
@@ -345,12 +346,13 @@ function classifyStatus(status: number): {
   return { subcode: "bad-request", retryable: false };
 }
 
-function parseRetryAfterMs(value: string | null): number | undefined {
+/** `Retry-After` as a delay: delta-seconds, or an HTTP-date measured against the injected clock. */
+function parseRetryAfterMs(value: string | null, now: () => number): number | undefined {
   if (value === null) return undefined;
   const trimmed = value.trim();
   if (/^\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed) * 1000;
   const date = Date.parse(trimmed);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now());
 }
 
 function defaultSleep(ms: number): Promise<void> {

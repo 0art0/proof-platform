@@ -97,19 +97,19 @@ const operationSchema: z.ZodType<KernelOperation> = z.unknown().transform((value
 
 const operandPathSchema = z.array(z.number().int().nonnegative()).max(64);
 
-export const replayTargetSchema = z
+const replayTargetSchema = z
   .object({ kind: z.enum(["goal", "obligation"]), id: statementIdSchema })
   .strict();
 export type ReplayTarget = z.infer<typeof replayTargetSchema>;
 
 /** Which statement of a target a selection sits in: its conclusion or one hypothesis. */
-export const replayStatementSchema = z.discriminatedUnion("role", [
+const replayStatementSchema = z.discriminatedUnion("role", [
   z.object({ role: z.literal("conclusion") }).strict(),
   z.object({ role: z.literal("hypothesis"), id: statementIdSchema }).strict(),
 ]);
-export type ReplayStatement = z.infer<typeof replayStatementSchema>;
+type ReplayStatement = z.infer<typeof replayStatementSchema>;
 
-export const replayOccurrenceSchema = z.discriminatedUnion("kind", [
+const replayOccurrenceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exact"), path: operandPathSchema }).strict(),
   z
     .object({
@@ -120,16 +120,16 @@ export const replayOccurrenceSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export type ReplayOccurrence = z.infer<typeof replayOccurrenceSchema>;
+type ReplayOccurrence = z.infer<typeof replayOccurrenceSchema>;
 
 /** A pattern variable: a symbol declared in the recorded context, with its sort. */
 const variablesSchema = z
   .array(z.object({ symbol: z.string().min(1), sort: sortSchema }).strict())
   .max(256);
-export type ReplayVariable = z.infer<typeof variablesSchema>[number];
+type ReplayVariable = z.infer<typeof variablesSchema>[number];
 
 /** One selection of a step: where it was, and the fragment re-matched as a pattern. */
-export const semanticSelectionSchema = z
+const semanticSelectionSchema = z
   .object({
     /** The move's selection slot (`occurrence` for a result application). */
     slotId: stableIdentifierSchema,
@@ -141,10 +141,10 @@ export const semanticSelectionSchema = z
     variables: variablesSchema,
   })
   .strict();
-export type SemanticSelection = z.infer<typeof semanticSelectionSchema>;
+type SemanticSelection = z.infer<typeof semanticSelectionSchema>;
 
 /** One menu parameter of a step: the chosen item's origin and value, never its item ID. */
-export const semanticParameterSchema = z
+const semanticParameterSchema = z
   .object({
     parameterId: menuParameterIdSchema,
     origin: parameterMenuItemSchema.shape.origin,
@@ -153,7 +153,7 @@ export const semanticParameterSchema = z
     variables: variablesSchema,
   })
   .strict();
-export type SemanticParameter = z.infer<typeof semanticParameterSchema>;
+type SemanticParameter = z.infer<typeof semanticParameterSchema>;
 
 const substitutionsSchema = z
   .array(z.object({ symbol: z.string().min(1), expression: plainMathJsonSchema }).strict())
@@ -227,7 +227,7 @@ export const semanticStepSchema = z
 export type SemanticStep = z.infer<typeof semanticStepSchema>;
 
 /** Where a step with no displayed suggestion came from. */
-export const operationStepOriginSchema = z.enum(["backtrack", "raw-operation"]);
+const operationStepOriginSchema = z.enum(["backtrack", "raw-operation"]);
 export type OperationStepOrigin = z.infer<typeof operationStepOriginSchema>;
 
 /**
@@ -269,14 +269,14 @@ export const semanticOperationStepSchema = z
 export type SemanticOperationStep = z.infer<typeof semanticOperationStepSchema>;
 
 /** Any step plan the replay can re-match. */
-export const semanticPlanSchema = z.union([semanticStepSchema, semanticOperationStepSchema]);
+const semanticPlanSchema = z.union([semanticStepSchema, semanticOperationStepSchema]);
 export type SemanticPlan = z.infer<typeof semanticPlanSchema>;
 
-export const replayStepSourceSchema = z.enum(["suggestion", "backtrack", "raw-operation", "macro"]);
-export type ReplayStepSource = z.infer<typeof replayStepSourceSchema>;
+const replayStepSourceSchema = z.enum(["suggestion", "backtrack", "raw-operation", "macro"]);
+type ReplayStepSource = z.infer<typeof replayStepSourceSchema>;
 
 /** How a plan's step was originally applied. */
-export function replayStepSource(plan: SemanticPlan | undefined): ReplayStepSource {
+function replayStepSource(plan: SemanticPlan | undefined): ReplayStepSource {
   if (plan === undefined) return "suggestion";
   if (plan.source === "operation") return plan.origin;
   return plan.macro === undefined ? "suggestion" : "macro";
@@ -338,10 +338,10 @@ export type SemanticReplayCommand = z.infer<typeof semanticReplayCommandSchema>;
  * expression for the first time, `conflict` when it contradicts the correspondence (or maps two
  * variables to one symbol), and `shape` when only the head operator and arity agree.
  */
-export const replayMatchSchema = z.enum(["identical", "renamed", "conflict", "shape"]);
-export type ReplayMatch = z.infer<typeof replayMatchSchema>;
+const replayMatchSchema = z.enum(["identical", "renamed", "conflict", "shape"]);
+type ReplayMatch = z.infer<typeof replayMatchSchema>;
 
-export const replayCandidateSchema = z
+const replayCandidateSchema = z
   .object({
     /** Stable within a replay request: pass it back as an override. */
     id: z.string().min(1),
@@ -358,7 +358,7 @@ const slotCandidatesSchema = z
   .object({ slotId: stableIdentifierSchema, candidates: z.array(replayCandidateSchema) })
   .strict();
 
-export const replayDiagnosticCodeSchema = z.enum([
+const replayDiagnosticCodeSchema = z.enum([
   "step-not-replayable",
   "move-unavailable",
   "no-matching-selection",
@@ -367,7 +367,7 @@ export const replayDiagnosticCodeSchema = z.enum([
   "materialization-failed",
   "command-rejected",
 ]);
-export type ReplayDiagnosticCode = z.infer<typeof replayDiagnosticCodeSchema>;
+type ReplayDiagnosticCode = z.infer<typeof replayDiagnosticCodeSchema>;
 
 const replayDiagnosticSchema = z
   .object({ code: replayDiagnosticCodeSchema, message: z.string().min(1) })
@@ -377,7 +377,7 @@ const substitutionChangeSchema = z
   .object({ symbol: z.string().min(1), expression: plainMathJsonSchema })
   .strict();
 
-export const replayStepReportSchema = z
+const replayStepReportSchema = z
   .object({
     index: z.number().int().min(1),
     sourceEdgeId: proofEdgeIdSchema,

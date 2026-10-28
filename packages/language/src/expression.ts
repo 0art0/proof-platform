@@ -40,7 +40,7 @@ export function headOf(expression: PlainMathJson): string | undefined {
  * A matching-only normal form: `{sym}` and `{fn}` wrappers become their short forms, integer
  * `{num}` literals become numbers, and metadata is dropped. It is never persisted.
  */
-export function normalizeExpression(expression: PlainMathJson): PlainMathJson {
+function normalizeExpression(expression: PlainMathJson): PlainMathJson {
   const symbol = symbolName(expression);
   if (symbol !== undefined) return symbol;
   const parts = expressionParts(expression);

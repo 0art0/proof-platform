@@ -31,7 +31,7 @@ import { PRIMITIVE_TRANSITION_EVIDENCE } from "@proof/moves";
 import type { ProofEdge, ProofEdgeId, ProofNode, ProofNodeId } from "./index";
 
 /** How a transition is supported (refinement §9), extended with explicit sorry assumptions. */
-export const DISCOVERY_EVIDENCE_KINDS = [
+const DISCOVERY_EVIDENCE_KINDS = [
   "structural",
   "library-result",
   "background-inference",

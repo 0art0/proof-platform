@@ -47,22 +47,65 @@ export function bindingsTypeFit(
   return fit;
 }
 
-function termSortFit(term: PlainMathJson, expected: Sort, context: FilterContext): TypeFit {
-  const cacheKey = `${JSON.stringify(term)}\u0000${JSON.stringify(expected)}`;
-  const cached = context.sortCache.get(cacheKey);
-  if (cached !== undefined) return cached;
+/**
+ * The parts of a sort probe that depend only on the local declarations and operators, not on the
+ * term or sort being checked: the declared symbol set, the probe's declaration ID and symbol, and
+ * the statement validators already built for each expected sort.
+ *
+ * Every term that reaches a probe has only declared or reserved free symbols, and
+ * `freshSymbolName` already avoids reserved symbols, so the probe symbol is the same for every term
+ * of a context and for every expected sort.
+ */
+type SortProbeBase = Readonly<{
+  declared: ReadonlySet<string>;
+  probeId: string;
+  probeSymbol: string;
+  /** Validators by serialized expected sort; `undefined` when the validator cannot be built. */
+  validators: Map<string, ReturnType<typeof createStatementViewSchema> | undefined>;
+}>;
+
+/** Keyed by the identity of the immutable declaration and operator lists a context carries. */
+const sortProbeBases = new WeakMap<
+  readonly Declaration[],
+  WeakMap<readonly OperatorDeclaration[], SortProbeBase>
+>();
+
+function sortProbeBaseFor(context: FilterContext): SortProbeBase {
+  let byOperators = sortProbeBases.get(context.declarations);
+  if (byOperators === undefined) {
+    byOperators = new WeakMap();
+    sortProbeBases.set(context.declarations, byOperators);
+  }
+  const existing = byOperators.get(context.operators);
+  if (existing !== undefined) return existing;
   const declared = new Set<string>([
     ...context.declarations.map(({ symbol }) => symbol),
     ...context.operators.map(({ symbol }) => symbol),
   ]);
+  const usedIds = new Set<string>(context.declarations.map(({ id }) => id));
+  let probeId = "declaration:retrieval-sort-probe";
+  for (let suffix = 1; usedIds.has(probeId); suffix += 1) {
+    probeId = `declaration:retrieval-sort-probe-${suffix}`;
+  }
+  const base: SortProbeBase = {
+    declared,
+    probeId,
+    probeSymbol: freshSymbolName("SortProbe", declared),
+    validators: new Map(),
+  };
+  byOperators.set(context.operators, base);
+  return base;
+}
+
+function termSortFit(term: PlainMathJson, expected: Sort, context: FilterContext): TypeFit {
+  const cacheKey = `${JSON.stringify(term)}\u0000${JSON.stringify(expected)}`;
+  const cached = context.sortCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const base = sortProbeBaseFor(context);
   const undeclared = freeSymbolNames(term, { operators: context.operators }).some(
-    (symbol) => !declared.has(symbol) && !RESERVED_BUILTIN_SYMBOLS.has(symbol),
+    (symbol) => !base.declared.has(symbol) && !RESERVED_BUILTIN_SYMBOLS.has(symbol),
   );
-  const fit: TypeFit = undeclared
-    ? "unknown"
-    : termHasSort(term, expected, context)
-      ? "exact"
-      : "mismatch";
+  const fit: TypeFit = undeclared ? "unknown" : probeTermSort(term, expected, context, base);
   context.sortCache.set(cacheKey, fit);
   return fit;
 }
@@ -72,26 +115,44 @@ function termSortFit(term: PlainMathJson, expected: Sort, context: FilterContext
  * `(expected) -> proposition` is applied to the term, which is proposition
  * valued exactly when the term has the expected sort in the local context.
  * This mirrors the kernel's own instantiation check.
+ *
+ * Only a genuine schema rejection is a `mismatch`. A probe that throws, such as an environment the
+ * validator refuses to build, proves nothing about the term, so it yields the conservative
+ * `unknown` and the candidate is kept rather than silently dropped.
  */
-function termHasSort(term: PlainMathJson, expected: Sort, context: FilterContext): boolean {
-  const usedSymbols = new Set<string>([
-    ...context.declarations.map(({ symbol }) => symbol),
-    ...context.operators.map(({ symbol }) => symbol),
-    ...freeSymbolNames(term, { operators: context.operators }),
-  ]);
-  const usedIds = new Set<string>(context.declarations.map(({ id }) => id));
-  let probeId = "declaration:retrieval-sort-probe";
-  for (let suffix = 1; usedIds.has(probeId); suffix += 1) {
-    probeId = `declaration:retrieval-sort-probe-${suffix}`;
+function probeTermSort(
+  term: PlainMathJson,
+  expected: Sort,
+  context: FilterContext,
+  base: SortProbeBase,
+): TypeFit {
+  try {
+    const sortKey = JSON.stringify(expected);
+    if (!base.validators.has(sortKey)) {
+      base.validators.set(sortKey, buildProbeValidator(expected, context, base));
+    }
+    const validator = base.validators.get(sortKey);
+    if (validator === undefined) return "unknown";
+    return validator.safeParse({ expression: [base.probeSymbol, term] }).success
+      ? "exact"
+      : "mismatch";
+  } catch {
+    return "unknown";
   }
-  const probe = freshSymbolName("SortProbe", usedSymbols);
+}
+
+function buildProbeValidator(
+  expected: Sort,
+  context: FilterContext,
+  base: SortProbeBase,
+): ReturnType<typeof createStatementViewSchema> | undefined {
   try {
     return createStatementViewSchema({
       declarations: [
         ...context.declarations,
         {
-          id: declarationIdSchema.parse(probeId),
-          symbol: probe,
+          id: declarationIdSchema.parse(base.probeId),
+          symbol: base.probeSymbol,
           sort: {
             kind: "function",
             signature: { parameters: [expected], result: { kind: "proposition" } },
@@ -100,9 +161,9 @@ function termHasSort(term: PlainMathJson, expected: Sort, context: FilterContext
         },
       ],
       operators: context.operators,
-    }).safeParse({ expression: [probe, term] }).success;
+    });
   } catch {
-    return false;
+    return undefined;
   }
 }
 

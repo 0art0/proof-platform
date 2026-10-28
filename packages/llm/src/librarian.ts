@@ -322,7 +322,7 @@ export const librarianProposalSchema = z
   });
 export type LibrarianProposal = z.infer<typeof librarianProposalSchema>;
 
-export const librarianInsufficientContextSchema = z
+const librarianInsufficientContextSchema = z
   .object({
     kind: z.literal("insufficient-context"),
     requestedCategories: z
@@ -332,7 +332,7 @@ export const librarianInsufficientContextSchema = z
     rationale: shortTextSchema,
   })
   .strict();
-export const librarianDeclinedSchema = z
+const librarianDeclinedSchema = z
   .object({ kind: z.literal("declined"), reason: shortTextSchema })
   .strict();
 

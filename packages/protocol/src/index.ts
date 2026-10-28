@@ -178,7 +178,7 @@ const resolvedAssociativeProofSelectionSchema = z
     }
   });
 
-export const resolvedProofSelectionSchema: z.ZodType<ResolvedProofSelection> = z.discriminatedUnion(
+const resolvedProofSelectionSchema: z.ZodType<ResolvedProofSelection> = z.discriminatedUnion(
   "kind",
   [resolvedExactProofSelectionSchema, resolvedAssociativeProofSelectionSchema],
 );
@@ -191,7 +191,7 @@ const resolvedProofSelectionQuerySubjectSchema = z
   })
   .strict();
 
-export const resolvedProofSelectionQuerySchema: z.ZodType<ResolvedProofSelectionQuery> = z
+const resolvedProofSelectionQuerySchema: z.ZodType<ResolvedProofSelectionQuery> = z
   .object({
     kind: z.literal("selection-query"),
     stateId: proofStateIdSchema,
@@ -223,12 +223,12 @@ export const resolvedProofSelectionQuerySchema: z.ZodType<ResolvedProofSelection
     });
   });
 
-export const resolvedRetrievalSelectionSchema: z.ZodType<ResolvedRetrievalSelection> = z.union([
+const resolvedRetrievalSelectionSchema: z.ZodType<ResolvedRetrievalSelection> = z.union([
   resolvedProofSelectionSchema,
   resolvedProofSelectionQuerySchema,
 ]);
 
-export const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
+const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
   .object({
     id: suggestionIdSchema,
     source: z.enum(["result", "move"]),
@@ -317,7 +317,7 @@ export const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
     }
   });
 
-export const retrievalVariantGroupSchema: z.ZodType<RetrievalVariantGroup> = z
+const retrievalVariantGroupSchema: z.ZodType<RetrievalVariantGroup> = z
   .object({
     familyId: stableIdentifierSchema,
     name: z.string().min(1),
@@ -475,7 +475,7 @@ export type PrepareDisplayedSuggestionSetResult =
   | Readonly<{ ok: false; diagnostics: readonly [ProtocolDiagnostic] }>;
 
 /** Zod adapter over the kernel's guarded parser; the operation vocabulary stays kernel-owned. */
-export const kernelOperationAdapterSchema: z.ZodType<KernelOperation> = z
+const kernelOperationAdapterSchema: z.ZodType<KernelOperation> = z
   .unknown()
   .transform((value, context) => {
     try {
@@ -520,7 +520,7 @@ export type MacroLink = z.infer<typeof macroLinkSchema>;
  * confirmed plan: each is an ordinary raw kernel operation validated against its own parent.
  * `callId` is the stored LLM call that proposed the plan, in the session's evidence.
  */
-export const PROPOSAL_SOURCES = ["user-proposal", "minimal-context-llm"] as const;
+const PROPOSAL_SOURCES = ["user-proposal", "minimal-context-llm"] as const;
 export const proposalLinkSchema = z
   .object({
     source: z.enum(PROPOSAL_SOURCES),
@@ -708,7 +708,7 @@ export const transitionEvidenceSchema = z.enum(TRANSITION_EVIDENCE_KINDS);
  * transitions chronologically; it is not a timestamp, and deleting the latest moves lets a later
  * transition reuse their numbers.
  */
-export const transitionSequenceSchema = z.number().int().min(1);
+const transitionSequenceSchema = z.number().int().min(1);
 
 export const proofEdgeSchema = z
   .object({
@@ -749,14 +749,14 @@ export function createProofEdgeSchema(
   return proofEdgeSchema;
 }
 
-export const statementCollectionDeltaSchema = z
+const statementCollectionDeltaSchema = z
   .object({
     added: z.array(statementIdSchema),
     removed: z.array(statementIdSchema),
     updated: z.array(statementIdSchema),
   })
   .strict();
-export type StatementCollectionDelta = z.infer<typeof statementCollectionDeltaSchema>;
+type StatementCollectionDelta = z.infer<typeof statementCollectionDeltaSchema>;
 
 export const proofStateDeltaSchema = z
   .object({
@@ -771,7 +771,7 @@ export type ProofStateDelta = z.infer<typeof proofStateDeltaSchema>;
  * first step's, its `afterState` and `delta` are the FINAL state's, and its `transitionClass` is
  * the class composed from the steps.
  */
-export const macroPreviewStepSchema = z
+const macroPreviewStepSchema = z
   .object({
     /** 1-based. */
     index: z.number().int().min(1).max(16),
@@ -788,7 +788,7 @@ export const macroPreviewStepSchema = z
   .strict();
 export type MacroPreviewStep = z.infer<typeof macroPreviewStepSchema>;
 
-export const macroPreviewSchema = z
+const macroPreviewSchema = z
   .object({ steps: z.array(macroPreviewStepSchema).min(2).max(16) })
   .strict();
 export type MacroPreview = z.infer<typeof macroPreviewSchema>;
@@ -822,7 +822,7 @@ export type MovePreview = Readonly<{
 }>;
 
 /** The most constants one previewed step (a macro's steps together) can add. */
-export const MAX_PREVIEW_CONSTANTS = 32;
+const MAX_PREVIEW_CONSTANTS = 32;
 
 /**
  * The preview schema for an operator environment. A preview that names `constants` is read in the
@@ -1208,8 +1208,6 @@ export function createTransitionEventSchema(
     });
 }
 
-export const transitionEventSchema = createTransitionEventSchema();
-
 export type PreparedProofCommand = Readonly<{
   command: ApplyKernelCommand;
   parent: ProofNode;
@@ -1233,8 +1231,6 @@ export function createPreparedProofCommandSchema(
     .superRefine((prepared, context) => addPreparedLinkIssues(prepared, context));
 }
 
-export const preparedProofCommandSchema = createPreparedProofCommandSchema();
-
 export const proofCommandReceiptSchema = z
   .object({
     commandId: commandIdSchema,
@@ -1249,7 +1245,7 @@ export const proofCommandReceiptSchema = z
   .strict();
 export type ProofCommandReceipt = z.infer<typeof proofCommandReceiptSchema>;
 
-export type ProtocolDiagnosticCode =
+type ProtocolDiagnosticCode =
   | "invalid-context"
   | "invalid-current-node"
   | "invalid-command"
@@ -1262,25 +1258,7 @@ export type ProtocolDiagnosticCode =
   | "suggestion-evidence-invalid"
   | "invalid-prepared-record";
 
-export const protocolDiagnosticSchema = z
-  .object({
-    code: z.enum([
-      "invalid-context",
-      "invalid-current-node",
-      "invalid-command",
-      "actor-mismatch",
-      "command-id-conflict",
-      "stale-parent",
-      "kernel-rejected",
-      "move-rejected",
-      "preview-rejected",
-      "suggestion-evidence-invalid",
-      "invalid-prepared-record",
-    ]),
-    message: z.string(),
-  })
-  .strict();
-export type ProtocolDiagnostic = z.infer<typeof protocolDiagnosticSchema>;
+export type ProtocolDiagnostic = { code: ProtocolDiagnosticCode; message: string };
 
 export type PrepareProofCommandSuccess = Readonly<{
   ok: true;
@@ -1323,22 +1301,6 @@ export function createPrepareProofCommandSuccessSchema(
       }
     });
 }
-
-export function createPrepareProofCommandResultSchema(
-  environment: ProtocolEnvironment = {},
-): z.ZodType<PrepareProofCommandResult> {
-  return z.union([
-    createPrepareProofCommandSuccessSchema(environment),
-    z
-      .object({
-        ok: z.literal(false),
-        diagnostics: z.tuple([protocolDiagnosticSchema]),
-      })
-      .strict(),
-  ]);
-}
-
-export const prepareProofCommandResultSchema = createPrepareProofCommandResultSchema();
 
 /**
  * Stamp a prepared command with the session's next transition sequence. The worker calls this in

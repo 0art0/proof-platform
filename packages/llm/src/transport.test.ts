@@ -515,6 +515,43 @@ describe("transport failure classification and retries", () => {
     expect(clock.sleeps).toEqual([2000]);
   });
 
+  describe("Retry-After as an HTTP-date", () => {
+    // The fake clock starts at 1_000_000 ms after the epoch, which is 00:16:40 GMT on
+    // 1 January 1970; the real wall clock is decades later, so reading it would make every
+    // one of these dates look long past.
+    async function sleepsForRetryAfter(retryAfter: string): Promise<readonly number[]> {
+      let calls = 0;
+      const clock = fakeClock();
+      const transport = createVercelStructuredOutputTransport({
+        apiKey: SECRET,
+        retry: { ...clock.retry, baseDelayMs: 100 },
+        fetch: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return new Response("", { status: 429, headers: { "Retry-After": retryAfter } });
+          }
+          return stopResponse();
+        },
+      });
+      const evidence = await executePreparedLlmCall(formalizerCall(), transport);
+      expect(evidence.status).toBe("validated");
+      return clock.sleeps;
+    }
+
+    it("waits until the date, measured on the injected clock", async () => {
+      expect(await sleepsForRetryAfter("Thu, 01 Jan 1970 00:16:43 GMT")).toEqual([3000]);
+    });
+
+    it("falls back to the computed backoff when the date has already passed", async () => {
+      // random = 0.5 and baseDelayMs = 100 give a 75 ms backoff.
+      expect(await sleepsForRetryAfter("Thu, 01 Jan 1970 00:16:39 GMT")).toEqual([75]);
+    });
+
+    it("ignores an unparseable value", async () => {
+      expect(await sleepsForRetryAfter("soon")).toEqual([75]);
+    });
+  });
+
   it("gives up instead of waiting past the total time budget", async () => {
     let calls = 0;
     const clock = fakeClock();

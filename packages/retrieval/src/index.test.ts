@@ -8,6 +8,7 @@ import {
 } from "@proof/library";
 import {
   PROPOSITION_SORT,
+  declarationIdSchema,
   proofStateSchema,
   type PlainMathJson,
   type ProofState,
@@ -1048,6 +1049,32 @@ describe("typed unification and side-condition evaluation", () => {
     );
     expect(bindingsTypeFit(reflexivity, new Map([["x", "True"]]), context)).toBe("mismatch");
     expect(bindingsTypeFit(reflexivity, new Map([["x", 3]]), context)).toBe("exact");
+  });
+
+  it("treats a sort probe the validator cannot build as unknown rather than a mismatch", () => {
+    // A local declaration that collides with an operator symbol makes the statement validator
+    // throw while building the probe environment; that proves nothing about the term's sort.
+    const collidingContext = {
+      declarations: [
+        {
+          id: declarationIdSchema.parse("declaration:clashing-union"),
+          symbol: "Union",
+          sort: PROPOSITION_SORT,
+          role: "universal-parameter" as const,
+        },
+      ],
+      hypotheses: [],
+      operators: SET_OPERATOR_DECLARATIONS,
+      sortCache: new Map(),
+    };
+    expect(bindingsTypeFit(reflexivity, new Map([["x", 3]]), collidingContext)).toBe("unknown");
+    // The conservative fit is cached for the query, like any other.
+    expect([...collidingContext.sortCache.values()]).toEqual(["unknown"]);
+    // A genuine schema rejection in a buildable environment stays a mismatch.
+    const wellFormedContext = { ...collidingContext, declarations: [], sortCache: new Map() };
+    expect(bindingsTypeFit(reflexivity, new Map([["x", "True"]]), wellFormedContext)).toBe(
+      "mismatch",
+    );
   });
 
   it("uses available hypotheses to avoid predicted obligations", () => {
