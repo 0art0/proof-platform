@@ -25,6 +25,20 @@ PROOF_STORE=memory npx tsx apps/worker/src/main.ts
 Without `PROOF_STORE=memory`, the worker uses PostgreSQL and requires `PROOF_DATABASE_URL` (or
 `DATABASE_URL`) to point at a database migrated with `apps/worker/migrations/`.
 
+The worker accepts only requests whose `Host` header names it (`localhost`, `127.0.0.1`, `[::1]`
+or the bind host; this blocks DNS rebinding from a browser). Two optional settings tighten or
+widen that, and neither is needed locally:
+
+- `PROOF_HTTP_TOKEN` is a shared secret. When set, the worker answers `401` unless a request
+  carries `Authorization: Bearer <token>`, and the web app sends the token if the same variable is
+  set in its environment (server-side only; it is never sent to the browser). Setting
+  `PROOF_HTTP_HOST` to anything but a loopback address (127.0.0.0/8, `::1`, `localhost`) makes the
+  token mandatory, at least 32 characters, e.g. `openssl rand -hex 32`; the worker refuses to start
+  without it.
+- `PROOF_HTTP_ALLOWED_HOSTS` is a comma-separated list of extra host names to accept in `Host`
+  (any port), for example `proof-worker` when the web app reaches a containerized worker at
+  `http://proof-worker:8787`. Other hosts get `403`.
+
 In another terminal, start the web app. It reaches the worker at `PROOF_HTTP_ORIGIN`
 (default `http://127.0.0.1:8787`).
 

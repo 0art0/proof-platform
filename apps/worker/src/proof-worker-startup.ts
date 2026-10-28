@@ -15,6 +15,7 @@ import {
 } from "./migrations/runner";
 import { postgresProofStore, type SqlPool } from "./postgres-proof-store";
 import { createProofHttpService, type ProofHttpService } from "./proof-http";
+import { accessPolicyFromEnv, assertBindAllowed } from "./proof-http/access-control";
 import type { ProofStore } from "./proof-repository";
 
 export type ProofWorkerEnvironment = Readonly<Record<string, string | undefined>>;
@@ -100,8 +101,16 @@ export type StartedProofWorker = Readonly<{
  * and unchanged and refuses to start otherwise (schema changes need DDL rights and a deliberate
  * step, and several workers must not race to alter it); `PROOF_AUTO_MIGRATE=true` applies the
  * pending migrations first, for single-instance deployments. `npm run migrate` does the same.
+ *
+ * `PROOF_HTTP_TOKEN` (a bearer token required on every request) and `PROOF_HTTP_ALLOWED_HOSTS`
+ * (extra accepted `Host` names) are optional on the default loopback bind. Binding any other
+ * `PROOF_HTTP_HOST` requires a token of at least 32 characters; the worker refuses to start
+ * without one, before it touches the store.
  */
 export async function startProofWorker(env: ProofWorkerEnvironment): Promise<StartedProofWorker> {
+  const access = accessPolicyFromEnv(env);
+  const host = env.PROOF_HTTP_HOST ?? "127.0.0.1";
+  assertBindAllowed(access, host);
   const selection = selectProofStore(env);
   if (!selection.ok) throw new Error(selection.message);
   try {
@@ -115,9 +124,10 @@ export async function startProofWorker(env: ProofWorkerEnvironment): Promise<Sta
       llmCalls: selection.llmCalls,
       ai: createAiRuntime(env),
       aiLimiter: createAiLimiterFromEnv(env),
+      access,
     });
     const port = parsePort(env.PROOF_HTTP_PORT);
-    const { origin } = await service.listen({ host: env.PROOF_HTTP_HOST ?? "127.0.0.1", port });
+    const { origin } = await service.listen({ host, port });
     return Object.freeze({
       kind: selection.kind,
       origin,

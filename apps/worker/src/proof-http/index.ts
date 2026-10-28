@@ -29,6 +29,13 @@ import {
 import type { Pool } from "pg";
 import { z } from "zod";
 import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "../approved-catalog";
+import {
+  DEFAULT_HTTP_ACCESS_POLICY,
+  assertBindAllowed,
+  checkRequestAccess,
+  writeAccessDenied,
+  type HttpAccessPolicy,
+} from "./access-control";
 import { hypothesisInvestigationRequestSchema, investigateHypothesis } from "../inquiry-methods";
 import {
   inquiryRecordQuerySchema,
@@ -280,6 +287,12 @@ export type ProofHttpServiceOptions = Readonly<{
   ai?: AiRuntime;
   /** Cost guard for AI provider calls; defaults to the documented in-process limits. */
   aiLimiter?: AiLimiter;
+  /**
+   * Bearer token and extra `Host` names (see `access-control`). The default is no token and
+   * loopback names only; the ambient environment is never read. A non-loopback `listen` host
+   * requires a token of at least 32 characters.
+   */
+  access?: HttpAccessPolicy;
 }>;
 
 type HandlerContext = ServiceContext;
@@ -298,7 +311,14 @@ export function createProofHttpService(
     ai: options.ai,
     aiLimiter: options.aiLimiter ?? createAiLimiter(),
   };
+  const access = options.access ?? DEFAULT_HTTP_ACCESS_POLICY;
+  let bindHost: string | undefined;
   const server = createServer((request, response) => {
+    const denial = checkRequestAccess(access, bindHost, request);
+    if (denial !== undefined) {
+      writeAccessDenied(response, denial);
+      return;
+    }
     void handleRequest(context, request, response).catch(() => {
       if (!response.headersSent) {
         writeJson(response, 500, {
@@ -316,6 +336,8 @@ export function createProofHttpService(
       if (server.listening) throw new Error("The proof HTTP service is already listening.");
       const host = options.host ?? "127.0.0.1";
       const port = options.port ?? 0;
+      assertBindAllowed(access, host);
+      bindHost = host;
       await listen(server, port, host);
       const address = server.address();
       if (address === null || typeof address === "string") {

@@ -849,6 +849,8 @@ async function main(): Promise<void> {
     ...process.env,
     PROOF_STORE: "memory",
     PROOF_HTTP_PORT: "0",
+    // This process calls its own worker without credentials; an ambient token would lock it out.
+    PROOF_HTTP_TOKEN: undefined,
     PROOF_AI_TIMEOUT_MS: String(timeoutMs),
     PROOF_AI_MAX_CONCURRENT: process.env.PROOF_AI_MAX_CONCURRENT ?? "16",
     PROOF_AI_RATE_PER_MINUTE: process.env.PROOF_AI_RATE_PER_MINUTE ?? "600",

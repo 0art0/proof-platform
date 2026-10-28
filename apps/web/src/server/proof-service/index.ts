@@ -878,8 +878,10 @@ function isRootedProofHistory(history: ProofHistory): boolean {
 
 async function requestProofService(pathname: string, init: RequestInit): Promise<Response> {
   let origin: string;
+  let authorization: Record<string, string>;
   try {
     origin = configuredProofServiceOrigin();
+    authorization = proofServiceAuthorization();
   } catch {
     throw new ProofServiceError(
       "service_unavailable",
@@ -893,7 +895,7 @@ async function requestProofService(pathname: string, init: RequestInit): Promise
       ...init,
       cache: "no-store",
       redirect: "error",
-      headers: { accept: "application/json", ...headersRecord(init.headers) },
+      headers: { accept: "application/json", ...headersRecord(init.headers), ...authorization },
     });
   } catch (error) {
     if (error instanceof ProofServiceError) throw error;
@@ -919,6 +921,20 @@ function configuredProofServiceOrigin(): string {
     throw new Error("Invalid proof-service origin.");
   }
   return url.origin;
+}
+
+/**
+ * The one place the worker credential is attached: `PROOF_HTTP_TOKEN`, when set in the web
+ * server's environment, goes out as a bearer token on every request to the worker. It is read
+ * here, in server-only code, from a variable without the `NEXT_PUBLIC_` prefix, so it never
+ * reaches the browser bundle or any response. A token that cannot travel in a header is a
+ * configuration error, like a bad origin.
+ */
+function proofServiceAuthorization(): Record<string, string> {
+  const token = process.env.PROOF_HTTP_TOKEN;
+  if (token === undefined || token === "") return {};
+  if (!/^[\x21-\x7e]+$/.test(token)) throw new Error("Invalid proof-service token.");
+  return { authorization: `Bearer ${token}` };
 }
 
 function headersRecord(headers: HeadersInit | undefined): Record<string, string> {

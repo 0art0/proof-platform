@@ -183,6 +183,7 @@ function sessionEnvelope(overrides: Record<string, unknown> = {}): Record<string
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.PROOF_HTTP_ORIGIN;
+  delete process.env.PROOF_HTTP_TOKEN;
 });
 
 describe("proof-service adapter", () => {
@@ -205,6 +206,99 @@ describe("proof-service adapter", () => {
         headers: { accept: "application/json" },
       }),
     );
+  });
+
+  describe("worker credential", () => {
+    const TOKEN = "web-to-worker-secret-0123456789abcdef";
+
+    function headersOfEveryCall(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
+      return fetchMock.mock.calls.map(([, init]) => (init as RequestInit).headers);
+    }
+
+    it("sends no authorization header when PROOF_HTTP_TOKEN is unset or empty", async () => {
+      for (const token of [undefined, ""]) {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse(sessionEnvelope()));
+        vi.stubGlobal("fetch", fetchMock);
+        process.env.PROOF_HTTP_ORIGIN = "http://proof-worker.test";
+        if (token === undefined) delete process.env.PROOF_HTTP_TOKEN;
+        else process.env.PROOF_HTTP_TOKEN = token;
+
+        await readCurrentProofSession(SESSION_ID);
+        expect(headersOfEveryCall(fetchMock)).toEqual([{ accept: "application/json" }]);
+      }
+    });
+
+    it("attaches the bearer token to every request, GET and POST alike", async () => {
+      const request = {
+        id: "interaction:token",
+        nodeId: NODE_ID,
+        kind: "objective-changed",
+        objective: "Split the goal.",
+      };
+      const event = {
+        ...request,
+        sequence: 1,
+        stateId: STATE_ID,
+        actor: { id: "actor:web", kind: "human" },
+        recordedAt: "2026-09-27T12:00:00.000Z",
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(sessionEnvelope()))
+        .mockResolvedValueOnce(jsonResponse({ event, replayed: false }, 201));
+      vi.stubGlobal("fetch", fetchMock);
+      process.env.PROOF_HTTP_ORIGIN = "http://proof-worker.test";
+      process.env.PROOF_HTTP_TOKEN = TOKEN;
+
+      await readCurrentProofSession(SESSION_ID);
+      await recordStoredInteractionEvent(SESSION_ID, request);
+
+      expect(fetchMock.mock.calls.map(([, init]) => (init as RequestInit).method)).toEqual([
+        "GET",
+        "POST",
+      ]);
+      expect(headersOfEveryCall(fetchMock)).toEqual([
+        { accept: "application/json", authorization: `Bearer ${TOKEN}` },
+        {
+          accept: "application/json",
+          "content-type": "application/json",
+          authorization: `Bearer ${TOKEN}`,
+        },
+      ]);
+    });
+
+    it("keeps the token out of the proof-service error a browser could receive", async () => {
+      process.env.PROOF_HTTP_ORIGIN = "http://proof-worker.test";
+      process.env.PROOF_HTTP_TOKEN = TOKEN;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          jsonResponse(
+            {
+              diagnostics: [{ code: "unauthorized", message: "A valid bearer token is required." }],
+            },
+            401,
+          ),
+        ),
+      );
+      const failure = await readCurrentProofSession(SESSION_ID).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ProofServiceError);
+      expect(JSON.stringify(failure)).not.toContain(TOKEN);
+      expect((failure as ProofServiceError).message).not.toContain(TOKEN);
+    });
+
+    it("treats a token that cannot travel in a header as a configuration error", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      process.env.PROOF_HTTP_ORIGIN = "http://proof-worker.test";
+      process.env.PROOF_HTTP_TOKEN = "has a space";
+
+      await expect(readCurrentProofSession(SESSION_ID)).rejects.toMatchObject({
+        code: "service_unavailable",
+        status: 503,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it("reads the stored problem metadata for display and degrades to undefined", async () => {
