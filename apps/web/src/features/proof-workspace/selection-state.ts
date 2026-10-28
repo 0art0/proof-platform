@@ -23,7 +23,7 @@ export type SelectionGestureFeedback = Readonly<{
   outcome: SelectionGestureOutcome;
   /** True when repeating the same primary collapsed click would walk to a semantic parent. */
   repeatable: boolean;
-  /** Present when the display gesture was snapped to the nearest semantic subtree. */
+  /** Present when the display gesture was not an exact occurrence: why it was snapped or widened. */
   fallbackReason?: string;
 }>;
 
@@ -212,7 +212,11 @@ const OUTCOME_MESSAGES: Readonly<Record<SelectionGestureOutcome, string>> = Obje
   "set-by-drop": "Selected the drop source and target to preview a move.",
 });
 
-/** A short, screen-reader-friendly description of how the last gesture was interpreted. */
+/**
+ * A short, screen-reader-friendly description of how the last gesture was interpreted. A fallback
+ * reason is a complete sentence that already says what happened (snapped to a subtree, or fell
+ * back to the whole expression), so it leads the message unchanged.
+ */
 export function describeSelectionFeedback(feedback: SelectionGestureFeedback): string {
   const base =
     feedback.outcome === "replaced" && feedback.repeatable
@@ -220,7 +224,7 @@ export function describeSelectionFeedback(feedback: SelectionGestureFeedback): s
       : OUTCOME_MESSAGES[feedback.outcome];
   return feedback.fallbackReason === undefined
     ? base
-    : `Snapped to nearest subtree (${feedback.fallbackReason.replace(/\.$/, "")}). ${base}`;
+    : `${feedback.fallbackReason.replace(/\.$/, "")}. ${base}`;
 }
 
 function stableAnchor(anchor: StatementAnchor): StatementAnchor {

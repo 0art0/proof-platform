@@ -114,7 +114,7 @@ describe("ProofWorkspace selection feedback", () => {
     Object.assign(conclusion, { getElementInfo: () => ({ data: { "proof-path-2": "9.2" } }) });
     fireEvent.pointerUp(conclusion);
     expect(screen.getByTestId("selection-feedback")).toHaveTextContent(
-      /^Snapped to nearest subtree/,
+      /^Stale display metadata was snapped to the statement root\. Selected the occurrence\./,
     );
     expect(screen.getByText("path root")).toBeVisible();
   });

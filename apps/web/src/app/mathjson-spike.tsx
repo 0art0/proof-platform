@@ -19,6 +19,7 @@ import {
   renderInteractiveLatex,
   type MathLiveSelectionPort,
 } from "../features/proof-workspace/mathlive-selection";
+import styles from "./mathjson-spike.module.css";
 
 export const INITIAL_STATEMENT = [
   "Equal",
@@ -75,7 +76,7 @@ export function MathJsonSpike() {
       MathfieldElement.fontsDirectory = null;
       field = new MathfieldElement();
       field.readOnly = true;
-      field.className = "math-field";
+      field.className = styles.mathField ?? "";
       field.value = interactiveLatex;
       field.setAttribute("aria-label", "Interactive MathJSON statement");
 
@@ -185,58 +186,58 @@ export function MathJsonSpike() {
   };
 
   return (
-    <section className="spike" aria-labelledby="spike-heading">
-      <div className="spike-intro">
-        <p className="eyebrow">Stage 1 · interaction spike</p>
+    <section className={styles.spike} aria-labelledby="spike-heading">
+      <header className={styles.intro}>
+        <p className={styles.eyebrow}>Stage 1 · interaction spike</p>
         <h1 id="spike-heading">Point at structure, not pixels.</h1>
-        <p className="lede">
+        <p className={styles.lead}>
           MathJSON stays authoritative. MathLive renders it, selection lenses recover semantic
           occurrences, and every replacement produces a new plain tree.
         </p>
-      </div>
+      </header>
 
-      <div className="workspace-grid">
-        <div className="formula-panel panel">
-          <div className="panel-heading">
+      <div className={styles.grid}>
+        <div className={styles.panel}>
+          <div className={styles.panelHeading}>
             <div>
-              <p className="panel-kicker">Rendered projection</p>
+              <p className={styles.eyebrow}>Rendered projection</p>
               <h2>Interactive statement</h2>
             </div>
-            <span className="status-pill" data-ready={mathLiveReady}>
+            <span className={styles.status} data-ready={mathLiveReady}>
               {mathLiveReady ? "MathLive ready" : "Loading MathLive"}
             </span>
           </div>
-          <div className="math-shell" ref={hostRef} data-testid="mathlive-host">
+          <div className={styles.mathShell} ref={hostRef} data-testid="mathlive-host">
             <span aria-hidden="true">{rendered.ok ? rendered.latex : "Render error"}</span>
           </div>
-          <p className="gesture-hint">
+          <p className={styles.hint}>
             Click a leaf, click it again to expand, or drag across a visible range.
           </p>
 
-          <div className="target-row" aria-label="Deterministic selection targets">
-            <button type="button" onClick={() => chooseExact([0, 0])}>
+          <div className={styles.targets} role="group" aria-label="Deterministic selection targets">
+            <button className={styles.button} type="button" onClick={() => chooseExact([0, 0])}>
               Select x²
             </button>
-            <button type="button" onClick={() => chooseExact([0, 3])}>
+            <button className={styles.button} type="button" onClick={() => chooseExact([0, 3])}>
               Select second y
             </button>
-            <button type="button" onClick={chooseVirtual}>
+            <button className={styles.button} type="button" onClick={chooseVirtual}>
               Select 3y + z
             </button>
-            <button type="button" onClick={chooseFallback}>
+            <button className={styles.button} type="button" onClick={chooseFallback}>
               Try cross-branch range
             </button>
           </div>
         </div>
 
-        <aside className="selection-panel panel" aria-live="polite">
-          <p className="panel-kicker">Interpreted selection</p>
+        <aside className={`${styles.panel} ${styles.selectionPanel}`} aria-live="polite">
+          <p className={styles.eyebrow}>Interpreted selection</p>
           {selection ? (
             <>
-              <div className={`selection-kind selection-kind--${selection.kind}`}>
+              <div className={styles.kind} data-kind={selection.kind}>
                 {selectionLabel(selection)}
               </div>
-              <dl className="selection-facts">
+              <dl className={styles.facts}>
                 <div>
                   <dt>Operand path</dt>
                   <dd data-testid="selection-path">
@@ -250,66 +251,72 @@ export function MathJsonSpike() {
                   </div>
                 ) : null}
               </dl>
-              <pre className="selected-fragment" data-testid="selection-fragment">
+              <pre className={styles.code} data-testid="selection-fragment">
                 {JSON.stringify(selection.fragment, null, 2)}
               </pre>
               {selection.kind === "fallback" ? (
-                <p className="fallback-notice" role="status">
+                <p className={styles.fallbackNotice} role="status">
                   Fallback applied: the highlighted card is the actual subtree that will be used.
                 </p>
               ) : null}
-              <button className="quiet-button" type="button" onClick={expandSelection}>
+              <button className={styles.expand} type="button" onClick={expandSelection}>
                 Expand to parent
               </button>
             </>
           ) : (
-            <p className="empty-selection">No semantic selection yet.</p>
+            <p className={styles.hint}>No semantic selection yet.</p>
           )}
-          <p className="interaction-message">{message}</p>
+          <p className={styles.hint}>{message}</p>
         </aside>
       </div>
 
-      <div className="transform-panel panel">
+      <div className={`${styles.panel} ${styles.transform}`}>
         <div>
-          <p className="panel-kicker">Deterministic transformation</p>
+          <p className={styles.eyebrow}>Deterministic transformation</p>
           <h2>Replace the interpreted selection</h2>
         </div>
-        <div className="replacement-controls">
-          <label htmlFor="replacement">Replacement MathJSON</label>
-          <select
-            id="replacement"
-            value={replacementIndex}
-            onChange={(event) => setReplacementIndex(Number(event.target.value))}
-          >
-            {replacements.map((replacement, index) => (
-              <option value={index} key={replacement.label}>
-                {replacement.label} · {JSON.stringify(replacement.value)}
-              </option>
-            ))}
-          </select>
+        <div className={styles.replacementControls}>
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="replacement">
+              Replacement MathJSON
+            </label>
+            <select
+              id="replacement"
+              value={replacementIndex}
+              onChange={(event) => setReplacementIndex(Number(event.target.value))}
+            >
+              {replacements.map((replacement, index) => (
+                <option value={index} key={replacement.label}>
+                  {replacement.label} · {JSON.stringify(replacement.value)}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
-            className="primary-button"
+            className={styles.primary}
             type="button"
             onClick={applyReplacement}
             disabled={!selection}
           >
             Replace selection
           </button>
-          <button className="quiet-button" type="button" onClick={reset}>
+          <button className={styles.button} type="button" onClick={reset}>
             Reset statement
           </button>
         </div>
       </div>
 
-      <div className="source-panel panel">
-        <div className="panel-heading">
+      <div className={styles.panel}>
+        <div className={styles.panelHeading}>
           <div>
-            <p className="panel-kicker">Ground truth</p>
+            <p className={styles.eyebrow}>Ground truth</p>
             <h2>Current plain MathJSON</h2>
           </div>
-          <span className="source-badge">authoritative</span>
+          <span className={styles.sourceBadge}>authoritative</span>
         </div>
-        <pre data-testid="authoritative-mathjson">{JSON.stringify(statement, null, 2)}</pre>
+        <pre className={`${styles.code} ${styles.source}`} data-testid="authoritative-mathjson">
+          {JSON.stringify(statement, null, 2)}
+        </pre>
       </div>
     </section>
   );
