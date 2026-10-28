@@ -161,12 +161,6 @@ export function jsonEquals(left: unknown, right: unknown): boolean {
   );
 }
 
-export function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  seen.add(value);
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor !== undefined && "value" in descriptor) deepFreeze(descriptor.value, seen);
-  });
-  return Object.freeze(value);
-}
+import { deepFreeze } from "@proof/mathjson-model";
+
+export { deepFreeze };
