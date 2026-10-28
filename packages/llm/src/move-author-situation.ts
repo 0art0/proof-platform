@@ -54,7 +54,7 @@ const hypothesisSchema = z
   .strict();
 
 /** The sequent the executor was asked about, before its plan. */
-export const situationSequentSchema = z
+const situationSequentSchema = z
   .object({
     id: stableIdentifierSchema,
     declarations: z.array(declarationSchema).max(MAX_DECLARATIONS),
@@ -65,7 +65,7 @@ export const situationSequentSchema = z
 export type SituationSequent = z.infer<typeof situationSequentSchema>;
 
 /** A goal or obligation the plan leaves. */
-export const situationOutcomeSequentSchema = z
+const situationOutcomeSequentSchema = z
   .object({
     kind: z.enum(["goal", "obligation"]),
     id: stableIdentifierSchema,
@@ -76,7 +76,6 @@ export const situationOutcomeSequentSchema = z
     conclusion: plainMathJsonSchema,
   })
   .strict();
-export type SituationOutcomeSequent = z.infer<typeof situationOutcomeSequentSchema>;
 
 const operandPathSchema = z.array(z.number().int().nonnegative()).max(64);
 

@@ -50,7 +50,7 @@ const actorIdSchema = stableIdentifierSchema.brand("ActorId");
 const commandIdSchema = stableIdentifierSchema.brand("CommandId");
 const proofNodeIdSchema = stableIdentifierSchema.brand("ProofNodeId");
 
-export const backtrackTargetSchema = z
+const backtrackTargetSchema = z
   .object({ kind: z.enum(["goal", "obligation"]), id: statementIdSchema })
   .strict();
 export type BacktrackTarget = z.infer<typeof backtrackTargetSchema>;
@@ -78,9 +78,8 @@ export const backtrackWithInformationCommandSchema = z
     ...backtrackRequestShape,
   })
   .strict();
-export type BacktrackWithInformationCommand = z.infer<typeof backtrackWithInformationCommandSchema>;
 
-export const backtrackAncestorSchema = z
+const backtrackAncestorSchema = z
   .object({
     nodeId: proofNodeIdSchema,
     /** Edges between this ancestor and the source node (the parent has distance 1). */

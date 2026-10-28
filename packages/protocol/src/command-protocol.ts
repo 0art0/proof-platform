@@ -45,7 +45,7 @@ import {
   type ParameterMenuRecord,
 } from "./parameter-menus";
 import { replayOverrideSchema } from "./semantic-replay";
-import type { DisplayedSuggestionSet, ProofStateDelta } from "./index";
+import type { DisplayedSuggestionSet } from "./index";
 
 // Local copies of the branded identifiers in `index.ts`: the brands are structural, so values
 // parsed here are interchangeable with those schemas' outputs without an import cycle.
@@ -67,10 +67,9 @@ export type ProtocolActor = z.infer<typeof protocolActorSchema>;
 const ALIAS_PATTERN = /^[gohsm][1-9][0-9]{0,3}$/;
 
 /** `g`, `o`, `h`, `s` or `m` followed by a positive index. */
-export const snapshotAliasSchema = z.string().regex(ALIAS_PATTERN, "Not a snapshot alias.");
-export type SnapshotAlias = z.infer<typeof snapshotAliasSchema>;
+const snapshotAliasSchema = z.string().regex(ALIAS_PATTERN, "Not a snapshot alias.");
 
-export type AliasKind = "goal" | "obligation" | "hypothesis" | "suggestion" | "menu-item";
+type AliasKind = "goal" | "obligation" | "hypothesis" | "suggestion" | "menu-item";
 
 const ALIAS_PREFIX: Readonly<Record<AliasKind, string>> = {
   goal: "g",
@@ -96,7 +95,7 @@ const aliasEntrySchema = z
   .strict();
 export type AliasEntry = z.infer<typeof aliasEntrySchema>;
 
-export const snapshotAliasTableSchema = z
+const snapshotAliasTableSchema = z
   .object({
     nodeId: proofNodeIdSchema,
     stateId: proofStateIdSchema,
@@ -235,7 +234,7 @@ export const targetReferenceSchema = z.union([
 export type TargetReference = z.infer<typeof targetReferenceSchema>;
 
 /** `conclusion`, or a hypothesis alias (`h2`) or stored hypothesis ID. */
-export const statementReferenceSchema = stableIdentifierSchema;
+const statementReferenceSchema = stableIdentifierSchema;
 export type StatementReference = z.infer<typeof statementReferenceSchema>;
 
 export function resolveTargetReference(
@@ -389,9 +388,8 @@ export const moveDraftProposalSchema = z
     executorCallId: stableIdentifierSchema,
   })
   .strict();
-export type MoveDraftProposal = z.infer<typeof moveDraftProposalSchema>;
 
-export const payloadSourceSchema = z.enum([
+const payloadSourceSchema = z.enum([
   "setup",
   "approved-generator",
   "validated-operation",
@@ -413,14 +411,14 @@ export const mathOccurrenceSchema = z
 export type MathOccurrence = z.infer<typeof mathOccurrenceSchema>;
 
 /** Mathematics referenced by occurrence (preferred), or sent raw with its declared source. */
-export const mathPayloadSchema = z.union([
+const mathPayloadSchema = z.union([
   z.object({ occurrence: mathOccurrenceSchema }).strict(),
   z.object({ expression: plainMathJsonSchema, source: payloadSourceSchema }).strict(),
 ]);
 export type MathPayload = z.infer<typeof mathPayloadSchema>;
 
 /** The subexpression at an operand path (0-based operand indices, as selections use). */
-export function subexpressionAt(
+function subexpressionAt(
   expression: PlainMathJson,
   path: readonly number[],
 ): PlainMathJson | undefined {
@@ -562,11 +560,10 @@ const associativeSelectionReferenceSchema = z
   );
 
 /** A selection in the current snapshot, by alias or stored ID. */
-export const selectionReferenceSchema = z.union([
+const selectionReferenceSchema = z.union([
   exactSelectionReferenceSchema,
   associativeSelectionReferenceSchema,
 ]);
-export type SelectionReference = z.infer<typeof selectionReferenceSchema>;
 
 /** Parameter ID → menu item alias (`m2`) or content-derived menu item ID. */
 const menuChoiceReferencesSchema = z
@@ -720,11 +717,11 @@ const commandSchemas = [
     .strict(),
 ] as const;
 
-export const protocolCommandSchema = z.discriminatedUnion("kind", commandSchemas);
+const protocolCommandSchema = z.discriminatedUnion("kind", commandSchemas);
 export type ProtocolCommand = z.infer<typeof protocolCommandSchema>;
 export type ProtocolCommandKind = ProtocolCommand["kind"];
 
-export const PROTOCOL_COMMAND_KINDS: readonly ProtocolCommandKind[] = Object.freeze(
+const PROTOCOL_COMMAND_KINDS: readonly ProtocolCommandKind[] = Object.freeze(
   commandSchemas.map((schema) => schema.shape.kind.value),
 );
 
@@ -739,10 +736,9 @@ export const CURSOR_BOUND_COMMAND_KINDS: readonly ProtocolCommandKind[] = Object
   "replay",
 ]);
 
-export const aliasBasisSchema = z
+const aliasBasisSchema = z
   .object({ nodeId: proofNodeIdSchema, suggestionSetId: suggestionSetIdSchema.optional() })
   .strict();
-export type AliasBasis = z.infer<typeof aliasBasisSchema>;
 
 /** One mutation, by a human or an agent, through the single command service. */
 export const protocolCommandEnvelopeSchema = z
@@ -839,9 +835,8 @@ const compactSuggestionSchema = z
     transitionClass: z.enum(["equivalence", "strengthening", "weakening"]).optional(),
   })
   .strict();
-export type CompactSuggestion = z.infer<typeof compactSuggestionSchema>;
 
-export const displayedSuggestionsViewSchema = z
+const displayedSuggestionsViewSchema = z
   .object({
     suggestionSetId: suggestionSetIdSchema,
     /** The `suggestions-displayed` event that fixed the display order, when there is one. */
@@ -932,7 +927,7 @@ const compactCollectionDeltaSchema = z
   .strict();
 
 /** The change between two stored snapshots, with the aliases of the later one. */
-export const snapshotDeltaSchema = z
+const snapshotDeltaSchema = z
   .object({
     from: z.object({ nodeId: proofNodeIdSchema, stateId: proofStateIdSchema }).strict(),
     to: z.object({ nodeId: proofNodeIdSchema, stateId: proofStateIdSchema }).strict(),
@@ -988,21 +983,11 @@ export function snapshotDelta(from: SnapshotView, to: SnapshotView): SnapshotDel
   }) as SnapshotDelta;
 }
 
-/** Statement-ID summary of a snapshot delta, in the kernel's `ProofStateDelta` shape. */
-export function snapshotDeltaIds(delta: SnapshotDelta): ProofStateDelta {
-  const ids = (collection: SnapshotDelta["goals"]) => ({
-    added: collection.added.map(({ id }) => id),
-    removed: collection.removed,
-    updated: collection.updated.map(({ id }) => id),
-  });
-  return { goals: ids(delta.goals), obligations: ids(delta.obligations) } as ProofStateDelta;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Responses and observations
 // ---------------------------------------------------------------------------------------------
 
-export const protocolCursorSchema = z
+const protocolCursorSchema = z
   .object({
     nodeId: proofNodeIdSchema,
     stateId: proofStateIdSchema,
@@ -1038,7 +1023,7 @@ export const protocolCommandResponseSchema = z
   .strict();
 export type ProtocolCommandResponse = z.infer<typeof protocolCommandResponseSchema>;
 
-export const aliasedParameterMenuSchema = z
+const aliasedParameterMenuSchema = z
   .object({
     parameterId: menuParameterIdSchema,
     label: z.string().min(1),
@@ -1081,8 +1066,7 @@ const observedSessionSchema = z
   })
   .strict();
 
-export const observeViewSchema = z.enum(["full", "summary", "delta"]);
-export type ObserveView = z.infer<typeof observeViewSchema>;
+const observeViewSchema = z.enum(["full", "summary", "delta"]);
 
 /** `view=full`: the stored snapshot, aliases, open targets and the displayed suggestions. */
 export const observeFullResponseSchema = z
@@ -1161,7 +1145,6 @@ export const observeResponseSchema = z.discriminatedUnion("view", [
   observeSummaryResponseSchema,
   observeDeltaResponseSchema,
 ]);
-export type ObserveResponse = z.infer<typeof observeResponseSchema>;
 
 /** Query of `GET …/observe`: `view`, and for a delta `sinceNode`, `afterEvent`, `afterInquiry`. */
 export const observeQuerySchema = z

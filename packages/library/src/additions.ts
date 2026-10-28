@@ -32,19 +32,9 @@ import {
 
 export const libraryAdditionEventIdSchema = stableIdentifierSchema.brand("LibraryAdditionEventId");
 export type LibraryAdditionEventId = z.infer<typeof libraryAdditionEventIdSchema>;
-export const backgroundRevisionEventIdSchema = stableIdentifierSchema.brand(
-  "BackgroundRevisionEventId",
-);
-export type BackgroundRevisionEventId = z.infer<typeof backgroundRevisionEventIdSchema>;
+const backgroundRevisionEventIdSchema = stableIdentifierSchema.brand("BackgroundRevisionEventId");
 
-export const libraryAdditionOriginKindSchema = z.enum([
-  "setup",
-  "user",
-  "agent",
-  "service",
-  "derived",
-]);
-export type LibraryAdditionOriginKind = z.infer<typeof libraryAdditionOriginKindSchema>;
+const libraryAdditionOriginKindSchema = z.enum(["setup", "user", "agent", "service", "derived"]);
 
 export const libraryAdditionOriginSchema = z
   .object({ kind: libraryAdditionOriginKindSchema, actorId: stableIdentifierSchema.optional() })
@@ -70,15 +60,15 @@ export const LIBRARY_ADMISSION_DIAGNOSTIC_CODES = [
   "derived-node-not-found",
   "move-layer-required",
 ] as const;
-export const libraryAdmissionDiagnosticCodeSchema = z.enum(LIBRARY_ADMISSION_DIAGNOSTIC_CODES);
+const libraryAdmissionDiagnosticCodeSchema = z.enum(LIBRARY_ADMISSION_DIAGNOSTIC_CODES);
 export type LibraryAdmissionDiagnosticCode = z.infer<typeof libraryAdmissionDiagnosticCodeSchema>;
 
-export const libraryAdmissionDiagnosticSchema = z
+const libraryAdmissionDiagnosticSchema = z
   .object({ code: libraryAdmissionDiagnosticCodeSchema, message: z.string().min(1) })
   .strict();
 export type LibraryAdmissionDiagnostic = z.infer<typeof libraryAdmissionDiagnosticSchema>;
 
-export const libraryAdmissionRecordSchema = z.discriminatedUnion("decision", [
+const libraryAdmissionRecordSchema = z.discriminatedUnion("decision", [
   z.object({ decision: z.literal("admitted"), diagnostics: z.tuple([]) }).strict(),
   z
     .object({
@@ -159,14 +149,9 @@ export function createLibraryAdditionEventSchema(
     }) as unknown as z.ZodType<LibraryAdditionEvent>;
 }
 
-export const libraryAdditionEventSchema: z.ZodType<LibraryAdditionEvent> = z.lazy(() =>
-  createLibraryAdditionEventSchema(),
-);
-
 export const backgroundRevisionActorSchema = z
   .object({ kind: z.enum(["setup", "user", "agent", "service"]), id: stableIdentifierSchema })
   .strict();
-export type BackgroundRevisionActor = z.infer<typeof backgroundRevisionActorSchema>;
 
 export const backgroundRevisionEventSchema = z
   .object({

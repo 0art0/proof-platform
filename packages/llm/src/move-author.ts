@@ -186,7 +186,7 @@ export function describePrimitives(): readonly PrimitiveSpec[] {
 // ---------------------------------------------------------------------------------------------
 
 /** A menu parameter value a proposal states, in the platform's kinds. */
-export const moveAuthorParameterSchema = z.discriminatedUnion("kind", [
+const moveAuthorParameterSchema = z.discriminatedUnion("kind", [
   z
     .object({
       parameter: parameterIdSchema,
@@ -237,7 +237,7 @@ const statementRefSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("hypothesis"), label: referenceSchema }).strict(),
 ]);
 
-export const moveAuthorStepSelectionSchema = z
+const moveAuthorStepSelectionSchema = z
   .object({
     slot: stableIdentifierSchema,
     /** The goal or obligation the selection is in. */
@@ -250,7 +250,7 @@ export const moveAuthorStepSelectionSchema = z
   })
   .strict();
 
-export const moveAuthorStepSchema = z
+const moveAuthorStepSchema = z
   .object({
     id: labelSchema,
     operationKind: z.string().min(1).max(80),
@@ -258,13 +258,12 @@ export const moveAuthorStepSchema = z
     parameters: z.array(moveAuthorParameterSchema).max(8),
   })
   .strict();
-export type MoveAuthorStep = z.infer<typeof moveAuthorStepSchema>;
 
 const exampleSelectionSchema = z
   .object({ slot: stableIdentifierSchema, statement: statementRefSchema, path: operandPathSchema })
   .strict();
 
-export const moveAuthorExampleStateSchema = z
+const moveAuthorExampleStateSchema = z
   .object({
     declarations: z
       .array(
@@ -277,7 +276,6 @@ export const moveAuthorExampleStateSchema = z
     conclusion: plainMathJsonSchema,
   })
   .strict();
-export type MoveAuthorExampleState = z.infer<typeof moveAuthorExampleStateSchema>;
 
 const expectedSchema = z
   .object({
@@ -418,7 +416,7 @@ export type MoveAuthorProposal = z.infer<typeof moveAuthorProposalSchema>;
 // Other outputs
 // ---------------------------------------------------------------------------------------------
 
-export const moveAuthorInsufficientContextSchema = z
+const moveAuthorInsufficientContextSchema = z
   .object({
     kind: z.literal("insufficient-context"),
     requestedCategories: z
@@ -428,7 +426,7 @@ export const moveAuthorInsufficientContextSchema = z
     rationale: shortTextSchema,
   })
   .strict();
-export const moveAuthorDeclinedSchema = z
+const moveAuthorDeclinedSchema = z
   .object({ kind: z.literal("declined"), reason: shortTextSchema })
   .strict();
 

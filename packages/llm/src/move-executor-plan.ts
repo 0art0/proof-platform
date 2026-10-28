@@ -320,7 +320,7 @@ const VALIDATION_STATE_IDS = {
 };
 
 /** Every fresh label a step introduces, in field order. */
-export function stepFreshLabels(step: ExecutorPlanStep): readonly string[] {
+function stepFreshLabels(step: ExecutorPlanStep): readonly string[] {
   return executorFreshIdFields(step.kind).flatMap((field) => {
     const value = step[field];
     if (typeof value === "string") return [value];
@@ -457,7 +457,7 @@ export function mapExecutorStepReferences(
 }
 
 /** The ID of the state after step `index` (1-based) of the call's plan. */
-export function executorStateId(callId: string, index: number): string {
+function executorStateId(callId: string, index: number): string {
   return `state:${callId}:${index}`;
 }
 

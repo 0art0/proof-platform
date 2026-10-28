@@ -59,7 +59,7 @@ export const DIVIDES: OperatorDeclaration = operatorDeclarationSchema.parse({
   },
 });
 
-export const IS_PRIME: OperatorDeclaration = operatorDeclarationSchema.parse({
+const IS_PRIME: OperatorDeclaration = operatorDeclarationSchema.parse({
   id: "operator:is-prime",
   symbol: "IsPrime",
   signature: { parameters: [NATURAL], result: PROPOSITION_SORT },
@@ -75,7 +75,7 @@ export const IS_PRIME: OperatorDeclaration = operatorDeclarationSchema.parse({
 });
 
 /** A binder: `SumOver(k, n, body)` is the sum of `body` over the divisors `k` of `n`. */
-export const SUM_OVER_DIVISORS: OperatorDeclaration = operatorDeclarationSchema.parse({
+const SUM_OVER_DIVISORS: OperatorDeclaration = operatorDeclarationSchema.parse({
   id: "operator:sum-over-divisors",
   symbol: "SumOverDivisors",
   signature: { parameters: [INTEGER, INTEGER, INTEGER], result: INTEGER },
@@ -88,7 +88,7 @@ export const SUM_OVER_DIVISORS: OperatorDeclaration = operatorDeclarationSchema.
 });
 
 /** An operator without presentation metadata. */
-export const PHI: OperatorDeclaration = operatorDeclarationSchema.parse({
+const PHI: OperatorDeclaration = operatorDeclarationSchema.parse({
   id: "operator:totient",
   symbol: "Totient",
   signature: { parameters: [INTEGER], result: INTEGER },

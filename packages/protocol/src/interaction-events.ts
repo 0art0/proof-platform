@@ -30,15 +30,14 @@ export const interactionEventIdSchema = stableIdentifierSchema.brand("Interactio
 export type InteractionEventId = z.infer<typeof interactionEventIdSchema>;
 
 /** `sha256:` followed by the hex digest of a definition's canonical JSON. */
-export const definitionHashSchema = z
+const definitionHashSchema = z
   .string()
   .regex(/^sha256:[0-9a-f]{64}$/, "Definition hashes are sha256 content hashes.");
 export type DefinitionHash = z.infer<typeof definitionHashSchema>;
 
-export const definitionKindSchema = z.enum(["move", "library-result"]);
-export type DefinitionKind = z.infer<typeof definitionKindSchema>;
+const definitionKindSchema = z.enum(["move", "library-result"]);
 
-export const definitionReferenceSchema = z
+const definitionReferenceSchema = z
   .object({ kind: definitionKindSchema, id: stableIdentifierSchema, hash: definitionHashSchema })
   .strict();
 export type DefinitionReference = z.infer<typeof definitionReferenceSchema>;
@@ -64,7 +63,7 @@ export const definitionReferencesSchema = z
   });
 
 /** One definition whose content differs between a stale preview and its regeneration. */
-export const definitionChangeSchema = z
+const definitionChangeSchema = z
   .object({
     kind: definitionKindSchema,
     id: stableIdentifierSchema,
@@ -214,9 +213,7 @@ const backtrackedPayloadShape = {
 export const CLIENT_INTERACTION_EVENT_KINDS = Object.freeze(
   Object.keys(clientPayloadShapes) as (keyof typeof clientPayloadShapes)[],
 );
-export type ClientInteractionEventKind = keyof typeof clientPayloadShapes;
-export type InteractionEventKind =
-  ClientInteractionEventKind | "preview-regenerated" | "backtracked-with-information";
+type ClientInteractionEventKind = keyof typeof clientPayloadShapes;
 
 const requestBaseShape = { id: interactionEventIdSchema, nodeId: proofNodeIdSchema } as const;
 
@@ -238,7 +235,6 @@ export const recordInteractionEventRequestSchema = z.discriminatedUnion("kind", 
   requestVariant("objective-changed"),
   requestVariant("interaction-ended-without-action"),
 ]);
-export type RecordInteractionEventRequest = z.infer<typeof recordInteractionEventRequestSchema>;
 
 const recordedBaseShape = {
   ...requestBaseShape,
@@ -368,4 +364,3 @@ export const previewRegeneratedResponseSchema = z
     ]),
   })
   .strict();
-export type PreviewRegeneratedResponse = z.infer<typeof previewRegeneratedResponseSchema>;

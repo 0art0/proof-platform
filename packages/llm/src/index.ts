@@ -103,22 +103,6 @@ export {
 } from "./move-author-situation";
 export { compileMoveAuthorProposal, proposedMoveId } from "./move-author-template";
 
-export const LLM_ROLES = [
-  "topic-extractor",
-  "background-proposer",
-  "librarian",
-  "proof-state-formalizer",
-  "move-shortlister",
-  "move-executor",
-  "move-author",
-  "attestor",
-  "background-gatekeeper",
-  "generality-reviewer",
-  "stateful-proof-agent",
-] as const;
-export const llmRoleSchema = z.enum(LLM_ROLES);
-export type LlmRole = z.infer<typeof llmRoleSchema>;
-
 export const SUPPORTED_LLM_ROLES = [
   "topic-extractor",
   "proof-state-formalizer",
@@ -128,7 +112,7 @@ export const SUPPORTED_LLM_ROLES = [
   "librarian",
   "move-author",
 ] as const;
-export const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
+const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
 export type RenderedMathematics = Readonly<{ latex: string; naturalLanguage: string }>;
 
@@ -193,7 +177,6 @@ const topicExtractorContextSchema = z
       .optional(),
   })
   .strict();
-export type TopicExtractorContext = z.infer<typeof topicExtractorContextSchema>;
 
 const selectionLocationSchema = z
   .object({
@@ -267,16 +250,15 @@ const candidateCardSchema = z
     unresolvedParameters: z.array(stableIdentifierSchema),
   })
   .strict();
-export type CandidateCard = z.infer<typeof candidateCardSchema>;
+type CandidateCard = z.infer<typeof candidateCardSchema>;
 
 /**
  * Why a shortlist was requested: the user pressed the button (`explicit-user`), the user's
  * selections produced a list and automatic ranking was on (`automatic`), or the deterministic
  * list was empty (`deterministic-empty`).
  */
-export const SHORTLISTER_TRIGGERS = ["deterministic-empty", "explicit-user", "automatic"] as const;
+const SHORTLISTER_TRIGGERS = ["deterministic-empty", "explicit-user", "automatic"] as const;
 export const shortlisterTriggerSchema = z.enum(SHORTLISTER_TRIGGERS);
-export type ShortlisterTrigger = z.infer<typeof shortlisterTriggerSchema>;
 
 /**
  * The reserved Jev option meaning "no displayed candidate is relevant to the selections". It is
@@ -312,14 +294,14 @@ export type MoveShortlisterContext = z.infer<typeof moveShortlisterContextSchema
  * Where a move description came from: the user's own instruction box, or a technique another
  * service suggested (for example the shortlister's pick) that the user asked to carry out.
  */
-export const EXECUTOR_SOURCES = ["user-instruction", "shortlisted-technique"] as const;
+const EXECUTOR_SOURCES = ["user-instruction", "shortlisted-technique"] as const;
 export const executorSourceSchema = z.enum(EXECUTOR_SOURCES);
 export type ExecutorSource = z.infer<typeof executorSourceSchema>;
 
 /** The longest move description the executor is given. */
 export const MAX_EXECUTOR_INSTRUCTION_LENGTH = 2_000;
 /** The most approved results the executor is shown. */
-export const MAX_EXECUTOR_RESULTS = 32;
+const MAX_EXECUTOR_RESULTS = 32;
 const MAX_EXECUTOR_HYPOTHESES = 64;
 const MAX_EXECUTOR_DECLARATIONS = 256;
 const MAX_EXECUTOR_OPERATORS = 128;
@@ -374,7 +356,7 @@ const moveExecutorContextSchema = z
       refinement,
     );
   });
-export type MoveExecutorContext = z.infer<typeof moveExecutorContextSchema>;
+type MoveExecutorContext = z.infer<typeof moveExecutorContextSchema>;
 
 const envelopeBaseShape = {
   id: llmCallIdSchema,
@@ -423,7 +405,7 @@ const formalizerContextSchema = z
     );
     addDuplicateIssues(context.approvedLibrary.sorts, refinement);
   });
-export type ProofStateFormalizerContext = z.infer<typeof formalizerContextSchema>;
+type ProofStateFormalizerContext = z.infer<typeof formalizerContextSchema>;
 const moveShortlisterEnvelopeSchema = z
   .object({
     ...envelopeBaseShape,
@@ -488,7 +470,7 @@ export type LlmBoundaryDiagnosticCode =
  * Safe, closed classification of a transport failure. It is derived from HTTP status and local
  * conditions only; provider text, headers and credentials are never part of it.
  */
-export const LLM_TRANSPORT_FAILURE_SUBCODES = [
+const LLM_TRANSPORT_FAILURE_SUBCODES = [
   "rate-limited",
   "server-error",
   "timeout",
@@ -515,7 +497,7 @@ export type LlmBoundaryDiagnostic = Readonly<{
   message: string;
   subcode?: LlmTransportFailureSubcode | undefined;
 }>;
-export const llmBoundaryDiagnosticSchema: z.ZodType<LlmBoundaryDiagnostic> = z
+const llmBoundaryDiagnosticSchema: z.ZodType<LlmBoundaryDiagnostic> = z
   .object({
     code: z.enum([
       "invalid-request",
@@ -1095,7 +1077,7 @@ const shortlisterInsufficientContextSchema = z
   })
   .strict();
 const declinedSchema = z.object({ kind: z.literal("declined"), reason: shortTextSchema }).strict();
-export const moveShortlistProposalSchema = z
+const moveShortlistProposalSchema = z
   .object({
     kind: z.literal("move-shortlist"),
     choices: z
@@ -1106,21 +1088,19 @@ export const moveShortlistProposalSchema = z
       .max(8),
   })
   .strict();
-export type MoveShortlistProposal = z.infer<typeof moveShortlistProposalSchema>;
 
 /**
  * The shortlister judged that no displayed candidate is relevant to the selections. It is a
  * validated outcome, distinct from a refusal and from a low-confidence answer (which is kept as a
  * `declined` output and falls back to the deterministic list).
  */
-export const moveShortlistNoneRelevantSchema = z
+const moveShortlistNoneRelevantSchema = z
   .object({
     kind: z.literal("none-relevant"),
     confidence: z.number().finite().min(0).max(1),
     reason: shortTextSchema,
   })
   .strict();
-export type MoveShortlistNoneRelevant = z.infer<typeof moveShortlistNoneRelevantSchema>;
 
 const topicOutputSchema = z.union([
   topicManifestProposalSchema,
@@ -1161,13 +1141,12 @@ const formalizerInsufficientContextSchema = z
     rationale: shortTextSchema,
   })
   .strict();
-export const proofStateFormalizationProposalSchema = z
+const proofStateFormalizationProposalSchema = z
   .object({
     kind: z.literal("formalization"),
     draft: problemDraftSchema,
   })
   .strict();
-export type ProofStateFormalizationProposal = z.infer<typeof proofStateFormalizationProposalSchema>;
 const formalizerOutputSchema = z.union([
   proofStateFormalizationProposalSchema,
   formalizerInsufficientContextSchema,

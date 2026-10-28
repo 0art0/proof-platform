@@ -34,6 +34,7 @@
  */
 import {
   operatorDeclarationsSchema,
+  operatorIdSchema,
   sortSchema,
   type OperatorDeclaration,
   type PlainMathJson,
@@ -96,7 +97,7 @@ const OPERATOR_REGISTERED_AT = "2026-09-26T00:00:00.000Z";
 /** The set pack's operators: binary union and intersection of sets of elements. */
 export const SET_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
   {
-    id: "operator:set-union",
+    id: operatorIdSchema.parse("operator:set-union"),
     symbol: "Union",
     signature: { parameters: [ELEMENT_SET_SORT, ELEMENT_SET_SORT], result: ELEMENT_SET_SORT },
     presentation: {
@@ -107,7 +108,7 @@ export const SET_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
     },
   },
   {
-    id: "operator:set-intersection",
+    id: operatorIdSchema.parse("operator:set-intersection"),
     symbol: "Intersection",
     signature: { parameters: [ELEMENT_SET_SORT, ELEMENT_SET_SORT], result: ELEMENT_SET_SORT },
     presentation: {
@@ -117,12 +118,12 @@ export const SET_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
       domains: ["sets"],
     },
   },
-] as unknown as readonly OperatorDeclaration[];
+];
 
 /** The divisibility pack's operator: the relation "m divides n" between integers. */
 export const DIVISIBILITY_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
   {
-    id: "operator:divides",
+    id: operatorIdSchema.parse("operator:divides"),
     symbol: "Divides",
     signature: { parameters: [INTEGER_SORT, INTEGER_SORT], result: PROPOSITION_SORT },
     presentation: {
@@ -138,7 +139,7 @@ export const DIVISIBILITY_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] 
       domains: ["number-theory"],
     },
   },
-] as unknown as readonly OperatorDeclaration[];
+];
 
 /**
  * The closure pack's operator: a Kuratowski-style closure of a set of elements, the corpus's
@@ -147,7 +148,7 @@ export const DIVISIBILITY_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] 
  */
 export const CLOSURE_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
   {
-    id: "operator:set-closure",
+    id: operatorIdSchema.parse("operator:set-closure"),
     symbol: "Closure",
     signature: { parameters: [ELEMENT_SET_SORT], result: ELEMENT_SET_SORT },
     presentation: {
@@ -162,7 +163,7 @@ export const CLOSURE_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
       notations: ["kuratowski-closure"],
     },
   },
-] as unknown as readonly OperatorDeclaration[];
+];
 
 const HYPOTHESIS: ApplicationRequirement = {
   section: "hypothesis",

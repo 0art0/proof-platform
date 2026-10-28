@@ -138,7 +138,6 @@ export const PROBLEM_SETUP_LAYER_IDS = [
 export const problemSetupLayerIdSchema = z.enum(PROBLEM_SETUP_LAYER_IDS);
 
 export const problemSetupPackIdSchema = z.enum(LIBRARY_PACK_IDS);
-export type ProblemSetupPackId = z.infer<typeof problemSetupPackIdSchema>;
 
 /** Symbols are plain identifiers (MathJSON symbols such as `x`, `x_1` or `alpha`). */
 export const problemSetupSymbolSchema = z
@@ -180,7 +179,7 @@ export const problemDraftSchema = z
   .strict();
 export type ProblemDraft = z.infer<typeof problemDraftSchema>;
 
-export const PROBLEM_SETUP_DIAGNOSTIC_CODES = [
+const PROBLEM_SETUP_DIAGNOSTIC_CODES = [
   "invalid-draft",
   "duplicate-choice",
   "pack-operator-conflict",
@@ -194,7 +193,7 @@ export const PROBLEM_SETUP_DIAGNOSTIC_CODES = [
   "invalid-root-state",
   "approved-library-invalid",
 ] as const;
-export const problemSetupDiagnosticCodeSchema = z.enum(PROBLEM_SETUP_DIAGNOSTIC_CODES);
+const problemSetupDiagnosticCodeSchema = z.enum(PROBLEM_SETUP_DIAGNOSTIC_CODES);
 export type ProblemSetupDiagnosticCode = z.infer<typeof problemSetupDiagnosticCodeSchema>;
 
 /** A precise draft problem: `path` locates the draft field it concerns. */
@@ -207,14 +206,14 @@ export const problemSetupDiagnosticSchema = z
   .strict();
 export type ProblemSetupDiagnostic = z.infer<typeof problemSetupDiagnosticSchema>;
 
-export const problemSetupDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+const problemSetupDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
 /**
  * The results of an approved initial library, as the review shows them. Approval records these
  * results (and their generated variants) as setup additions to the `initial-problem` layer of the
  * new session; the review's digest covers the full artifacts, not just this summary.
  */
-export const problemSetupInitialLibrarySchema = z
+const problemSetupInitialLibrarySchema = z
   .object({
     results: z
       .array(
@@ -264,7 +263,6 @@ export const problemDraftValidationResponseSchema = z.discriminatedUnion("ok", [
     .object({ ok: z.literal(false), diagnostics: z.array(problemSetupDiagnosticSchema).min(1) })
     .strict(),
 ]);
-export type ProblemDraftValidationResponse = z.infer<typeof problemDraftValidationResponseSchema>;
 
 /**
  * `POST /proof-sessions`: approve a reviewed draft. The client chooses `sessionId` once per
@@ -277,17 +275,6 @@ export const problemApprovalRequestSchema = z
     reviewedDigest: problemSetupDigestSchema,
   })
   .strict();
-export type ProblemApprovalRequest = z.infer<typeof problemApprovalRequestSchema>;
-
-export type ProblemSetupPackOption = Readonly<{
-  id: ProblemSetupPackId;
-  name: string;
-  description: string;
-  domain: string;
-  /** Packs without notation are always in the catalog; the others need their operators. */
-  alwaysActive: boolean;
-  operators: readonly unknown[];
-}>;
 
 /** `GET /problem-setup/options`: the menus of the entry form. */
 export const problemSetupOptionsSchema = z

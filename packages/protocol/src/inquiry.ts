@@ -31,7 +31,7 @@ const proofNodeIdSchema = stableIdentifierSchema.brand("ProofNodeId");
 const suggestionSetIdSchema = stableIdentifierSchema.brand("SuggestionSetId");
 const suggestionIdSchema = stableIdentifierSchema.brand("SuggestionId");
 
-export const inquiryRecordIdSchema = stableIdentifierSchema.brand("InquiryRecordId");
+const inquiryRecordIdSchema = stableIdentifierSchema.brand("InquiryRecordId");
 export type InquiryRecordId = z.infer<typeof inquiryRecordIdSchema>;
 
 export const INQUIRY_RECORD_KINDS = Object.freeze([
@@ -46,14 +46,6 @@ export const INQUIRY_RECORD_KINDS = Object.freeze([
   "status-change",
 ] as const);
 export type InquiryRecordKind = (typeof INQUIRY_RECORD_KINDS)[number];
-
-export const QUESTION_FORMS = Object.freeze([
-  "establish",
-  "construct",
-  "determine",
-  "explore",
-] as const);
-export type QuestionForm = (typeof QUESTION_FORMS)[number];
 
 export const INQUIRY_RELATIONS = Object.freeze([
   "wouldSufficeFor",
@@ -84,17 +76,16 @@ export const REASON_PROVENANCES = Object.freeze([
   "method-encoded",
   "later-interpretation",
 ] as const);
-export type ReasonProvenance = (typeof REASON_PROVENANCES)[number];
 
 /** The statuses of each record kind that has a lifecycle; the first is the initial status. */
-export const INQUIRY_STATUSES = Object.freeze({
+const INQUIRY_STATUSES = Object.freeze({
   question: Object.freeze(["open", "resolved", "abandoned"] as const),
   objective: Object.freeze(["active", "achieved", "suspended", "abandoned"] as const),
   attempt: Object.freeze(["in-progress", "succeeded", "blocked", "abandoned"] as const),
   requirement: Object.freeze(["open", "satisfied", "withdrawn"] as const),
   obstruction: Object.freeze(["open", "addressed", "dismissed"] as const),
 });
-export type InquiryStatusSubjectKind = keyof typeof INQUIRY_STATUSES;
+type InquiryStatusSubjectKind = keyof typeof INQUIRY_STATUSES;
 const ALL_STATUSES = [...new Set(Object.values(INQUIRY_STATUSES).flat())] as [string, ...string[]];
 
 const targetReferenceSchema = z
@@ -118,7 +109,7 @@ function uniqueArray<Item extends z.ZodType>(item: Item, min: number, max: numbe
 }
 
 /** A premise or side condition of a library result, by its position in the result. */
-export const resultConditionSchema = z
+const resultConditionSchema = z
   .object({
     kind: z.enum(["premise", "side-condition"]),
     index: z.number().int().nonnegative(),
@@ -131,7 +122,7 @@ export type ResultCondition = z.infer<typeof resultConditionSchema>;
  * its statements, a subexpression at an operand path, a construction task, or a requirement of
  * one. The worker validates every reference against the stored node.
  */
-export const inquiryMathReferenceSchema = z.discriminatedUnion("kind", [
+const inquiryMathReferenceSchema = z.discriminatedUnion("kind", [
   z
     .object({ kind: z.literal("target"), nodeId: proofNodeIdSchema, target: targetReferenceSchema })
     .strict(),
@@ -181,14 +172,14 @@ export const inquiryMathReferenceSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export type InquiryMathReference = z.infer<typeof inquiryMathReferenceSchema>;
+type InquiryMathReference = z.infer<typeof inquiryMathReferenceSchema>;
 
 /**
  * A proposition by reference. A `target` is the target's whole sequent, optionally without some
  * of its hypotheses (the statement investigated when testing a hypothesis's role). `negated`
  * refers to the negation, so a refutation is an `Establish` of a negated reference.
  */
-export const propositionReferenceSchema = z.discriminatedUnion("kind", [
+const propositionReferenceSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("target"),
@@ -217,7 +208,7 @@ export const propositionReferenceSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export type PropositionReference = z.infer<typeof propositionReferenceSchema>;
+type PropositionReference = z.infer<typeof propositionReferenceSchema>;
 
 /**
  * The platform's inquiry methods (refinement §6, §10): actions whose stated semantics create
@@ -225,30 +216,29 @@ export type PropositionReference = z.infer<typeof propositionReferenceSchema>;
  * `investigate-hypothesis` tests the role of a hypothesis, and `extract-conditional-lemma`
  * extracts an established claim as a derived result.
  */
-export const INQUIRY_METHOD_IDS = Object.freeze([
+const INQUIRY_METHOD_IDS = Object.freeze([
   "try-result",
   "investigate-hypothesis",
   "extract-conditional-lemma",
 ] as const);
-export type InquiryMethodId = (typeof INQUIRY_METHOD_IDS)[number];
 
 /**
  * A method tried or proposed: an approved move, an approved library result, one of the
  * platform's inquiry methods, or manual work.
  */
-export const methodReferenceSchema = z.discriminatedUnion("kind", [
+const methodReferenceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("move"), moveId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("library-result"), resultId: stableIdentifierSchema }).strict(),
   z.object({ kind: z.literal("inquiry-method"), methodId: z.enum(INQUIRY_METHOD_IDS) }).strict(),
   z.object({ kind: z.literal("manual") }).strict(),
 ]);
-export type MethodReference = z.infer<typeof methodReferenceSchema>;
+type MethodReference = z.infer<typeof methodReferenceSchema>;
 
 const displayedSuggestionReferenceSchema = z
   .object({ suggestionSetId: suggestionSetIdSchema, suggestionId: suggestionIdSchema })
   .strict();
 
-export const INFORMAL_SUPPORT_STATUSES = Object.freeze([
+const INFORMAL_SUPPORT_STATUSES = Object.freeze([
   "conjectured",
   "plausible",
   "checked-on-examples",
@@ -261,7 +251,7 @@ export const INFORMAL_SUPPORT_STATUSES = Object.freeze([
  * N11 requirement with its established role. `informal` is an explicit, visible informal status
  * and never counts as validated evidence.
  */
-export const logicalSupportSchema = z.discriminatedUnion("kind", [
+const logicalSupportSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("transition"), childNodeId: proofNodeIdSchema }).strict(),
   z
     .object({
@@ -286,10 +276,10 @@ export const logicalSupportSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export type LogicalSupport = z.infer<typeof logicalSupportSchema>;
+type LogicalSupport = z.infer<typeof logicalSupportSchema>;
 
 /** A reason with its provenance. A method-encoded reason names the method that encodes it. */
-export const inquiryReasonSchema = z
+const inquiryReasonSchema = z
   .object({
     provenance: z.enum(REASON_PROVENANCES),
     /** Records the reason rests on, such as observations. */
@@ -343,16 +333,16 @@ const questionFormSchema = z.discriminatedUnion("form", [
     })
     .strict(),
 ]);
-export type InquiryQuestion = z.infer<typeof questionFormSchema>;
+type InquiryQuestion = z.infer<typeof questionFormSchema>;
 
 const decisionOptionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("record"), recordId: inquiryRecordIdSchema }).strict(),
   z.object({ kind: z.literal("suggestion"), ...displayedSuggestionReferenceSchema.shape }).strict(),
   z.object({ kind: z.literal("method"), method: methodReferenceSchema }).strict(),
 ]);
-export type DecisionOption = z.infer<typeof decisionOptionSchema>;
+type DecisionOption = z.infer<typeof decisionOptionSchema>;
 
-export const OBSERVATION_DIAGNOSTIC_CODES = Object.freeze([
+const OBSERVATION_DIAGNOSTIC_CODES = Object.freeze([
   "unmet-condition",
   "failed-match",
   "forbidden-dependency",
@@ -704,7 +694,7 @@ export function inquiryRecordReferenceIds(record: InquiryRecordInput): readonly 
 }
 
 /** Every displayed suggestion set an input references. */
-export function inquiryRecordSuggestionSetIds(record: InquiryRecordInput): readonly string[] {
+function inquiryRecordSuggestionSetIds(record: InquiryRecordInput): readonly string[] {
   const ids: string[] = [];
   if (record.kind === "attempt" && record.suggestion !== undefined) {
     ids.push(record.suggestion.suggestionSetId);

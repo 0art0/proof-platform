@@ -19,7 +19,6 @@ import { z } from "zod";
 export const menuItemIdSchema = z
   .string()
   .regex(/^menu-item:[0-9a-f]{16}$/, "Menu item IDs are content-derived menu identifiers.");
-export type MenuItemId = z.infer<typeof menuItemIdSchema>;
 
 /** A move parameter ID, e.g. `disjunctIndex`, `direction` or `instantiation/p`. */
 export const menuParameterIdSchema = stableIdentifierSchema;
@@ -111,7 +110,7 @@ export const parameterMenuItemSchema = z
   .strict();
 export type ParameterMenuItemRecord = z.infer<typeof parameterMenuItemSchema>;
 
-export const parameterMenuSchema = z
+const parameterMenuSchema = z
   .object({
     parameterId: menuParameterIdSchema,
     label: z.string().min(1),

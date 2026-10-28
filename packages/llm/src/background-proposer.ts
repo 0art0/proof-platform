@@ -136,7 +136,7 @@ export function addConstantIssues(
 }
 
 /** A constant's signature in the problem setup's sort-menu names, when every sort is on the menu. */
-export function menuSignature(
+function menuSignature(
   operator: OperatorDeclaration,
 ): Readonly<{ parameters: ProblemSetupSortId[]; result: ProblemSetupSortId }> | undefined {
   const parameters = operator.signature.parameters.map((sort) =>
@@ -234,7 +234,7 @@ export const backgroundProposerContextSchema = z
   .strict();
 export type BackgroundProposerContext = z.infer<typeof backgroundProposerContextSchema>;
 
-export const backgroundInsufficientContextSchema = z
+const backgroundInsufficientContextSchema = z
   .object({
     kind: z.literal("insufficient-context"),
     requestedCategories: z
@@ -244,7 +244,7 @@ export const backgroundInsufficientContextSchema = z
     rationale: shortTextSchema,
   })
   .strict();
-export const backgroundDeclinedSchema = z
+const backgroundDeclinedSchema = z
   .object({ kind: z.literal("declined"), reason: shortTextSchema })
   .strict();
 

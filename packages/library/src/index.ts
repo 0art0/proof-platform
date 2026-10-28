@@ -15,11 +15,10 @@ import { backgroundClassificationSchema, type BackgroundClassification } from ".
 import { mergeLibraryOperators, resultMentionedSymbols } from "./operator-environment";
 
 export const libraryArtifactKindSchema = z.enum(["definition", "result", "technique", "move"]);
-export type LibraryArtifactKind = z.infer<typeof libraryArtifactKindSchema>;
 
-export const libraryArtifactIdSchema = stableIdentifierSchema.brand("LibraryArtifactId");
+const libraryArtifactIdSchema = stableIdentifierSchema.brand("LibraryArtifactId");
 export type LibraryArtifactId = z.infer<typeof libraryArtifactIdSchema>;
-export const variantFamilyIdSchema = stableIdentifierSchema.brand("VariantFamilyId");
+const variantFamilyIdSchema = stableIdentifierSchema.brand("VariantFamilyId");
 export type VariantFamilyId = z.infer<typeof variantFamilyIdSchema>;
 
 export const libraryLayerSchema = z.enum([
@@ -36,7 +35,7 @@ export type LibraryLayerId = z.infer<typeof libraryLayerIdSchema>;
 export const applicationDirectionSchema = z.enum(["forward", "backward"]);
 export type ApplicationDirection = z.infer<typeof applicationDirectionSchema>;
 
-export const deterministicRenderingsSchema = z
+const deterministicRenderingsSchema = z
   .object({ latex: z.string().min(1), naturalLanguage: z.string().min(1) })
   .strict();
 export type DeterministicRenderings = z.infer<typeof deterministicRenderingsSchema>;
@@ -45,7 +44,7 @@ export type DeterministicRenderings = z.infer<typeof deterministicRenderingsSche
  * Deterministic, equivalence-preserving reshapings applied by `generateVariants`. Forward/backward
  * restriction is deliberately absent: see the module comment in `variants.ts`.
  */
-export const variantTransformationSchema = z.enum([
+const variantTransformationSchema = z.enum([
   "contrapositive",
   "converse",
   "symmetric-equality",
@@ -115,7 +114,7 @@ export const applicationRequirementSchema = z
   .strict();
 export type ApplicationRequirement = z.infer<typeof applicationRequirementSchema>;
 
-export const resultPatternSchema = z
+const resultPatternSchema = z
   .object({
     id: stableIdentifierSchema,
     expression: plainMathJsonSchema,
@@ -127,7 +126,7 @@ export type ResultPattern = z.infer<typeof resultPatternSchema>;
 
 const statementShapeSchema = z.object({ expression: plainMathJsonSchema }).strict();
 
-export const resultSideConditionSchema = z
+const resultSideConditionSchema = z
   .object({
     id: stableIdentifierSchema,
     description: z.string().min(1),
@@ -227,7 +226,7 @@ const resultReviewDecisionSchema = z.enum(["approved", "rejected", "changes-requ
  * A human review of a derived draft (roadmap N44). Like a move review it is recorded as a new
  * artifact that restates the reviewed result; `reviewOf` names the draft it decides.
  */
-export const libraryResultReviewSchema = z
+const libraryResultReviewSchema = z
   .object({
     decision: resultReviewDecisionSchema,
     reviewerId: stableIdentifierSchema,
@@ -238,7 +237,7 @@ export const libraryResultReviewSchema = z
   .strict();
 
 /** The most library constants one result may declare. */
-export const MAX_RESULT_OPERATORS = 16;
+const MAX_RESULT_OPERATORS = 16;
 
 const rawResultSchema = z
   .object({
@@ -273,14 +272,14 @@ const rawTechniqueSchema = z
   })
   .strict();
 
-export const moveReviewDecisionSchema = z.enum(["approved", "rejected", "changes-requested"]);
+const moveReviewDecisionSchema = z.enum(["approved", "rejected", "changes-requested"]);
 export type MoveReviewDecision = z.infer<typeof moveReviewDecisionSchema>;
 
-export const definitionDigestSchema = z
+const definitionDigestSchema = z
   .string()
   .regex(/^sha256:[0-9a-f]{64}$/, "A definition digest is sha256: followed by 64 hex digits.");
 
-export const libraryMoveReviewSchema = z
+const libraryMoveReviewSchema = z
   .object({
     decision: moveReviewDecisionSchema,
     reviewerId: stableIdentifierSchema,
@@ -304,7 +303,7 @@ const rawMoveSchema = z
   })
   .strict();
 
-export const libraryMoveSchema: z.ZodType<LibraryMove> = guardedSchema(
+const libraryMoveSchema: z.ZodType<LibraryMove> = guardedSchema(
   rawMoveSchema.superRefine((move, context) => {
     addCommonIssues(move, context);
     const { review, approval } = move;
@@ -365,7 +364,7 @@ export function createLibraryResultSchema(
   );
 }
 
-export function createLibraryDefinitionSchema(
+function createLibraryDefinitionSchema(
   environment: LibraryEnvironment = {},
 ): z.ZodType<LibraryDefinition> {
   const operators = operatorDeclarationsSchema.parse(environment.operators ?? []);

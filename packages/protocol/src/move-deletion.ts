@@ -11,8 +11,7 @@ const transitionEventIdSchema = stableIdentifierSchema.brand("TransitionEventId"
 const suggestionSetIdSchema = stableIdentifierSchema.brand("SuggestionSetId");
 const movePreviewIdSchema = stableIdentifierSchema.brand("MovePreviewId");
 
-export const proofDeletionIdSchema = stableIdentifierSchema.brand("ProofDeletionId");
-export type ProofDeletionId = z.infer<typeof proofDeletionIdSchema>;
+const proofDeletionIdSchema = stableIdentifierSchema.brand("ProofDeletionId");
 
 const deletionActorSchema = z
   .object({ id: actorIdSchema, kind: z.enum(["human", "agent"]) })
@@ -31,7 +30,6 @@ export const deletePreviousMoveCommandSchema = z
     reason: z.string().min(1).max(500).optional(),
   })
   .strict();
-export type DeletePreviousMoveCommand = z.infer<typeof deletePreviousMoveCommandSchema>;
 
 export const deletePreviousMoveReceiptSchema = z
   .object({
