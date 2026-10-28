@@ -12,6 +12,7 @@
  * A later interpretation is recorded afterwards and only about records of earlier commands.
  */
 import {
+  canonicalJson,
   constructionRequirementIdSchema,
   constructionTaskIdSchema,
   proofStateIdSchema,
@@ -1490,19 +1491,6 @@ function targetsByKey(state: ProofState): ReadonlyMap<string, unknown> {
       obligation,
     ]),
   ]);
-}
-
-/** JSON with sorted object keys, so stored copies compare equal whatever their key order. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    return `{${Object.entries(value)
-      .filter(([, child]) => child !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }
 
 function deepFreeze<Value>(value: Value): Value {

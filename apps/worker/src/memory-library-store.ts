@@ -3,6 +3,7 @@ import type {
   LibraryAdditionEvent,
   LibraryOperatorRegistration,
 } from "@proof/library";
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import type { ProofSessionMetadata } from "@proof/protocol";
 import {
   libraryScopeKey,
@@ -210,8 +211,8 @@ export class MemoryLibraryStore extends MemoryProofStore implements LibraryStore
         }
         if (
           event.artifact.layer !== event.layer ||
-          !sameJson(event.artifact.classification, event.classification) ||
-          !sameJson(event.artifact.approval, event.approval)
+          !canonicalJsonEquals(event.artifact.classification, event.classification) ||
+          !canonicalJsonEquals(event.artifact.approval, event.approval)
         ) {
           violation("library_addition_events record check: the event must restate its artifact.");
         }
@@ -280,7 +281,7 @@ export class MemoryLibraryStore extends MemoryProofStore implements LibraryStore
         ) {
           violation(`library_background_revisions unique sequence: ${event.sequence}.`);
         }
-        if (sameJson(event.previous, event.revised)) {
+        if (canonicalJsonEquals(event.previous, event.revised)) {
           violation("library_background_revisions check: a revision must change the profile.");
         }
         staged.revisions.set(key, jsonRow(event));
@@ -321,22 +322,6 @@ function artifactId(row: StoredLibraryArtifactRow): string {
 
 function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-/** JSONB equality: object key order is irrelevant. */
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => compareStrings(left, right))
-      .map(([key, entry]) => [key, canonical(entry)]),
-  );
 }
 
 function violation(message: string): never {

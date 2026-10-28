@@ -29,6 +29,7 @@
  * - `reviewed-authoring` is accepted only from a human actor.
  */
 import {
+  canonicalJson,
   plainMathJsonSchema,
   proofStateIdSchema,
   stableIdentifierSchema,
@@ -1173,17 +1174,6 @@ export type ObserveQuery = z.infer<typeof observeQuerySchema>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
 }
 
 function deepFreeze<Value>(value: Value): Value {

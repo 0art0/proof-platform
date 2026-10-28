@@ -236,6 +236,38 @@ export function jsonValueEquals(left: unknown, right: unknown): boolean {
   );
 }
 
+/**
+ * Canonical JSON text of plain data: object keys sorted by UTF-16 code unit, no whitespace, and
+ * every scalar and key written by `JSON.stringify`. `undefined` follows `JSON.stringify`: an
+ * object property whose value is `undefined` is omitted, while an `undefined` array element, an
+ * array hole, and a top-level `undefined` are written as `null`.
+ *
+ * Persisted identities hash these exact bytes (artifact digests, definition hashes, menu item
+ * IDs), so the output for any value must never change.
+ */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${Array.from(value, (item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    return `{${Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Equality of canonical JSON: object key order and `undefined`-valued properties do not matter,
+ * so a value equals its JSONB round trip. Use `jsonValueEquals` when an `undefined`-valued key
+ * must count as present.
+ */
+export function canonicalJsonEquals(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
 /** Recursively freezes own data properties in place (cycle-safe) and returns the same value. */
 export function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {
   if (typeof value !== "object" || value === null || seen.has(value)) return value;

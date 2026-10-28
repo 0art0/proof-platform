@@ -12,11 +12,11 @@
  */
 import { createHash } from "node:crypto";
 import { mergeLibraryOperators } from "@proof/library";
+import { canonicalJson } from "@proof/mathjson-model";
 import {
   LEGACY_ARTIFACT_VERSION,
   PROOF_ARTIFACT_KIND,
   PROOF_ARTIFACT_VERSION,
-  canonicalArtifactJson,
   createMovePreviewSchema,
   createPrepareProofCommandSuccessSchema,
   createProofNodeSchema,
@@ -205,7 +205,7 @@ export function artifactDigest(content: unknown): string {
     typeof content === "object" && content !== null && !Array.isArray(content)
       ? Object.fromEntries(Object.entries(content).filter(([key]) => key !== "digest"))
       : content;
-  return `sha256:${createHash("sha256").update(canonicalArtifactJson(withoutDigest)).digest("hex")}`;
+  return `sha256:${createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")}`;
 }
 
 async function readStoredRows(

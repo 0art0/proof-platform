@@ -6,6 +6,7 @@
  * while `./index` is still evaluating.
  */
 import {
+  canonicalJsonEquals,
   operatorDeclarationsSchema,
   type OperatorDeclaration,
   type PlainMathJson,
@@ -33,7 +34,7 @@ export function mergeLibraryOperators(
     if (typeof symbol !== "string") return { ok: false, message: "An operator is invalid." };
     const existing = bySymbol.get(symbol);
     if (existing === undefined) bySymbol.set(symbol, operator);
-    else if (!sameJson(existing, operator)) {
+    else if (!canonicalJsonEquals(existing, operator)) {
       return { ok: false, message: `The operator ${symbol} is declared inconsistently.` };
     }
   }
@@ -120,22 +121,6 @@ export function resultMentionedSymbols(
   });
   result.patterns.forEach(({ expression }) => mentionedSymbols(expression, symbols));
   return symbols;
-}
-
-/** Key-order-insensitive JSON equality, so JSONB round trips compare equal. */
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-}
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, entry]) => [key, canonical(entry)]),
-  );
 }
 
 function deepFreeze<Value>(value: Value, seen: WeakSet<object> = new WeakSet()): Value {

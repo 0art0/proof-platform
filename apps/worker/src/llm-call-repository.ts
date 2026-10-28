@@ -12,6 +12,7 @@ import {
   type LlmCallId,
   type LlmTransport,
 } from "@proof/llm";
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import { z } from "zod";
 import { ProofStoreTransactionError } from "./proof-repository";
 
@@ -284,7 +285,7 @@ export async function runDurableLlmCall(
         );
       }
       if (current.status === "completed") {
-        return sameJson(current.evidence, evidence)
+        return canonicalJsonEquals(current.evidence, evidence)
           ? { status: "completed" as const, record: current, replayed: true }
           : failure(
               "uncertain",
@@ -456,7 +457,7 @@ export async function readApprovedBackground(
       if (
         decision === undefined ||
         decision.id !== decisionId ||
-        !sameJson(decision.owner, owner)
+        !canonicalJsonEquals(decision.owner, owner)
       ) {
         return failure(
           "rejected",
@@ -526,7 +527,7 @@ export async function recordLibraryProposalDecision(
       let existing: LibraryProposalDecision | undefined;
       if (existingInput !== undefined) {
         existing = safeParse(libraryProposalDecisionSchema, existingInput);
-        if (existing === undefined || !sameJson(existing, decision)) {
+        if (existing === undefined || !canonicalJsonEquals(existing, decision)) {
           return failure(
             "rejected",
             "decision-id-conflict",
@@ -593,7 +594,7 @@ export async function readLibraryProposalDecision(
       if (
         decision === undefined ||
         decision.id !== decisionId ||
-        !sameJson(decision.owner, owner)
+        !canonicalJsonEquals(decision.owner, owner)
       ) {
         return notFound();
       }
@@ -661,7 +662,7 @@ async function recordProposalDecision<Decision extends ProposalReview>(
       let existing: Decision | undefined;
       if (existingInput !== undefined) {
         existing = safeParse(spec.schema, existingInput);
-        if (existing === undefined || !sameJson(existing, decision)) {
+        if (existing === undefined || !canonicalJsonEquals(existing, decision)) {
           return failure(
             "rejected",
             "decision-id-conflict",
@@ -679,7 +680,7 @@ async function recordProposalDecision<Decision extends ProposalReview>(
         call.role !== spec.role ||
         call.evidence.status !== "validated" ||
         call.evidence.output?.kind !== spec.outputKind ||
-        !sameJson(call.evidence.output, decision.proposal)
+        !canonicalJsonEquals(call.evidence.output, decision.proposal)
       ) {
         return failure(
           "rejected",
@@ -726,7 +727,7 @@ function parseStoredCall(
   callId: LlmCallId,
 ): StoredLlmCall | undefined {
   const record = safeParse(storedLlmCallSchema, input);
-  return record !== undefined && sameJson(record.owner, owner) && record.id === callId
+  return record !== undefined && canonicalJsonEquals(record.owner, owner) && record.id === callId
     ? freezeDetached(record)
     : undefined;
 }
@@ -738,9 +739,9 @@ function sameClaim(
   return (
     left.id === right.id &&
     left.role === right.role &&
-    sameJson(left.owner, right.owner) &&
-    sameJson(left.preparedCall, right.preparedCall) &&
-    sameJson(left.dispatch, right.dispatch)
+    canonicalJsonEquals(left.owner, right.owner) &&
+    canonicalJsonEquals(left.preparedCall, right.preparedCall) &&
+    canonicalJsonEquals(left.dispatch, right.dispatch)
   );
 }
 
@@ -766,10 +767,6 @@ function safeParse<Output>(schema: z.ZodType<Output>, input: unknown): Output | 
   } catch {
     return undefined;
   }
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function isPlainData(value: unknown, ancestors: ReadonlySet<object> = new Set()): boolean {

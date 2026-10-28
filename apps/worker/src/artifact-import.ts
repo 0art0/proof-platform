@@ -44,13 +44,13 @@ import {
   type LibraryArtifact,
   type LibraryResult,
 } from "@proof/library";
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import {
   LEGACY_ARTIFACT_VERSION,
   SUPPORTED_ARTIFACT_VERSIONS,
   appliedResultIds,
   assignTransitionSequence,
   effectiveOperators,
-  canonicalArtifactJson,
   deriveArtifactFinalMaterial,
   deriveTranslationDictionary,
   inquiryRecordInputFields,
@@ -1350,5 +1350,5 @@ function toJson(value: unknown): JsonValue {
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
-  return canonicalArtifactJson(toJson(left)) === canonicalArtifactJson(toJson(right));
+  return canonicalJsonEquals(toJson(left), toJson(right));
 }

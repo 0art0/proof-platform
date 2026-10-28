@@ -7,6 +7,7 @@
  * storage; a client never supplies operator declarations of its own.
  */
 import { starterLibraryPacks, type LibraryPack } from "@proof/library";
+import { jsonValueEquals } from "@proof/mathjson-model";
 import { stableIdentifierSchema, type OperatorDeclaration } from "@proof/protocol";
 import { z } from "zod";
 import {
@@ -53,7 +54,7 @@ export function resolveAgainstRegistry(
     const trigger = constant.presentation?.latex?.parse?.trigger;
     const same = registry.find(({ operator }) => operator.symbol === constant.symbol);
     if (same !== undefined) {
-      if (canonicalJson(same.operator.signature) === canonicalJson(constant.signature)) {
+      if (jsonValueEquals(same.operator.signature, constant.signature)) {
         return same.operator;
       }
       conflicts.add(
@@ -141,16 +142,4 @@ export async function loadApprovedConstants(
           ? 409
           : 400;
   return { ok: false, status, diagnostics: [diagnostic] };
-}
-
-/** JSON with sorted object keys, so structurally equal values compare equal. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

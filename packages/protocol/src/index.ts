@@ -12,6 +12,7 @@ import { mergeLibraryOperators } from "@proof/library";
 import {
   createExecutableProofStateSchema,
   declarationsSchema,
+  jsonValueEquals,
   operatorDeclarationSchema,
   operatorDeclarationsSchema,
   plainMathJsonSchema,
@@ -171,8 +172,8 @@ const resolvedAssociativeProofSelectionSchema = z
     if (
       localLens === undefined ||
       localLens.operator !== selection.operator ||
-      !jsonEquals(localLens.fragment, selection.fragment) ||
-      !jsonEquals(selection.coveredOperandPaths, expectedPaths)
+      !jsonValueEquals(localLens.fragment, selection.fragment) ||
+      !jsonValueEquals(selection.coveredOperandPaths, expectedPaths)
     ) {
       addLinkIssue(context, "The associative proof-selection lens is internally inconsistent.");
     }
@@ -211,7 +212,7 @@ const resolvedProofSelectionQuerySchema: z.ZodType<ResolvedProofSelectionQuery> 
     query.selections.forEach(({ abstraction }) => {
       if (abstraction === undefined) return;
       const previous = wildcardById.get(abstraction.id);
-      if (previous !== undefined && !jsonEquals(previous, abstraction)) {
+      if (previous !== undefined && !jsonValueEquals(previous, abstraction)) {
         addLinkIssue(context, "Repeated query wildcard IDs must retain one specification.");
       }
       const previousId = wildcardIdBySymbol.get(abstraction.symbol);
@@ -448,7 +449,7 @@ export const displayedSuggestionSetSchema: z.ZodType<DisplayedSuggestionSet> = z
       const exactFamilySuggestions = suggestionSet.suggestions
         .filter(({ variantFamilyId }) => variantFamilyId === group.familyId)
         .map(({ id }) => id);
-      if (!jsonEquals(group.suggestionIds, exactFamilySuggestions)) {
+      if (!jsonValueEquals(group.suggestionIds, exactFamilySuggestions)) {
         addLinkIssue(
           context,
           "A variant group must retain every displayed family member in order.",
@@ -902,7 +903,7 @@ function createMovePreviewSchemaIn(environment: ProtocolEnvironment): z.ZodType<
         if (
           first === undefined ||
           last === undefined ||
-          !jsonEquals(first.operation, preview.operation)
+          !jsonValueEquals(first.operation, preview.operation)
         ) {
           addLinkIssue(context, "A macro preview's operation must be its first step's.");
         } else if (last.operation.resultStateId !== preview.afterState.id) {
@@ -950,7 +951,7 @@ function createMovePreviewSchemaIn(environment: ProtocolEnvironment): z.ZodType<
           );
         }
       }
-      if (!jsonEquals(preview.delta, computeDelta(preview.beforeState, preview.afterState))) {
+      if (!jsonValueEquals(preview.delta, computeDelta(preview.beforeState, preview.afterState))) {
         addLinkIssue(context, "The preview delta does not match its evidence snapshots.");
       }
     });
@@ -1082,7 +1083,7 @@ function prepareMacroPreview(
   environment: ProtocolEnvironment,
 ): PrepareMovePreviewResult {
   const first = macro.steps[0];
-  if (first === undefined || !jsonEquals(first.operation, request.operation)) {
+  if (first === undefined || !jsonValueEquals(first.operation, request.operation)) {
     return protocolFailure(
       "preview-rejected",
       "A macro preview's operation must be its first step's.",
@@ -1202,7 +1203,7 @@ export function createTransitionEventSchema(
       if (event.operation.resultStateId !== event.afterState.id) {
         addLinkIssue(context, "Operation result-state ID does not match after-state evidence.");
       }
-      if (!jsonEquals(event.delta, computeDelta(event.beforeState, event.afterState))) {
+      if (!jsonValueEquals(event.delta, computeDelta(event.beforeState, event.afterState))) {
         addLinkIssue(context, "The recorded state delta does not match the evidence snapshots.");
       }
     });
@@ -1407,7 +1408,7 @@ function prepareProofCommandInternal(
   if (command === undefined) {
     return protocolFailure("invalid-command", "The command does not match its strict schema.");
   }
-  if (!jsonEquals(command.actor, contextResult.trustedActor)) {
+  if (!jsonValueEquals(command.actor, contextResult.trustedActor)) {
     return protocolFailure(
       "actor-mismatch",
       "Command provenance does not exactly match the trusted actor context.",
@@ -1441,7 +1442,7 @@ function prepareProofCommandInternal(
       return protocolFailure("invalid-prepared-record", "The prior prepared result is invalid.");
     }
     if (previous.prepared.command.commandId === command.commandId) {
-      if (!jsonEquals(previous.prepared.command, command)) {
+      if (!jsonValueEquals(previous.prepared.command, command)) {
         return protocolFailure(
           "command-id-conflict",
           "The command ID was already used for a different validated command.",
@@ -1655,7 +1656,7 @@ function verifiedByKernel(
     // Records stored before evidence was kept have none to compare.
     (previous.prepared.edge.evidence === undefined ||
       transition.evidence === previous.prepared.edge.evidence) &&
-    jsonEquals(transition.state, previous.prepared.node.state)
+    jsonValueEquals(transition.state, previous.prepared.node.state)
   );
 }
 
@@ -1664,7 +1665,7 @@ function conflictsWithRecordedNode(
   previous: PrepareProofCommandSuccess,
 ): boolean {
   for (const recorded of [previous.prepared.parent, previous.prepared.node]) {
-    if (current.id === recorded.id && !jsonEquals(current, recorded)) return true;
+    if (current.id === recorded.id && !jsonValueEquals(current, recorded)) return true;
   }
   return false;
 }
@@ -1694,15 +1695,15 @@ function addPreparedLinkIssues(prepared: PreparedProofCommand, context: z.Refine
     edge.transitionClass !== event.transitionClass ||
     edge.evidence !== event.evidence ||
     edge.sequence !== event.sequence ||
-    !jsonEquals(command.actor, event.actor) ||
+    !jsonValueEquals(command.actor, event.actor) ||
     command.operation.resultStateId !== node.state.id ||
     command.operation.expectedStateId !== parent.state.id ||
-    !jsonEquals(command.operation, edge.operation) ||
-    !jsonEquals(command.menuSelection, edge.menuSelection) ||
-    !jsonEquals(command.proposal, edge.proposal) ||
-    !jsonEquals(command.operation, event.operation) ||
-    !jsonEquals(parent.state, event.beforeState) ||
-    !jsonEquals(node.state, event.afterState)
+    !jsonValueEquals(command.operation, edge.operation) ||
+    !jsonValueEquals(command.menuSelection, edge.menuSelection) ||
+    !jsonValueEquals(command.proposal, edge.proposal) ||
+    !jsonValueEquals(command.operation, event.operation) ||
+    !jsonValueEquals(parent.state, event.beforeState) ||
+    !jsonValueEquals(node.state, event.afterState)
   ) {
     addLinkIssue(context, "Prepared command records are not linked consistently.");
   }
@@ -1754,14 +1755,14 @@ export function suggestionSetMatchesNode(
       })),
     };
     const resolved = resolveProofSelectionQuery(node.state, queryRequest, environment);
-    return resolved.ok && jsonEquals(resolved.query, suggestionSet.selection);
+    return resolved.ok && jsonValueEquals(resolved.query, suggestionSet.selection);
   }
   const resolved = resolveProofSelection(
     node.state,
     selectionRequestFromResolved(suggestionSet.selection),
     environment,
   );
-  return resolved.ok && jsonEquals(resolved.selection, suggestionSet.selection);
+  return resolved.ok && jsonValueEquals(resolved.selection, suggestionSet.selection);
 }
 
 function selectionRequestFromResolved(selection: ResolvedProofSelection): unknown {
@@ -1866,9 +1867,9 @@ function previewEvidenceMatchesCommand(
     preview.suggestionSetId !== command.suggestionSetId ||
     preview.chosenSuggestionId !== command.chosenSuggestionId ||
     preview.moveId !== command.moveId ||
-    !jsonEquals(preview.operation, command.operation) ||
-    !jsonEquals(preview.menuSelection, command.menuSelection) ||
-    !jsonEquals(preview.beforeState, parent.state) ||
+    !jsonValueEquals(preview.operation, command.operation) ||
+    !jsonValueEquals(preview.menuSelection, command.menuSelection) ||
+    !jsonValueEquals(preview.beforeState, parent.state) ||
     !chosenSuggestionMatchesMove(
       suggestionSet,
       preview.chosenSuggestionId,
@@ -1887,7 +1888,7 @@ function previewEvidenceMatchesCommand(
     planned.ok &&
     planned.preview.transitionClass === preview.transitionClass &&
     (preview.evidence === undefined || planned.preview.evidence === preview.evidence) &&
-    jsonEquals(planned.preview.state, preview.afterState)
+    jsonValueEquals(planned.preview.state, preview.afterState)
   );
 }
 
@@ -1914,7 +1915,7 @@ function collectionDelta(
     updated: after
       .filter((entry) => {
         const previous = beforeById.get(entry.id);
-        return previous !== undefined && !jsonEquals(previous, entry);
+        return previous !== undefined && !jsonValueEquals(previous, entry);
       })
       .map((entry) => entry.id),
   };
@@ -1934,25 +1935,6 @@ function safeZodParse<Output>(schema: z.ZodType<Output>, value: unknown): Output
   } catch {
     return undefined;
   }
-}
-
-function jsonEquals(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonEquals(value, right[index]))
-    );
-  }
-  if (!isRecord(left) || !isRecord(right)) return false;
-  const leftKeys = Object.keys(left).sort();
-  const rightKeys = Object.keys(right).sort();
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every((key, index) => key === rightKeys[index] && jsonEquals(left[key], right[key]))
-  );
 }
 
 function isSortedStrings(values: readonly string[]): boolean {
