@@ -34,6 +34,19 @@ The implementation must continue to honor the design plan's central boundaries:
 6. Review the complete diff and working-tree status before reporting, and state which checks ran and
    any remaining risks.
 
+## Branches and worktrees
+
+Work happens on a branch, usually in its own git worktree under `.claude/worktrees/`. By default, once
+the work is committed and its checks pass (`npm run verify`, plus the e2e suites the change touches),
+merge it into the local `main` without waiting to be asked. Then remove its worktree
+(`git worktree remove`) and delete the merged branch (`git branch -d`). Parallel lanes merge into one
+integration branch first, and the integration branch is verified before it merges into `main`.
+
+Leave a worktree in place if it has uncommitted changes or unmerged commits, and say so in the
+report. A fresh worktree has no `node_modules`. Copying the main checkout's
+(`cp -a <main>/node_modules .`) is cheaper than `npm ci`, and the relative `@proof/*` links resolve
+to the worktree's packages. Each copy is about 0.6 GB, so prune finished worktrees promptly.
+
 ## Useful commands
 
 ```bash
