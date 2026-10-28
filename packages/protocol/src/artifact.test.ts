@@ -184,6 +184,34 @@ describe("canonicalArtifactJson", () => {
       '{"b":1,"c":[null]}',
     );
   });
+
+  it("produces exactly the bytes artifact digests were computed over (golden)", () => {
+    const input = {
+      z: [3, -1.5, 1e21, 0.1, -0, 2e-7, 123456789012345680000],
+      a: {
+        é: 'ünïcødé ∀x. x≥0   "quoted" \\ \n\t\u0001',
+        "10": true,
+        "2": false,
+        "": null,
+        B: "upper",
+        b: "lower",
+      },
+      m: [["Add", 1, { sym: "x" }], { fn: ["Sin", "Pi"] }, [], {}],
+      emoji: "😀 \ud800",
+    };
+    expect(canonicalArtifactJson(input)).toBe(
+      '{"a":{"":null,"10":true,"2":false,"B":"upper","b":"lower",' +
+        '"é":"ünïcødé ∀x. x≥0   \\"quoted\\" \\\\ \\n\\t\\u0001"},' +
+        '"emoji":"😀 \\ud800",' +
+        '"m":[["Add",1,{"sym":"x"}],{"fn":["Sin","Pi"]},[],{}],' +
+        '"z":[3,-1.5,1e+21,0.1,0,2e-7,123456789012345680000]}',
+    );
+    expect(canonicalArtifactJson({ b: 1, a: undefined, c: [undefined, { d: undefined }] })).toBe(
+      '{"b":1,"c":[null,{}]}',
+    );
+    expect(canonicalArtifactJson(undefined)).toBe("null");
+    expect(canonicalArtifactJson("x")).toBe('"x"');
+  });
 });
 
 describe("withArtifactSessionId", () => {

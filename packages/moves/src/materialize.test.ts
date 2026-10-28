@@ -513,6 +513,71 @@ describe("generateParameterMenus", () => {
     ]);
   });
 
+  it("derives byte-stable menu item IDs from the canonical JSON of each value (golden)", () => {
+    // Menu item IDs are stored in previews, edges and artifacts: these exact IDs must never change.
+    const ids = (
+      input: ExecutableProofState,
+      kind: KernelOperationKind,
+      selections: MoveSelections,
+      parameterId: string,
+      environment?: KernelEnvironment,
+    ) =>
+      menusOf(input, kind, selections, environment)
+        .menus.find((menu) => menu.parameterId === parameterId)
+        ?.items.map((item) => item.id);
+    expect(
+      ids(
+        state(["Or", "p", "q", ["And", "p", "q"]]),
+        "choose-goal-disjunct",
+        { target: at("conclusion") },
+        "disjunctIndex",
+      ),
+    ).toEqual([
+      "menu-item:a7a2acad0ce9c022",
+      "menu-item:f80ea69aaaa28d99",
+      "menu-item:57daa47f1459ae06",
+    ]);
+    expect(
+      ids(
+        state(
+          ["Lt", "a", ["S", "b"]],
+          [{ id: "h:all", expression: ["ForAll", "x", ["Lt", "x", ["S", "x"]]] }],
+        ),
+        "instantiate-universal-hypothesis",
+        { target: at("conclusion"), universal: at("h:all"), term: at("conclusion", [1, 0]) },
+        "term",
+      ),
+    ).toEqual([
+      "menu-item:241165cd4ead1469",
+      "menu-item:6909a758e708de5e",
+      "menu-item:aab6bb7b28bc5b84",
+      "menu-item:c3f2a754894c813d",
+    ]);
+    expect(
+      ids(
+        state(
+          ["Not", "p"],
+          [
+            { id: "h:iff", expression: ["Equivalent", "p", "q"] },
+            { id: "h:other", expression: ["Equivalent", "q", "p"] },
+          ],
+        ),
+        "rewrite-with-equivalence",
+        {
+          target: at("conclusion"),
+          equivalence: at("h:other"),
+          occurrence: at("conclusion", [0]),
+        },
+        "source",
+        resultEnvironment,
+      ),
+    ).toEqual([
+      "menu-item:603104904ebd585c",
+      "menu-item:f8e0f927f26f2d9a",
+      "menu-item:8c33b5be7646ef33",
+    ]);
+  });
+
   it("orders instantiation terms selection-first, filters by sort, and omits bound subterms", () => {
     const input = state(
       ["Lt", "a", ["S", "b"]],
