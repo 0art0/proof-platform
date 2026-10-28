@@ -57,6 +57,20 @@ import {
 } from "./move-author";
 import { abstractSituation } from "./move-author-situation";
 import {
+  normalizeProofPlannerWireResult,
+  proofPlannerContextSchema,
+  proofPlannerOutputSchema,
+  proofPlannerSystemMessage,
+  proofPlannerWireResultSchema,
+} from "./proof-plan";
+import {
+  STEP_TRANSLATOR_SYSTEM_MESSAGE,
+  jevChoicesResultSchema,
+  normalizeJevChoices,
+  stepTranslatorContextSchema,
+  stepTranslatorOutputSchema,
+} from "./step-translator";
+import {
   MAX_PLAN_STEPS,
   executorInsufficientContextSchema,
   executorPlanProposalSchema,
@@ -103,6 +117,8 @@ export {
   type Situation,
 } from "./move-author-situation";
 export { compileMoveAuthorProposal, proposedMoveId } from "./move-author-template";
+export * from "./proof-plan";
+export * from "./step-translator";
 
 export const SUPPORTED_LLM_ROLES = [
   "topic-extractor",
@@ -112,6 +128,8 @@ export const SUPPORTED_LLM_ROLES = [
   "move-executor",
   "librarian",
   "move-author",
+  "proof-planner",
+  "step-translator",
 ] as const;
 const supportedLlmRoleSchema = z.enum(SUPPORTED_LLM_ROLES);
 export type SupportedLlmRole = z.infer<typeof supportedLlmRoleSchema>;
@@ -449,6 +467,20 @@ const librarianEnvelopeSchema = z
     context: librarianContextSchema,
   })
   .strict();
+const proofPlannerEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("proof-planner"),
+    context: proofPlannerContextSchema,
+  })
+  .strict();
+const stepTranslatorEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("step-translator"),
+    context: stepTranslatorContextSchema,
+  })
+  .strict();
 export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   topicExtractorEnvelopeSchema,
   proofStateFormalizerEnvelopeSchema,
@@ -457,6 +489,8 @@ export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   moveExecutorEnvelopeSchema,
   librarianEnvelopeSchema,
   moveAuthorEnvelopeSchema,
+  proofPlannerEnvelopeSchema,
+  stepTranslatorEnvelopeSchema,
 ]);
 export type LlmContextEnvelope = z.infer<typeof llmContextEnvelopeSchema>;
 
@@ -849,6 +883,56 @@ const moveAuthorRequestSchema = z
   })
   .strict();
 
+const roleRequestSchema = z.object({ id: llmCallIdSchema, context: z.unknown() }).strict();
+
+/**
+ * The proof planner's envelope (`docs/motivated-proof-plans.md` section 1). The worker builds the
+ * context deterministically from the session: problem, background, active constants, library and
+ * the initial goal with its hypotheses labelled H1, H2, ...
+ */
+export function buildProofPlannerContext(input: unknown): RoleLlmContextResult<"proof-planner"> {
+  const request = safeParsePlain(roleRequestSchema, input);
+  const context =
+    request === undefined ? undefined : safeParsePlain(proofPlannerContextSchema, request.context);
+  if (request === undefined || context === undefined) {
+    return failure("invalid-request", "The proof-planner request is invalid.");
+  }
+  return {
+    ok: true,
+    envelope: freezeDetached({
+      id: request.id,
+      schemaVersion: "llm-context/v1" as const,
+      role: "proof-planner" as const,
+      context,
+    }),
+    diagnostics: [],
+  };
+}
+
+/** The step translator's envelope: one plan step, its focus and the computed candidates or menus. */
+export function buildStepTranslatorContext(
+  input: unknown,
+): RoleLlmContextResult<"step-translator"> {
+  const request = safeParsePlain(roleRequestSchema, input);
+  const context =
+    request === undefined
+      ? undefined
+      : safeParsePlain(stepTranslatorContextSchema, request.context);
+  if (request === undefined || context === undefined) {
+    return failure("invalid-request", "The step-translator request is invalid.");
+  }
+  return {
+    ok: true,
+    envelope: freezeDetached({
+      id: request.id,
+      schemaVersion: "llm-context/v1" as const,
+      role: "step-translator" as const,
+      context,
+    }),
+    diagnostics: [],
+  };
+}
+
 /**
  * Build the move author's minimal context (design plan sections 13.3 and 15.3) from a stored
  * move-executor call whose plan was applied: the user's instruction, the applied step abstracted
@@ -1207,7 +1291,9 @@ export type ValidatedLlmOutput =
   | z.infer<typeof backgroundProposerOutputSchema>
   | z.infer<typeof executorOutputSchema>
   | z.infer<typeof librarianOutputSchema>
-  | z.infer<typeof moveAuthorOutputSchema>;
+  | z.infer<typeof moveAuthorOutputSchema>
+  | z.infer<typeof proofPlannerOutputSchema>
+  | z.infer<typeof stepTranslatorOutputSchema>;
 
 const topicWireSchema = z.object({ result: topicOutputSchema }).strict();
 const backgroundWireSchema = z.object({ result: backgroundProposerWireResultSchema }).strict();
@@ -1216,6 +1302,9 @@ const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).stri
 const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
 const executorWireSchema = z.object({ result: executorWireResultSchema }).strict();
 const moveAuthorWireSchema = z.object({ result: moveAuthorWireResultSchema }).strict();
+const proofPlannerWireSchema = z.object({ result: proofPlannerWireResultSchema }).strict();
+/** Jev is not called with a JSON schema; this root only describes the validated output. */
+const stepTranslatorWireSchema = z.object({ result: stepTranslatorOutputSchema }).strict();
 
 const jevChoiceResultSchema = z
   .object({
@@ -1257,6 +1346,8 @@ export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
   if (role === "move-executor") return executorWireSchema;
   if (role === "librarian") return librarianWireSchema;
   if (role === "move-author") return moveAuthorWireSchema;
+  if (role === "proof-planner") return proofPlannerWireSchema;
+  if (role === "step-translator") return stepTranslatorWireSchema;
   return shortlisterWireSchema;
 }
 
@@ -1362,6 +1453,7 @@ export const FORMALIZER_BUILTIN_LATEX: readonly (readonly [symbol: string, latex
 ];
 const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. The built-in symbols are always available, need no approval and are never listed in approvedLibrary.operators, even when that list is empty; write them with exactly this LaTeX: ${FORMALIZER_BUILTIN_LATEX.map(([symbol, latex]) => `${symbol} ${latex}`).join("; ")}. Write implication as \\implies, never \\to or \\rightarrow, which denote a function arrow. Never ask for a definition of a built-in symbol. If the problem needs an operator that is neither listed nor built in, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
 
+const PROOF_PLANNER_SYSTEM_MESSAGE = proofPlannerSystemMessage(FORMALIZER_BUILTIN_LATEX);
 function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "topic-extractor") {
     return "Return only a topic manifest, a permitted context request, or a refusal. Do not solve the problem.";
@@ -1371,6 +1463,8 @@ function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "librarian") return LIBRARIAN_SYSTEM_MESSAGE;
   if (role === "move-executor") return MOVE_EXECUTOR_SYSTEM_MESSAGE;
   if (role === "move-author") return MOVE_AUTHOR_SYSTEM_MESSAGE;
+  if (role === "proof-planner") return PROOF_PLANNER_SYSTEM_MESSAGE;
+  if (role === "step-translator") return STEP_TRANSLATOR_SYSTEM_MESSAGE;
   return SHORTLISTER_SYSTEM_MESSAGE;
 }
 
@@ -1507,6 +1601,46 @@ export function validateLlmOutput(
     return problem === undefined
       ? { ok: true, output: freezeDetached(output), diagnostics: [] }
       : failure("invalid-output", problem);
+  }
+
+  if (call.role === "proof-planner") {
+    if (call.envelope.role !== "proof-planner") {
+      return failure("invalid-output", "The LLM output does not belong to this call.");
+    }
+    const wireOutput = safeParsePlain(proofPlannerWireResultSchema, candidate);
+    const normalized =
+      wireOutput === undefined
+        ? undefined
+        : normalizeProofPlannerWireResult(wireOutput, call.envelope.context);
+    if (normalized !== undefined) {
+      return normalized.ok
+        ? { ok: true, output: freezeDetached(normalized.output), diagnostics: [] }
+        : failure("invalid-output", normalized.message);
+    }
+    // An already normalized output is checked against the same context.
+    const output = safeParsePlain(proofPlannerOutputSchema, candidate);
+    if (output === undefined) return failure("invalid-output", "The LLM output is malformed.");
+    if (output.kind !== "proof-plan")
+      return { ok: true, output: freezeDetached(output), diagnostics: [] };
+    const rechecked = normalizeProofPlannerWireResult(
+      { ...output, kind: "proof" },
+      call.envelope.context,
+    );
+    return rechecked.ok
+      ? { ok: true, output: freezeDetached(output), diagnostics: [] }
+      : failure("invalid-output", rechecked.message);
+  }
+
+  if (call.role === "step-translator") {
+    if (call.envelope.role !== "step-translator") {
+      return failure("invalid-output", "The LLM output does not belong to this call.");
+    }
+    const raw = safeParsePlain(jevChoicesResultSchema, candidate);
+    if (raw === undefined) return failure("invalid-output", "The Jev answer is malformed.");
+    const normalized = normalizeJevChoices(raw, call.envelope, call.envelope.context);
+    return normalized.ok
+      ? { ok: true, output: freezeDetached(normalized.output), diagnostics: [] }
+      : failure("invalid-output", normalized.message);
   }
 
   const jevResult = safeParsePlain(jevChoiceResultSchema, candidate);
@@ -1683,6 +1817,8 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         executorOutputSchema,
         librarianOutputSchema,
         moveAuthorOutputSchema,
+        proofPlannerOutputSchema,
+        stepTranslatorOutputSchema,
       ])
       .optional(),
     diagnostics: z.array(llmBoundaryDiagnosticSchema),
@@ -1731,7 +1867,11 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         (evidence.role === "librarian" &&
           !librarianOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "move-author" &&
-          !moveAuthorOutputSchema.safeParse(evidence.output).success))
+          !moveAuthorOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "proof-planner" &&
+          !proofPlannerOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "step-translator" &&
+          !stepTranslatorOutputSchema.safeParse(evidence.output).success))
     ) {
       context.addIssue({ code: "custom", message: "Evidence output must match the call role." });
     }
