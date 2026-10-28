@@ -9,7 +9,7 @@ import {
   type ResolveProofSelectionResult,
   type StatementAnchor,
 } from "@proof/selections";
-import type { PlainMathJson } from "@proof/mathjson-model";
+import { canonicalJson, type PlainMathJson } from "@proof/mathjson-model";
 import type { Presentation } from "@proof/language";
 import {
   MathLiveStatement,
@@ -178,7 +178,7 @@ function ValidatedProofWorkspace({
   }));
   const selectedAnchors = new Map<string, SelectionPolarity | undefined>();
   for (const { selection, resolved } of resolvedSelections) {
-    const key = JSON.stringify(selection.anchor);
+    const key = canonicalJson(selection.anchor);
     const polarity = resolved.ok ? resolved.selection.position.polarity : undefined;
     const existing = selectedAnchors.get(key);
     // Several selections in one statement with different polarities read as mixed.
@@ -561,7 +561,7 @@ function StatementView({
   handleLabel,
   environment,
 }: StatementViewProps) {
-  const key = JSON.stringify(anchor);
+  const key = canonicalJson(anchor);
   const selected = environment.selectedAnchors.has(key);
   const polarity = environment.selectedAnchors.get(key);
   const gestures = environment.gestures;

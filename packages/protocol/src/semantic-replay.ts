@@ -35,7 +35,9 @@ import {
 } from "@proof/kernel";
 import {
   binderShape,
+  canonicalJsonEquals,
   freeSymbolNames,
+  jsonValueEquals,
   parseStatementView,
   plainMathJsonSchema,
   sortEquals,
@@ -2336,7 +2338,7 @@ function sameShape(left: PlainMathJson, right: PlainMathJson): boolean {
 }
 
 function sameOccurrence(left: ReplayOccurrence, right: ReplayOccurrence): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return jsonValueEquals(left, right);
 }
 
 function candidateId(
@@ -2485,7 +2487,7 @@ function originCorresponds(
           ? candidate.statement.kind === "conclusion"
           : candidate.statement.kind === "hypothesis" &&
             candidate.statement.id === mapped(recorded.statement.id);
-      return statementMatches && JSON.stringify(candidate.path) === JSON.stringify(recorded.path);
+      return statementMatches && jsonValueEquals(candidate.path, recorded.path);
     }
     case "result":
       return candidate.kind === "result" && candidate.resultId === recorded.resultId;
@@ -2571,7 +2573,7 @@ function valuesEqual(
       );
     }
   }
-  return JSON.stringify(left) === JSON.stringify(right);
+  return canonicalJsonEquals(left, right);
 }
 
 // --------------------------------------------------------------------------------------------

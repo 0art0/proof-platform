@@ -25,7 +25,12 @@ import {
   type LibraryResultReview,
 } from "@proof/library";
 import { createPresentation } from "@proof/language";
-import type { PlainMathJson, ProofContext, StatementView } from "@proof/mathjson-model";
+import {
+  canonicalJsonEquals,
+  type PlainMathJson,
+  type ProofContext,
+  type StatementView,
+} from "@proof/mathjson-model";
 import {
   planConditionalLemma,
   type ConditionalLemmaPlan,
@@ -236,8 +241,10 @@ export function existingLemmas(
   lemma: LibraryResult,
 ): readonly ExistingLemma[] {
   const same = (candidate: LibraryResult) =>
-    JSON.stringify([candidate.statement, candidate.premises]) ===
-    JSON.stringify([lemma.statement, lemma.premises]);
+    canonicalJsonEquals(
+      [candidate.statement, candidate.premises],
+      [lemma.statement, lemma.premises],
+    );
   const results = artifacts.filter(
     (artifact): artifact is LibraryResult =>
       artifact.kind === "result" &&

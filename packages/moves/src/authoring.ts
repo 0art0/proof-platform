@@ -49,6 +49,7 @@ import { libraryArtifactReferenceSchema, type LibraryProvenance } from "@proof/l
 import {
   CONSTRUCTION_REQUIREMENT_ROLES,
   binderShape,
+  canonicalJson,
   constructionRequirementEvidenceSchema,
   createExecutableProofStateSchema,
   RESERVED_BUILTIN_SYMBOLS,
@@ -2276,5 +2277,5 @@ function situationShape(
       hypotheses.map(rename),
     ];
   });
-  return JSON.stringify(statements);
+  return canonicalJson(statements);
 }

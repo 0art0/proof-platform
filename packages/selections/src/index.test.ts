@@ -202,6 +202,21 @@ describe("visible fallback semantics", () => {
     });
   });
 
+  it("matches requested leaves whatever the key order of their metadata", () => {
+    const expression = [
+      "Add",
+      ["Multiply", { num: "3", latex: "3" }, "y"],
+      "z",
+    ] as unknown as PlainMathJson;
+    const requested = ["Subtract", { latex: "3", num: "3" }, "y"] as unknown as PlainMathJson;
+    expect(resolveSelection(expression, requested)).toMatchObject({
+      kind: "fallback",
+      path: [0],
+      fragment: ["Multiply", { num: "3", latex: "3" }, "y"],
+      reason: expect.stringContaining("snapped to the nearest subtree"),
+    });
+  });
+
   it("says so when a requested leaf is absent from the expression", () => {
     const requested: PlainMathJson = ["Subtract", 2, "absent"];
     const resolved = resolveSelection(statement, requested);

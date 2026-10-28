@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { createLatexRenderer, createPresentation } from "@proof/language";
+import { canonicalJsonEquals } from "@proof/mathjson-model";
 import {
   BACKGROUND_LEVELS,
   createProofNodeSchema,
@@ -1040,8 +1041,9 @@ function parseOperators(input: readonly unknown[]): readonly OperatorDeclaration
 }
 
 function sortLabel(sorts: ProblemSetupOptions["sorts"], sort: unknown): string {
-  const key = JSON.stringify(sort);
-  return sorts.find((choice) => JSON.stringify(choice.sort) === key)?.label ?? key;
+  return (
+    sorts.find((choice) => canonicalJsonEquals(choice.sort, sort))?.label ?? JSON.stringify(sort)
+  );
 }
 
 function toggle(values: readonly string[], value: string, checked: boolean): string[] {

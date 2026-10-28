@@ -33,6 +33,7 @@ import {
   type LibraryResult,
 } from "@proof/library";
 import {
+  canonicalJson,
   freeSymbolNames,
   parseStatementView,
   substituteMathJson,
@@ -437,7 +438,7 @@ export function statementKey(
     const substituted = safely(() => substituteMathJson(formula, substitutions), undefined);
     return substituted?.ok === true ? substituted.expression : formula;
   });
-  return JSON.stringify(renamed);
+  return canonicalJson(renamed);
 }
 
 function orderedParameters(

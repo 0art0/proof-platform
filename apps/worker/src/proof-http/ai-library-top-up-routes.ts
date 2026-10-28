@@ -36,7 +36,7 @@ import {
   type PreparedLlmCall,
 } from "@proof/llm";
 import { mentionedSymbols, type LibraryAdditionEvent, type LibraryResult } from "@proof/library";
-import type { OperatorDeclaration } from "@proof/mathjson-model";
+import { canonicalJsonEquals, type OperatorDeclaration } from "@proof/mathjson-model";
 import { resolveProofSelection } from "@proof/selections";
 import { z } from "zod";
 import { coveredConstants, loadSessionConstants, type SessionConstants } from "../active-constants";
@@ -288,7 +288,7 @@ function replayConflict(
     // When the selections still resolve (the proof has not moved on), they must describe the
     // stored situation; after the proof moved on there is nothing left to compare.
     const situation = situationOf(requested.selections, loaded);
-    if (situation.ok && JSON.stringify(situation.situation) !== JSON.stringify(stored.situation)) {
+    if (situation.ok && !canonicalJsonEquals(situation.situation, stored.situation)) {
       return conflict("The call ID was used for other selections.");
     }
   }

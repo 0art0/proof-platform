@@ -58,6 +58,29 @@ describe("offline AI evaluation contracts", () => {
     }
   });
 
+  it("matches corpus sorts to the setup menu whatever their object key order", () => {
+    const reversed = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reversed)
+        : typeof value === "object" && value !== null
+          ? Object.fromEntries(
+              Object.entries(value)
+                .reverse()
+                .map(([key, entry]) => [key, reversed(entry)]),
+            )
+          : value;
+    for (const corpusProblem of BENCHMARK_CORPUS) {
+      const reordered = {
+        ...corpusProblem,
+        declarations: corpusProblem.declarations.map(
+          ([symbol, sort]) =>
+            [symbol, reversed(sort)] as (typeof corpusProblem.declarations)[number],
+        ),
+      };
+      expect(corpusReferenceDraft(reordered)).toEqual(corpusReferenceDraft(corpusProblem));
+    }
+  });
+
   it("runs the formalizer adapter across private corpus targets", async () => {
     const seen: string[] = [];
     const result = await evaluateFormalizerCorpus({

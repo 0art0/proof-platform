@@ -13,6 +13,7 @@
  */
 import {
   canonicalJson,
+  canonicalJsonEquals,
   constructionRequirementIdSchema,
   constructionTaskIdSchema,
   proofStateIdSchema,
@@ -104,7 +105,7 @@ function uniqueArray<Item extends z.ZodType>(item: Item, min: number, max: numbe
     .min(min)
     .max(max)
     .refine(
-      (items) => new Set(items.map((value) => JSON.stringify(value))).size === items.length,
+      (items) => new Set(items.map((value) => canonicalJson(value))).size === items.length,
       "Entries must be unique.",
     );
 }
@@ -460,8 +461,9 @@ function payloadIssue(record: InquiryRecordInput): string | undefined {
         ? "An observation needs mathematical references, a diagnostic, or a note."
         : undefined;
     case "decision": {
-      const key = JSON.stringify(record.selected);
-      return (record.alternatives ?? []).some((option) => JSON.stringify(option) === key)
+      return (record.alternatives ?? []).some((option) =>
+        canonicalJsonEquals(option, record.selected),
+      )
         ? "The selected option cannot also be an alternative."
         : undefined;
     }

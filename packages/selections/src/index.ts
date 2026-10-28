@@ -1,6 +1,7 @@
 import {
   binderShape,
   builtinBinderSorts,
+  canonicalJson,
   constructionPlaceholderOperators,
   createProofStateSchema,
   deepFreeze,
@@ -444,7 +445,7 @@ function fallbackPathFor(
       });
     } else {
       total = 1;
-      const key = JSON.stringify(candidate);
+      const key = canonicalJson(candidate);
       if (requested.has(key)) counts.set(key, 1);
     }
     if (
@@ -482,7 +483,7 @@ function leafCounts(expression: PlainMathJson): Readonly<{
   let total = 0;
   walkExpressions(expression, [], (candidate) => {
     if (functionParts(candidate)) return;
-    const key = JSON.stringify(candidate);
+    const key = canonicalJson(candidate);
     counts.set(key, (counts.get(key) ?? 0) + 1);
     total += 1;
   });
@@ -928,7 +929,7 @@ function safeParseRetrievalWildcard(value: unknown): RetrievalWildcard | undefin
 }
 
 function selectionOccurrenceKey(selection: ResolvedProofSelection): string {
-  return JSON.stringify(
+  return canonicalJson(
     selection.kind === "exact"
       ? [selection.anchor, "exact", selection.path]
       : [

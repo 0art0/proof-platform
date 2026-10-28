@@ -60,7 +60,10 @@ const proposition = (symbol: string) => ({
   role: "universal-parameter",
 });
 
-function review(goal: unknown = ["Or", "p", "q"]) {
+function review(
+  goal: unknown = ["Or", "p", "q"],
+  declarations: readonly unknown[] = [proposition("p"), proposition("q")],
+) {
   const rootNode = createProofNodeSchema().parse({
     id: "node:root",
     state: {
@@ -70,7 +73,7 @@ function review(goal: unknown = ["Or", "p", "q"]) {
           id: "goal:1",
           sequent: {
             context: {
-              declarations: [proposition("p"), proposition("q")],
+              declarations,
               hypotheses: [{ id: "hypothesis:1", statement: { expression: "p" } }],
             },
             conclusion: { expression: goal },
@@ -129,12 +132,12 @@ const createCalls = () => calls.filter(({ url }) => url === "/api/proof-sessions
 const validateCalls = () => calls.filter(({ url }) => url === "/api/problem-drafts/validate");
 const approveButton = () => screen.queryByRole("button", { name: "Start exploring" });
 
-function renderForm() {
+function renderForm(menu: ProblemSetupOptions = options) {
   const navigate = vi.fn();
   let sessions = 0;
   render(
     <ProblemEntryForm
-      options={options}
+      options={menu}
       navigate={navigate}
       createSessionId={() => `session:test-${(sessions += 1)}`}
     />,
@@ -199,6 +202,44 @@ describe("ProblemEntryForm approval gate", () => {
         body: { sessionId: "session:test-1", draft: reviewed, reviewedDigest: review().digest },
       },
     ]);
+  });
+
+  it("labels reviewed variables by the sort menu whatever its object key order", async () => {
+    const reversed = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(reversed)
+        : typeof value === "object" && value !== null
+          ? Object.fromEntries(
+              Object.entries(value)
+                .reverse()
+                .map(([key, entry]) => [key, reversed(entry)]),
+            )
+          : value;
+    answers.set("/api/problem-drafts/validate", () =>
+      Response.json({
+        ok: true,
+        data: {
+          ok: true,
+          review: review(
+            ["Or", "p", "q"],
+            [
+              proposition("p"),
+              proposition("q"),
+              { id: "declaration:A", symbol: "A", sort: SET, role: "universal-parameter" },
+            ],
+          ),
+        },
+      }),
+    );
+    renderForm({
+      ...options,
+      sorts: options.sorts.map((choice) => ({ ...choice, sort: reversed(choice.sort) })),
+    } as ProblemSetupOptions);
+    fillDraft();
+    await reviewDraft();
+    const summary = screen.getByRole("region", { name: "Review" });
+    expect(summary).toHaveTextContent("A: Set of elements");
+    expect(summary).toHaveTextContent("p: Proposition");
   });
 
   it("discards the review when the draft is edited afterwards", async () => {

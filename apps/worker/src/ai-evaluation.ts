@@ -3,6 +3,7 @@
  * never contacts a model. Corpus answers remain evaluator-side and are not part of role context.
  */
 import { alphaEquivalent } from "@proof/kernel";
+import { sortEquals } from "@proof/mathjson-model";
 import { isDeepStrictEqual } from "node:util";
 import { analyzeDiscoveryTree, type ProofEdge, type ProofNode } from "@proof/protocol";
 import {
@@ -315,9 +316,7 @@ export function scoreFormalizerDraft(
 /** Construct a reference draft for adapters and tests from the handwritten corpus state. */
 export function corpusReferenceDraft(problem: CorpusProblem): ProblemDraft {
   const declarations = problem.declarations.map(([symbol, sort]) => {
-    const match = PROBLEM_SETUP_SORT_CHOICES.find(
-      (choice) => JSON.stringify(choice.sort) === JSON.stringify(sort),
-    );
+    const match = PROBLEM_SETUP_SORT_CHOICES.find((choice) => sortEquals(choice.sort, sort));
     if (match === undefined) throw new Error(`No problem-setup sort for corpus symbol ${symbol}.`);
     return { symbol, sort: problemSetupSortIdSchema.parse(match.id) };
   });

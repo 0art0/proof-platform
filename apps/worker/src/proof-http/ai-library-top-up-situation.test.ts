@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { MemoryLlmCallStore } from "../memory-llm-call-store";
+import type { LlmCallStoreTransaction } from "../llm-call-repository";
 import { createAiLimiter } from "./ai-rate-limit";
 import {
   ANY_PROPOSITION,
@@ -24,6 +26,56 @@ import {
 } from "./ai-library-top-up.testing";
 
 afterEach(closeServices);
+
+/** Object keys in PostgreSQL JSONB order: shorter keys first, then by byte value. */
+function jsonbKeyOrder(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(jsonbKeyOrder);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.length - right.length || (left < right ? -1 : 1))
+      .map(([key, entry]) => [key, jsonbKeyOrder(entry)]),
+  );
+}
+
+type StoredSituationCall = {
+  status: string;
+  preparedCall: {
+    envelope: { context?: { situation?: { selections?: { expression: unknown }[] } } };
+    messages: { content: string }[];
+  };
+};
+
+/**
+ * An evidence store that reads a stored top-up call back as one prepared from a state whose
+ * MathJSON nodes list their keys in JSONB order. The user message is rewritten to match, so the
+ * stored call stays valid and only the situation's key order differs from a fresh rebuild.
+ */
+class ReorderedSituationLlmCallStore extends MemoryLlmCallStore {
+  override transaction<Result>(
+    work: (transaction: LlmCallStoreTransaction) => Promise<Result>,
+  ): Promise<Result> {
+    return super.transaction((transaction) =>
+      work({
+        ...transaction,
+        readCallForUpdate: async (owner, callId) => {
+          const record = (await transaction.readCallForUpdate(owner, callId)) as
+            StoredSituationCall | undefined;
+          // Completing a claim compares the stored call with the prepared one byte for byte.
+          if (record?.status !== "completed") return record;
+          const { envelope, messages } = record.preparedCall;
+          for (const selection of envelope?.context?.situation?.selections ?? []) {
+            selection.expression = jsonbKeyOrder(selection.expression);
+          }
+          if (envelope !== undefined && messages?.[1] !== undefined) {
+            messages[1].content = JSON.stringify(envelope);
+          }
+          return record;
+        },
+      }),
+    );
+  }
+}
 
 /**
  * The `no-relevant-results` top-up and the behaviour every top-up shares: the abstracted
@@ -160,6 +212,32 @@ describe("no-relevant-results top-up", () => {
         reviewerId: "service:library-gate",
       });
     }
+  });
+
+  it("replays a call whose stored situation lists MathJSON keys in another order", async () => {
+    // A numeral with metadata is a multi-key node that no schema reorders, so the stored
+    // situation and a fresh rebuild can differ in key order alone.
+    const goals = [{ format: "mathjson", expression: ["Divides", "m", { latex: "2", num: "2" }] }];
+    const { origin, topUps } = await topUpScenario(
+      () => libraryOutput([DIVIDES_FROM_EQUAL]),
+      { calls: new ReorderedSituationLlmCallStore() },
+      { goals },
+    );
+    const first = await topUp(origin, request);
+    expect(first.response.status, JSON.stringify(first.body)).toBe(201);
+    const replay = await topUp(origin, request);
+    expect(replay.response.status, JSON.stringify(replay.body)).toBe(200);
+    expect(replay.body).toMatchObject({ replayed: true });
+    expect(topUps).toHaveLength(1);
+
+    // Other selections under the same call ID are still a conflict.
+    const other = await topUp(origin, {
+      ...request,
+      selections: [{ ...conclusionSelection, path: [1] }],
+    });
+    expect(other.response.status, JSON.stringify(other.body)).toBe(409);
+    expect(other.body).toMatchObject({ diagnostics: [{ code: "call-id-conflict" }] });
+    expect(topUps).toHaveLength(1);
   });
 
   it("describes related fragments with one set of neutral names", async () => {

@@ -48,6 +48,15 @@ describe("statementKey", () => {
     expect(statementKey(crossed)).not.toBe(statementKey(transitive));
   });
 
+  it("ignores the order of the keys in a numeral with metadata", () => {
+    const stored = shape(["a"], [], ["Divides", "a", { num: "2", latex: "2" }]);
+    const proposed = shape(["x"], [], ["Divides", "x", { latex: "2", num: "2" }]);
+    expect(statementKey(proposed)).toBe(statementKey(stored));
+    expect(statementKey(shape(["x"], [], ["Divides", "x", { latex: "3", num: "3" }]))).not.toBe(
+      statementKey(stored),
+    );
+  });
+
   it("tells premises, statements and operators apart", () => {
     const base = shape(["a"], [], ["Divides", "a", "a"]);
     expect(statementKey(shape(["a"], [["Divides", "a", "a"]], ["Divides", "a", "a"]))).not.toBe(

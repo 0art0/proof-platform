@@ -278,6 +278,21 @@ describe("selection overlap", () => {
     expect(selectionsOverlap(exact("goal:left", [0]), exact("goal:left", [1]))).toBe(false);
     expect(selectionsOverlap(exact("goal:left", []), exact("goal:right", []))).toBe(false);
   });
+
+  it("compares statement anchors whatever their object key order", () => {
+    const left = exact("goal:left", [0]);
+    const reordered: AnchoredProofSelection = {
+      kind: "exact",
+      path: [0, 1],
+      anchor: {
+        statement: { kind: "conclusion" },
+        target: { id: "goal:left" as StatementAnchor["target"]["id"], kind: "goal" },
+        stateId: left.anchor.stateId,
+      },
+    };
+    expect(selectionsOverlap(left, reordered)).toBe(true);
+    expect(selectionsOverlap(reordered, exact("goal:right", [0, 1]))).toBe(false);
+  });
 });
 
 describe("abstract selection flags", () => {

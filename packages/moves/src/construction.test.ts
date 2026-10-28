@@ -956,6 +956,34 @@ describe("describeGenerality", () => {
     ]);
   });
 
+  it("sees examples as alike whatever the key order of the metadata in their statements", () => {
+    // `p` and `u` carry display metadata, written in different key orders.
+    const conclusion = (metadata: unknown, other: string) =>
+      ["Implies", metadata, other] as unknown as PlainMathJson;
+    const template = authoredMoveTemplateSchema.parse(
+      contrapositiveTemplate({
+        examples: [
+          applied(
+            "one",
+            ["p", "q"],
+            conclusion({ sym: "p", latex: "p" }, "q"),
+            contrapositive("p", "q"),
+          ),
+          applied(
+            "two",
+            ["u", "v"],
+            conclusion({ latex: "u", sym: "u" }, "v"),
+            contrapositive("u", "v"),
+          ),
+          (contrapositiveTemplate().examples as unknown[])[2],
+        ],
+      }),
+    );
+    expect(describeGenerality(template, operators).map(({ code }) => code)).toEqual([
+      "examples-alike",
+    ]);
+  });
+
   it("notes nothing for examples with different shapes", () => {
     const template = authoredMoveTemplateSchema.parse(contrapositiveTemplate());
     expect(describeGenerality(template, operators)).toEqual([]);

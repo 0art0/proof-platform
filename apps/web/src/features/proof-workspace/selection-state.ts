@@ -1,3 +1,4 @@
+import { jsonValueEquals } from "@proof/mathjson-model";
 import { retrievalWildcardSchema } from "@proof/protocol";
 import type { z } from "zod";
 import {
@@ -250,9 +251,7 @@ export function selectionsOverlap(
   left: AnchoredProofSelection,
   right: AnchoredProofSelection,
 ): boolean {
-  if (JSON.stringify(stableAnchor(left.anchor)) !== JSON.stringify(stableAnchor(right.anchor))) {
-    return false;
-  }
+  if (!jsonValueEquals(stableAnchor(left.anchor), stableAnchor(right.anchor))) return false;
   return coveragePaths(left).some((leftPath) =>
     coveragePaths(right).some(
       (rightPath) =>

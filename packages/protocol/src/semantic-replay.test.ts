@@ -286,6 +286,24 @@ function rename(expression: PlainMathJson, names: Readonly<Record<string, string
   return expression;
 }
 
+/** The same data with every object's keys in reverse order, as a JSONB round trip may leave them. */
+function reverseKeys<Value>(value: Value): Value {
+  if (Array.isArray(value)) return value.map(reverseKeys) as Value;
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .reverse()
+        .map(([key, entry]) => [key, reverseKeys(entry)]),
+    ) as Value;
+  }
+  return value;
+}
+
+/** Steps as stored and read back: identical data, different object key order. */
+function reorderedKeys(steps: readonly SemanticReplaySourceStep[]): SemanticReplaySourceStep[] {
+  return steps.map((source) => reverseKeys(source));
+}
+
 describe("deriveSemanticStep", () => {
   it("describes selections by statement role and fragment, and parameters by menu origin", () => {
     const branch = new Branch(
@@ -629,6 +647,25 @@ describe("planSemanticReplay", () => {
         diagnostic: { code: "step-not-replayable", message: "No selections." },
       },
     });
+  });
+
+  it("matches recorded menu values whatever the object key order", () => {
+    const disjunct = new Branch(
+      rootNode("node:source", "goal:main", ["p", "q"], ["Or", "q", ["And", "p", "q"]]),
+    ).apply("c1", "move:choose-goal-disjunct", [{ target: "goal:main" }], {
+      disjunctIndex: (value) =>
+        JSON.stringify(value) === JSON.stringify({ kind: "index", index: 1 }),
+    });
+    const target = rootNode("node:target", "goal:x", ["a", "b"], ["Or", "b", ["And", "a", "b"]]);
+    const steps = disjunct.steps();
+    const plain = planSemanticReplay(replayInput(steps, target));
+    const reordered = planSemanticReplay(replayInput(reorderedKeys(steps), target));
+    if (!plain.ok || !reordered.ok) throw new Error("the replay was not planned");
+    expect(plain.report.steps[0]?.parameters).toEqual([]);
+    expect(reordered.report.complete).toBe(true);
+    expect(reordered.report.steps[0]?.parameters).toEqual([]);
+    expect(reordered.report).toEqual(plain.report);
+    expect(reordered.finalNode.state).toEqual(plain.finalNode.state);
   });
 
   it("chooses menu parameters again by value under the correspondence, or by origin", () => {
@@ -1200,6 +1237,38 @@ describe("planSemanticReplay over steps without a suggestion", () => {
       path: [1],
       source: { kind: "hypothesis", hypothesisId: "statement:renamed" },
     });
+  });
+
+  it("prefers the recorded occurrence whatever the object key order", () => {
+    const branch = new RawBranch(
+      rootNode(
+        "node:source",
+        "goal:main",
+        ["p", "q", "r"],
+        ["Or", "r", "p"] as unknown as PlainMathJson,
+        [{ id: "statement:equivalence", expression: ["Equivalent", "p", "q"] }] as never,
+      ),
+    ).apply("rw", {
+      kind: "rewrite-with-equivalence",
+      target: goalTarget("goal:main"),
+      statement: { kind: "conclusion" },
+      path: [1],
+      source: { kind: "hypothesis", hypothesisId: "statement:equivalence" },
+      direction: "forward",
+    });
+    const target = rootNode(
+      "node:target",
+      "goal:renamed",
+      ["a", "b", "c"],
+      ["Or", "c", "a"] as unknown as PlainMathJson,
+      [{ id: "statement:renamed", expression: ["Equivalent", "a", "b"] }] as never,
+    );
+    const plain = planSemanticReplay(replayInput(branch.steps(), target));
+    const reordered = planSemanticReplay(replayInput(reorderedKeys(branch.steps()), target));
+    if (!plain.ok || !reordered.ok) throw new Error("the replay was not planned");
+    expect(reordered.report.complete).toBe(true);
+    expect(reordered.report).toEqual(plain.report);
+    expect(reordered.replayed[0]?.prepared.prepared.edge.operation).toMatchObject({ path: [1] });
   });
 
   it("applies the approved macro again as one step, or fails naming the missing macro", () => {
