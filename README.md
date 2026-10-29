@@ -15,6 +15,16 @@ npm run verify
 
 ## Running locally
 
+Start the worker and the web app together with one command, then open <http://localhost:3000>:
+
+```bash
+scripts/start.sh   # or: npm run dev
+```
+
+It uses the in-memory store unless `PROOF_DATABASE_URL` (or `DATABASE_URL`) is set, gives the
+worker the AI settings in `.env.local`, and stops both servers on Ctrl-C. The rest of this section
+describes starting each server by hand.
+
 Start the proof worker with the non-persistent in-memory store (no PostgreSQL needed). It listens on
 `http://127.0.0.1:8787` by default; set `PROOF_HTTP_PORT` to change it.
 

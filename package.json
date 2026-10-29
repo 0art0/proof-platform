@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "dev": "npm run dev -w @proof/worker & npm run dev -w @proof/web; wait",
+    "dev": "scripts/start.sh",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "npm run lint --workspaces --if-present",
