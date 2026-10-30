@@ -2,7 +2,36 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { readBoundedJson, RequestBodyError } from "./http";
+import { readBoundedJson, RequestBodyError, validateSameOriginRequest } from "./http";
+
+function mutation(url: string, origin: string, fetchSite = "same-origin"): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: { origin, "sec-fetch-site": fetchSite },
+  });
+}
+
+describe("validateSameOriginRequest", () => {
+  it("accepts the request's own origin and its loopback aliases on the same port", () => {
+    for (const origin of ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000"]) {
+      expect(validateSameOriginRequest(mutation("http://localhost:3000/api/x", origin))).toBe(
+        undefined,
+      );
+    }
+  });
+
+  it("rejects other hosts, ports and schemes, and cross-site fetches", () => {
+    for (const [url, origin, fetchSite] of [
+      ["http://localhost:3000/api/x", "http://evil.example:3000", "same-origin"],
+      ["http://localhost:3000/api/x", "http://127.0.0.1:3001", "same-origin"],
+      ["http://localhost:3000/api/x", "https://127.0.0.1:3000", "same-origin"],
+      ["http://app.example/api/x", "http://localhost", "same-origin"],
+      ["http://localhost:3000/api/x", "http://127.0.0.1:3000", "cross-site"],
+    ] as const) {
+      expect(validateSameOriginRequest(mutation(url, origin, fetchSite))?.status).toBe(403);
+    }
+  });
+});
 
 function streamedRequest(body: ReadableStream<Uint8Array>): Request {
   return new Request("http://localhost/api/test", {

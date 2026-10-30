@@ -152,7 +152,8 @@ describe("plain data helpers", () => {
         const other = permuted(value, seed);
         expect(canonicalJson(other)).toBe(canonicalJson(value));
         expect(jsonValueEquals(other, value)).toBe(true);
-        expect(JSON.parse(canonicalJson(value))).toEqual(value);
+        // JSON has no negative zero, so compare with the value as JSON can hold it.
+        expect(JSON.parse(canonicalJson(value))).toEqual(JSON.parse(JSON.stringify(value)));
       }),
     );
     // Equal canonical text exactly when the values are structurally equal. The small domain makes
