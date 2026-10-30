@@ -41,6 +41,25 @@ export function proofServiceFailure(error: unknown): Response {
   return proofApiFailure("service_unavailable", "The proof service could not be reached.", 503);
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Next reports a locally served request's URL as `localhost` whichever loopback name the browser
+ * used, so a page opened at `127.0.0.1` or `[::1]` counts as the same origin on the same scheme and
+ * port. A DNS-rebinding page's origin names the attacker's host, never a loopback address.
+ */
+function sameApplicationOrigin(supplied: string, request: string): boolean {
+  if (supplied === request) return true;
+  const a = new URL(supplied);
+  const b = new URL(request);
+  return (
+    a.protocol === b.protocol &&
+    a.port === b.port &&
+    LOOPBACK_HOSTNAMES.has(a.hostname) &&
+    LOOPBACK_HOSTNAMES.has(b.hostname)
+  );
+}
+
 /** Accept a mutation only from this application's own origin (no body is required). */
 export function validateSameOriginRequest(request: Request): Response | undefined {
   let requestOrigin: string;
@@ -60,7 +79,7 @@ export function validateSameOriginRequest(request: Request): Response | undefine
     );
   }
   if (
-    suppliedOrigin !== requestOrigin ||
+    !sameApplicationOrigin(suppliedOrigin, requestOrigin) ||
     request.headers.get("sec-fetch-site")?.toLowerCase() !== "same-origin"
   ) {
     return proofApiFailure(
