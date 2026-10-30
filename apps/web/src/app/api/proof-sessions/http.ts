@@ -44,28 +44,22 @@ export function proofServiceFailure(error: unknown): Response {
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
- * Next reports a locally served request's URL as `localhost` whichever loopback name the browser
- * used, so a page opened at `127.0.0.1` or `[::1]` counts as the same origin on the same scheme and
- * port. A DNS-rebinding page's origin names the attacker's host, never a loopback address.
+ * Next reports a locally served request's URL as `localhost` on the port it listens on, whatever
+ * address the browser used. A page opened at another loopback name, or through a port forward
+ * (`127.0.0.1:40061` reaching port 3000), is accepted when its loopback origin names exactly the
+ * `Host` the browser sent. A DNS-rebinding page's origin names the attacker's host, never a
+ * loopback address, and another local page's origin names a different host or port.
  */
-function sameApplicationOrigin(supplied: string, request: string): boolean {
-  if (supplied === request) return true;
-  const a = new URL(supplied);
-  const b = new URL(request);
-  return (
-    a.protocol === b.protocol &&
-    a.port === b.port &&
-    LOOPBACK_HOSTNAMES.has(a.hostname) &&
-    LOOPBACK_HOSTNAMES.has(b.hostname)
-  );
+function sameApplicationOrigin(supplied: string, request: Request): boolean {
+  if (supplied === new URL(request.url).origin) return true;
+  const origin = new URL(supplied);
+  return LOOPBACK_HOSTNAMES.has(origin.hostname) && request.headers.get("host") === origin.host;
 }
 
 /** Accept a mutation only from this application's own origin (no body is required). */
 export function validateSameOriginRequest(request: Request): Response | undefined {
-  let requestOrigin: string;
   let suppliedOrigin: string;
   try {
-    requestOrigin = new URL(request.url).origin;
     const origin = request.headers.get("origin");
     if (origin === null) throw new Error("Missing origin.");
     const parsedOrigin = new URL(origin);
@@ -79,7 +73,7 @@ export function validateSameOriginRequest(request: Request): Response | undefine
     );
   }
   if (
-    !sameApplicationOrigin(suppliedOrigin, requestOrigin) ||
+    !sameApplicationOrigin(suppliedOrigin, request) ||
     request.headers.get("sec-fetch-site")?.toLowerCase() !== "same-origin"
   ) {
     return proofApiFailure(
