@@ -1211,3 +1211,17 @@ migrate -- --status` reported up to date.
   - Gaps: the librarian's results can still restate the goal when the constants give it away (the
     person can untick them); the interactive goal view shows custom operators as `\mathrm{Name}`
     rather than their templates (unchanged; selection mapping needs it).
+- 2026-11-04 — Logical structure and position hover (design plan §7.1, §7.2):
+  - `@proof/selections` adds a Zod schema for the logical structure of a proof state
+    (`logicalProofStateSchema`, `logicalStatementSchema`) and the projection `logicalProofState`.
+    Atoms hold the stored MathJSON; every node carries its operand path and the position
+    `positionAtPath` computes there. Targets with identical contexts share one proof context, and
+    obligations and assumptions stay apart from goals and hypotheses.
+  - The formal view names the position of the logical node under the pointer and frames it. Terms
+    report the proposition governing them, and an operator its connective.
+  - Hit-testing measures MathLive's atom spans directly: `getElementInfo` serves bounds cached in
+    viewport coordinates that scrolling does not invalidate.
+  - Gaps: the natural-language view is flat text, so it names the whole statement's position only.
+    A closing bracket reports the connective around it, and the frame shows that wider extent.
+    Nothing reads `withLibraryResult` or the state-level projection yet; hover uses
+    `logicalStatement` per statement.

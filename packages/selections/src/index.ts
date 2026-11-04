@@ -96,7 +96,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function functionParts(expression: PlainMathJson): FunctionParts | undefined {
+export function functionParts(expression: PlainMathJson): FunctionParts | undefined {
   if (Array.isArray(expression)) {
     const operator = expression[0];
     if (typeof operator !== "string") return undefined;
@@ -1305,3 +1305,5 @@ function flipPolarity(polarity: LogicalPolarity): LogicalPolarity {
   if (polarity === "negative") return "positive";
   return polarity;
 }
+
+export * from "./logical-structure";

@@ -3,13 +3,24 @@
 import type { MathfieldElement as MathfieldElementType } from "mathlive";
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { renderMathJson, type PlainMathJson } from "@proof/mathjson-model";
-import type { AnchoredProofSelection, StatementAnchor } from "@proof/selections";
+import {
+  logicalNodeAtPath,
+  type AnchoredProofSelection,
+  type LogicalStatement,
+  type StatementAnchor,
+} from "@proof/selections";
 import {
   readAnchoredMathLiveSelection,
   renderInteractiveLatex,
   type MathLiveSelectionPort,
 } from "./mathlive-selection";
 import { readAnchoredOccurrenceAtPoint, type MathLivePointPort } from "./mathlive-point";
+import {
+  occurrenceAtPoint,
+  occurrenceBox,
+  readOccurrenceTable,
+  type HoverBox,
+} from "./mathlive-hover";
 import gestureStyles from "../gestures/gestures.module.css";
 import styles from "./proof-workspace.module.css";
 
@@ -34,9 +45,38 @@ export type MathLiveStatementGesture = Readonly<{
 /** The logical polarity of the selected sub-expression, used for its bevel treatment. */
 export type SelectionPolarity = "positive" | "negative" | "mixed" | "neutral";
 
+export const POLARITY_LABELS: Readonly<Record<SelectionPolarity, string>> = Object.freeze({
+  positive: "Positive position (goal-like)",
+  negative: "Negative position (hypothesis-like)",
+  mixed: "Mixed polarity",
+  neutral: "Neutral (term) position",
+});
+
+const POLARITY_SIGNS: Readonly<Record<SelectionPolarity, string>> = Object.freeze({
+  positive: "+",
+  negative: "−",
+  mixed: "±",
+  neutral: "·",
+});
+
+/** The logical node under the pointer and where it is drawn, relative to the statement. */
+type HoveredPosition = Readonly<{ polarity: SelectionPolarity; box: HoverBox }>;
+
+function sameHover(left: HoveredPosition | undefined, right: HoveredPosition): boolean {
+  return (
+    left?.polarity === right.polarity &&
+    left.box.left === right.box.left &&
+    left.box.right === right.box.right &&
+    left.box.top === right.box.top &&
+    left.box.bottom === right.box.bottom
+  );
+}
+
 type MathLiveStatementProps = Readonly<{
   anchor: StatementAnchor;
   expression: PlainMathJson;
+  /** The statement's logical structure, which says what the pointer is hovering over. */
+  logical: LogicalStatement;
   label: string;
   selected: boolean;
   /** Polarity of the active selection inside this statement, when one exists. */
@@ -55,6 +95,7 @@ export type MathLiveDropZone = Readonly<{
 export function MathLiveStatement({
   anchor,
   expression,
+  logical,
   label,
   selected,
   selectionPolarity,
@@ -62,6 +103,9 @@ export function MathLiveStatement({
   dropZone,
 }: MathLiveStatementProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const logicalRef = useRef(logical);
+  const [hovered, setHovered] = useState<HoveredPosition>();
   const fieldRef = useRef<MathfieldElementType | undefined>(undefined);
   const [dropOver, setDropOver] = useState(false);
   const onGestureRef = useRef(onGesture);
@@ -74,7 +118,8 @@ export function MathLiveStatement({
   useEffect(() => {
     onGestureRef.current = onGesture;
     anchorRef.current = anchor;
-  }, [anchor, onGesture]);
+    logicalRef.current = logical;
+  }, [anchor, logical, onGesture]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -109,6 +154,35 @@ export function MathLiveStatement({
         });
       };
 
+      // Touch has no hover, and a held button means a selection or a drag is under way.
+      const handlePointerMove = (event: PointerEvent) => {
+        const frame = frameRef.current;
+        if (!field || !frame || event.pointerType === "touch" || event.buttons !== 0) {
+          setHovered(undefined);
+          return;
+        }
+        const table = readOccurrenceTable(field.shadowRoot);
+        const hit = occurrenceAtPoint(table, { x: event.clientX, y: event.clientY });
+        if (hit === undefined) {
+          setHovered(undefined);
+          return;
+        }
+        const node = logicalNodeAtPath(logicalRef.current, hit.path);
+        const box = occurrenceBox(table, node.path, hit.entry);
+        const origin = frame.getBoundingClientRect();
+        const next: HoveredPosition = {
+          polarity: node.position.polarity,
+          box: {
+            left: box.left - origin.left,
+            right: box.right - origin.left,
+            top: box.top - origin.top,
+            bottom: box.bottom - origin.top,
+          },
+        };
+        setHovered((current) => (sameHover(current, next) ? current : next));
+      };
+      const handlePointerLeave = () => setHovered(undefined);
+
       // The field is read-only, but MathLive consumes Tab to move through the expression, which
       // made one statement take several tab stops. Let Tab leave the field instead.
       field.addEventListener(
@@ -119,6 +193,8 @@ export function MathLiveStatement({
         true,
       );
       field.addEventListener("pointerup", handlePointerUp);
+      field.addEventListener("pointermove", handlePointerMove);
+      field.addEventListener("pointerleave", handlePointerLeave);
       host.replaceChildren(field);
       fieldRef.current = field;
       setReady(true);
@@ -128,6 +204,7 @@ export function MathLiveStatement({
       active = false;
       fieldRef.current = undefined;
       field?.remove();
+      setHovered(undefined);
     };
   }, [expression, interactiveLatex, label, serializedAnchor]);
 
@@ -168,19 +245,53 @@ export function MathLiveStatement({
       data-drop-anchor={dropReady ? serializedAnchor : undefined}
       {...dropHandlers}
     >
-      <div
-        className={styles.mathProjection}
-        data-ready={ready}
-        data-selected={selected}
-        data-selection-polarity={selected ? selectionPolarity : undefined}
-        data-selection-anchor={serializedAnchor}
-        ref={hostRef}
-      >
-        <span aria-hidden="true">{rendered.ok ? rendered.latex : "Unable to render MathJSON"}</span>
+      <div className={styles.hoverFrame} ref={frameRef}>
+        <div
+          className={styles.mathProjection}
+          data-ready={ready}
+          data-selected={selected}
+          data-selection-polarity={selected ? selectionPolarity : undefined}
+          data-selection-anchor={serializedAnchor}
+          ref={hostRef}
+        >
+          <span aria-hidden="true">
+            {rendered.ok ? rendered.latex : "Unable to render MathJSON"}
+          </span>
+        </div>
+        {hovered === undefined ? null : <HoveredPositionMark hovered={hovered} />}
       </div>
       {dropReady ? (
         <span className={gestureStyles.dropHint}>Drop here to preview a move</span>
       ) : null}
     </div>
+  );
+}
+
+/** Outlines the hovered logical node and names its position. Neither takes pointer events. */
+function HoveredPositionMark({
+  hovered: { polarity, box },
+}: Readonly<{ hovered: HoveredPosition }>) {
+  return (
+    <>
+      <span
+        className={styles.hoverOccurrence}
+        data-polarity={polarity}
+        aria-hidden="true"
+        style={{
+          left: box.left,
+          top: box.top,
+          width: box.right - box.left,
+          height: box.bottom - box.top,
+        }}
+      />
+      <span
+        className={styles.hoverLabel}
+        data-polarity={polarity}
+        role="tooltip"
+        style={{ left: box.left, top: box.top }}
+      >
+        <span aria-hidden="true">{POLARITY_SIGNS[polarity]}</span> {POLARITY_LABELS[polarity]}
+      </span>
+    </>
   );
 }

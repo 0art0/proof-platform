@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useId, useReducer, useRef } from "react";
+import { useEffect, useId, useMemo, useReducer, useRef } from "react";
 import { createProofNodeSchema, type OperatorDeclaration, type ProofNode } from "@proof/protocol";
 import {
   formatOperandPath,
+  logicalStatement,
   resolveProofSelection,
   type AnchoredProofSelection,
   type ResolveProofSelectionResult,
@@ -13,6 +14,7 @@ import { canonicalJson, type PlainMathJson } from "@proof/mathjson-model";
 import type { Presentation } from "@proof/language";
 import {
   MathLiveStatement,
+  POLARITY_LABELS,
   type MathLiveStatementGesture,
   type SelectionPolarity,
 } from "./mathlive-statement";
@@ -196,6 +198,7 @@ function ValidatedProofWorkspace({
   const statementEnvironment: StatementEnvironment = {
     view,
     presentation,
+    operators,
     selectedAnchors,
     onGesture: handleGesture,
     gestures: view === "formal" ? gestures : undefined,
@@ -305,6 +308,7 @@ type TargetKind = "goal" | "obligation";
 type StatementEnvironment = Readonly<{
   view: WorkspaceView;
   presentation: Presentation;
+  operators: readonly OperatorDeclaration[];
   /** Selected statement anchors, keyed by serialized anchor, with their selection polarity. */
   selectedAnchors: ReadonlyMap<string, SelectionPolarity | undefined>;
   onGesture: (gesture: MathLiveStatementGesture) => void;
@@ -349,16 +353,10 @@ function FamilyLegend() {
         <span className={styles.bevelSample} data-polarity="negative" aria-hidden="true" />
         Negative (hypothesis-like): outward bevel
       </li>
+      <li>Hover over part of a statement to see its position.</li>
     </ul>
   );
 }
-
-const POLARITY_LABELS: Readonly<Record<SelectionPolarity, string>> = Object.freeze({
-  positive: "Positive position (goal-like)",
-  negative: "Negative position (hypothesis-like)",
-  mixed: "Mixed polarity",
-  neutral: "Neutral (term) position",
-});
 
 type TargetGroupProps = Readonly<{
   kind: TargetKind;
@@ -565,12 +563,19 @@ function StatementView({
   const selected = environment.selectedAnchors.has(key);
   const polarity = environment.selectedAnchors.get(key);
   const gestures = environment.gestures;
+  const { operators } = environment;
+  const basePolarity = anchor.statement.kind === "conclusion" ? "positive" : "negative";
+  const logical = useMemo(
+    () => logicalStatement(expression, basePolarity, { declarations, operators }),
+    [expression, basePolarity, declarations, operators],
+  );
   return (
     <div className={styles.statement}>
       {environment.view === "natural-language" ? (
         <p
           className={styles.naturalLanguage}
           aria-label={label}
+          title={POLARITY_LABELS[logical.position.polarity]}
           data-selected={selected}
           data-selection-polarity={selected ? polarity : undefined}
         >
@@ -582,6 +587,7 @@ function StatementView({
         <MathLiveStatement
           anchor={anchor}
           expression={expression}
+          logical={logical}
           label={label}
           selected={selected}
           selectionPolarity={polarity}
