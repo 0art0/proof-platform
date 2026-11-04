@@ -121,9 +121,11 @@ describe("library built from a background proposal under review", () => {
 
   it("needs exactly one source, and only a validated proposal of the construction", async () => {
     const { origin } = await proposed();
-    const both = libraryFromProposal({ approvedBackground: { decisionId: "background-decision:x" } });
+    const both = libraryFromProposal({
+      approvedBackground: { decisionId: "background-decision:x" },
+    });
     expect((await post(origin, "/ai/library", both)).status).toBe(400);
-    const { backgroundProposal: _omitted, ...neither } = libraryFromProposal();
+    const neither = { constructionId: CONSTRUCTION, id: "llm-call:library", packs: [] };
     expect((await post(origin, "/ai/library", neither)).status).toBe(400);
     const unknown = libraryFromProposal({ backgroundProposal: { callId: "llm-call:nothing" } });
     expect((await post(origin, "/ai/library", unknown)).status).toBe(404);
@@ -138,7 +140,10 @@ describe("library built from a background proposal under review", () => {
     const notAProposal = await post(
       origin,
       "/ai/library",
-      libraryFromProposal({ id: "llm-call:library-2", backgroundProposal: { callId: "llm-call:library" } }),
+      libraryFromProposal({
+        id: "llm-call:library-2",
+        backgroundProposal: { callId: "llm-call:library" },
+      }),
     );
     expect(notAProposal.status).toBe(409);
   });
@@ -154,11 +159,16 @@ describe("approving an edited background", () => {
     );
     expect(approved.status).toBe(201);
     const body = await json<{
-      decision: { proposal: { constants: { operator: { presentation: { displayName: string } } }[] }; amendment: unknown };
+      decision: {
+        proposal: { constants: { operator: { presentation: { displayName: string } } }[] };
+        amendment: unknown;
+      };
     }>(approved);
     // The decision names the model's own answer; the edits sit beside it.
     expect(body.decision.proposal.constants[0]?.operator.presentation.displayName).toBe("coprime");
-    expect(body.decision.amendment).toMatchObject({ background: { level: "second-year undergraduate" } });
+    expect(body.decision.amendment).toMatchObject({
+      background: { level: "second-year undergraduate" },
+    });
 
     // The edited notation is the notation the setup reads.
     const edited = await check(origin, {
@@ -198,7 +208,10 @@ describe("approving an edited background", () => {
         {
           ...COPRIME_EDITED,
           signature: { ...COPRIME_EDITED.signature, result: { kind: "named", id: "sort:integer" } },
-          presentation: { ...COPRIME_EDITED.presentation, naturalLanguage: [{ template: "c(#1, #2)" }] },
+          presentation: {
+            ...COPRIME_EDITED.presentation,
+            naturalLanguage: [{ template: "c(#1, #2)" }],
+          },
         },
       ],
     ],
@@ -214,6 +227,22 @@ describe("approving an edited background", () => {
               template: String.raw`\Cop{#1}{#2}`,
               precedence: "atom",
               parse: { trigger: String.raw`\Cop`, notation: "function" },
+            },
+          },
+        },
+      ],
+    ],
+    [
+      "uses notation that would be typed as something else",
+      [
+        {
+          ...COPRIME_EDITED,
+          presentation: {
+            ...COPRIME_EDITED.presentation,
+            latex: {
+              template: String.raw`\operatorname{D}\left(#1, #2\right)`,
+              precedence: "atom",
+              parse: { trigger: String.raw`\operatorname{D}`, notation: "function" },
             },
           },
         },

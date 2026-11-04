@@ -30,7 +30,7 @@ function choose(text: string) {
 }
 
 describe("ArtifactUpload", () => {
-  it("uploads the chosen file and opens the new read-only session", async () => {
+  it("opens a file as soon as it is chosen, as a new read-only session", async () => {
     const fetchMock = stubFetch(
       {
         ok: true,
@@ -46,12 +46,9 @@ describe("ArtifactUpload", () => {
     );
     const navigate = vi.fn();
     render(<ArtifactUpload navigate={navigate} />);
-    const upload = screen.getByRole("button", { name: "Open proof file" });
-    expect(upload).toBeDisabled();
+    expect(screen.getByText("Open a proof file")).toBeVisible();
 
     choose(JSON.stringify(artifact));
-    expect(upload).toBeEnabled();
-    fireEvent.click(upload);
 
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledExactlyOnceWith("/sessions/session%3Aartifact%3A0123"),
@@ -83,7 +80,6 @@ describe("ArtifactUpload", () => {
     const navigate = vi.fn();
     render(<ArtifactUpload navigate={navigate} />);
     choose(JSON.stringify(artifact));
-    fireEvent.click(screen.getByRole("button", { name: "Open proof file" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The artifact was not imported: Edge 2 differs.");
@@ -102,7 +98,6 @@ describe("ArtifactUpload", () => {
     );
     render(<ArtifactUpload navigate={vi.fn()} />);
     choose(JSON.stringify(artifact));
-    fireEvent.click(screen.getByRole("button", { name: "Open proof file" }));
     const alert = await screen.findByRole("alert");
     const details = alert.querySelector("details");
     expect(details).not.toBeNull();
@@ -115,7 +110,6 @@ describe("ArtifactUpload", () => {
     const fetchMock = stubFetch({}, 500);
     render(<ArtifactUpload navigate={vi.fn()} />);
     choose("{not json");
-    fireEvent.click(screen.getByRole("button", { name: "Open proof file" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The file is not valid JSON.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -181,10 +175,8 @@ describe("ArtifactDownload", () => {
 });
 
 describe("LandingActions", () => {
-  it("offers the three ways to begin and keeps less common actions tucked away", () => {
+  it("puts the statement first and the other ways to begin quietly below it", () => {
     render(<LandingActions developmentSessionId="session:development" />);
-    expect(screen.getByRole("heading", { name: "Open a proof file" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Artifact file")).toBeEnabled();
     // The statement is all a new problem needs; it is carried to the problem page.
     const statement = screen.getByLabelText("New problem statement");
     expect(statement).toHaveAttribute("name", "statement");
@@ -192,20 +184,24 @@ describe("LandingActions", () => {
     const start = screen.getByRole("button", { name: "Start a new problem" });
     expect(start.closest("form")).toHaveAttribute("action", "/problems/new");
     expect(start.closest("form")).toHaveAttribute("method", "get");
-    expect(screen.getByRole("heading", { name: "Resume a saved proof" })).toBeInTheDocument();
-    expect(screen.getByText("Download a saved proof").closest("details")).not.toHaveAttribute(
-      "open",
-    );
-    expect(screen.getByText("Open an example proof").closest("details")).not.toHaveAttribute(
-      "open",
-    );
+    // A title is optional and tucked behind a quiet toggle; it travels with the statement.
+    const title = screen.getByLabelText("Title");
+    expect(title).toHaveAttribute("name", "title");
+    expect(title.closest("form")).toBe(start.closest("form"));
+    expect(screen.getByText("+ Add title").closest("details")).not.toHaveAttribute("open");
+
+    const others = screen.getByRole("navigation", { name: "Other ways to begin" });
+    expect(screen.getByLabelText("Artifact file")).toBeEnabled();
+    expect(screen.getByText("Open a proof file")).toBeVisible();
+    expect(screen.getByText("Resume a saved proof").closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Resume a saved proof"));
+    expect(screen.getByRole("button", { name: "Resume proof" })).toBeInTheDocument();
     fireEvent.click(screen.getByText("Download a saved proof"));
     expect(screen.getByRole("button", { name: "Download artifact" })).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Open an example proof"));
-    expect(screen.getByRole("link", { name: "Explore the example proof" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Explore an example" })).toHaveAttribute(
       "href",
       "/sessions/session%3Adevelopment",
     );
-    expect(screen.getByText("Download a saved proof")).toBeInTheDocument();
+    expect(others).toContainElement(screen.getByRole("link", { name: "Explore an example" }));
   });
 });

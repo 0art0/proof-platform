@@ -65,7 +65,10 @@ describe("background amendments", () => {
           fc.tuple(
             fc.constant(size),
             fc.subarray(Array.from({ length: size }, (_, index) => index)),
-            fc.uniqueArray(fc.stringMatching(/^[a-z]{2,8}$/), { minLength: size, maxLength: size }),
+            fc.uniqueArray(fc.stringMatching(/^[a-z]{2,8}$/), {
+              minLength: size,
+              maxLength: size,
+            }),
           ),
         ),
         ([size, kept, names]) => {

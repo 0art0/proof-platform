@@ -104,11 +104,20 @@ describe("PATCH /proof-sessions/:id/title", () => {
     const get = await fetch(url);
     expect(get.status).toBe(405);
     expect(get.headers.get("allow")).toBe("PATCH");
-    for (const body of [{}, { title: "" }, { title: "   " }, { title: "x".repeat(201) }, { title: 3 }]) {
+    for (const body of [
+      {},
+      { title: "" },
+      { title: "   " },
+      { title: "x".repeat(201) },
+      { title: 3 },
+    ]) {
       expect((await fetch(url, json(body))).status, JSON.stringify(body)).toBe(400);
     }
     expect((await fetch(url, json({ title: "A", extra: true }))).status).toBe(400);
-    const missing = await fetch(`${origin}/proof-sessions/session:missing/title`, json({ title: "A" }));
+    const missing = await fetch(
+      `${origin}/proof-sessions/session:missing/title`,
+      json({ title: "A" }),
+    );
     expect(missing.status).toBe(404);
   });
 

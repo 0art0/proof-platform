@@ -1183,3 +1183,31 @@ migrate -- --status` reported up to date.
   `proof_constant_activations`; with the activation insert skipped it fails. Checks on `478dd79` plus
   this change: verify exit 0; workspace e2e 35/35 on the memory store (twice) and 35/35 on PostgreSQL 18
   (fresh, migrations 0001–0019, and again on the populated database); `migrate --status` up to date.
+- 2026-11-04 — Streamlined problem entry (user request) — the landing page puts one large
+  statement box first (title behind "+ Add title"); opening a proof file, resuming by ID and the
+  example are a quiet row below it, and a chosen file opens at once. With a background proposer the
+  new-problem page is guided: the background is proposed as soon as the statement is decided and is
+  edited in place (level, summary, assumptions; each constant's name and LaTeX, or its removal); the
+  library is built from the proposal under review (`POST /ai/library` `backgroundProposal`, the
+  librarian still never sees the problem) and renders in the edited notation; an ⓘ on each step
+  shows the role's system message (`GET /ai/prompts`); "Start proof" approves the background (with
+  an `amendment` when edited) and the ticked results, drafts and checks the setup and opens the
+  session. At the user's request the drafted setup is no longer shown for review before the
+  session starts (design plan §4.4): the worker's check still gates it, and a draft that fails is
+  handed to the hand-entry form with both approvals. The setup-progress rail, "AI assistance" and
+  "Build library" sections are removed.
+  - Notation: `background-proposer-v3` and `librarian-v3` state notation standards, and the worker
+    repairs proposed notation deterministically (invented commands become `\operatorname{...}`;
+    unusable, repeated, taken or non-round-tripping triggers take the canonical function form;
+    `notationRoundTrips` in `@proof/language`), so notation alone no longer rejects an answer.
+    Background proposer and librarian default to low effort (backgrounds 2-9 s, a library about 8 s).
+  - Edits: an approval's `amendment` may rewrite the profile, remove constants and change a kept
+    constant's presentation only (ID, symbol and signature fixed); the approved library is judged
+    and rendered with the approved presentation. Migration 0021 adds `proof_sessions.title`;
+    `PATCH /proof-sessions/:id/title` renames a session from the workspace header without touching
+    the approved setup.
+  - Fixed: the workspace's interactive formulas annotated operand leaves inside command names, so
+    a constant rendered as `\mathrm{Gcd}` showed as `\m…thrmGcd`.
+  - Gaps: the librarian's results can still restate the goal when the constants give it away (the
+    person can untick them); the interactive goal view shows custom operators as `\mathrm{Name}`
+    rather than their templates (unchanged; selection mapping needs it).

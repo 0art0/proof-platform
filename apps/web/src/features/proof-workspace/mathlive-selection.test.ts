@@ -1,6 +1,8 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { createPresentation } from "@proof/language";
 import {
+  renderMathJson,
   operatorDeclarationSchema,
   proofStateIdSchema,
   statementIdSchema,
@@ -78,6 +80,43 @@ describe("interactive LaTeX metadata", () => {
     expect(annotated).toContain("proof-path-1=0}{a}");
     expect(annotated).toContain("proof-path-1=1}{b}");
     expect(annotated.indexOf("proof-path-1=0")).toBeLessThan(annotated.indexOf("proof-path-1=1"));
+  });
+
+  it("never annotates inside a command name or a function's name", () => {
+    // `Gcd` is not a Compute Engine name, so it renders as \mathrm{Gcd}; the leaf `a` used to be
+    // found inside \mathrm, splitting it into \m…thrm, and `c` inside {Gcd}.
+    const annotated = renderInteractiveLatex(["Divides", ["Gcd", "a", "c"], ["Add", "a", "c"]]);
+    expect(annotated).toContain("\\mathrm{Gcd}(");
+    expect(annotated).toContain("proof-path-2=0.0}{a}");
+    expect(annotated).toContain("proof-path-2=0.1}{c}");
+    expect(annotated).toContain("proof-path-2=1.0}{a}");
+    expect(annotated).toContain("proof-path-2=1.1}{c}");
+  });
+
+  it("only wraps leaves: removing the annotations gives the rendering back (property)", () => {
+    const strip = (latex: string) => {
+      let previous;
+      let current = latex;
+      do {
+        previous = current;
+        current = current.replace(/\\htmlData\{[^{}]*\}\{((?:[^{}]|\{[^{}]*\})*)\}/g, "$1");
+      } while (current !== previous);
+      return current;
+    };
+    const name = fc.stringMatching(/^[A-Z][a-z]{1,8}$/);
+    const variable = fc.constantFrom("a", "b", "c", "m", "r", "t", "x", "n");
+    fc.assert(
+      fc.property(name, name, variable, variable, (outer, inner, first, second) => {
+        const expression: PlainMathJson = [outer, [inner, first, second], second];
+        const annotated = renderInteractiveLatex(expression);
+        const plain = renderMathJson(expression);
+        expect(strip(annotated)).toBe(plain.latex);
+        // No annotation starts inside a command name or inside a function's name.
+        expect(annotated).not.toMatch(/\\[A-Za-z]+\\htmlData/);
+        expect(annotated).not.toMatch(/\\mathrm\{[^{}]*\\htmlData/);
+      }),
+      { numRuns: 150 },
+    );
   });
 
   it("chooses the deepest nested path exposed by MathLive", () => {

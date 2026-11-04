@@ -17,18 +17,15 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 
 /**
  * "Upload artifact" (design plan §4.1, roadmap N27): read a previously exported artifact file and
- * post it to `/api/artifacts`. The worker revalidates it completely and creates a read-only
- * session, which then opens; a rejection lists the worker's diagnostics.
+ * post it to `/api/artifacts` as soon as it is chosen. The worker revalidates it completely and
+ * creates a read-only session, which then opens; a rejection lists the worker's diagnostics.
  */
 export function ArtifactUpload({
   navigate = (url) => window.location.assign(url),
 }: Readonly<{ navigate?: (url: string) => void }>) {
-  const [file, setFile] = useState<File | undefined>(undefined);
   const [notice, setNotice] = useState<UploadNotice>({ kind: "idle" });
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (file === undefined) return;
+  async function open(file: File) {
     setNotice({ kind: "uploading" });
     let artifact: unknown;
     try {
@@ -65,28 +62,23 @@ export function ArtifactUpload({
   }
 
   return (
-    <form className={styles.cardForm} onSubmit={(event) => void submit(event)}>
-      <input
-        type="file"
-        className={styles.fileInput}
-        accept="application/json,.json"
-        aria-label="Artifact file"
-        onChange={(event) => {
-          setFile(event.currentTarget.files?.[0]);
-          setNotice({ kind: "idle" });
-        }}
-      />
-      <div className={styles.formActions}>
-        <button
-          type="submit"
-          className={styles.secondary}
-          disabled={file === undefined || notice.kind === "uploading"}
-        >
-          Open proof file
-        </button>
-        {file === undefined ? <p className={styles.reason}>Choose a file first.</p> : null}
-      </div>
-      {notice.kind === "uploading" ? <p role="status">Revalidating the artifact…</p> : null}
+    <div className={styles.fileOpen}>
+      <label className={styles.quietLink} data-busy={notice.kind === "uploading"}>
+        {notice.kind === "uploading" ? "Opening…" : "Open a proof file"}
+        <input
+          type="file"
+          className="visually-hidden"
+          accept="application/json,.json"
+          aria-label="Artifact file"
+          disabled={notice.kind === "uploading"}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            // Clear the input so choosing the same file again opens it again.
+            event.currentTarget.value = "";
+            if (file !== undefined) void open(file);
+          }}
+        />
+      </label>
       {notice.kind === "failed" ? (
         <div role="alert" className={styles.error}>
           <p>{notice.message}</p>
@@ -108,7 +100,7 @@ export function ArtifactUpload({
           ) : null}
         </div>
       ) : null}
-    </form>
+    </div>
   );
 }
 

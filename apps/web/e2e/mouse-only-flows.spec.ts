@@ -104,10 +104,9 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
 
   // Reimport it from the landing page by choosing the file in the file chooser.
   await page.goto("/");
-  const upload = page.getByRole("button", { name: "Open proof file" });
-  await expect(upload).toBeDisabled();
   const choosing = page.waitForEvent("filechooser");
-  await page.getByLabel("Artifact file", { exact: true }).click();
+  await page.getByText("Open a proof file").click();
+  // Choosing the file opens it.
   await (
     await choosing
   ).setFiles({
@@ -115,8 +114,6 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
     mimeType: "application/json",
     buffer: artifactBody,
   });
-  await expect(upload).toBeEnabled();
-  await upload.click();
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)artifact(%3A|:)[0-9a-f]{32}$/);
   const importedBase = new URL(page.url()).pathname;
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();

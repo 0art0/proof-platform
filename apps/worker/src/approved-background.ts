@@ -217,7 +217,9 @@ export async function loadProposedBackground(
     return {
       ok: false,
       status: 409,
-      diagnostics: [{ code: "approved-constant-conflict", message: resolution.conflicts.join(" ") }],
+      diagnostics: [
+        { code: "approved-constant-conflict", message: resolution.conflicts.join(" ") },
+      ],
     };
   }
   return { ok: true, background: proposal.background, constants: resolution.constants };

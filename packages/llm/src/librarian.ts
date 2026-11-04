@@ -28,6 +28,7 @@ import {
   addConstantIssues,
   backgroundConstantSchema,
   wireOperatorSchema,
+  declareWireOperator,
   wireOperatorToDeclarationInput,
 } from "./background-proposer";
 
@@ -432,6 +433,7 @@ export function normalizeLibrarianWireResult(
       const trigger = operator.presentation?.latex?.parse?.trigger;
       return trigger === undefined ? [] : [trigger];
     }),
+    declareWireOperator,
   );
   const bySymbol = new Map(repaired.map((operator) => [operator.symbol, operator]));
   const output: LibrarianWireResult = {

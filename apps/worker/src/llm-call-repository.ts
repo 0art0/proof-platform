@@ -120,7 +120,8 @@ export const backgroundProposalDecisionSchema = z.discriminatedUnion("decision",
         decision.proposal,
         decision.amendment.constants.map(({ operator }) => operator),
       );
-      if (issue !== undefined) context.addIssue({ code: "custom", message: issue, path: ["amendment"] });
+      if (issue !== undefined)
+        context.addIssue({ code: "custom", message: issue, path: ["amendment"] });
     }),
   z.object({ ...backgroundReviewBase, decision: z.literal("rejected") }).strict(),
 ]);

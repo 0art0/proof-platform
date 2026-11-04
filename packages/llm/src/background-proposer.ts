@@ -324,9 +324,12 @@ export function normalizeBackgroundProposerWireResult(
   if (wire.kind !== "background-proposal") return wire;
   const existingSymbols = new Set(existing.map(({ symbol }) => symbol));
   const repaired = repairOperatorNotations(
-    wire.constants.map(({ operator }) => operator).filter(({ symbol }) => !existingSymbols.has(symbol)),
+    wire.constants
+      .map(({ operator }) => operator)
+      .filter(({ symbol }) => !existingSymbols.has(symbol)),
     (operator) => operator.parameters.length,
     existing.flatMap(({ trigger }) => (trigger === undefined ? [] : [trigger])),
+    declareWireOperator,
   );
   const bySymbol = new Map(repaired.map((operator) => [operator.symbol, operator]));
   const output: BackgroundProposerWireResult = {
@@ -351,6 +354,18 @@ export function normalizeBackgroundProposerWireResult(
   };
   try {
     const parsed = backgroundProposerOutputSchema.safeParse(normalized);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The declaration of a provider-written operator, or undefined when it does not make one. */
+export function declareWireOperator(
+  operator: z.infer<typeof wireOperatorSchema>,
+): OperatorDeclaration | undefined {
+  try {
+    const parsed = operatorDeclarationSchema.safeParse(wireOperatorToDeclarationInput(operator));
     return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;

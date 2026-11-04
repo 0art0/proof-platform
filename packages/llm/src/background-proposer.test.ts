@@ -642,6 +642,31 @@ describe("background proposer notation repair", () => {
     ]);
   });
 
+  it("gives the function form to notation that would be typed as something else", () => {
+    // `\operatorname{D}` is the standard derivative, so `D(f)` would never read as Derivative.
+    const [derivative] = constantsOf(
+      validateLlmOutput(
+        prepared(),
+        wireProposal([
+          wireConstant({
+            id: "operator:derivative",
+            symbol: "Derivative",
+            displayName: "derivative",
+            parameters: ["real-function"],
+            result: "real-function",
+            latex: {
+              template: String.raw`\operatorname{D}\left(#1\right)`,
+              precedence: "atom",
+              parse: { trigger: String.raw`\operatorname{D}`, notation: "function" },
+            },
+            naturalLanguage: { template: "the derivative of #1", negated: null },
+          }),
+        ]),
+      ),
+    );
+    expect(derivative?.presentation?.latex).toEqual(functionForm("Derivative", "#1"));
+  });
+
   it("replaces a template that is not valid LaTeX by the function form", () => {
     const [coprime] = constantsOf(
       validateLlmOutput(

@@ -174,7 +174,6 @@ describe("ProblemEntryForm approval gate", () => {
     const navigate = renderForm();
     fillDraft();
     expect(approveButton()).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("created only after you approve");
 
     await reviewDraft();
     expect(validateCalls()).toHaveLength(1);
@@ -249,7 +248,6 @@ describe("ProblemEntryForm approval gate", () => {
 
     change("Goal 1", "q \\lor p");
     expect(approveButton()).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("created only after you approve");
     expect(createCalls()).toHaveLength(0);
 
     await reviewDraft();

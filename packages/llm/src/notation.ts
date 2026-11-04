@@ -1,3 +1,5 @@
+import { notationRoundTrips } from "@proof/language";
+import type { OperatorDeclaration } from "@proof/protocol";
 import { validateLatex } from "mathlive/ssr";
 
 /**
@@ -9,9 +11,10 @@ import { validateLatex } from "mathlive/ssr";
  * alone, so a replay repairs identically:
  *
  * - every LaTeX command MathLive does not know (`\Name`) becomes `\operatorname{Name}`;
- * - a trigger that is not a usable, unique LaTeX command occurring in the template, or a template
- *   that is still not valid LaTeX, is replaced by the canonical function form
- *   `\operatorname{Symbol}\left(#1, #2\right)` with the trigger `\operatorname{Symbol}`.
+ * - a trigger that is not a usable, unique LaTeX command occurring in the template, a template
+ *   that is still not valid LaTeX, or notation whose typed form reads back as something else, is
+ *   replaced by the canonical function form `\operatorname{Symbol}\left(#1, #2\right)` with the
+ *   trigger `\operatorname{Symbol}`.
  */
 
 /** The notation fields of an operator, as the provider writes them. */
@@ -148,11 +151,21 @@ export function repairOperatorNotations<Operator extends WireNotation & WireNatu
   operators: readonly Operator[],
   arityOf: (operator: Operator) => number,
   takenTriggers: Iterable<string> = [],
+  /** The full declaration of an operator, for the round-trip check; undefined if it has none. */
+  declare?: (operator: Operator) => OperatorDeclaration | undefined,
 ): Operator[] {
   const taken = new Set(takenTriggers);
   return operators.map((operator) => {
     const arity = arityOf(operator);
-    const latex = repairLatex(operator, arity, taken);
+    let latex = repairLatex(operator, arity, taken);
+    // Notation that is well formed but reads back as something else (`\operatorname{D}` is the
+    // standard derivative) takes the canonical form, which is named after the symbol.
+    if (latex.parse !== null && declare !== undefined) {
+      const declaration = declare({ ...operator, latex });
+      if (declaration !== undefined && !notationRoundTrips(declaration)) {
+        latex = functionFormNotation(operator.symbol, arity);
+      }
+    }
     const trigger = latex.parse?.trigger;
     if (trigger !== undefined) taken.add(trigger);
     const spoken = repairNaturalLanguage(operator, arity);

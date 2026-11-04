@@ -21,6 +21,7 @@ import {
   isUsableOperatorTemplate,
   type BackgroundProposal,
 } from "@proof/llm";
+import { notationRoundTrips } from "@proof/language";
 import { jsonValueEquals } from "@proof/mathjson-model";
 import { backgroundProfileSchema, operatorDeclarationSchema } from "@proof/protocol";
 import { z } from "zod";
@@ -35,8 +36,7 @@ export const backgroundAmendmentRequestSchema = z
 export type BackgroundAmendmentRequest = z.infer<typeof backgroundAmendmentRequestSchema>;
 
 export type AmendmentResult =
-  | Readonly<{ ok: true; amended: BackgroundProposal }>
-  | Readonly<{ ok: false; message: string }>;
+  Readonly<{ ok: true; amended: BackgroundProposal }> | Readonly<{ ok: false; message: string }>;
 
 /**
  * The amended proposal, or why the edits are not allowed. Constants keep the proposal's order and
@@ -54,7 +54,8 @@ export function amendBackgroundProposal(
       message: `The background edits are not valid${first === undefined ? "" : `: ${first.message}`}`,
     };
   }
-  const issue = amendmentIssue(proposal, request.data.constants);
+  const issue =
+    amendmentIssue(proposal, request.data.constants) ?? notationIssue(request.data.constants);
   if (issue !== undefined) return { ok: false, message: issue };
   const edited = new Map(request.data.constants.map((operator) => [operator.id, operator]));
   const amended = backgroundProposalSchema.safeParse({
@@ -97,12 +98,28 @@ export function amendmentIssue(
     if (!jsonValueEquals(original.operator.signature, operator.signature)) {
       return `The signature of ${operator.symbol} cannot change.`;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Why an edited constant's notation cannot be used, or undefined. Checked when the edits are
+ * requested, not when a stored decision is read: it depends on what the typesetter and the parser
+ * know, which may change, and an approval once recorded must stay readable.
+ */
+function notationIssue(
+  constants: readonly z.infer<typeof operatorDeclarationSchema>[],
+): string | undefined {
+  for (const operator of constants) {
     const template = operator.presentation?.latex?.template;
     if (
       template !== undefined &&
       !isUsableOperatorTemplate(template, operator.signature.parameters.length)
     ) {
       return `The LaTeX of ${operator.symbol} must be valid and show each of its ${operator.signature.parameters.length} operands.`;
+    }
+    if (!notationRoundTrips(operator)) {
+      return `Typed in this notation, ${operator.symbol} would read as something else; try \\operatorname{${operator.symbol}}.`;
     }
   }
   return undefined;

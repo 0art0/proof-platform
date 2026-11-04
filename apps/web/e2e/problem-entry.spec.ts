@@ -24,17 +24,30 @@ async function fillPropositionalDraft(page: Page) {
   await expect(page.getByText("Notation recognized.").first()).toBeVisible();
 }
 
-test("the landing page offers the three ways to begin", async ({ page }) => {
+test("the landing page puts the statement first and the other ways quietly below", async ({
+  page,
+}) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "New problem" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What would you like to prove?" })).toBeVisible();
+  await expect(page.getByLabel("New problem statement", { exact: true })).toBeFocused();
   await expect(page.getByLabel("Artifact file", { exact: true })).toBeEnabled();
-  // Upload waits for a chosen file.
-  await expect(page.getByRole("button", { name: "Open proof file" })).toBeDisabled();
+  await expect(page.getByText("Open a proof file")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Explore an example" })).toBeVisible();
 
+  await page.getByText("Resume a saved proof").click();
   await page.getByLabel("Saved proof ID", { exact: true }).fill("session:development");
   await page.getByRole("button", { name: "Resume proof" }).click();
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)development$/);
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
+});
+
+test("a title added on the landing page travels with the statement", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("New problem statement", { exact: true }).fill("Assuming p, show p or q.");
+  await page.getByText("+ Add title").click();
+  await page.getByLabel("Title", { exact: true }).fill("Disjunction");
+  await page.getByRole("button", { name: "Start a new problem" }).click();
+  await expect(page).toHaveURL(/\/problems\/new\?statement=.*&title=Disjunction/);
 });
 
 test("a reviewed and approved problem becomes a new session", async ({ page }) => {
@@ -77,6 +90,7 @@ test("the worker's diagnostics explain a rejected draft", async ({ page }) => {
 
 test("an exported artifact uploads as a read-only session", async ({ page }) => {
   await page.goto("/");
+  await page.getByText("Resume a saved proof").click();
   await page.getByText("Download a saved proof").click();
   const downloadButton = page.getByRole("button", { name: "Download artifact" });
   await expect(downloadButton).toHaveAttribute("data-hydrated", "true");
@@ -94,7 +108,7 @@ test("an exported artifact uploads as a read-only session", async ({ page }) => 
     mimeType: "application/json",
     buffer: exportedBody,
   });
-  await page.getByRole("button", { name: "Open proof file" }).click();
+  // Choosing the file opens it.
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)artifact(%3A|:)[0-9a-f]{32}$/);
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
 });
@@ -121,19 +135,46 @@ test("an empty check lists every missing required field", async ({ page }) => {
   await expect(alert).toContainText("Goal 1");
 });
 
-test("AI assistance is visible, explains that it is not configured, and sends nothing", async ({
-  page,
-}) => {
+test("without AI the setup is entered by hand and nothing is sent to a model", async ({ page }) => {
+  const aiRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/api/ai/")) aiRequests.push(request.url());
+  });
+  await page.goto("/problems/new?statement=Show%20that%20p%20implies%20p.");
+  // The browser suite's worker has no provider: the hand-entry form, with no AI steps.
+  await expect(statementBox(page)).toHaveValue("Show that p implies p.");
+  await expect(page.getByLabel("Assumed level", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Background" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start proof" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Check setup" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "cannot be checked yet" })).toBeVisible();
+  expect(aiRequests).toEqual([]);
+});
+
+test("a proof can be renamed while it is being explored", async ({ page }) => {
   await page.goto("/problems/new");
-  const ai = page.getByRole("region", { name: "Background and setup" });
-  await expect(ai).toContainText("nothing changes until you");
-  await expect(ai).toContainText("not configured on this proof service");
-  await expect(ai.getByRole("button", { name: "Suggest background" })).toBeDisabled();
-  await expect(ai.getByRole("button", { name: "Draft the setup" })).toBeDisabled();
-  // The workers of the browser suite have no provider, so entering the statement cannot enable it.
-  await page.getByLabel("Problem statement").fill("Show that p implies p.");
-  await expect(ai.getByRole("button", { name: "Suggest background" })).toBeDisabled();
-  await expect(ai.getByText("Not configured.").first()).toBeVisible();
+  await fillPropositionalDraft(page);
+  await page.getByRole("button", { name: "Check setup" }).click();
+  await page.getByRole("button", { name: "Start exploring" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Disjunction introduction", level: 1 }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Rename proof" }).click();
+  const title = page.getByRole("textbox", { name: "Proof title" });
+  await title.fill("Or-introduction");
+  await title.press("Enter");
+  await expect(page.getByRole("heading", { name: "Or-introduction", level: 1 })).toBeVisible();
+
+  // The name is stored: it survives a reload and reaches the recent proofs.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Or-introduction", level: 1 })).toBeVisible();
+  await page.goto("/");
+  await expect(
+    page
+      .getByRole("region", { name: "Recent proofs" })
+      .getByRole("link", { name: "Or-introduction" }),
+  ).toBeVisible();
 });
 
 test("an unknown proof shows a page with a way back", async ({ page }) => {
