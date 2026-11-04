@@ -13,6 +13,7 @@ import {
 } from "@proof/protocol";
 import { canonicalJson } from "@proof/mathjson-model";
 import { z } from "zod";
+import { repairOperatorNotations } from "./notation";
 
 /**
  * The background proposer (`docs/ai-agents-architecture.md` section 1). From the problem statement
@@ -172,6 +173,8 @@ const existingOperatorSchema = z
     displayName: shortTextSchema,
     parameters: z.array(problemSetupSortIdSchema).max(16),
     result: problemSetupSortIdSchema,
+    /** Its LaTeX parse trigger, which no other constant may use (absent on older calls). */
+    trigger: shortTextSchema.optional(),
   })
   .strict();
 export type ExistingOperator = z.infer<typeof existingOperatorSchema>;
@@ -193,6 +196,9 @@ export function describeExistingOperators(
             displayName: operator.presentation?.displayName ?? operator.symbol,
             parameters: signature.parameters,
             result: signature.result,
+            ...(operator.presentation?.latex?.parse === undefined
+              ? {}
+              : { trigger: operator.presentation.latex.parse.trigger }),
           },
         ];
   });
@@ -305,13 +311,31 @@ export const backgroundProposerWireResultSchema = z.union([
 export type BackgroundProposerWireResult = z.infer<typeof backgroundProposerWireResultSchema>;
 
 /**
- * Convert a provider result into the validated output. Every deterministic rule of
- * `backgroundProposalSchema` runs here; `undefined` means the output is rejected.
+ * Convert a provider result into the validated output. The constants' notation is first repaired
+ * deterministically (`./notation`): an invented LaTeX command or an unusable or repeated trigger
+ * no longer rejects the answer. A constant that names an existing operator is left as written,
+ * because the registry's own declaration replaces it. Every deterministic rule of
+ * `backgroundProposalSchema` then runs; `undefined` means the output is rejected.
  */
 export function normalizeBackgroundProposerWireResult(
-  output: BackgroundProposerWireResult,
+  wire: BackgroundProposerWireResult,
+  existing: readonly ExistingOperator[] = [],
 ): BackgroundProposerOutput | undefined {
-  if (output.kind !== "background-proposal") return output;
+  if (wire.kind !== "background-proposal") return wire;
+  const existingSymbols = new Set(existing.map(({ symbol }) => symbol));
+  const repaired = repairOperatorNotations(
+    wire.constants.map(({ operator }) => operator).filter(({ symbol }) => !existingSymbols.has(symbol)),
+    (operator) => operator.parameters.length,
+    existing.flatMap(({ trigger }) => (trigger === undefined ? [] : [trigger])),
+  );
+  const bySymbol = new Map(repaired.map((operator) => [operator.symbol, operator]));
+  const output: BackgroundProposerWireResult = {
+    ...wire,
+    constants: wire.constants.map((constant) => ({
+      ...constant,
+      operator: bySymbol.get(constant.operator.symbol) ?? constant.operator,
+    })),
+  };
   const { domains, maximumLevel, ...profile } = output.background;
   const normalized = {
     kind: output.kind,
@@ -381,15 +405,49 @@ const BACKGROUND_PROPOSER_CONCLUSION =
   "When the context contains a revision, apply the user's feedback to the previous proposal and return a complete replacement proposal, keeping what the feedback does not change.";
 
 /**
+ * The standards every proposed constant's notation meets. The worker also enforces them
+ * deterministically (`./notation`), so a constant that misses one is repaired, not rejected; the
+ * text tells the model what the result will look like.
+ */
+export const CONSTANT_NOTATION_STANDARDS =
+  "Notation standards for every constant. " +
+  "Symbol: an UpperCamelCase English name of the concept, letters and digits only (Divides, Coprime, ContinuousOn), never a LaTeX command and never a single letter. " +
+  "Display name: a short lower-case phrase as it is read aloud (divides, greatest common divisor, continuous on). " +
+  "LaTeX template: standard math-mode LaTeX that MathLive typesets, with no dollar signs. Use only standard commands (for example \\mid, \\gcd, \\circ, \\perp, \\subseteq, \\setminus, \\lvert, \\rvert). Never invent a command such as \\Odd, \\Prime or \\Converges: when the notation has no standard command, use the function form \\operatorname{Name}\\left(#1, #2\\right) with precedence atom. " +
+  "Parse trigger: for the function form, the full \\operatorname{Name} with notation function; for an infix relation or operation, the one standard command between the operands (for example \\mid) with notation infix; for a standard function such as \\gcd, that command with notation function. Never use a bare \\operatorname, \\mathrm, \\text or \\mathrel as a trigger, never use one trigger for two constants, and never reuse the trigger of an existing operator. " +
+  "Natural-language template: a plain English clause or noun phrase that renders every operand, such as #1 divides #2. ";
+
+/**
  * The system message of calls recorded before existing operators were offered in the context. A
  * stored call may still carry it, so evidence stays readable; new calls use the current message.
  */
 export const BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE =
   BACKGROUND_PROPOSER_INTRODUCTION + OPERATOR_DECLARATION_GUIDANCE + BACKGROUND_PROPOSER_CONCLUSION;
 
-/** The role's fixed system message; new calls are prepared with it. */
+const EXISTING_OPERATORS_GUIDANCE =
+  "Some operators already exist: context.operators lists them with their symbol, display name and signature (in the sort names below), and they come from the available notation packs. To use an existing operator, declare a constant with exactly its symbol and exactly its signature, and its existing notation is used; never give an existing symbol another signature, and never reuse an existing operator's id or LaTeX parse trigger for a different symbol. When context.operators is absent or empty, no existing operators are known. ";
+
+/** The message of calls recorded before the notation standards (`background-proposer-v2`). */
+const BACKGROUND_PROPOSER_V2_SYSTEM_MESSAGE =
+  BACKGROUND_PROPOSER_INTRODUCTION +
+  EXISTING_OPERATORS_GUIDANCE +
+  OPERATOR_DECLARATION_GUIDANCE +
+  BACKGROUND_PROPOSER_CONCLUSION;
+
+/** Every earlier system message a stored background-proposer call may carry. */
+export const BACKGROUND_PROPOSER_EARLIER_SYSTEM_MESSAGES: readonly string[] = [
+  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
+  BACKGROUND_PROPOSER_V2_SYSTEM_MESSAGE,
+];
+
+/** The role's fixed system message; new calls are prepared with it (`background-proposer-v3`). */
 export const BACKGROUND_PROPOSER_SYSTEM_MESSAGE =
   BACKGROUND_PROPOSER_INTRODUCTION +
-  "Some operators already exist: context.operators lists them with their symbol, display name and signature (in the sort names below), and they come from the available notation packs. To use an existing operator, declare a constant with exactly its symbol and exactly its signature, and its existing notation is used; never give an existing symbol another signature, and never reuse an existing operator's id or LaTeX parse trigger for a different symbol. When context.operators is absent or empty, no existing operators are known. " +
+  "Keep the proposal small: usually zero to four constants. Prefer a built-in symbol or an existing operator to a new constant, and propose a constant only for a notion the statement itself uses. Keep the background summary to one or two sentences and list at most five assumptions. " +
+  EXISTING_OPERATORS_GUIDANCE.replace(
+    "and signature (in the sort names below)",
+    "signature (in the sort names below) and LaTeX parse trigger",
+  ) +
   OPERATOR_DECLARATION_GUIDANCE +
+  CONSTANT_NOTATION_STANDARDS +
   BACKGROUND_PROPOSER_CONCLUSION;

@@ -169,7 +169,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: backgroundModel,
-        promptVersion: "background-proposer-v2",
+        promptVersion: "background-proposer-v3",
         maxOutputTokens: backgroundTokens,
         reasoningEffort: backgroundReasoningEffort,
       }),
@@ -185,7 +185,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: librarianModel,
-        promptVersion: "librarian-v2",
+        promptVersion: "librarian-v3",
         maxOutputTokens: librarianTokens,
         reasoningEffort: librarianReasoningEffort,
       }),

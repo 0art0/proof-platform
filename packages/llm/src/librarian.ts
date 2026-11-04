@@ -19,7 +19,9 @@ import {
 } from "@proof/protocol";
 import { applicationDirectionSchema, applicationRequirementSchema } from "@proof/library";
 import { z } from "zod";
+import { repairOperatorNotations } from "./notation";
 import {
+  CONSTANT_NOTATION_STANDARDS,
   OPERATOR_DECLARATION_GUIDANCE,
   RESERVED_SYMBOL_LIST,
   SORT_NAME_LIST,
@@ -413,15 +415,36 @@ export type LibrarianWireResult = z.infer<typeof librarianWireResultSchema>;
  * a clashing parameter name; inconsistent directions) is set aside as `unusable` with its reason.
  */
 export function normalizeLibrarianWireResult(
-  output: LibrarianWireResult,
+  wire: LibrarianWireResult,
   context: LibrarianContext,
 ): LibrarianOutput | undefined {
-  if (output.kind !== "library-proposal") return output;
+  if (wire.kind !== "library-proposal") return wire;
+  const available = librarianContextConstants(context);
+  // The new constants' notation is repaired as a background proposal's is (`./notation`); a new
+  // constant that repeats a context symbol is left as written and rejects the output below.
+  const contextSymbols = new Set(available.map(({ symbol }) => symbol));
+  const repaired = repairOperatorNotations(
+    wire.newConstants
+      .map(({ operator }) => operator)
+      .filter(({ symbol }) => !contextSymbols.has(symbol)),
+    (operator) => operator.parameters.length,
+    available.flatMap((operator) => {
+      const trigger = operator.presentation?.latex?.parse?.trigger;
+      return trigger === undefined ? [] : [trigger];
+    }),
+  );
+  const bySymbol = new Map(repaired.map((operator) => [operator.symbol, operator]));
+  const output: LibrarianWireResult = {
+    ...wire,
+    newConstants: wire.newConstants.map((constant) => ({
+      ...constant,
+      operator: bySymbol.get(constant.operator.symbol) ?? constant.operator,
+    })),
+  };
   const newConstants = output.newConstants.map(({ operator, rationale }) => ({
     operator: wireOperatorToDeclarationInput(operator),
     rationale,
   }));
-  const available = librarianContextConstants(context);
   const taken = {
     symbols: new Set(available.map(({ symbol }) => symbol)),
     ids: new Set<string>(available.map(({ id }) => id)),
@@ -696,5 +719,20 @@ const LIBRARIAN_REQUEST_KINDS_GUIDANCE =
   "In a top-up the proof's constants are fixed: return an empty newConstants list and propose only results that use the supplied constants and built-in symbols; a result that needs another operator is rejected. " +
   "In every kind, context.existingResults are the names and statements of the results the session library already holds.";
 
-/** The role's fixed system message; stored calls are checked against it. */
-export const LIBRARIAN_SYSTEM_MESSAGE = `${LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE} ${LIBRARIAN_REQUEST_KINDS_GUIDANCE}`;
+/** The message of calls recorded before the notation standards (`librarian-v2`). */
+const LIBRARIAN_V2_SYSTEM_MESSAGE = `${LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE} ${LIBRARIAN_REQUEST_KINDS_GUIDANCE}`;
+
+/** Every earlier system message a stored librarian call may carry. */
+export const LIBRARIAN_EARLIER_SYSTEM_MESSAGES: readonly string[] = [
+  LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE,
+  LIBRARIAN_V2_SYSTEM_MESSAGE,
+];
+
+/**
+ * The role's fixed system message (`librarian-v3`); stored calls are checked against it. It keeps
+ * an initial library short, so that it is built in seconds: more can be added during the proof.
+ */
+export const LIBRARIAN_SYSTEM_MESSAGE =
+  `${LIBRARIAN_V2_SYSTEM_MESSAGE} ` +
+  "For an initial request, return the 6 to 12 most useful results rather than an exhaustive list, give each one or two patterns, and keep descriptions to one sentence: the library is built while the person waits, and results can be added during the proof. " +
+  CONSTANT_NOTATION_STANDARDS.replace("for every constant", "for every new constant");

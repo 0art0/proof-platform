@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
+import { validateLatex } from "mathlive/ssr";
 import { z } from "zod";
 import { CLOSURE_OPERATOR_DECLARATIONS, DIVISIBILITY_OPERATOR_DECLARATIONS } from "@proof/library";
 import {
@@ -269,56 +270,12 @@ describe("background proposer output validation", () => {
       "a duplicate operator symbol",
       wireProposal([wireConstant(), wireConstant({ id: "operator:other", latex: untyped })]),
     ],
-    [
-      "a duplicate LaTeX parse trigger",
-      wireProposal([
-        wireConstant(),
-        wireConstant({ id: "operator:other", symbol: "Other" }, "A second relation."),
-      ]),
-    ],
     ["a reserved built-in symbol", wireProposal([wireConstant({ symbol: "Add" })])],
     ["another reserved built-in symbol", wireProposal([wireConstant({ symbol: "Element" })])],
     ["a symbol that is not a plain identifier", wireProposal([wireConstant({ symbol: "a b" })])],
     ["an unknown sort name", wireProposal([wireConstant({ parameters: ["matrix", "integer"] })])],
     ["a named sort outside the menu", wireProposal([wireConstant({ result: "sort:matrix" })])],
     ["a constant with no operand", wireProposal([wireConstant({ parameters: [] })])],
-    [
-      "a template placeholder beyond the signature",
-      wireProposal([
-        wireConstant({
-          latex: { template: String.raw`#1\perp #3`, precedence: "relation", parse: null },
-        }),
-      ]),
-    ],
-    [
-      "a parse trigger missing from the template",
-      wireProposal([
-        wireConstant({
-          latex: {
-            template: String.raw`#1\sim #2`,
-            precedence: "relation",
-            parse: { trigger: String.raw`\perp`, notation: "infix" },
-          },
-        }),
-      ]),
-    ],
-    [
-      "an infix trigger on a non-binary operator",
-      wireProposal([
-        wireConstant({
-          parameters: ["integer"],
-          latex: {
-            template: String.raw`\perp #1`,
-            precedence: "relation",
-            parse: { trigger: String.raw`\perp`, notation: "infix" },
-          },
-        }),
-      ]),
-    ],
-    [
-      "a negated template on a term-valued operator",
-      wireProposal([wireConstant({ result: "integer" })]),
-    ],
     ["an extra field on the operator", wireProposal([wireConstant({ binder: "x" })])],
     [
       "a nullable field that is absent",
@@ -528,6 +485,208 @@ describe("formalizer system message", () => {
   });
 });
 
+describe("background proposer notation repair", () => {
+  const constantsOf = (validated: ReturnType<typeof validateLlmOutput>) => {
+    if (!validated.ok || validated.output.kind !== "background-proposal") {
+      throw new Error("Expected a validated proposal.");
+    }
+    return validated.output.constants.map(({ operator }) => operator);
+  };
+  const functionForm = (symbol: string, operands: string) => ({
+    template: `\\operatorname{${symbol}}\\left(${operands}\\right)`,
+    precedence: "atom",
+    parse: { trigger: `\\operatorname{${symbol}}`, notation: "function" },
+  });
+  const relation = (template: string, trigger: string) => ({
+    template,
+    precedence: "relation",
+    parse: { trigger, notation: "infix" },
+  });
+
+  it("rewrites an invented command as a named operator and keeps its trigger usable", () => {
+    const [odd] = constantsOf(
+      validateLlmOutput(
+        prepared(),
+        wireProposal([
+          wireConstant({
+            id: "operator:odd",
+            symbol: "Odd",
+            parameters: ["integer"],
+            latex: {
+              template: String.raw`\Odd(#1)`,
+              precedence: "atom",
+              parse: { trigger: String.raw`\Odd`, notation: "function" },
+            },
+            naturalLanguage: { template: "#1 is odd", negated: "#1 is not odd" },
+          }),
+        ]),
+      ),
+    );
+    expect(odd?.presentation?.latex).toEqual({
+      template: String.raw`\operatorname{Odd}(#1)`,
+      precedence: "atom",
+      parse: { trigger: String.raw`\operatorname{Odd}`, notation: "function" },
+    });
+  });
+
+  it("gives the function form to an infix operator written with an invented command", () => {
+    const [coprime] = constantsOf(
+      validateLlmOutput(
+        prepared(),
+        wireProposal([
+          wireConstant({ latex: relation(String.raw`#1 \Coprime #2`, String.raw`\Coprime`) }),
+        ]),
+      ),
+    );
+    expect(coprime?.presentation?.latex).toEqual(functionForm("Coprime", "#1, #2"));
+  });
+
+  it("repairs a bare \\operatorname trigger, a missing trigger and a repeated trigger", () => {
+    const constants = constantsOf(
+      validateLlmOutput(
+        prepared(),
+        wireProposal([
+          wireConstant({
+            id: "operator:prime",
+            symbol: "Prime",
+            parameters: ["integer"],
+            latex: {
+              template: String.raw`\operatorname{Prime}(#1)`,
+              precedence: "atom",
+              parse: { trigger: String.raw`\operatorname`, notation: "function" },
+            },
+            naturalLanguage: { template: "#1 is prime", negated: "#1 is not prime" },
+          }),
+          wireConstant({ latex: relation(String.raw`#1\sim #2`, String.raw`\perp`) }),
+          wireConstant({ id: "operator:other", symbol: "Other" }, "A second relation."),
+          wireConstant({ id: "operator:third", symbol: "Third" }, "A third relation."),
+        ]),
+      ),
+    );
+    expect(constants.map(({ presentation }) => presentation?.latex)).toEqual([
+      functionForm("Prime", "#1"),
+      functionForm("Coprime", "#1, #2"),
+      // The first constant that uses \perp keeps it; a later one cannot share it.
+      relation(String.raw`#1\perp #2`, String.raw`\perp`),
+      functionForm("Third", "#1, #2"),
+    ]);
+  });
+
+  it("never takes an existing operator's trigger, but leaves a reference to it as written", () => {
+    const constants = constantsOf(
+      validateLlmOutput(
+        prepared({ operators: [...DIVISIBILITY_OPERATOR_DECLARATIONS] }),
+        wireProposal([
+          wireConstant({
+            id: "operator:divides",
+            symbol: "Divides",
+            latex: relation(String.raw`#1\mid #2`, String.raw`\mid`),
+            naturalLanguage: { template: "#1 divides #2", negated: "#1 does not divide #2" },
+          }),
+          wireConstant({ latex: relation(String.raw`#1\mid #2`, String.raw`\mid`) }),
+        ]),
+      ),
+    );
+    expect(constants[0]?.presentation?.latex?.parse?.trigger).toBe(String.raw`\mid`);
+    expect(constants[1]?.presentation?.latex).toEqual(functionForm("Coprime", "#1, #2"));
+  });
+
+  it("repairs templates that do not render exactly the operands", () => {
+    const constants = constantsOf(
+      validateLlmOutput(
+        prepared(),
+        wireProposal([
+          // A placeholder beyond the signature, and a template that is a lone control character.
+          wireConstant({
+            latex: { template: String.raw`#1\perp #3`, precedence: "relation", parse: null },
+          }),
+          wireConstant({
+            id: "operator:consecutive",
+            symbol: "Consecutive",
+            displayName: "consecutive",
+            latex: { template: "\u0000", precedence: "relation", parse: null },
+            naturalLanguage: { template: "consecutive", negated: "#1 and #2 are not consecutive" },
+          }),
+          // An infix trigger on a unary operator, whose spoken form also names a missing #2.
+          wireConstant({
+            id: "operator:unit",
+            symbol: "Unit",
+            displayName: "unit",
+            parameters: ["integer"],
+            latex: relation(String.raw`\perp #1`, String.raw`\perp`),
+          }),
+          // A negated template on a term-valued operator.
+          wireConstant({
+            id: "operator:half",
+            symbol: "Half",
+            displayName: "half",
+            result: "integer",
+            parameters: ["integer"],
+            latex: { template: String.raw`\tfrac{#1}{2}`, precedence: "atom", parse: null },
+            naturalLanguage: { template: "half of #1", negated: "not half of #1" },
+          }),
+        ]),
+      ),
+    );
+    expect(constants.map(({ presentation }) => presentation?.latex)).toEqual([
+      functionForm("Coprime", "#1, #2"),
+      functionForm("Consecutive", "#1, #2"),
+      functionForm("Unit", "#1"),
+      { template: String.raw`\tfrac{#1}{2}`, precedence: "atom" },
+    ]);
+    expect(constants.map(({ presentation }) => presentation?.naturalLanguage)).toEqual([
+      [{ template: "#1 and #2 are coprime", negated: "#1 and #2 are not coprime" }],
+      [{ template: "consecutive (#1, #2)", negated: "#1 and #2 are not consecutive" }],
+      [{ template: "unit (#1)" }],
+      [{ template: "half of #1" }],
+    ]);
+  });
+
+  it("replaces a template that is not valid LaTeX by the function form", () => {
+    const [coprime] = constantsOf(
+      validateLlmOutput(
+        prepared(),
+        wireProposal([
+          wireConstant({
+            latex: { template: String.raw`{#1 \perp #2`, precedence: "relation", parse: null },
+          }),
+        ]),
+      ),
+    );
+    expect(coprime?.presentation?.latex).toEqual(functionForm("Coprime", "#1, #2"));
+  });
+
+  it("always yields valid, typeable notation for an invented command of any name", () => {
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[A-Za-z]{2,12}$/),
+        fc.constantFrom("infix" as const, "function" as const),
+        (name, notation) => {
+          const template = notation === "infix" ? `#1 \\${name} #2` : `\\${name}(#1, #2)`;
+          const [operator] = constantsOf(
+            validateLlmOutput(
+              prepared(),
+              wireProposal([
+                wireConstant({
+                  latex: {
+                    template,
+                    precedence: notation === "infix" ? "relation" : "atom",
+                    parse: { trigger: `\\${name}`, notation },
+                  },
+                }),
+              ]),
+            ),
+          );
+          const latex = operator?.presentation?.latex;
+          expect(latex?.parse?.trigger).toBeDefined();
+          expect(validateLatex(latex?.template.replace(/#(\d)/g, "x_$1") ?? "")).toEqual([]);
+        },
+      ),
+      { numRuns: 60 },
+    );
+  });
+});
+
 describe("background proposer existing operators", () => {
   const existing = [...DIVISIBILITY_OPERATOR_DECLARATIONS, ...CLOSURE_OPERATOR_DECLARATIONS];
 
@@ -541,15 +700,18 @@ describe("background proposer existing operators", () => {
         displayName: "divides",
         parameters: ["integer", "integer"],
         result: "proposition",
+        trigger: String.raw`\mid`,
       },
       {
         symbol: "Closure",
         displayName: "closure",
         parameters: ["set-of-elements"],
         result: "set-of-elements",
+        trigger: String.raw`\operatorname{cl}`,
       },
     ]);
-    // Only what a constant needs to reference an operator is shown: no LaTeX, no IDs.
+    // Only what a constant needs to reference an operator, or to avoid its trigger, is shown: no
+    // templates, no IDs.
     expect(JSON.stringify(envelope.context.operators)).not.toContain("latex");
     expect(JSON.stringify(envelope.context.operators)).not.toContain("operator:");
     expect(preparedLlmCallSchema.safeParse(call).success).toBe(true);

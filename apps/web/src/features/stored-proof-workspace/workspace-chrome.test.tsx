@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
+import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProofNodeSchema, type ProofNode } from "@proof/protocol";
@@ -92,6 +93,65 @@ describe("WorkspaceHeader", () => {
     expect(screen.getByText("Current node node:c")).toBeVisible();
     expect(screen.getByText("Loading branch…")).toBeVisible();
     expect(document.querySelector("header p:nth-of-type(3)")).toBeNull();
+  });
+
+  it("renames the proof in place, and cancels with Escape", async () => {
+    const onRename = vi.fn(async (title: string) => (title.length === 0 ? "Problem" : title));
+    // The workspace owns the shown title, as here.
+    function Harness() {
+      const [title, setTitle] = useState("Problem");
+      return (
+        <WorkspaceHeader
+          {...baseProps}
+          title={title}
+          onRename={async (next) => {
+            const shown = await onRename(next);
+            setTitle(shown);
+            return shown;
+          }}
+          breadcrumb={{ kind: "loading" }}
+        />
+      );
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Rename proof" }));
+    const input = screen.getByRole("textbox", { name: "Proof title" });
+    fireEvent.change(input, { target: { value: "  Neighbours are coprime " } });
+    fireEvent.submit(input);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Neighbours are coprime" }),
+      ).toBeVisible(),
+    );
+    expect(onRename).toHaveBeenCalledWith("Neighbours are coprime");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename proof" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Proof title" }), {
+      target: { value: "Discarded" },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Proof title" }), { key: "Escape" });
+    expect(screen.getByRole("heading", { level: 1, name: "Neighbours are coprime" })).toBeVisible();
+    expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the editor open with the reason when a rename fails", async () => {
+    const onRename = vi.fn(async () => {
+      throw new Error("The proof service could not be reached.");
+    });
+    render(
+      <WorkspaceHeader
+        {...baseProps}
+        title="Problem"
+        onRename={onRename}
+        breadcrumb={{ kind: "loading" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Rename proof" }));
+    const input = screen.getByRole("textbox", { name: "Proof title" });
+    fireEvent.change(input, { target: { value: "New" } });
+    fireEvent.submit(input);
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be reached");
+    expect(screen.getByRole("textbox", { name: "Proof title" })).toBeVisible();
   });
 
   it("shows problem metadata when supplied", () => {

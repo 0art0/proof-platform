@@ -66,8 +66,10 @@ export type StoredProofSession = Readonly<{
   /** Set for a session imported from an artifact (N27): nothing in it can be changed. */
   readOnly?: true | undefined;
   visibility?: "shared" | undefined;
-  /** Problem metadata, when the page supplies it: the header's title and collapsed statement. */
+  /** The header's title: the name the person gave the session, else the problem's title. */
   title?: string | undefined;
+  /** The approved problem title, shown again when a rename is cleared. */
+  problemTitle?: string | undefined;
   statement?: string | undefined;
   background?: string | undefined;
 }>;
@@ -165,6 +167,32 @@ function StatefulStoredWorkspace({
   useEffect(() => {
     recordRecentSession({ id: initialSession.id, title: initialSession.title });
   }, [initialSession.id, initialSession.title]);
+
+  // The shown title, which the person can rename at any point of the proof.
+  const [title, setTitle] = useState(initialSession.title);
+  const rename = useCallback(
+    async (next: string): Promise<string | undefined> => {
+      const response = await fetch(`/api/proof-sessions/${encodeURIComponent(session.id)}/title`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: next.length === 0 ? null : next }),
+      });
+      const body = (await response.json().catch(() => undefined)) as
+        | { ok: true; data: { title: string | null } }
+        | { ok: false; error: { message: string } }
+        | undefined;
+      if (!response.ok || body === undefined || !body.ok) {
+        throw new Error(
+          body !== undefined && !body.ok ? body.error.message : "The title could not be saved.",
+        );
+      }
+      const shown = body.data.title ?? initialSession.problemTitle;
+      setTitle(shown);
+      recordRecentSession({ id: session.id, title: shown });
+      return shown;
+    },
+    [session.id, initialSession.problemTitle],
+  );
   useEffect(
     () => () => {
       requestGeneration.current += 1;
@@ -840,7 +868,8 @@ function StatefulStoredWorkspace({
     <section className={styles.storedWorkspace} aria-label="Stored proof session">
       <WorkspaceHeader
         sessionId={session.id}
-        title={session.title}
+        title={title}
+        onRename={rename}
         statement={session.statement}
         background={session.background}
         currentNodeId={node.id}

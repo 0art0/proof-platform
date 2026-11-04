@@ -8,13 +8,23 @@
  */
 import { starterLibraryPacks, type LibraryPack } from "@proof/library";
 import { jsonValueEquals } from "@proof/mathjson-model";
-import { stableIdentifierSchema, type OperatorDeclaration } from "@proof/protocol";
+import {
+  stableIdentifierSchema,
+  type BackgroundProfile,
+  type OperatorDeclaration,
+} from "@proof/protocol";
 import { z } from "zod";
 import {
   readApprovedBackground,
+  readLlmCall,
   type ApprovedBackground,
   type LlmCallStore,
 } from "./llm-call-repository";
+
+/** Names a validated background proposal of the request's own construction (library). */
+export const backgroundProposalReferenceSchema = z
+  .object({ callId: stableIdentifierSchema })
+  .strict();
 
 /** Names an approved background decision of the request's own construction (formalizer). */
 export const approvedBackgroundReferenceSchema = z
@@ -142,4 +152,95 @@ export async function loadApprovedConstants(
           ? 409
           : 400;
   return { ok: false, status, diagnostics: [diagnostic] };
+}
+
+export type LoadedProposedBackground =
+  | Readonly<{
+      ok: true;
+      background: BackgroundProfile;
+      /** The proposed constants, registry references replaced by the registry's own. */
+      constants: readonly OperatorDeclaration[];
+    }>
+  | Readonly<{
+      ok: false;
+      status: 400 | 404 | 409 | 503;
+      diagnostics: readonly [Readonly<{ code: string; message: string }>];
+    }>;
+
+/**
+ * Read the profile and constants of a validated background proposal that no one has decided on
+ * yet, so that a library can be built from it while the person reviews it. The library is still
+ * only evidence: nothing reaches a session until the person approves the background (possibly
+ * edited, `background-amendment.ts`) and keeps library results, and the setup's gate judges the
+ * kept results against the approved constants.
+ */
+export async function loadProposedBackground(
+  llmCalls: LlmCallStore | undefined,
+  constructionId: string,
+  callId: string,
+): Promise<LoadedProposedBackground> {
+  if (llmCalls === undefined) {
+    return {
+      ok: false,
+      status: 503,
+      diagnostics: [{ code: "ai-disabled", message: "LLM evidence storage is unavailable." }],
+    };
+  }
+  const read = await readLlmCall(llmCalls, { kind: "construction", id: constructionId }, callId);
+  if (read.status !== "found") {
+    const [diagnostic] = read.diagnostics;
+    const status =
+      read.status === "uncertain" ? 503 : diagnostic.code === "call-not-found" ? 404 : 400;
+    return { ok: false, status, diagnostics: [diagnostic] };
+  }
+  const record = read.record;
+  if (
+    record.status !== "completed" ||
+    record.role !== "background-proposer" ||
+    record.evidence.status !== "validated" ||
+    record.evidence.output?.kind !== "background-proposal"
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      diagnostics: [
+        {
+          code: "proposal-not-usable",
+          message: "Only a validated background proposal of this construction can seed a library.",
+        },
+      ],
+    };
+  }
+  const proposal = record.evidence.output;
+  const resolution = resolveAgainstRegistry(proposal.constants.map(({ operator }) => operator));
+  if (resolution.conflicts.length > 0) {
+    return {
+      ok: false,
+      status: 409,
+      diagnostics: [{ code: "approved-constant-conflict", message: resolution.conflicts.join(" ") }],
+    };
+  }
+  return { ok: true, background: proposal.background, constants: resolution.constants };
+}
+
+/**
+ * A library context's constants with the approved background's presentation: a constant of the
+ * context that the approved background keeps (same ID, symbol and signature) takes the approved
+ * declaration, so the person's notation edits reach the library's results. Every other constant
+ * is left as it was; a result that applies a constant the background no longer has is caught by
+ * the setup's gate. Pure.
+ */
+export function withApprovedPresentation(
+  constants: readonly OperatorDeclaration[],
+  approved: readonly OperatorDeclaration[],
+): readonly OperatorDeclaration[] {
+  const bySymbol = new Map(approved.map((operator) => [operator.symbol, operator]));
+  return constants.map((constant) => {
+    const edited = bySymbol.get(constant.symbol);
+    return edited !== undefined &&
+      edited.id === constant.id &&
+      jsonValueEquals(edited.signature, constant.signature)
+      ? edited
+      : constant;
+  });
 }

@@ -24,7 +24,7 @@ import {
 import { canonicalJsonEquals, jsonValueEquals } from "@proof/mathjson-model";
 import { z } from "zod";
 import {
-  BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
+  BACKGROUND_PROPOSER_EARLIER_SYSTEM_MESSAGES,
   BACKGROUND_PROPOSER_SYSTEM_MESSAGE,
   MAX_EXISTING_OPERATORS,
   backgroundProposerContextSchema,
@@ -34,7 +34,7 @@ import {
   normalizeBackgroundProposerWireResult,
 } from "./background-proposer";
 import {
-  LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE,
+  LIBRARIAN_EARLIER_SYSTEM_MESSAGES,
   LIBRARIAN_SYSTEM_MESSAGE,
   librarianContextSchema,
   librarianOutputSchema,
@@ -149,6 +149,7 @@ export { backgroundProfileSchema, type BackgroundProfile } from "@proof/protocol
 export * from "./transport";
 export {
   BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE,
+  CONSTANT_NOTATION_STANDARDS,
   MAX_BACKGROUND_CONSTANTS,
   MAX_EXISTING_OPERATORS,
   backgroundProposalSchema,
@@ -159,6 +160,7 @@ export {
   type BackgroundProposerOutput,
   type ExistingOperator,
 } from "./background-proposer";
+export { functionFormNotation, isUsableOperatorTemplate } from "./notation";
 export {
   MAX_LIBRARIAN_ACTIVATED_CONSTANTS,
   MAX_LIBRARIAN_CONTEXT_CONSTANTS,
@@ -1454,6 +1456,14 @@ export const FORMALIZER_BUILTIN_LATEX: readonly (readonly [symbol: string, latex
 const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. The built-in symbols are always available, need no approval and are never listed in approvedLibrary.operators, even when that list is empty; write them with exactly this LaTeX: ${FORMALIZER_BUILTIN_LATEX.map(([symbol, latex]) => `${symbol} ${latex}`).join("; ")}. Write implication as \\implies, never \\to or \\rightarrow, which denote a function arrow. Never ask for a definition of a built-in symbol. If the problem needs an operator that is neither listed nor built in, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
 
 const PROOF_PLANNER_SYSTEM_MESSAGE = proofPlannerSystemMessage(FORMALIZER_BUILTIN_LATEX);
+/**
+ * The fixed system message new calls of a role are prepared with. It is public so that a person
+ * can read exactly what a role is told; it never varies with the request.
+ */
+export function currentSystemMessage(role: SupportedLlmRole): string {
+  return expectedSystemMessage(role);
+}
+
 function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "topic-extractor") {
     return "Return only a topic manifest, a permitted context request, or a refusal. Do not solve the problem.";
@@ -1491,8 +1501,9 @@ function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean 
       (content === FORMALIZER_BASE_SYSTEM_MESSAGE ||
         content === FORMALIZER_PREVIOUS_SYSTEM_MESSAGE)) ||
     (role === "move-shortlister" && content === SHORTLISTER_PREVIOUS_SYSTEM_MESSAGE) ||
-    (role === "background-proposer" && content === BACKGROUND_PROPOSER_PREVIOUS_SYSTEM_MESSAGE) ||
-    (role === "librarian" && content === LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "background-proposer" &&
+      BACKGROUND_PROPOSER_EARLIER_SYSTEM_MESSAGES.includes(content)) ||
+    (role === "librarian" && LIBRARIAN_EARLIER_SYSTEM_MESSAGES.includes(content)) ||
     (role === "move-author" && content === MOVE_AUTHOR_PREVIOUS_SYSTEM_MESSAGE) ||
     (role === "move-executor" && content === MOVE_EXECUTOR_PREVIOUS_SYSTEM_MESSAGE)
   );
@@ -1518,7 +1529,9 @@ export function validateLlmOutput(
   if (call.role === "background-proposer") {
     const wireOutput = safeParsePlain(backgroundProposerWireResultSchema, candidate);
     const output =
-      wireOutput === undefined ? undefined : normalizeBackgroundProposerWireResult(wireOutput);
+      wireOutput === undefined || call.envelope.role !== "background-proposer"
+        ? undefined
+        : normalizeBackgroundProposerWireResult(wireOutput, call.envelope.context.operators);
     return output === undefined
       ? failure("invalid-output", "The LLM output is malformed or breaks a background rule.")
       : { ok: true, output: freezeDetached(output), diagnostics: [] };
