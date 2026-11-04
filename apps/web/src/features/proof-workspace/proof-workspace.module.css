@@ -4,6 +4,7 @@
  * goals are blue with a solid frame, obligations violet with a dashed frame, hypotheses orange
  * with a square H1/H2 tag, and variables neutral. Polarity is named in the "Selected" pill and
  * drawn as a faint inward (positive) or outward (negative) bevel on the selected statement.
+ * Hovering names the position of the logical node under the pointer and frames it the same way.
  */
 .workspace {
   display: grid;
@@ -406,6 +407,47 @@
     inset 0 0 0 1px var(--select-ring),
     1px 1px 3px var(--bevel-dark),
     -1px -1px 2px var(--bevel-light);
+}
+
+/* The frame the hover mark is placed in; the mark must not catch the pointer it follows. */
+.hoverFrame {
+  position: relative;
+}
+
+.hoverOccurrence {
+  position: absolute;
+  border-radius: var(--radius-control);
+  outline: 1px solid var(--select-ring);
+  outline-offset: 1px;
+  pointer-events: none;
+}
+
+.hoverOccurrence[data-polarity="positive"] {
+  box-shadow: inset 1px 1px 3px var(--bevel-dark);
+}
+
+.hoverOccurrence[data-polarity="negative"] {
+  box-shadow:
+    1px 1px 3px var(--bevel-dark),
+    -1px -1px 2px var(--bevel-light);
+}
+
+.hoverOccurrence[data-polarity="mixed"] {
+  outline-style: dashed;
+}
+
+.hoverLabel {
+  position: absolute;
+  z-index: 2;
+  transform: translateY(calc(-100% - var(--space-1)));
+  border: 1px solid var(--select-ring);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  padding: 0 var(--space-1);
+  color: var(--text);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .selectedBadge {

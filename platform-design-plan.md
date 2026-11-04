@@ -289,6 +289,12 @@ Polarity is computed deterministically over statement constructors:
 
 Polarity informs highlighting, deep inference, theorem direction, applicability, and ranking.
 
+### 7.2 Logical structure
+
+A proof state has a validated logical view: its contexts, with variables classified as free, meta, or let, and each statement read as connectives and quantifiers over atomic statements. Atoms hold the exact stored MathJSON, and each node records its operand path and the polarity computed at it. The view is derived from the proof state and never stored, so it cannot disagree with MathJSON.
+
+Hovering a statement names the logical position of the node under the pointer. A term has no polarity of its own, so hovering one reports the proposition that governs it.
+
 ## 8. Selection and interaction semantics
 
 ### 8.1 Exact subtree selections

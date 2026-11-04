@@ -131,6 +131,102 @@ async function openIsolatedWorkspace(page: Page): Promise<string> {
   return sessionId;
 }
 
+const NESTED_IMPLICATION_DRAFT: IsolatedDraft = {
+  problem: { title: "Nested implication", statement: "Assuming p implies q, show the nesting." },
+  background: {
+    level: "elementary propositional logic",
+    summary: "Propositional connectives.",
+    assumptions: [],
+  },
+  libraryLayerIds: ["layer:global"],
+  packs: [],
+  declarations: [
+    { symbol: "p", sort: "proposition" },
+    { symbol: "q", sort: "proposition" },
+    { symbol: "r", sort: "proposition" },
+    { symbol: "x", sort: "real" },
+  ],
+  hypotheses: [
+    { format: "mathjson", expression: ["Implies", "p", "q"] },
+    { format: "mathjson", expression: ["Greater", "x", 0] },
+  ],
+  goals: [{ format: "mathjson", expression: ["Implies", ["Implies", "p", "q"], "r"] }],
+};
+
+/**
+ * Moves the real mouse onto the nth drawn glyph of a statement. The glyph is measured in the DOM:
+ * `getElementInfo` keeps bounds from before the last scroll.
+ */
+async function hoverGlyph(page: Page, field: Locator, glyph: string, occurrence = 0) {
+  await field.scrollIntoViewIfNeeded();
+  const point = await field.evaluate(
+    (element, { glyph, occurrence }) => {
+      const atoms = element.shadowRoot?.querySelectorAll("[data-atom-id]") ?? [];
+      const matches = [...atoms].filter(
+        (atom) => atom.textContent === glyph && !atom.querySelector("[data-atom-id]"),
+      );
+      const bounds = matches[occurrence]?.getBoundingClientRect();
+      if (!bounds) throw new Error(`No glyph ${glyph} at ${occurrence}`);
+      return { x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom) / 2 };
+    },
+    { glyph, occurrence },
+  );
+  await page.mouse.move(point.x, point.y);
+  return point;
+}
+
+async function expectHoverPosition(
+  page: Page,
+  field: Locator,
+  glyph: string,
+  position: RegExp,
+  occurrence = 0,
+) {
+  await hoverGlyph(page, field, glyph, occurrence);
+  await expect(page.getByRole("tooltip")).toHaveText(position);
+}
+
+test("hovering names the logical position of each part of a statement", async ({ page }) => {
+  const sessionId = await createIsolatedSession(page, NESTED_IMPLICATION_DRAFT);
+  await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
+  const goal = page.getByLabel("Goal 1 conclusion");
+  const implication = page.getByLabel("Goal 1 hypothesis 1");
+  const relation = page.getByLabel("Goal 1 hypothesis 2");
+  await expect(goal).toBeVisible();
+  await expect(relation).toBeVisible();
+
+  // In `(p ⇒ q) ⇒ r` the inner antecedent flips twice and the inner consequent once.
+  await expectHoverPosition(page, goal, "p", /Positive position/);
+  await expectHoverPosition(page, goal, "q", /Negative position/);
+  await expectHoverPosition(page, goal, "r", /Positive position/);
+
+  // The same `p ⇒ q` as a hypothesis starts negative, so its antecedent is positive.
+  await expectHoverPosition(page, implication, "p", /Positive position/);
+  await expectHoverPosition(page, implication, "q", /Negative position/);
+
+  // An operator speaks for the connective it belongs to: the inner one is in negative position.
+  await expectHoverPosition(page, goal, "⟹", /Negative position/, 0);
+  await expectHoverPosition(page, goal, "⟹", /Positive position/, 1);
+
+  // A term has no polarity of its own, so the proposition governing it is reported.
+  await expectHoverPosition(page, relation, "x", /Negative position/);
+  await expectHoverPosition(page, relation, ">", /Negative position/);
+
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+
+  // Scrolling must not leave hover reading where the statement used to be.
+  await hoverGlyph(page, goal, "q");
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => window.scrollBy(0, 120));
+  const point = await hoverGlyph(page, goal, "q");
+  await expect(page.getByRole("tooltip")).toHaveText(/Negative position/);
+  const mark = await page.locator('[class*="hoverOccurrence"]').boundingBox();
+  expect(mark).not.toBeNull();
+  expect(point.y).toBeGreaterThanOrEqual(mark!.y);
+  expect(point.y).toBeLessThanOrEqual(mark!.y + mark!.height);
+});
+
 test("the stored session and each contextual sequent survive reload", async ({ page }) => {
   await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
