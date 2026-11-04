@@ -134,6 +134,8 @@ const proofSessionSchema = z
 const currentProofSessionSchema = proofSessionSchema.extend({
   readOnly: z.literal(true).optional(),
   visibility: z.literal("shared").optional(),
+  /** The name a person gave the session; absent means the approved problem title. */
+  title: z.string().min(1).max(200).optional(),
 });
 
 const currentSessionEnvelopeSchema = z
@@ -1499,6 +1501,40 @@ export async function readSessionVisibility(
   );
 }
 
+const sessionTitleEnvelopeSchema = z
+  .object({ sessionId: stableIdentifierSchema, title: z.string().min(1).max(200).nullable() })
+  .strict();
+export type SessionTitleView = z.infer<typeof sessionTitleEnvelopeSchema>;
+
+/**
+ * Rename a session; `null` (or an empty title) restores the approved problem title. Renaming is
+ * not a proof write: the approved setup keeps the title it was approved with.
+ */
+export async function setSessionTitle(
+  sessionIdInput: unknown,
+  titleInput: unknown,
+  options: ProofServiceRequestOptions = {},
+): Promise<SessionTitleView> {
+  const sessionId = parseIdentifier(sessionIdInput, "proof session");
+  const trimmed = typeof titleInput === "string" ? titleInput.trim() : titleInput;
+  const title = z.union([z.string().max(200), z.null()]).safeParse(trimmed === "" ? null : trimmed);
+  if (!title.success) throw invalidRequest("A title is text of at most 200 characters, or null.");
+  const response = await requestProofService(
+    `/proof-sessions/${encodeURIComponent(sessionId)}/title`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: title.data }),
+      ...signalOption(options.signal),
+    },
+  );
+  const value = await readValidatedEnvelope(response);
+  if (response.status !== 200) throw failureForResponse(response.status, value);
+  const parsed = sessionTitleEnvelopeSchema.safeParse(value);
+  if (!parsed.success || parsed.data.sessionId !== sessionId) throw invalidUpstreamResponse();
+  return parsed.data;
+}
+
 /** Change a session's visibility. */
 export async function setSessionVisibility(
   sessionIdInput: unknown,
@@ -1656,6 +1692,36 @@ export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
 const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
 
 /** Which AI roles are configured on the worker; an unreachable worker means none are. */
+const aiPromptsSchema = z.object({
+  roles: z.record(z.string(), z.object({ systemMessage: z.string() }).passthrough()),
+});
+
+/** What the problem-entry roles are told; empty when the worker cannot say. Never throws. */
+export async function readAiPrompts(
+  options: ProofServiceRequestOptions = {},
+): Promise<Readonly<{ background?: string; library?: string; formalizer?: string }>> {
+  try {
+    const response = await requestProofService("/ai/prompts", {
+      method: "GET",
+      ...signalOption(options.signal),
+    });
+    const value = await readValidatedEnvelope(response);
+    const parsed = aiPromptsSchema.safeParse(value);
+    if (response.status !== 200 || !parsed.success) return {};
+    const message = (role: string) => parsed.data.roles[role]?.systemMessage;
+    const prompts: { background?: string; library?: string; formalizer?: string } = {};
+    const background = message("background-proposer");
+    const library = message("librarian");
+    const formalizer = message("proof-state-formalizer");
+    if (background !== undefined) prompts.background = background;
+    if (library !== undefined) prompts.library = library;
+    if (formalizer !== undefined) prompts.formalizer = formalizer;
+    return prompts;
+  } catch {
+    return {};
+  }
+}
+
 export async function readAiCapabilities(
   options: ProofServiceRequestOptions = {},
 ): Promise<AiCapabilities> {

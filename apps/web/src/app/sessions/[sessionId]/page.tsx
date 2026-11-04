@@ -32,12 +32,14 @@ export default async function SessionPage({
     readProofSessionMetadata(loaded.session.id),
     readAiCapabilities(),
   ]);
+  // A name the person gave the session comes first; the approved problem title is the fallback.
   const session =
     metadata === undefined
       ? loaded.session
       : {
           ...loaded.session,
-          title: metadata.problem.title,
+          title: loaded.session.title ?? metadata.problem.title,
+          problemTitle: metadata.problem.title,
           statement: metadata.problem.statement,
           background: metadata.background.summary,
         };

@@ -6,6 +6,7 @@ import {
   deleteProofSession,
   exportProofArtifact,
   readSessionVisibility,
+  setSessionTitle,
   setSessionVisibility,
 } from ".";
 
@@ -54,6 +55,43 @@ describe("deleteProofSession", () => {
     const fetchMock = stubWorker(new Response(null, { status: 204 }));
     await expect(deleteProofSession("bad id")).rejects.toMatchObject({ status: 400 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("setSessionTitle", () => {
+  it("sends the trimmed title, and null for an empty one", async () => {
+    const fetchMock = stubWorker(
+      jsonResponse({ sessionId: "session:test", title: "Neighbours" }, 200),
+    );
+    expect(await setSessionTitle("session:test", "  Neighbours ")).toEqual({
+      sessionId: "session:test",
+      title: "Neighbours",
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(String(url)).toBe("http://proof-worker.test/proof-sessions/session%3Atest/title");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({ title: "Neighbours" });
+
+    const cleared = stubWorker(jsonResponse({ sessionId: "session:test", title: null }, 200));
+    expect(await setSessionTitle("session:test", "   ")).toEqual({
+      sessionId: "session:test",
+      title: null,
+    });
+    expect(JSON.parse(String((cleared.mock.calls[0] as [URL, RequestInit])[1].body))).toEqual({
+      title: null,
+    });
+  });
+
+  it("rejects a malformed title before any request, and an answer for another session", async () => {
+    const fetchMock = stubWorker(jsonResponse({ sessionId: "session:other", title: "A" }, 200));
+    await expect(setSessionTitle("session:test", 4)).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    await expect(setSessionTitle("session:test", "x".repeat(201))).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(setSessionTitle("session:test", "A")).rejects.toBeDefined();
   });
 });
 

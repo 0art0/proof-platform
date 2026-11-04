@@ -141,7 +141,7 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
 
   async lockSession(sessionId: ProofSessionId): Promise<unknown | undefined> {
     const result = await this.client.query(
-      `SELECT id, root_node_id, current_node_id, operators, metadata, read_only, visibility
+      `SELECT id, root_node_id, current_node_id, operators, metadata, read_only, visibility, title
        FROM proof_sessions
        WHERE id = $1
        FOR UPDATE`,
@@ -160,7 +160,18 @@ class PostgresProofStoreTransaction implements ProofStoreTransaction {
             : { metadata: row.metadata }),
           ...(row.read_only === true ? { readOnly: true } : {}),
           ...(row.visibility === "shared" ? { visibility: "shared" } : {}),
+          ...(typeof row.title === "string" ? { title: row.title } : {}),
         };
+  }
+
+  async setSessionTitle(sessionId: ProofSessionId, title: string | undefined): Promise<boolean> {
+    const result = await this.client.query(
+      `UPDATE proof_sessions
+       SET title = $2
+       WHERE id = $1`,
+      [sessionId, title ?? null],
+    );
+    return result.rowCount === 1;
   }
 
   async markSessionReadOnly(sessionId: ProofSessionId): Promise<boolean> {

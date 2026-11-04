@@ -76,6 +76,32 @@ export async function setSessionVisibility(
   }
 }
 
+export type SetTitleResult =
+  | Readonly<{ status: "renamed"; sessionId: ProofSessionId; title: string | null }>
+  | RepositoryFailure;
+
+/**
+ * Rename a session, or with `null` restore the approved problem title. The approved setup and its
+ * metadata are left as they were approved; only the display name changes.
+ */
+export async function setSessionTitle(
+  store: ProofStore,
+  sessionIdInput: unknown,
+  title: string | null,
+): Promise<SetTitleResult> {
+  const sessionId = parseSessionId(sessionIdInput);
+  if (sessionId === undefined) return notFound();
+  try {
+    return await store.transaction(async (transaction): Promise<SetTitleResult> => {
+      if ((await transaction.lockSession(sessionId)) === undefined) return notFound();
+      if (!(await transaction.setSessionTitle(sessionId, title ?? undefined))) return notFound();
+      return { status: "renamed", sessionId, title };
+    });
+  } catch {
+    return storageFailure();
+  }
+}
+
 /** Hard-delete the session and all of its rows in one transaction; 404 when it is absent. */
 export async function deleteProofSession(
   store: ProofStore,

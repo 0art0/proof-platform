@@ -14,10 +14,12 @@
   },
   "dependencies": {
     "@proof/kernel": "*",
+    "@proof/language": "*",
     "@proof/library": "*",
     "@proof/mathjson-model": "*",
     "@proof/moves": "*",
     "@proof/protocol": "*",
+    "mathlive": "^0.110.0",
     "zod": "^4.5.4"
   }
 }

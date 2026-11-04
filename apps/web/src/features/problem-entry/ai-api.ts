@@ -49,7 +49,7 @@ function failureMessage(status: number, error: Readonly<{ code: string; message:
   if (status === 429) return "Too many AI requests right now. Wait a minute and try again.";
   if (error.code === "ai-disabled") return "AI assistance is not configured on this server.";
   if (error.code === "invalid-output") {
-    return "The model's answer did not pass validation and was discarded. Nothing changed.";
+    return "The model's answer could not be used, so nothing changed. Try again.";
   }
   return error.message;
 }

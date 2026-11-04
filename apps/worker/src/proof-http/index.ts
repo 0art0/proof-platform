@@ -410,6 +410,8 @@ async function handleRequest(
           // Additive markers: present only for an imported read-only or a shared session.
           ...(loaded.session.readOnly === true ? { readOnly: true as const } : {}),
           ...(loaded.session.visibility === "shared" ? { visibility: "shared" as const } : {}),
+          // The name a person gave the session, when they renamed it.
+          ...(loaded.session.title === undefined ? {} : { title: loaded.session.title }),
         },
         node: loaded.node,
         ...(metadata === undefined ? {} : { metadata }),

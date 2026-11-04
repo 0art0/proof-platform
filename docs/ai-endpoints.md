@@ -34,11 +34,15 @@ single-instance deployment can use `PROOF_AUTO_MIGRATE=true`; the normal migrati
 `npm run migrate`.
 
 Defaults are `openai/gpt-6-luna` with high reasoning effort and a 32,000 token output limit for the
-formalizer and for the librarian, the same model with high reasoning effort and a 16,000 token
-output limit for the move executor, the same model with high reasoning effort and a 32,000 token
-output limit for the move author, the same model with medium reasoning effort and an 8,000 token
-output limit for the background proposer and for topic extraction, and `typesafe-ai/jev` for
-shortlisting. Configuration can be overridden with `PROOF_AI_FORMALIZER_MODEL`,
+formalizer, the same model with low reasoning effort and a 32,000 token output limit for the
+librarian, the same model with high reasoning effort and a 16,000 token output limit for the move
+executor, the same model with high reasoning effort and a 32,000 token output limit for the move
+author, the same model with low reasoning effort and an 8,000 token output limit for the
+background proposer, medium effort and 8,000 tokens for topic extraction, and `typesafe-ai/jev` for
+shortlisting. The background proposer and the librarian run while a person waits on the
+new-problem page, so they default to low effort (measured on 2026-11-04: backgrounds in 2 to 9 s
+instead of 8 to 18 s, an initial library in about 8 s instead of 24 s at medium and 36 to 111 s at
+high). Configuration can be overridden with `PROOF_AI_FORMALIZER_MODEL`,
 `PROOF_AI_FORMALIZER_REASONING_EFFORT`, `PROOF_AI_FORMALIZER_MAX_OUTPUT_TOKENS`,
 `PROOF_AI_EXECUTOR_MODEL`, `PROOF_AI_EXECUTOR_REASONING_EFFORT`,
 `PROOF_AI_EXECUTOR_MAX_OUTPUT_TOKENS`, `PROOF_AI_MOVE_AUTHOR_MODEL`,
@@ -104,6 +108,12 @@ bool, "move-author": bool } }`. A role is `true` only when it has a configured t
 name, endpoint or credential is disclosed. The web application reads it to
 decide which AI controls to enable.
 
+`GET /ai/prompts` publishes what the problem-entry roles are told, so a person can read it:
+`{ "roles": { "background-proposer" | "librarian" | "proof-state-formalizer": { "systemMessage",
+"promptVersion", "model" } } }`. The system message is the role's fixed text (the same for every
+request); `promptVersion` and `model` are `null` when the role is not configured. No endpoint or
+credential is disclosed. The new-problem page shows each message behind an ⓘ beside its step.
+
 ## Propose a background
 
 `POST /ai/background` proposes the background relative to which a proof will be motivated, and the
@@ -137,6 +147,28 @@ instead of clashing with it, which the worker resolves as described under "Recor
 decision". Calls stored before the list was offered have no `operators` field and still read; the
 system message and prompt version (`background-proposer-v2`) changed with it, and the earlier
 message is still accepted when stored evidence is read.
+
+Prompt version `background-proposer-v3` adds notation standards: an UpperCamelCase symbol, a
+lower-case display name, standard LaTeX that MathLive typesets (never an invented command such as
+`\Odd`; notation without a standard command uses `\operatorname{Name}\left(#1, #2\right)`), a
+parse trigger that is the full `\operatorname{Name}` or the one standard command between the
+operands, and a small proposal (usually zero to four constants). The existing operators in the
+context now also carry their parse `trigger`, so a constant can avoid it. Both earlier messages are
+still accepted when stored evidence is read.
+
+Before the rules below run, the worker repairs each constant's notation deterministically
+(`packages/llm/src/notation.ts`), so notation alone never rejects an answer: a LaTeX command
+MathLive does not know (`\Name`) becomes `\operatorname{Name}`, and a constant whose template does
+not render exactly its operands, is still not valid LaTeX, or whose parse trigger is unusable (a
+bare `\operatorname`, a trigger missing from the template, an infix trigger on a unary operator),
+repeated, or already used by an existing operator, takes the canonical function form
+`\operatorname{Symbol}\left(#1, ...\right)` with the trigger `\operatorname{Symbol}`. A
+natural-language template that does not render every operand becomes `display name (#1, ...)`,
+and a negated template is dropped from an operator that is not proposition-valued. A constant that
+names an existing operator is left as written, since the registry's declaration replaces it. The
+repair depends only on the answer and the context, so a replay repairs identically; the raw
+response stays in the evidence. The librarian's new constants are repaired the same way. The
+web page asks once more, with a new recorded call, when an answer is still rejected.
 
 The provider is asked for a strict, flat encoding (nullable fields instead of optional ones, and a
 signature written with the problem setup's sort names), which the worker converts to full
@@ -190,6 +222,19 @@ that operator if its signature is the same (the registry's own declaration is th
 constants are), and a clash if the signature differs or if it reuses a registry operator's ID or
 LaTeX trigger under another symbol. A rejection is always recorded and approves nothing.
 
+An approval may carry the person's edits as `amendment: { background, constants }`
+(`apps/worker/src/background-amendment.ts`): the edited profile, and the declarations of the
+constants they kept. The edits are deliberately narrow so that everything built from the proposal
+keeps its meaning: constants can be removed but not added, and a kept constant keeps its ID, symbol
+and signature, so only its display name, LaTeX template and trigger, and natural-language templates
+can change. Its LaTeX must still render exactly its operands and be typeset by MathLive, and the
+amended proposal must pass every rule of a proposal and the registry check. Edits that break a
+rule are refused with `422 invalid-amendment` and a message that names the rule; edits on a
+rejection are `400`. The decision keeps `proposal` exactly as the model returned it and stores the
+amended proposal beside it as `amendment`, which is checked again whenever the decision is read;
+the approved background (its profile and constants, for the formalizer, the setup check and the
+session) is the amendment when there is one.
+
 ### Approved constants
 
 The constants of an approved background are available to later steps only by naming the approval
@@ -222,6 +267,22 @@ top-up kinds (prompt version `librarian-v2`); calls stored with the earlier mess
 
 A request with any other field (a problem, a background, constants, existing results) is `400`.
 An unknown, foreign or rejected background decision is `404` or `409`, as for the formalizer.
+
+Instead of `approvedBackground`, a request may name a background proposal that is still under
+review, `backgroundProposal: { callId }` (exactly one of the two; both or neither is `400`), so the
+library can be built while the person reviews the background. The background and constants then
+come from that stored proposal (registry references resolved as at approval); an unknown or foreign
+call is `404`, and a call that is not a validated background proposal is `409
+proposal-not-usable`. The librarian still never sees the problem, and nothing reaches a session
+until the person approves a background and keeps results. When the approved background was edited
+(`amendment`, above), the setup check, the session approval and the formalizer judge and render the
+library with the approved constants' presentation: a context constant with the same ID, symbol and
+signature takes the approved declaration, so notation edits reach the results, and a kept result
+that applies a removed constant is reported as `approved-library-invalid`.
+
+Prompt version `librarian-v3` asks an initial request for the 6 to 12 most useful results, with one
+or two patterns each and one-sentence descriptions, so the library is built while the person waits,
+and adds the notation standards for new constants. Earlier messages remain readable.
 
 The provider returns up to 40 results in a strict flat encoding: a slug, a name, a description, a
 classification (domains and a level), parameters (a symbol and a sort name), premises, a statement
@@ -1012,31 +1073,25 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
 `/api/proof-sessions` also pass the optional `approvedBackground` and `approvedLibrary` references
 (and refuse any other field in them). The topic routes are no longer relayed.
 
-- **New problem.** An optional "AI assistance" section starts with "Propose background", enabled
-  once the problem statement is filled in (the background fields need not be filled first). The
-  result card shows the background level, summary, assumptions and domains, and the constants with
-  their LaTeX, wording and rationale. "Revise with feedback" (a text box and a button, enabled once
-  there is feedback) asks for a revised proposal that replaces the card, and "Accept" records the
-  decision, fills in the existing background fields (which stay editable) and keeps the constants
-  for the rest of the form: they are named by decision in the formalizer call, the setup check and
-  the approval, previewed in the LaTeX fields, and listed in the review. "Stop using these
-  constants" drops them. A proposal that cannot be accepted (for example because a constant clashes
-  with the operator registry) says why and leaves the form unchanged. The "Draft the setup" step
-  needs the problem and background fields; a drafted setup, even one that needs review, replaces
-  the variables, hypotheses and goals only through an explicit button, and then goes through the
-  usual "Check setup" and "Start exploring". The review marks a setup that started from an AI
-  draft. Every call from one form shares a construction ID.
-- **Build library.** Once a background is accepted, "Build library" asks the librarian for general
-  results for that background (the button is disabled, with the reason beside it, until a
-  background is accepted or when the role is not configured). The result is a list with each
-  result's name, its statement rendered in LaTeX and in words, its premises and its description,
-  and a "Remove"/"Restore" toggle; a count says how many results are kept and how many generated
-  variants come with them. Results that did not pass the checks are collapsed under "N proposed
-  results did not pass checks" with plain reasons. "Approve library" records the kept result IDs
-  and nothing else; the library is then named by decision in the formalizer call, "Check setup" and
-  "Start exploring", listed in the review, and added to the new problem's library when the
-  session starts. Changing the selection, building again, or forgetting the background asks for a
-  new approval. Notation that kept results add is listed and previewed in the LaTeX fields.
+- **New problem.** With a background proposer configured, the page is guided and the statement is
+  all a person types (an optional title sits behind "+ Add title"). A statement typed on the
+  landing page is taken as decided: the background is asked for at once; otherwise "Continue" asks
+  for it. The background appears ready to edit: its level, summary and assumptions, and each
+  constant with its typeset notation, its display name and its LaTeX (checked as typed with
+  MathLive and the operand rule; a constant that names a pack operator shows "standard notation"
+  and is not editable), with a × to remove it. "Ask for a change…" revises the proposal with
+  feedback. As soon as the proposal arrives, the library is built from it (`backgroundProposal`)
+  and listed with a checkbox per result, rendered in the current, edited notation; a result that
+  applies a removed constant is unticked and disabled. An ⓘ beside each step shows the role's
+  system message (`GET /ai/prompts`). "Start proof" approves the background (with an `amendment`
+  only when something was edited), keeps the ticked results, drafts the setup with the formalizer,
+  checks it and creates the session, showing each step on the button. A drafted setup that does
+  not pass the check, or no draft at all, opens the hand-entry form with the background, the draft
+  and both approvals carried over, and a line saying why. Changing the statement after the
+  background arrived offers "Suggest again" and holds "Start proof" until then. Every call from
+  one page shares a construction ID. Without a background proposer the page is the hand-entry
+  form: background, notation and layers, variables, hypotheses and goals, "Check setup" and
+  "Start exploring".
 - **Workspace.** When a displayed suggestion list has two or more entries, the workspace ranks its
   first 32 candidates automatically (trigger `automatic`) once the list has stayed displayed for
   about half a second, so quickly changing the selection costs nothing. The ranked picks appear

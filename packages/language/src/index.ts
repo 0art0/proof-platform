@@ -55,3 +55,4 @@ export {
   type MethodReferenceView,
   type PropositionReferenceView,
 } from "./inquiry-explanation";
+export { notationRoundTrips } from "./notation-check";

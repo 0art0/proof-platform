@@ -15,6 +15,7 @@ import {
 import { canonicalJsonEquals } from "@proof/mathjson-model";
 import { z } from "zod";
 import { ProofStoreTransactionError } from "./proof-repository";
+import { amendmentIssue } from "./background-amendment";
 
 const stableStorageIdentifierSchema = z
   .string()
@@ -105,8 +106,23 @@ export const backgroundProposalDecisionSchema = z.discriminatedUnion("decision",
       ...backgroundReviewBase,
       decision: z.literal("approved"),
       approvedManifestId: stableStorageIdentifierSchema,
+      /**
+       * The background as the person approved it, when they edited the proposal
+       * (`background-amendment.ts`): the profile rewritten, constants removed, or a kept
+       * constant's presentation changed. `proposal` stays the model's exact answer.
+       */
+      amendment: backgroundProposalSchema.optional(),
     })
-    .strict(),
+    .strict()
+    .superRefine((decision, context) => {
+      if (decision.amendment === undefined) return;
+      const issue = amendmentIssue(
+        decision.proposal,
+        decision.amendment.constants.map(({ operator }) => operator),
+      );
+      if (issue !== undefined)
+        context.addIssue({ code: "custom", message: issue, path: ["amendment"] });
+    }),
   z.object({ ...backgroundReviewBase, decision: z.literal("rejected") }).strict(),
 ]);
 export type BackgroundProposalDecision = z.infer<typeof backgroundProposalDecisionSchema>;
@@ -152,7 +168,10 @@ export type ApprovedBackground = Readonly<{
   owner: LlmCallOwner;
   sourceCallId: LlmCallId;
   decisionId: string;
+  /** The background as approved: the person's amendment when there is one, else the proposal. */
   proposal: BackgroundProposal;
+  /** Whether the person edited the proposal before approving it. */
+  amended: boolean;
 }>;
 
 export interface LlmCallStoreTransaction {
@@ -624,7 +643,8 @@ function approvedBackgroundOf(
         owner: decision.owner,
         sourceCallId: decision.callId,
         decisionId: decision.id,
-        proposal: decision.proposal,
+        proposal: decision.amendment ?? decision.proposal,
+        amended: decision.amendment !== undefined,
       })
     : undefined;
 }

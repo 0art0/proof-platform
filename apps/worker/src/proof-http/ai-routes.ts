@@ -4,10 +4,12 @@ import {
   buildMoveShortlisterContext,
   buildProofStateFormalizerContext,
   buildTopicExtractorContext,
+  currentSystemMessage,
   prepareLlmCall,
   shortlisterTriggerSchema,
   SUPPORTED_LLM_ROLES,
   type BackgroundProposal,
+  type SupportedLlmRole,
 } from "@proof/llm";
 import {
   PROBLEM_SETUP_SORT_CHOICES,
@@ -71,6 +73,7 @@ import {
   loadApprovedLibrary,
 } from "../approved-library";
 import type { ApprovedInitialLibrary } from "../library-proposal";
+import { amendBackgroundProposal } from "../background-amendment";
 
 const formalizeRequestSchema = z
   .object({
@@ -125,6 +128,14 @@ const proposalDecisionRequestSchema = z
     decidedAt: z.string().datetime({ offset: true }),
   })
   .strict();
+/** A background decision may carry the person's edits, with an approval only. */
+const backgroundDecisionRequestSchema = proposalDecisionRequestSchema
+  // Checked by `amendBackgroundProposal`, which says which rule an edit breaks.
+  .extend({ amendment: z.unknown().optional() })
+  .strict()
+  .refine(({ decision, amendment }) => amendment === undefined || decision === "approved", {
+    message: "Only an approval can carry edits.",
+  });
 const shortlistRequestSchema = z
   .object({
     id: stableIdentifierSchema,
@@ -160,6 +171,14 @@ export async function handleAiRoute(
   if (path.length === 2 && path[0] === "ai" && path[1] === "capabilities") {
     if (request.method !== "GET") return methodNotAllowed(response, "GET");
     writeJson(response, 200, capabilities(context));
+    return true;
+  }
+
+  // What each problem-entry role is told, so a person can read the exact instructions. The
+  // messages are fixed text: they never depend on a request or on stored data.
+  if (path.length === 2 && path[0] === "ai" && path[1] === "prompts") {
+    if (request.method !== "GET") return methodNotAllowed(response, "GET");
+    writeJson(response, 200, prompts(context));
     return true;
   }
 
@@ -291,6 +310,28 @@ function capabilities(context: ServiceContext) {
       SUPPORTED_LLM_ROLES.map((role) => [
         role,
         context.ai?.[role] !== undefined && context.llmCalls !== undefined,
+      ]),
+    ),
+  };
+}
+
+/** The roles a person meets while entering a problem, whose instructions they can read. */
+const PUBLISHED_PROMPT_ROLES = [
+  "background-proposer",
+  "librarian",
+  "proof-state-formalizer",
+] as const satisfies readonly SupportedLlmRole[];
+
+function prompts(context: ServiceContext) {
+  return {
+    roles: Object.fromEntries(
+      PUBLISHED_PROMPT_ROLES.map((role) => [
+        role,
+        {
+          systemMessage: currentSystemMessage(role),
+          promptVersion: context.ai?.[role]?.dispatch.promptVersion ?? null,
+          model: context.ai?.[role]?.dispatch.model ?? null,
+        },
       ]),
     ),
   };
@@ -626,7 +667,7 @@ async function decideBackground(
 ): Promise<void> {
   const body = await readBody(request);
   if (!body.ok) return writeJson(response, body.status, problem(body.message));
-  const requestData = proposalDecisionRequestSchema.safeParse(body.value);
+  const requestData = backgroundDecisionRequestSchema.safeParse(body.value);
   if (!requestData.success) {
     return writeJson(response, 400, problem("The background decision request is invalid."));
   }
@@ -657,9 +698,19 @@ async function decideBackground(
       ],
     });
   }
+  let amendment: BackgroundProposal | undefined;
+  if (requestData.data.amendment !== undefined) {
+    const amended = amendBackgroundProposal(record.evidence.output, requestData.data.amendment);
+    if (!amended.ok) {
+      return writeJson(response, 422, {
+        diagnostics: [{ code: "invalid-amendment", message: amended.message }],
+      });
+    }
+    amendment = amended.amended;
+  }
   if (decision === "approved") {
     const { conflicts } = resolveAgainstRegistry(
-      record.evidence.output.constants.map(({ operator }) => operator),
+      (amendment ?? record.evidence.output).constants.map(({ operator }) => operator),
     );
     if (conflicts.length > 0) {
       return writeJson(response, 409, {
@@ -682,6 +733,7 @@ async function decideBackground(
     rationale,
     decision,
     ...(decision === "approved" ? { approvedManifestId: `background-approval:${decisionId}` } : {}),
+    ...(amendment === undefined ? {} : { amendment }),
   });
   if (recorded.status !== "recorded") {
     const code = recorded.diagnostics[0].code;
@@ -752,6 +804,7 @@ async function formalize(
       context.llmCalls,
       constructionId,
       approvedLibrary.decisionId,
+      constants,
     );
     if (!loaded.ok) return writeJson(response, loaded.status, { diagnostics: loaded.diagnostics });
     library = loaded.library;

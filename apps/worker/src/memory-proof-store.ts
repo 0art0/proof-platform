@@ -537,7 +537,21 @@ class MemoryTransactionContext {
               ...(session.metadata === undefined ? {} : { metadata: session.metadata }),
               ...(session.readOnly === true ? { readOnly: true } : {}),
               ...(session.visibility === "shared" ? { visibility: "shared" } : {}),
+              ...(session.title === undefined ? {} : { title: session.title }),
             };
+      },
+      setSessionTitle: async (sessionId, title) => {
+        await this.lock(sessionId);
+        const session = this.row("sessions", sessionId);
+        if (session === undefined) return false;
+        if (title !== undefined && (title.length < 1 || title.length > 200)) {
+          violation("proof_sessions title check: a title has 1 to 200 characters.");
+        }
+        const next: { -readonly [Key in keyof ProofSession]: ProofSession[Key] } = { ...session };
+        if (title === undefined) delete next.title;
+        else next.title = title;
+        this.staged.sessions.set(sessionId, Object.freeze(next));
+        return true;
       },
       setSessionVisibility: async (sessionId, visibility) => {
         await this.lock(sessionId);

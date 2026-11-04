@@ -46,6 +46,7 @@ export function renderInteractiveLatex(expression: PlainMathJson): string {
   if (!rendered.ok) return "\\text{Unable to render MathJSON}";
 
   const insertions: Array<Readonly<{ start: number; end: number; replacement: string }>> = [];
+  const protectedRanges = nameRanges(rendered.latex);
   let cursor = 0;
 
   for (const path of listExpressionPaths(expression)) {
@@ -54,7 +55,7 @@ export function renderInteractiveLatex(expression: PlainMathJson): string {
     const leaf = renderMathJson(fragment);
     if (!leaf.ok || leaf.latex.length === 0) continue;
 
-    const start = rendered.latex.indexOf(leaf.latex, cursor);
+    const start = findLeaf(rendered.latex, leaf.latex, cursor, protectedRanges);
     if (start < 0) continue;
     const end = start + leaf.latex.length;
     const key = `${PATH_KEY_PREFIX}${path.length}`;
@@ -73,6 +74,41 @@ export function renderInteractiveLatex(expression: PlainMathJson): string {
     )}`;
   }
   return `\\htmlData{${PATH_KEY_PREFIX}0=root}{${annotated}}`;
+}
+
+type Range = Readonly<{ start: number; end: number }>;
+
+/**
+ * The parts of rendered LaTeX that are names, not mathematics: command names (`\mathrm`) and the
+ * text arguments of name commands (`{Gcd}` in `\mathrm{Gcd}`). A leaf such as `a` or `c` must not
+ * be found inside them; annotating there would split `\mathrm` into `\m…thrm`.
+ */
+function nameRanges(latex: string): readonly Range[] {
+  const ranges: Range[] = [];
+  for (const match of latex.matchAll(/\\[A-Za-z]+/g)) {
+    ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  const named =
+    /\\(?:mathrm|operatorname|text|textrm|textit|mathit|mathbf|mathsf|mathtt|mathcal|mathbb)\{([^{}]*)\}/g;
+  for (const match of latex.matchAll(named)) {
+    const open = match.index + match[0].length - match[1]!.length - 1;
+    ranges.push({ start: open, end: open + match[1]!.length + 2 });
+  }
+  return ranges;
+}
+
+/**
+ * The first occurrence of `leaf` at or after `from` that neither starts nor ends inside a name: a
+ * name may lie wholly within the occurrence (the leaf `\mathrm{ab}` contains one), never across
+ * its boundary.
+ */
+function findLeaf(latex: string, leaf: string, from: number, names: readonly Range[]): number {
+  const cuts = (position: number) =>
+    names.some(({ start, end }) => position > start && position < end);
+  for (let start = latex.indexOf(leaf, from); start >= 0; start = latex.indexOf(leaf, start + 1)) {
+    if (!cuts(start) && !cuts(start + leaf.length)) return start;
+  }
+  return -1;
 }
 
 export function operandPathFromElementData(

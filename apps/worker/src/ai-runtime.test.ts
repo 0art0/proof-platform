@@ -47,23 +47,23 @@ describe("createAiRuntime", () => {
       "topic-extractor",
     ]);
     expect(DEFAULT_LIBRARIAN_MODEL).toBe("openai/gpt-6-luna");
-    expect(DEFAULT_LIBRARIAN_REASONING_EFFORT).toBe("high");
+    expect(DEFAULT_LIBRARIAN_REASONING_EFFORT).toBe("low");
     expect(DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS).toBe(32_000);
     expect(runtime.librarian?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_LIBRARIAN_MODEL,
-      promptVersion: "librarian-v2",
+      promptVersion: "librarian-v3",
       maxOutputTokens: DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_LIBRARIAN_REASONING_EFFORT,
     });
     expect(typeof runtime.librarian?.transport).toBe("function");
     expect(DEFAULT_BACKGROUND_PROPOSER_MODEL).toBe("openai/gpt-6-luna");
-    expect(DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT).toBe("medium");
+    expect(DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT).toBe("low");
     expect(DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS).toBe(8_000);
     expect(runtime["background-proposer"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_BACKGROUND_PROPOSER_MODEL,
-      promptVersion: "background-proposer-v2",
+      promptVersion: "background-proposer-v3",
       maxOutputTokens: DEFAULT_BACKGROUND_PROPOSER_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_BACKGROUND_PROPOSER_REASONING_EFFORT,
     });

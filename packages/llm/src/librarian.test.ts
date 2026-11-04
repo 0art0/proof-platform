@@ -315,10 +315,6 @@ describe("librarian output validation", () => {
         "a duplicate operator symbol",
         [wireConstant(), wireConstant({ id: "operator:o", latex: untyped })],
       ],
-      [
-        "a duplicate parse trigger",
-        [wireConstant(), wireConstant({ id: "operator:o", symbol: "Other" })],
-      ],
       ["a reserved built-in symbol", [wireConstant({ symbol: "Add" })]],
       ["a symbol that is not a plain identifier", [wireConstant({ symbol: "a b" })]],
       ["an unknown sort", [wireConstant({ parameters: ["matrix", "integer"] })]],
@@ -328,18 +324,6 @@ describe("librarian output validation", () => {
       [
         "an ID the context already uses",
         [wireConstant({ id: DIVISIBILITY_OPERATOR_DECLARATIONS[0]?.id, latex: untyped })],
-      ],
-      [
-        "a parse trigger the context already uses",
-        [
-          wireConstant({
-            latex: {
-              template: String.raw`#1\mid #2`,
-              precedence: "relation",
-              parse: { trigger: String.raw`\mid`, notation: "infix" },
-            },
-          }),
-        ],
       ],
       [
         "too many new constants",
@@ -357,6 +341,30 @@ describe("librarian output validation", () => {
         diagnostics: [{ code: "invalid-output" }],
       });
     }
+
+    // A repeated trigger, or one the context already uses, is repaired rather than rejected: the
+    // constant that cannot have it takes the canonical function form.
+    const mid = {
+      template: String.raw`#1\mid #2`,
+      precedence: "relation",
+      parse: { trigger: String.raw`\mid`, notation: "infix" },
+    };
+    const repaired = validateLlmOutput(
+      prepared(),
+      wireProposal(
+        [wireResult()],
+        [wireConstant({ latex: mid }), wireConstant({ id: "operator:o", symbol: "Other" })],
+      ),
+    );
+    if (!repaired.ok || repaired.output.kind !== "library-proposal") {
+      throw new Error("Expected a repaired library proposal.");
+    }
+    expect(
+      repaired.output.newConstants.map(({ operator }) => operator.presentation?.latex?.parse),
+    ).toEqual([
+      { trigger: String.raw`\operatorname{Coprime}`, notation: "function" },
+      { trigger: String.raw`\perp`, notation: "infix" },
+    ]);
   });
 
   it("sets aside a result that cannot be read as a result and keeps the others", () => {

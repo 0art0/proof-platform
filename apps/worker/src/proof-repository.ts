@@ -7,6 +7,7 @@ export {
   type ProofSession,
   type SessionVisibility,
   sessionVisibility,
+  sessionTitleSchema,
   proofSessionSchema,
   type StoredProofNodeRecord,
   type StoredDisplayedSuggestionSetRecord,

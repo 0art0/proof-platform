@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { ProofNode } from "@proof/protocol";
 import { humanizeMoveId } from "../macro-labels";
 import styles from "./stored-proof-workspace.module.css";
@@ -83,7 +84,109 @@ export type WorkspaceHeaderProps = Readonly<{
     | Readonly<{ kind: "loading" }>
     | Readonly<{ kind: "ready"; crumbs: readonly BranchCrumb[] }>
     | Readonly<{ kind: "unavailable" }>;
+  /**
+   * Rename the session; an empty title restores the problem title. Resolves with the title now
+   * shown, or rejects with a readable message. Absent: the title cannot be edited here.
+   */
+  onRename?: ((title: string) => Promise<string | undefined>) | undefined;
 }>;
+
+/** The session's title, renamed in place: a quiet button turns it into a text field. */
+function SessionTitle({
+  sessionId,
+  title,
+  onRename,
+}: Readonly<{
+  sessionId: string;
+  title: string | undefined;
+  onRename: (title: string) => Promise<string | undefined>;
+}>) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editing) input.current?.select();
+  }, [editing]);
+
+  const save = async () => {
+    if (saving) return;
+    if (draft.trim() === (title ?? "")) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    try {
+      const shown = await onRename(draft.trim());
+      setDraft(shown ?? "");
+      setEditing(false);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "The title could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <form
+        className={styles.titleForm}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
+        <input
+          ref={input}
+          className={styles.titleInput}
+          aria-label="Proof title"
+          value={draft}
+          maxLength={200}
+          placeholder="Untitled proof"
+          disabled={saving}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onBlur={() => void save()}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setDraft(title ?? "");
+              setError(undefined);
+              setEditing(false);
+            }
+          }}
+        />
+        {error === undefined ? null : (
+          <p role="alert" className={styles.titleError}>
+            {error}
+          </p>
+        )}
+      </form>
+    );
+  }
+  return (
+    <div className={styles.titleRow}>
+      <h1
+        className={title === undefined ? styles.idTitle : undefined}
+        title={title === undefined ? undefined : sessionId}
+      >
+        {title ?? sessionId}
+      </h1>
+      <button
+        type="button"
+        className={styles.renameButton}
+        aria-label="Rename proof"
+        title="Rename"
+        onClick={() => {
+          setDraft(title ?? "");
+          setEditing(true);
+        }}
+      >
+        <span aria-hidden="true">✎</span>
+      </button>
+    </div>
+  );
+}
 
 export function WorkspaceHeader({
   sessionId,
@@ -94,6 +197,7 @@ export function WorkspaceHeader({
   counts,
   readOnly = false,
   breadcrumb,
+  onRename,
 }: WorkspaceHeaderProps) {
   const closed = counts.goals === 0 && counts.obligations === 0;
   return (
@@ -104,12 +208,16 @@ export function WorkspaceHeader({
         <p className={title === undefined ? styles.headerEyebrow : styles.headerId}>
           {title === undefined ? "Proof session" : sessionId}
         </p>
-        <h1
-          className={title === undefined ? styles.idTitle : undefined}
-          title={title === undefined ? undefined : sessionId}
-        >
-          {title ?? sessionId}
-        </h1>
+        {onRename === undefined ? (
+          <h1
+            className={title === undefined ? styles.idTitle : undefined}
+            title={title === undefined ? undefined : sessionId}
+          >
+            {title ?? sessionId}
+          </h1>
+        ) : (
+          <SessionTitle sessionId={sessionId} title={title} onRename={onRename} />
+        )}
         {statement === undefined || statement.length === 0 ? null : (
           <details className={styles.headerStatement}>
             <summary>Problem statement</summary>

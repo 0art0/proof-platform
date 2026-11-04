@@ -17,7 +17,8 @@
  */
 import { MAX_FORMALIZER_LIBRARY_RESULTS } from "@proof/llm";
 import type { LibraryPack, LibraryResult } from "@proof/library";
-import { stableIdentifierSchema } from "@proof/protocol";
+import { stableIdentifierSchema, type OperatorDeclaration } from "@proof/protocol";
+import { withApprovedPresentation } from "./approved-background";
 import { z } from "zod";
 import {
   readLibraryProposalDecision,
@@ -49,11 +50,16 @@ export type LoadedApprovedLibrary =
       diagnostics: readonly [Readonly<{ code: string; message: string }>];
     }>;
 
-/** Resolve an approved library decision from storage, re-running the deterministic gate. */
+/**
+ * Resolve an approved library decision from storage, re-running the deterministic gate. When the
+ * approved background's constants are given, the library is judged and rendered with their
+ * presentation (`withApprovedPresentation`), so a person's notation edits reach its results.
+ */
 export async function loadApprovedLibrary(
   llmCalls: LlmCallStore | undefined,
   constructionId: string,
   decisionId: string,
+  approvedConstants: readonly OperatorDeclaration[] = [],
 ): Promise<LoadedApprovedLibrary> {
   if (llmCalls === undefined) {
     return {
@@ -78,7 +84,10 @@ export async function loadApprovedLibrary(
   const { decision, proposal } = read;
   const evaluation = evaluateLibraryProposal({
     callId: proposal.callId,
-    context: proposal.context,
+    context: {
+      ...proposal.context,
+      constants: [...withApprovedPresentation(proposal.context.constants, approvedConstants)],
+    },
     proposal: proposal.proposal,
   });
   const kept = selectApprovedResults(evaluation, decision.approvedResultIds, decision.reviewerId);

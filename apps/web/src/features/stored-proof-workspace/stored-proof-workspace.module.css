@@ -137,6 +137,62 @@
   composes: meta from "../../ui/controls.module.css";
 }
 
+/* The title renames in place: a quiet pencil appears beside it on hover or focus. */
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.renameButton {
+  flex: none;
+  min-height: 0;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+}
+
+.titleRow:hover .renameButton,
+.renameButton:focus-visible {
+  opacity: 1;
+}
+
+.titleForm {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.titleInput {
+  width: 100%;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-bottom: 1px solid var(--border-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: clamp(1.5rem, 3vw, var(--text-display));
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.titleInput:focus {
+  outline: none;
+  border-bottom-color: var(--focus);
+}
+
+.titleError {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--text-sm);
+}
+
 .sessionHeader h1.idTitle {
   font-size: var(--text-md);
   line-height: 1.57;

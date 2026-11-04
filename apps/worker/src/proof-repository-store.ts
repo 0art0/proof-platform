@@ -72,7 +72,20 @@ export type ProofSession = Readonly<{
    * session; the stores write and report only the non-default `shared`.
    */
   visibility?: "shared" | undefined;
+  /**
+   * The name a person gave the session (migration 0021). Absent means the approved problem title
+   * in `metadata`, which never changes: renaming is not a proof write and leaves the approved
+   * setup exactly as it was approved.
+   */
+  title?: string | undefined;
 }>;
+
+/** A session's display name: at most 200 characters, with no surrounding spaces. */
+export const sessionTitleSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((title) => title.trim() === title, "A title has no surrounding spaces.");
 
 /** A session's visibility; sessions are private unless explicitly shared. */
 export type SessionVisibility = "private" | "shared";
@@ -90,6 +103,7 @@ export const proofSessionSchema: z.ZodType<ProofSession> = z
     metadata: proofSessionMetadataSchema.optional(),
     readOnly: z.literal(true).optional(),
     visibility: z.literal("shared").optional(),
+    title: sessionTitleSchema.optional(),
   })
   .strict();
 
@@ -237,6 +251,12 @@ export interface ProofStoreTransaction {
    */
   setSessionVisibility(sessionId: ProofSessionId, visibility: SessionVisibility): Promise<boolean>;
   /**
+   * Set or clear `proof_sessions.title` (migration 0021); undefined restores the approved problem
+   * title. Returns false when the session does not exist. Not a proof write: it is allowed on a
+   * read-only session.
+   */
+  setSessionTitle(sessionId: ProofSessionId, title: string | undefined): Promise<boolean>;
+  /**
    * Hard-delete the session and every dependent row (nodes, suggestion sets, previews, edges,
    * events, commands, deletion tombstones, interaction events, inquiry records, replay steps,
    * artifact-import record, session-scoped library rows and proof-session LLM call records).
@@ -378,6 +398,7 @@ export function guardReadOnlySessions(inner: ProofStoreTransaction): ProofStoreT
     // must stay deletable and its visibility changeable.
     setSessionVisibility: (sessionId, visibility) =>
       inner.setSessionVisibility(sessionId, visibility),
+    setSessionTitle: (sessionId, title) => inner.setSessionTitle(sessionId, title),
     deleteSession: (sessionId) => inner.deleteSession(sessionId),
     lockSession: async (sessionId) => {
       const record = await inner.lockSession(sessionId);

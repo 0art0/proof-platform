@@ -70,6 +70,77 @@ describe("private-by-default export", () => {
   });
 });
 
+describe("PATCH /proof-sessions/:id/title", () => {
+  it("renames a session, reports the name with the session, and restores the problem title", async () => {
+    const { origin } = await scenario();
+    const base = `${origin}/proof-sessions/${encodeURIComponent(ARTIFACT_SESSION_ID)}`;
+    const before = (await (await fetch(base)).json()) as { session: Record<string, unknown> };
+    expect(before.session).not.toHaveProperty("title");
+    const node = (await (await fetch(base)).json()) as { node: unknown };
+
+    const renamed = await fetch(`${base}/title`, json({ title: "  Consecutive integers  " }));
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toEqual({
+      sessionId: ARTIFACT_SESSION_ID,
+      title: "Consecutive integers",
+    });
+    const after = (await (await fetch(base)).json()) as {
+      session: Record<string, unknown>;
+      node: unknown;
+    };
+    expect(after.session.title).toBe("Consecutive integers");
+    // Renaming is not a proof write: the current node is unchanged.
+    expect(after.node).toEqual(node.node);
+
+    const restored = await fetch(`${base}/title`, json({ title: null }));
+    expect(await restored.json()).toEqual({ sessionId: ARTIFACT_SESSION_ID, title: null });
+    const reset = (await (await fetch(base)).json()) as { session: Record<string, unknown> };
+    expect(reset.session).not.toHaveProperty("title");
+  });
+
+  it("validates the method and body, and 404s an unknown session", async () => {
+    const { origin } = await scenario();
+    const url = `${origin}/proof-sessions/${encodeURIComponent(ARTIFACT_SESSION_ID)}/title`;
+    const get = await fetch(url);
+    expect(get.status).toBe(405);
+    expect(get.headers.get("allow")).toBe("PATCH");
+    for (const body of [
+      {},
+      { title: "" },
+      { title: "   " },
+      { title: "x".repeat(201) },
+      { title: 3 },
+    ]) {
+      expect((await fetch(url, json(body))).status, JSON.stringify(body)).toBe(400);
+    }
+    expect((await fetch(url, json({ title: "A", extra: true }))).status).toBe(400);
+    const missing = await fetch(
+      `${origin}/proof-sessions/session:missing/title`,
+      json({ title: "A" }),
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  it("renames a read-only imported session too", async () => {
+    const { origin } = await scenario();
+    const exported = await fetch(
+      `${origin}/proof-sessions/${encodeURIComponent(ARTIFACT_SESSION_ID)}/export?confirmPrivateExport=true`,
+    );
+    const imported = await fetch(`${origin}/artifacts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: await exported.text(),
+    });
+    expect(imported.status).toBe(201);
+    const { sessionId } = (await imported.json()) as { sessionId: string };
+    const renamed = await fetch(
+      `${origin}/proof-sessions/${encodeURIComponent(sessionId)}/title`,
+      json({ title: "Imported" }),
+    );
+    expect(renamed.status).toBe(200);
+  });
+});
+
 describe("PATCH /proof-sessions/:id/visibility", () => {
   it("validates the method, media type and body", async () => {
     const { origin } = await scenario();

@@ -149,7 +149,8 @@ describe("background proposer endpoint", () => {
     expect(envelope.context.preferences).toEqual({ domains: ["number theory"], notation: [] });
     expect(seen[0]!.messages[0].content).toContain("must suffice to formalize the problem");
     // The registry's operators are offered so that a constant can reference one with its exact
-    // signature: symbol, display name and sort-name signature, and nothing about notation.
+    // signature: symbol, display name, sort-name signature and parse trigger (so that a constant
+    // can avoid it), and no templates.
     const operators = envelope.context.operators ?? [];
     expect(operators.map(({ symbol }) => symbol).sort()).toEqual(
       starterLibraryPacks()
@@ -161,6 +162,7 @@ describe("background proposer endpoint", () => {
       displayName: "divides",
       parameters: ["integer", "integer"],
       result: "proposition",
+      trigger: String.raw`\mid`,
     });
     expect(seen[0]!.messages[0].content).toContain("context.operators");
     expect(store.sessions.size).toBe(0);
@@ -773,7 +775,7 @@ describe("background decision endpoint", () => {
     expect(reject.status).toBe(201);
   });
 
-  it("also refuses a constant that reuses another registry operator's ID or LaTeX trigger", async () => {
+  it("refuses a constant that reuses another registry operator's ID; a reused trigger is repaired", async () => {
     const { origin } = await proposed([
       wireOperator({ id: "operator:divides" }),
       wireOperator({
@@ -791,7 +793,8 @@ describe("background decision endpoint", () => {
     const message = ((await approve.json()) as { diagnostics: [{ message: string }] })
       .diagnostics[0].message;
     expect(message).toContain("ID operator:divides");
-    expect(message).toContain("LaTeX trigger \\mid");
+    // The second constant's \mid was replaced by its function form when the answer was validated.
+    expect(message).not.toContain("LaTeX trigger");
   });
 
   it("accepts a constant that repeats a registry operator's symbol and signature", async () => {

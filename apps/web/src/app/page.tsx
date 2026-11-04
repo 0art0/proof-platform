@@ -7,14 +7,8 @@ export const revalidate = 0;
 /** Landing page (design plan §4.1): new problem, upload artifact, fetch stored proof. */
 export default function HomePage() {
   return (
-    <main className={styles.page}>
-      <header className={styles.pageHeader}>
-        <p className={styles.eyebrow}>Proof Platform</p>
-        <h1>Explore a proof, or begin a new one.</h1>
-        <p className={styles.lead}>
-          Describe a problem, open an exported proof, or pick up where you left off.
-        </p>
-      </header>
+    <main className={`${styles.page} ${styles.landing}`}>
+      <h1 className={styles.heroTitle}>What would you like to prove?</h1>
       <LandingActions developmentSessionId={configuredProofSessionId()} />
     </main>
   );

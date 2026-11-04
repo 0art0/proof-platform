@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type ReactNode,
-} from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { createLatexRenderer, createPresentation } from "@proof/language";
 import { canonicalJsonEquals } from "@proof/mathjson-model";
 import {
@@ -25,16 +17,11 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
-import { AiAssist, NO_AI_SETUP, type AiSetupCapabilities } from "./ai-assist";
 import {
   draftPathLabel,
-  draftStatementRows,
   emptyProblemForm,
-  formSetupContext,
   formToDraft,
   missingRequiredFields,
-  missingSetupFields,
-  withBackgroundProfile,
   type AcceptedBackground,
   type ApprovedLibrary,
   type DeclarationRow,
@@ -42,8 +29,6 @@ import {
   type ProblemForm,
 } from "./draft-form";
 import { recordRecentSession } from "./recent-sessions";
-import { SETUP_SECTION, deriveSetupProgress, type SetupStep } from "./setup-progress";
-import { SetupProgressPanel } from "./setup-progress-panel";
 import { StatementField, StatementPreview, cachedStatementFeedback } from "./statement-field";
 import { Formula } from "./typeset";
 import styles from "./problem-entry.module.css";
@@ -84,11 +69,22 @@ export type ProblemEntryFormProps = Readonly<{
   /** Navigate to the created session; defaults to a full navigation. */
   navigate?: (url: string) => void;
   createSessionId?: () => string;
-  /** Which AI setup roles the proof service offers; none by default. */
-  ai?: AiSetupCapabilities;
-  createAiId?: (prefix: string) => string;
-  /** A statement typed on the landing page; a background is then suggested at once. */
+  /** A statement typed on the landing page. */
   initialStatement?: string;
+  /**
+   * Where the guided entry left off when its drafted setup could not be used as it was: the form
+   * it filled in (background, and any drafted variables, hypotheses and goals), the approvals it
+   * recorded and the construction that owns them, and why it handed over.
+   */
+  handover?: Readonly<{
+    form: Partial<ProblemForm>;
+    constructionId: string;
+    accepted: AcceptedBackground | undefined;
+    approvedLibrary: ApprovedLibrary | undefined;
+    /** The formalizer call the statements came from, if any. */
+    draftCallId?: string | undefined;
+    reason: string;
+  }>;
 }>;
 
 const apiFailureSchema = z
@@ -100,43 +96,33 @@ const apiFailureSchema = z
   .strict();
 
 /**
- * New problem (design plan §4.1, §4.2, §4.4). The draft stays in the browser. With AI configured,
- * the statement is all the user types: a background is suggested with its constants, and
- * accepting it fills in the background fields, makes its constants available, and drafts the
- * setup, which is loaded and checked so the user lands on the review. The setup can still be
- * edited by hand, and without AI it is entered by hand.
- * "Check setup" asks the worker to validate it and shows the mathematical content; only
- * "Start exploring" on an unchanged reviewed draft creates the session and root node.
- * Any edit after review discards the review.
+ * New problem entered by hand (design plan §4.1, §4.4): used when the proof service has no AI
+ * setup roles, and when the guided entry hands over a drafted setup that needs a person's fix.
+ * The draft stays in the browser. "Check setup" asks the worker to validate it and shows the
+ * mathematical content; only "Start exploring" on an unchanged reviewed draft creates the
+ * session and root node. Any edit after review discards the review.
  */
 export function ProblemEntryForm({
   options,
   navigate = (url) => window.location.assign(url),
   createSessionId = () => `session:${crypto.randomUUID()}`,
-  ai = NO_AI_SETUP,
-  createAiId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
   initialStatement = "",
+  handover,
 }: ProblemEntryFormProps) {
   const [form, setForm] = useState<ProblemForm>(() => ({
     ...emptyProblemForm(),
     statement: initialStatement,
+    ...handover?.form,
   }));
   const [reviewed, setReviewed] = useState<Reviewed>();
   const [notice, setNotice] = useState<Notice>();
   const [busy, setBusy] = useState<"review" | "approve">();
-  // With AI the setup is drafted for the user, and entering it by hand is tucked away.
-  const guided = ai.background && ai.formalizer;
-  const [manualOpen, setManualOpen] = useState(false);
-  // Set when a drafted setup was loaded; the check runs once the form holds it.
-  const [checkLoaded, setCheckLoaded] = useState(false);
   const nextKey = useRef(100);
-  // Owner of this form's AI calls, so a background proposal and a draft keep their evidence together.
-  const [constructionId] = useState(() => createAiId("construction:web"));
-  const [aiDraftCallId, setAiDraftCallId] = useState<string>();
-  // The background the user accepted; its constants are named by decision, never sent as text.
-  const [accepted, setAccepted] = useState<AcceptedBackground>();
-  // The library the user approved; its results are named by decision, never sent as artifacts.
-  const [approvedLibrary, setApprovedLibrary] = useState<ApprovedLibrary>();
+  // The guided entry's approvals, when it handed over; the setup check and approval name them.
+  const constructionId = handover?.constructionId ?? "construction:web-manual";
+  const accepted = handover?.accepted;
+  const approvedLibrary = handover?.approvedLibrary;
+  const aiDraftCallId = handover?.draftCallId;
 
   const packOperators = useMemo(() => operatorsByPack(options), [options]);
   const selectedOperators = useMemo(
@@ -183,8 +169,7 @@ export function ProblemEntryForm({
     reviewed.accepted?.decisionId === accepted?.decisionId &&
     reviewed.library?.decisionId === approvedLibrary?.decisionId;
 
-  // How each statement row reads; the fields show it and the setup progress is derived from it.
-  // Only an edited row is parsed again.
+  // How each statement row reads, shown under the field. Only an edited row is parsed again.
   const hypothesisFeedback = useMemo(
     () => form.hypotheses.map((row) => cachedStatementFeedback(row, latex)),
     [form.hypotheses, latex],
@@ -193,23 +178,6 @@ export function ProblemEntryForm({
     () => form.goals.map((row) => cachedStatementFeedback(row, latex)),
     [form.goals, latex],
   );
-  const progress = deriveSetupProgress({
-    ai: { background: ai.background, library: ai.library },
-    statementFilled: form.statement.trim().length > 0,
-    backgroundAccepted: accepted !== undefined,
-    backgroundFieldsFilled:
-      form.backgroundLevel.trim().length > 0 && form.backgroundSummary.trim().length > 0,
-    approvedLibraryResults: approvedLibrary?.results.length,
-    declarationsFilled: form.declarations.every(({ symbol }) => symbol.trim().length > 0),
-    hypotheses: hypothesisFeedback.map(({ kind }) => kind),
-    goals: goalFeedback.map(({ kind }) => kind),
-    reviewed: reviewed !== undefined,
-    approvable,
-  });
-  /** The by-hand setup of a guided form sits in a closed disclosure; open it before jumping there. */
-  const followStep = (step: SetupStep) => {
-    if (guided && step.target === SETUP_SECTION.setup) setManualOpen(true);
-  };
 
   /** Every edit goes through here, and every edit invalidates the review. */
   const update = (change: (previous: ProblemForm) => ProblemForm) => {
@@ -233,7 +201,6 @@ export function ProblemEntryForm({
       const known = new Set(missing.map(({ field }) => field));
       const others = current.ok ? [] : current.problems.filter(({ field }) => !known.has(field));
       setNotice({ kind: "problems", problems: [...missing, ...others] });
-      setManualOpen(true);
       return;
     }
     const draft = current.draft;
@@ -275,24 +242,13 @@ export function ProblemEntryForm({
         });
         return;
       }
-      const failure = failureNotice(response.body);
-      setNotice(failure);
-      if (failure.kind === "diagnostics") setManualOpen(true);
+      setNotice(failureNotice(response.body));
     } catch {
       setNotice({ kind: "error", message: "The proof service could not be reached." });
     } finally {
       setBusy(undefined);
     }
   };
-
-  // A drafted setup was loaded into the form: check it as it now stands.
-  const checkLoadedSetup = useEffectEvent(() => {
-    setCheckLoaded(false);
-    void review();
-  });
-  useEffect(() => {
-    if (checkLoaded) checkLoadedSetup();
-  }, [checkLoaded]);
 
   const approve = async () => {
     if (reviewed === undefined || !approvable) return;
@@ -336,7 +292,12 @@ export function ProblemEntryForm({
           void review();
         }}
       >
-        <Section id={SETUP_SECTION.problem} title="Problem">
+        {handover === undefined ? null : (
+          <p className={styles.handoverNote} role="status">
+            {handover.reason}
+          </p>
+        )}
+        <Section title="Problem">
           <div className={styles.fieldGroup}>
             <Field label="Problem statement" required>
               <textarea
@@ -358,260 +319,199 @@ export function ProblemEntryForm({
           </Field>
         </Section>
 
-        <AiAssist
-          capabilities={ai}
-          context={formSetupContext(form, options)}
-          missing={missingSetupFields(form)}
-          constructionId={constructionId}
-          createId={createAiId}
-          accepted={accepted}
-          onAcceptBackground={(background) => {
-            update((f) => ({ ...f, ...withBackgroundProfile(background.profile) }));
-            setAccepted(background);
-            // A library is built for one accepted background.
-            setApprovedLibrary(undefined);
-          }}
-          onForgetBackground={() => {
-            setReviewed(undefined);
-            setNotice(undefined);
-            setAccepted(undefined);
-            setApprovedLibrary(undefined);
-          }}
-          operators={previewOperators}
-          approvedLibrary={approvedLibrary}
-          onApproveLibrary={(library) => {
-            setReviewed(undefined);
-            setNotice(undefined);
-            setApprovedLibrary(library);
-          }}
-          onForgetLibrary={() => {
-            setReviewed(undefined);
-            setNotice(undefined);
-            setApprovedLibrary(undefined);
-          }}
-          onUseDraft={(draft, callId, check) => {
-            update((f) => ({ ...f, ...draftStatementRows(draft, key) }));
-            setAiDraftCallId(callId);
-            if (check) setCheckLoaded(true);
-            else setManualOpen(true);
-          }}
-          proposeOnOpen={initialStatement.trim().length > 0}
-        />
+        <Section title="Background">
+          <Field label="Assumed level" required>
+            <input
+              placeholder="first-year undergraduate"
+              value={form.backgroundLevel}
+              onChange={text("backgroundLevel")}
+            />
+          </Field>
+          <Field label="What the reader is expected to know" required>
+            <textarea
+              rows={2}
+              value={form.backgroundSummary}
+              onChange={text("backgroundSummary")}
+            />
+          </Field>
+        </Section>
 
-        <HandSetup guided={guided} open={manualOpen} onToggle={setManualOpen}>
-          <Section
-            id={SETUP_SECTION.backgroundFields}
-            title="Background knowledge"
-            intro="Tell us what a reader may assume when exploring this problem."
-          >
-            <Field label="Assumed level" required>
-              <input
-                placeholder="first-year undergraduate"
-                value={form.backgroundLevel}
-                onChange={text("backgroundLevel")}
-              />
-            </Field>
-            <Field label="What the reader is expected to know" required>
-              <textarea
-                rows={2}
-                value={form.backgroundSummary}
-                onChange={text("backgroundSummary")}
-              />
-            </Field>
-          </Section>
-
-          <details className={styles.section}>
-            <summary className={styles.disclosureMain}>More setup choices (optional)</summary>
-            <Field label="Specific background assumptions (one per line)">
-              <textarea
-                rows={2}
-                value={form.backgroundAssumptions}
-                onChange={text("backgroundAssumptions")}
-              />
-            </Field>
-            <Field label="Areas of mathematics">
-              <input
-                placeholder="algebra, real analysis"
-                value={form.backgroundDomains}
-                onChange={text("backgroundDomains")}
-              />
-            </Field>
-            <Field label="Highest level of included results">
-              <select value={form.maximumLevel} onChange={text("maximumLevel")}>
-                <option value="">Unspecified</option>
-                {BACKGROUND_LEVELS.map((level) => (
-                  <option key={level} value={level}>
-                    {level}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Preferred areas of mathematics">
-              <input value={form.preferredDomains} onChange={text("preferredDomains")} />
-            </Field>
-            <Field label="Notation preferences (one per line)">
-              <textarea rows={2} value={form.notation} onChange={text("notation")} />
-            </Field>
-            <fieldset className={styles.choices}>
-              <legend>Include extra mathematical results</legend>
-              <p className={styles.sectionIntro}>
-                Choose additional results and methods to make available while exploring.
-              </p>
-              {options.layers.map((layer) => (
-                <label key={layer.id} className={styles.choice}>
-                  <input
-                    type="checkbox"
-                    checked={form.layerIds.includes(layer.id)}
-                    onChange={(event) => {
-                      const checked = event.currentTarget.checked;
-                      update((f) => ({ ...f, layerIds: toggle(f.layerIds, layer.id, checked) }));
-                    }}
-                  />
-                  <span>
-                    <strong>{layer.label}</strong> — {layer.description}
-                  </span>
-                </label>
+        <details className={styles.section}>
+          <summary className={styles.disclosureMain}>More setup choices (optional)</summary>
+          <Field label="Specific background assumptions (one per line)">
+            <textarea
+              rows={2}
+              value={form.backgroundAssumptions}
+              onChange={text("backgroundAssumptions")}
+            />
+          </Field>
+          <Field label="Areas of mathematics">
+            <input
+              placeholder="algebra, real analysis"
+              value={form.backgroundDomains}
+              onChange={text("backgroundDomains")}
+            />
+          </Field>
+          <Field label="Highest level of included results">
+            <select value={form.maximumLevel} onChange={text("maximumLevel")}>
+              <option value="">Unspecified</option>
+              {BACKGROUND_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
               ))}
-            </fieldset>
-            <fieldset className={styles.choices}>
-              <legend>Notation and concepts</legend>
-              {options.packs.map((pack) => (
-                <label key={pack.id} className={styles.choice}>
-                  <input
-                    type="checkbox"
-                    disabled={pack.alwaysActive}
-                    checked={pack.alwaysActive || form.packIds.includes(pack.id)}
-                    onChange={(event) => {
-                      const checked = event.currentTarget.checked;
-                      update((f) => ({ ...f, packIds: toggle(f.packIds, pack.id, checked) }));
-                    }}
-                  />
-                  <span>
-                    <strong>{pack.name}</strong> — {pack.description}
-                    {pack.alwaysActive ? (
-                      <em className={styles.hint}> Always included.</em>
-                    ) : (
-                      <em className={styles.hint}>
-                        {" "}
-                        Adds{" "}
-                        {(packOperators.get(pack.id) ?? []).map(({ symbol }) => symbol).join(", ")}.
-                      </em>
-                    )}
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          </details>
-
-          <Section
-            id={SETUP_SECTION.setup}
-            title="What is known and what to prove"
-            intro="Enter any assumptions and a goal. Add variables or objects if they appear in these statements."
-          >
-            <fieldset className={styles.rows}>
-              <legend>Variables and objects</legend>
-              <p className={styles.sectionIntro}>
-                For example, add x as a real number or A as a set.
-              </p>
-              {form.declarations.map((row, index) => (
-                <DeclarationEditor
-                  key={row.key}
-                  index={index}
-                  row={row}
-                  sorts={options.sorts}
-                  onChange={(next) =>
-                    update((f) => ({ ...f, declarations: replaceAt(f.declarations, index, next) }))
-                  }
-                  onRemove={() =>
-                    update((f) => ({ ...f, declarations: removeAt(f.declarations, index) }))
-                  }
+            </select>
+          </Field>
+          <Field label="Preferred areas of mathematics">
+            <input value={form.preferredDomains} onChange={text("preferredDomains")} />
+          </Field>
+          <Field label="Notation preferences (one per line)">
+            <textarea rows={2} value={form.notation} onChange={text("notation")} />
+          </Field>
+          <fieldset className={styles.choices}>
+            <legend>Include extra mathematical results</legend>
+            {options.layers.map((layer) => (
+              <label key={layer.id} className={styles.choice}>
+                <input
+                  type="checkbox"
+                  checked={form.layerIds.includes(layer.id)}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    update((f) => ({ ...f, layerIds: toggle(f.layerIds, layer.id, checked) }));
+                  }}
                 />
-              ))}
-              <button
-                type="button"
-                className={styles.addButton}
-                onClick={() =>
-                  update((f) => ({
-                    ...f,
-                    declarations: [...f.declarations, { key: key(), symbol: "", sort: "real" }],
-                  }))
-                }
-              >
-                <span aria-hidden="true">+</span> Add variable or object
-              </button>
-            </fieldset>
-            <fieldset className={styles.rows}>
-              <legend>What is already known</legend>
-              {form.hypotheses.map((row, index) => (
-                <StatementField
-                  key={row.key}
-                  label={`Hypothesis ${index + 1}`}
-                  family="hypothesis"
-                  row={row}
-                  feedback={hypothesisFeedback[index] ?? { kind: "empty" }}
-                  onChange={(next) =>
-                    update((f) => ({ ...f, hypotheses: replaceAt(f.hypotheses, index, next) }))
-                  }
-                  onRemove={() =>
-                    update((f) => ({ ...f, hypotheses: removeAt(f.hypotheses, index) }))
-                  }
+                <span>
+                  <strong>{layer.label}</strong> — {layer.description}
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className={styles.choices}>
+            <legend>Notation and concepts</legend>
+            {options.packs.map((pack) => (
+              <label key={pack.id} className={styles.choice}>
+                <input
+                  type="checkbox"
+                  disabled={pack.alwaysActive}
+                  checked={pack.alwaysActive || form.packIds.includes(pack.id)}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    update((f) => ({ ...f, packIds: toggle(f.packIds, pack.id, checked) }));
+                  }}
                 />
-              ))}
-              <button
-                type="button"
-                className={styles.addButton}
-                onClick={() =>
-                  update((f) => ({
-                    ...f,
-                    hypotheses: [...f.hypotheses, { key: key(), format: "latex", text: "" }],
-                  }))
-                }
-              >
-                <span aria-hidden="true">+</span> Add hypothesis
-              </button>
-            </fieldset>
-            <fieldset className={styles.rows}>
-              <legend>What to prove</legend>
-              {form.goals.map((row, index) => (
-                <StatementField
-                  key={row.key}
-                  label={`Goal ${index + 1}`}
-                  family="goal"
-                  required={index === 0}
-                  row={row}
-                  feedback={goalFeedback[index] ?? { kind: "empty" }}
-                  onChange={(next) =>
-                    update((f) => ({ ...f, goals: replaceAt(f.goals, index, next) }))
-                  }
-                  onRemove={
-                    form.goals.length > 1
-                      ? () => update((f) => ({ ...f, goals: removeAt(f.goals, index) }))
-                      : undefined
-                  }
-                />
-              ))}
-              <button
-                type="button"
-                className={styles.addButton}
-                onClick={() =>
-                  update((f) => ({
-                    ...f,
-                    goals: [...f.goals, { key: key(), format: "latex", text: "" }],
-                  }))
-                }
-              >
-                <span aria-hidden="true">+</span> Add goal
-              </button>
-            </fieldset>
-          </Section>
-        </HandSetup>
+                <span>
+                  <strong>{pack.name}</strong> — {pack.description}
+                  {pack.alwaysActive ? (
+                    <em className={styles.hint}> Always included.</em>
+                  ) : (
+                    <em className={styles.hint}>
+                      {" "}
+                      Adds{" "}
+                      {(packOperators.get(pack.id) ?? []).map(({ symbol }) => symbol).join(", ")}.
+                    </em>
+                  )}
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        </details>
 
-        <div className={styles.actions} id={SETUP_SECTION.check}>
-          {reviewed === undefined ? (
-            <p className={styles.gateNote} role="status">
-              A proof session is created only after you approve the checked setup.
-            </p>
-          ) : null}
+        <Section title="What is known and what to prove">
+          <fieldset className={styles.rows}>
+            <legend>Variables and objects</legend>
+            {form.declarations.map((row, index) => (
+              <DeclarationEditor
+                key={row.key}
+                index={index}
+                row={row}
+                sorts={options.sorts}
+                onChange={(next) =>
+                  update((f) => ({ ...f, declarations: replaceAt(f.declarations, index, next) }))
+                }
+                onRemove={() =>
+                  update((f) => ({ ...f, declarations: removeAt(f.declarations, index) }))
+                }
+              />
+            ))}
+            <button
+              type="button"
+              className={styles.addButton}
+              onClick={() =>
+                update((f) => ({
+                  ...f,
+                  declarations: [...f.declarations, { key: key(), symbol: "", sort: "real" }],
+                }))
+              }
+            >
+              <span aria-hidden="true">+</span> Add variable or object
+            </button>
+          </fieldset>
+          <fieldset className={styles.rows}>
+            <legend>What is already known</legend>
+            {form.hypotheses.map((row, index) => (
+              <StatementField
+                key={row.key}
+                label={`Hypothesis ${index + 1}`}
+                family="hypothesis"
+                row={row}
+                feedback={hypothesisFeedback[index] ?? { kind: "empty" }}
+                onChange={(next) =>
+                  update((f) => ({ ...f, hypotheses: replaceAt(f.hypotheses, index, next) }))
+                }
+                onRemove={() =>
+                  update((f) => ({ ...f, hypotheses: removeAt(f.hypotheses, index) }))
+                }
+              />
+            ))}
+            <button
+              type="button"
+              className={styles.addButton}
+              onClick={() =>
+                update((f) => ({
+                  ...f,
+                  hypotheses: [...f.hypotheses, { key: key(), format: "latex", text: "" }],
+                }))
+              }
+            >
+              <span aria-hidden="true">+</span> Add hypothesis
+            </button>
+          </fieldset>
+          <fieldset className={styles.rows}>
+            <legend>What to prove</legend>
+            {form.goals.map((row, index) => (
+              <StatementField
+                key={row.key}
+                label={`Goal ${index + 1}`}
+                family="goal"
+                required={index === 0}
+                row={row}
+                feedback={goalFeedback[index] ?? { kind: "empty" }}
+                onChange={(next) =>
+                  update((f) => ({ ...f, goals: replaceAt(f.goals, index, next) }))
+                }
+                onRemove={
+                  form.goals.length > 1
+                    ? () => update((f) => ({ ...f, goals: removeAt(f.goals, index) }))
+                    : undefined
+                }
+              />
+            ))}
+            <button
+              type="button"
+              className={styles.addButton}
+              onClick={() =>
+                update((f) => ({
+                  ...f,
+                  goals: [...f.goals, { key: key(), format: "latex", text: "" }],
+                }))
+              }
+            >
+              <span aria-hidden="true">+</span> Add goal
+            </button>
+          </fieldset>
+        </Section>
+
+        <div className={styles.actions}>
           <div className={styles.actionButtons}>
             <button
               type="submit"
@@ -638,7 +538,6 @@ export function ProblemEntryForm({
           />
         )}
       </form>
-      <SetupProgressPanel steps={progress} onFollow={followStep} />
     </div>
   );
 }
@@ -670,9 +569,8 @@ function ReviewPanel({
   const context = goal?.sequent.context;
   const library = reviewed.review.initialLibrary;
   return (
-    <section className={styles.review} aria-label="Review" id={SETUP_SECTION.review}>
+    <section className={styles.review} aria-label="Review">
       <h2>Review your setup</h2>
-      <p>Check that the problem, assumptions, and goal are represented as you intend.</p>
       {aiDraftCallId === undefined ? null : (
         <p className={styles.provenance} role="note">
           The variables, hypotheses and goals started from an AI draft ({aiDraftCallId}). Check them
@@ -909,52 +807,12 @@ function NoticeView({ notice }: Readonly<{ notice: Notice }>) {
   );
 }
 
-function Section({
-  id,
-  title,
-  intro,
-  children,
-}: Readonly<{ id?: string; title: string; intro?: string; children: ReactNode }>) {
+function Section({ title, children }: Readonly<{ title: string; children: ReactNode }>) {
   return (
-    <section className={styles.section} id={id}>
-      {intro === undefined ? (
-        <h2>{title}</h2>
-      ) : (
-        <div className={styles.sectionHeader}>
-          <h2>{title}</h2>
-          <p className={styles.sectionIntro}>{intro}</p>
-        </div>
-      )}
+    <section className={styles.section}>
+      <h2>{title}</h2>
       {children}
     </section>
-  );
-}
-
-/**
- * The background and setup fields. With AI they are drafted for the user and sit in a disclosure
- * that opens when there is something to fix; without AI they are the way to enter the setup.
- */
-function HandSetup({
-  guided,
-  open,
-  onToggle,
-  children,
-}: Readonly<{
-  guided: boolean;
-  open: boolean;
-  onToggle: (open: boolean) => void;
-  children: ReactNode;
-}>) {
-  if (!guided) return <>{children}</>;
-  return (
-    <details
-      className={styles.handSetup}
-      open={open}
-      onToggle={(event) => onToggle(event.currentTarget.open)}
-    >
-      <summary className={styles.disclosureMain}>Edit the background and setup by hand</summary>
-      {children}
-    </details>
   );
 }
 

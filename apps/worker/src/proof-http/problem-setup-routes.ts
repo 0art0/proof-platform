@@ -273,6 +273,7 @@ async function resolveApprovals(
       context.llmCalls,
       references.approvedLibrary.constructionId,
       references.approvedLibrary.decisionId,
+      constants,
     );
     if (!loaded.ok) return loaded;
     library = loaded.library;

@@ -20,7 +20,12 @@ import {
 } from "@proof/llm";
 import { stableIdentifierSchema } from "@proof/protocol";
 import { z } from "zod";
-import { approvedBackgroundReferenceSchema, loadApprovedConstants } from "../approved-background";
+import {
+  approvedBackgroundReferenceSchema,
+  backgroundProposalReferenceSchema,
+  loadApprovedConstants,
+  loadProposedBackground,
+} from "../approved-background";
 import {
   evaluateLibraryProposal,
   LIBRARY_REVIEWER_ID,
@@ -49,12 +54,19 @@ const libraryRequestSchema = z
   .object({
     constructionId: stableIdentifierSchema,
     id: stableIdentifierSchema,
-    /** The approved background whose profile and constants the librarian works from. */
-    approvedBackground: approvedBackgroundReferenceSchema,
+    /** The approved background whose profile and constants the librarian works from, or ... */
+    approvedBackground: approvedBackgroundReferenceSchema.optional(),
+    /** ... a validated background proposal that is still under review. Exactly one is given. */
+    backgroundProposal: backgroundProposalReferenceSchema.optional(),
     /** The notation packs of the setup: their operators and results are part of the context. */
     packs: z.array(stableIdentifierSchema).max(7),
   })
-  .strict();
+  .strict()
+  .refine(
+    ({ approvedBackground, backgroundProposal }) =>
+      (approvedBackground === undefined) !== (backgroundProposal === undefined),
+    { message: "Name either an approved background or a background proposal." },
+  );
 
 const libraryDecisionRequestSchema = z
   .object({
@@ -97,7 +109,13 @@ export async function proposeLibrary(
       ],
     });
   }
-  const { constructionId, id, approvedBackground, packs: selected } = requestData.data;
+  const {
+    constructionId,
+    id,
+    approvedBackground,
+    backgroundProposal,
+    packs: selected,
+  } = requestData.data;
   const packs = starterLibraryPacks();
   if (
     new Set(selected).size !== selected.length ||
@@ -106,14 +124,18 @@ export async function proposeLibrary(
     return writeJson(response, 400, problem("A selected library pack is not available."));
   }
 
-  // The background and its constants come from storage by decision ID; the request cannot carry
-  // declarations of its own.
-  const loaded = await loadApprovedConstants(
-    context.llmCalls,
-    constructionId,
-    approvedBackground.decisionId,
-  );
+  // The background and its constants come from storage, by decision ID or by proposal call ID;
+  // the request cannot carry declarations of its own.
+  const loaded =
+    approvedBackground !== undefined
+      ? await loadApprovedConstants(context.llmCalls, constructionId, approvedBackground.decisionId)
+      : await loadProposedBackground(
+          context.llmCalls,
+          constructionId,
+          backgroundProposal?.callId ?? "",
+        );
   if (!loaded.ok) return writeJson(response, loaded.status, { diagnostics: loaded.diagnostics });
+  const background = "approved" in loaded ? loaded.approved.proposal.background : loaded.background;
   const conflicts: string[] = [];
   const { operators } = resolveSessionOperators(
     selected,
@@ -140,7 +162,7 @@ export async function proposeLibrary(
   const built = buildLibrarianContext({
     id,
     kind: "initial",
-    background: loaded.approved.proposal.background,
+    background,
     constants: operators,
     existingResults,
   });
