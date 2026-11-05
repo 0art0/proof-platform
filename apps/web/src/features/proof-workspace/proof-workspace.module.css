@@ -4,7 +4,7 @@
  * goals are blue with a solid frame, obligations violet with a dashed frame, hypotheses orange
  * with a square H1/H2 tag, and variables neutral. Polarity is named in the "Selected" pill and
  * drawn as a faint inward (positive) or outward (negative) bevel on the selected statement.
- * Hovering names the position of the logical node under the pointer and frames it the same way.
+ * Hovering names the position of the proposition under the pointer and frames it the same way.
  */
 .workspace {
   display: grid;

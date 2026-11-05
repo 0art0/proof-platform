@@ -3,11 +3,11 @@
 import type { MathfieldElement as MathfieldElementType } from "mathlive";
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { renderMathJson, type PlainMathJson } from "@proof/mathjson-model";
-import {
-  logicalNodeAtPath,
-  type AnchoredProofSelection,
-  type LogicalStatement,
-  type StatementAnchor,
+import type {
+  AnchoredProofSelection,
+  OperandPath,
+  SelectionPosition,
+  StatementAnchor,
 } from "@proof/selections";
 import {
   readAnchoredMathLiveSelection,
@@ -59,7 +59,7 @@ const POLARITY_SIGNS: Readonly<Record<SelectionPolarity, string>> = Object.freez
   neutral: "·",
 });
 
-/** The logical node under the pointer and where it is drawn, relative to the statement. */
+/** The proposition under the pointer and where it is drawn, relative to the statement. */
 type HoveredPosition = Readonly<{ polarity: SelectionPolarity; box: HoverBox }>;
 
 function sameHover(left: HoveredPosition | undefined, right: HoveredPosition): boolean {
@@ -75,8 +75,10 @@ function sameHover(left: HoveredPosition | undefined, right: HoveredPosition): b
 type MathLiveStatementProps = Readonly<{
   anchor: StatementAnchor;
   expression: PlainMathJson;
-  /** The statement's logical structure, which says what the pointer is hovering over. */
-  logical: LogicalStatement;
+  /** The proposition governing an operand path, which is what hovering that path reports. */
+  governingProposition: (
+    path: OperandPath,
+  ) => Readonly<{ path: OperandPath; position: SelectionPosition }>;
   label: string;
   selected: boolean;
   /** Polarity of the active selection inside this statement, when one exists. */
@@ -95,7 +97,7 @@ export type MathLiveDropZone = Readonly<{
 export function MathLiveStatement({
   anchor,
   expression,
-  logical,
+  governingProposition,
   label,
   selected,
   selectionPolarity,
@@ -104,7 +106,7 @@ export function MathLiveStatement({
 }: MathLiveStatementProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const logicalRef = useRef(logical);
+  const governingRef = useRef(governingProposition);
   const [hovered, setHovered] = useState<HoveredPosition>();
   const fieldRef = useRef<MathfieldElementType | undefined>(undefined);
   const [dropOver, setDropOver] = useState(false);
@@ -118,8 +120,8 @@ export function MathLiveStatement({
   useEffect(() => {
     onGestureRef.current = onGesture;
     anchorRef.current = anchor;
-    logicalRef.current = logical;
-  }, [anchor, logical, onGesture]);
+    governingRef.current = governingProposition;
+  }, [anchor, governingProposition, onGesture]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -167,7 +169,7 @@ export function MathLiveStatement({
           setHovered(undefined);
           return;
         }
-        const node = logicalNodeAtPath(logicalRef.current, hit.path);
+        const node = governingRef.current(hit.path);
         const box = occurrenceBox(table, node.path, hit.entry);
         const origin = frame.getBoundingClientRect();
         const next: HoveredPosition = {
@@ -267,7 +269,7 @@ export function MathLiveStatement({
   );
 }
 
-/** Outlines the hovered logical node and names its position. Neither takes pointer events. */
+/** Outlines the hovered proposition and names its position. Neither takes pointer events. */
 function HoveredPositionMark({
   hovered: { polarity, box },
 }: Readonly<{ hovered: HoveredPosition }>) {

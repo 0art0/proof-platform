@@ -12,6 +12,9 @@ import {
   createAssociativeSelection,
   expressionAtPath,
   findExactPaths,
+  governingProposition,
+  listExpressionPaths,
+  positionAtPath,
   replaceAtPath,
   replaceSelection,
   resolveProofSelection,
@@ -1080,5 +1083,60 @@ describe("construction placeholders", () => {
       ok: true,
       query: { selections: [{ selection: { fragment: ["m", "P"] } }] },
     });
+  });
+});
+
+describe("governingProposition", () => {
+  const root = { polarity: "positive", role: "proposition" } as const;
+  const expression: PlainMathJson = [
+    "Implies",
+    ["And", ["Greater", "x", 0], "P"],
+    ["ForAll", ["Element", "y", "S"], ["Not", "Q"]],
+  ];
+  const governing = (path: readonly number[]) =>
+    governingProposition(expression, path, root, [], []);
+
+  it("gives a term the relation around it", () => {
+    expect(governing([0, 0, 1])).toEqual({
+      path: [0, 0],
+      position: { polarity: "negative", role: "proposition" },
+    });
+  });
+
+  it("gives a bound variable and its domain the quantifier around them", () => {
+    for (const path of [
+      [1, 0],
+      [1, 0, 0],
+      [1, 0, 1],
+    ]) {
+      expect(governing(path)).toMatchObject({ path: [1], position: { polarity: "positive" } });
+    }
+  });
+
+  it("returns a proposition unchanged and the root for the empty path", () => {
+    expect(governing([1, 1, 0])).toMatchObject({
+      path: [1, 1, 0],
+      position: { polarity: "negative" },
+    });
+    expect(governing([])).toEqual({ path: [], position: root });
+  });
+
+  it("falls back to the root for a path that does not exist", () => {
+    expect(governing([7, 7])).toEqual({ path: [], position: root });
+  });
+
+  it("is always the deepest proposition prefix of the path", () => {
+    const paths = listExpressionPaths(expression);
+    fc.assert(
+      fc.property(fc.constantFrom(...paths), (path) => {
+        const found = governing(path);
+        expect(path.slice(0, found.path.length)).toEqual(found.path);
+        expect(found.position.role).toBe("proposition");
+        for (let length = found.path.length + 1; length <= path.length; length += 1) {
+          const deeper = positionAtPath(expression, path.slice(0, length), root, [], []);
+          expect(deeper?.role).not.toBe("proposition");
+        }
+      }),
+    );
   });
 });

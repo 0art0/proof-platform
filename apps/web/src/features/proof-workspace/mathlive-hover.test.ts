@@ -52,6 +52,76 @@ describe("occurrenceAtPoint", () => {
   });
 });
 
+describe("brackets", () => {
+  const open: OccurrenceEntry = { bracket: "open", box: box(0, 1) };
+  const close: OccurrenceEntry = { bracket: "close", box: box(0, 1) };
+  const at = (index: number) => box(index * 10, index * 10 + 9);
+  const pathAt = (row: readonly OccurrenceEntry[], index: number) =>
+    occurrenceAtPoint(
+      row.map((entry, position) => ({ ...entry, box: at(position) })),
+      { x: index * 10 + 5, y: 5 },
+    )?.path;
+
+  it("belong to what they enclose, not to their neighbours", () => {
+    // `(p ⇒ q) ⇒ r`
+    const row = [
+      open,
+      { path: [0, 0] },
+      { box: box(0, 1) },
+      { path: [0, 1] },
+      close,
+      { box: box(0, 1) },
+      { path: [1] },
+    ].map((entry) => ({ box: box(0, 1), ...entry }));
+    expect(pathAt(row, 0)).toEqual([0]);
+    expect(pathAt(row, 4)).toEqual([0]);
+  });
+
+  it("are not fooled by a leaf before the opening bracket", () => {
+    // `a ∧ (b ⇒ c)`
+    const row = [
+      { path: [0] },
+      { box: box(0, 1) },
+      open,
+      { path: [1, 0] },
+      { path: [1, 1] },
+      close,
+    ].map((entry) => ({ box: box(0, 1), ...entry }));
+    expect(pathAt(row, 2)).toEqual([1]);
+    expect(pathAt(row, 5)).toEqual([1]);
+  });
+
+  it("pair up across nesting", () => {
+    // `(a ∧ (b ⇒ c)) ⇒ d`
+    const row = [
+      open,
+      { path: [0, 0] },
+      open,
+      { path: [0, 1, 0] },
+      { path: [0, 1, 1] },
+      close,
+      close,
+      { path: [1] },
+    ].map((entry) => ({ box: box(0, 1), ...entry }));
+    expect(pathAt(row, 5)).toEqual([0, 1]);
+    expect(pathAt(row, 6)).toEqual([0]);
+    expect(pathAt(row, 0)).toEqual([0]);
+  });
+
+  it("fall back to their neighbours when unmatched or empty", () => {
+    const unmatched = [{ path: [0, 0] }, close, { path: [0, 1] }].map((entry) => ({
+      box: box(0, 1),
+      ...entry,
+    }));
+    expect(pathAt(unmatched, 1)).toEqual([0]);
+    const empty = [{ path: [0] }, open, close, { path: [1] }].map((entry) => ({
+      box: box(0, 1),
+      ...entry,
+    }));
+    expect(pathAt(empty, 1)).toEqual([]);
+  });
+});
+
 describe("occurrenceBox", () => {
   it("spans the leaves under a path, including what lies between them", () => {
     expect(occurrenceBox(entries, [0], greater)).toEqual(box(0, 40));
@@ -98,6 +168,19 @@ describe("readOccurrenceTable", () => {
 
     leaf.getBoundingClientRect = () => box(0, 5, 100, 110) as DOMRect;
     expect(readOccurrenceTable(root)[0]?.box).toEqual(box(0, 5, 100, 110));
+  });
+
+  it("marks brackets, but not a bracket drawn inside an annotated leaf", () => {
+    const root = document.createElement("div");
+    const opening = atom(box(0, 2));
+    opening.textContent = "(";
+    const inner = atom(box(3, 5), { "data-proof-path-1": "0" });
+    inner.textContent = ")";
+    root.append(opening, inner);
+    expect(readOccurrenceTable(root)).toEqual([
+      { path: undefined, bracket: "open", box: box(0, 2) },
+      { path: [0], box: box(3, 5) },
+    ]);
   });
 
   it("reads nothing from a field that has not rendered", () => {
