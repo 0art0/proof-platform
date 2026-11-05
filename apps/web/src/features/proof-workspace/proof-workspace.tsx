@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useId, useMemo, useReducer, useRef } from "react";
+import { useEffect, useId, useReducer, useRef } from "react";
 import { createProofNodeSchema, type OperatorDeclaration, type ProofNode } from "@proof/protocol";
 import {
   formatOperandPath,
-  logicalStatement,
+  governingProposition,
   resolveProofSelection,
   type AnchoredProofSelection,
   type ResolveProofSelectionResult,
@@ -563,19 +563,14 @@ function StatementView({
   const selected = environment.selectedAnchors.has(key);
   const polarity = environment.selectedAnchors.get(key);
   const gestures = environment.gestures;
-  const { operators } = environment;
-  const basePolarity = anchor.statement.kind === "conclusion" ? "positive" : "negative";
-  const logical = useMemo(
-    () => logicalStatement(expression, basePolarity, { declarations, operators }),
-    [expression, basePolarity, declarations, operators],
-  );
+  const polarityAtRoot = anchor.statement.kind === "conclusion" ? "positive" : "negative";
   return (
     <div className={styles.statement}>
       {environment.view === "natural-language" ? (
         <p
           className={styles.naturalLanguage}
           aria-label={label}
-          title={POLARITY_LABELS[logical.position.polarity]}
+          title={POLARITY_LABELS[polarityAtRoot]}
           data-selected={selected}
           data-selection-polarity={selected ? polarity : undefined}
         >
@@ -587,7 +582,15 @@ function StatementView({
         <MathLiveStatement
           anchor={anchor}
           expression={expression}
-          logical={logical}
+          governingProposition={(path) =>
+            governingProposition(
+              expression,
+              path,
+              { polarity: polarityAtRoot, role: "proposition" },
+              declarations,
+              environment.operators,
+            )
+          }
           label={label}
           selected={selected}
           selectionPolarity={polarity}

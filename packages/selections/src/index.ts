@@ -96,7 +96,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function functionParts(expression: PlainMathJson): FunctionParts | undefined {
+function functionParts(expression: PlainMathJson): FunctionParts | undefined {
   if (Array.isArray(expression)) {
     const operator = expression[0];
     if (typeof operator !== "string") return undefined;
@@ -1201,6 +1201,26 @@ export function positionAtPath(
   return currentPosition;
 }
 
+/**
+ * The deepest proposition containing `path`, with its position. A term or binder has no logical
+ * polarity of its own, so this is the proposition that governs it: the relation around a term, or
+ * the quantifier around its bound variable. `root` is the statement's base position.
+ */
+export function governingProposition(
+  expression: PlainMathJson,
+  path: OperandPath,
+  root: SelectionPosition,
+  declarations: readonly Declaration[],
+  operators: readonly OperatorDeclaration[],
+): Readonly<{ path: OperandPath; position: SelectionPosition }> {
+  for (let length = path.length; length > 0; length -= 1) {
+    const prefix = path.slice(0, length);
+    const position = positionAtPath(expression, prefix, root, declarations, operators);
+    if (position?.role === "proposition") return { path: prefix, position };
+  }
+  return { path: [], position: root };
+}
+
 function childPosition(
   operator: string,
   operandIndex: number,
@@ -1305,5 +1325,3 @@ function flipPolarity(polarity: LogicalPolarity): LogicalPolarity {
   if (polarity === "negative") return "positive";
   return polarity;
 }
-
-export * from "./logical-structure";

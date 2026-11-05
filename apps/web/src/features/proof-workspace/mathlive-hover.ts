@@ -4,9 +4,17 @@ import { operandPathFromElementData } from "./mathlive-selection";
 export type HoverBox = Readonly<{ left: number; right: number; top: number; bottom: number }>;
 
 /** One drawn atom. Only annotated leaves have a `path`; operators and brackets do not. */
-export type OccurrenceEntry = Readonly<{ path?: OperandPath | undefined; box: HoverBox }>;
+export type OccurrenceEntry = Readonly<{
+  path?: OperandPath | undefined;
+  bracket?: "open" | "close" | undefined;
+  box: HoverBox;
+}>;
 
 const ROOT_ANNOTATION = "data-proof-path-0";
+const BRACKETS: ReadonlyMap<string | null, "open" | "close"> = new Map([
+  ["(", "open"],
+  [")", "close"],
+]);
 
 function nearestLeafPath(element: Element): OperandPath | undefined {
   for (let current: Element | null = element; current; current = current.parentElement) {
@@ -35,7 +43,10 @@ export function readOccurrenceTable(root: ParentNode | null): readonly Occurrenc
     if (element.hasAttribute(ROOT_ANNOTATION)) continue;
     const { left, right, top, bottom } = element.getBoundingClientRect();
     if (right <= left) continue;
-    entries.push({ path: nearestLeafPath(element), box: { left, right, top, bottom } });
+    const path = nearestLeafPath(element);
+    const box = { left, right, top, bottom };
+    const bracket = path === undefined ? BRACKETS.get(element.textContent) : undefined;
+    entries.push(bracket === undefined ? { path, box } : { path, bracket, box });
   }
   return entries;
 }
@@ -69,12 +80,34 @@ function commonPrefix(left: OperandPath, right: OperandPath): OperandPath {
   return end < 0 ? left.slice(0, right.length) : left.slice(0, end);
 }
 
+/** The leaves between a bracket and its partner; undefined for an unmatched bracket. */
+function bracketedLeaves(
+  entries: readonly OccurrenceEntry[],
+  index: number,
+): readonly OperandPath[] | undefined {
+  const own = entries[index]?.bracket;
+  const step = own === "open" ? 1 : -1;
+  const leaves: OperandPath[] = [];
+  let depth = 0;
+  for (let cursor = index; cursor >= 0 && cursor < entries.length; cursor += step) {
+    const { bracket, path } = entries[cursor]!;
+    if (path !== undefined) leaves.push(path);
+    if (bracket !== undefined) depth += bracket === own ? 1 : -1;
+    if (depth === 0) return leaves;
+  }
+  return undefined;
+}
+
 /**
- * The operator between two leaves belongs to their common ancestor: `>` in `x > 0` to the relation,
- * `⇒` to the implication. A prefix such as `¬` or `∀` has a leaf on one side only, and belongs to
- * that leaf's parent.
+ * An operator belongs to what it joins. A bracket belongs to what it encloses, however its
+ * neighbours nest. Between two leaves, an operator belongs to their common ancestor: `>` in `x > 0`
+ * to the relation, `⇒` to the implication. A prefix such as `¬` or `∀` has a leaf on one side only,
+ * and belongs to that leaf's parent.
  */
 function operatorPath(entries: readonly OccurrenceEntry[], index: number): OperandPath {
+  const enclosed = entries[index]?.bracket === undefined ? [] : bracketedLeaves(entries, index);
+  if (enclosed !== undefined && enclosed.length > 0) return enclosed.reduce(commonPrefix);
+
   const before = entries.slice(0, index).findLast((entry) => entry.path !== undefined)?.path;
   const after = entries.slice(index + 1).find((entry) => entry.path !== undefined)?.path;
   if (before !== undefined && after !== undefined) return commonPrefix(before, after);

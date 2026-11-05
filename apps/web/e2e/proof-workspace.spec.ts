@@ -149,6 +149,7 @@ const NESTED_IMPLICATION_DRAFT: IsolatedDraft = {
   hypotheses: [
     { format: "mathjson", expression: ["Implies", "p", "q"] },
     { format: "mathjson", expression: ["Greater", "x", 0] },
+    { format: "mathjson", expression: ["And", "r", ["Implies", ["Implies", "p", "q"], "r"]] },
   ],
   goals: [{ format: "mathjson", expression: ["Implies", ["Implies", "p", "q"], "r"] }],
 };
@@ -207,6 +208,15 @@ test("hovering names the logical position of each part of a statement", async ({
   // An operator speaks for the connective it belongs to: the inner one is in negative position.
   await expectHoverPosition(page, goal, "⟹", /Negative position/, 0);
   await expectHoverPosition(page, goal, "⟹", /Positive position/, 1);
+
+  // A bracket speaks for what it encloses, whatever is next to it.
+  await expectHoverPosition(page, goal, "(", /Negative position/);
+  await expectHoverPosition(page, goal, ")", /Negative position/);
+  const nested = page.getByLabel("Goal 1 hypothesis 3");
+  await expectHoverPosition(page, nested, "(", /Negative position/, 0);
+  await expectHoverPosition(page, nested, "(", /Positive position/, 1);
+  await expectHoverPosition(page, nested, ")", /Positive position/, 0);
+  await expectHoverPosition(page, nested, ")", /Negative position/, 1);
 
   // A term has no polarity of its own, so the proposition governing it is reported.
   await expectHoverPosition(page, relation, "x", /Negative position/);
