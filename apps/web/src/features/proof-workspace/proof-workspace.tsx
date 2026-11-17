@@ -211,16 +211,19 @@ function ValidatedProofWorkspace({
           <p className={styles.eyebrow}>Proof snapshot</p>
           <h2>Goals and obligations</h2>
         </div>
-        <dl className={styles.snapshotFacts}>
-          <div>
-            <dt>Node</dt>
-            <dd className={styles.snapshotFact}>{node.id}</dd>
-          </div>
-          <div>
-            <dt>State</dt>
-            <dd className={styles.snapshotFact}>{node.state.id}</dd>
-          </div>
-        </dl>
+        <details className={styles.legendDetails}>
+          <summary>Snapshot IDs</summary>
+          <dl className={styles.snapshotFacts}>
+            <div>
+              <dt>Node</dt>
+              <dd className={styles.snapshotFact}>{node.id}</dd>
+            </div>
+            <div>
+              <dt>State</dt>
+              <dd className={styles.snapshotFact}>{node.state.id}</dd>
+            </div>
+          </dl>
+        </details>
       </header>
 
       <div className={styles.workspaceBody}>

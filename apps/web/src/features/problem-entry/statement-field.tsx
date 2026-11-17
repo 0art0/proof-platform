@@ -1,10 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import type { LatexRenderer } from "@proof/language";
 import type { PlainMathJson } from "@proof/protocol";
 import { splitNaturalLanguage } from "../proof-workspace/presentation";
-import { parseMathJsonText, type StatementFormat, type StatementRow } from "./draft-form";
+import {
+  parseMathJsonText,
+  STATEMENT_SYMBOLS,
+  statementLatex,
+  type StatementFormat,
+  type StatementRow,
+} from "./draft-form";
 import styles from "./problem-entry.module.css";
 import { Formula } from "./typeset";
 
@@ -29,7 +35,7 @@ export function statementFeedback(
       ? recognized(parsed.expression, latex)
       : { kind: "error", message: parsed.message };
   }
-  const parsed = latex.parse(row.text);
+  const parsed = latex.parse(statementLatex(row.text));
   return parsed.ok
     ? recognized(parsed.expression, latex)
     : { kind: "error", message: parsed.diagnostics.map(({ message }) => message).join(" ") };
@@ -123,6 +129,21 @@ export function StatementField({
   onChange: (row: StatementRow) => void;
   onRemove?: (() => void) | undefined;
 }>) {
+  const input = useRef<HTMLTextAreaElement>(null);
+  const insertSymbol = (symbol: string) => {
+    const field = input.current;
+    if (field === null) return;
+    const { selectionStart, selectionEnd } = field;
+    onChange({
+      ...row,
+      text: row.text.slice(0, selectionStart) + symbol + row.text.slice(selectionEnd),
+    });
+    requestAnimationFrame(() => {
+      field.focus();
+      const caret = selectionStart + symbol.length;
+      field.setSelectionRange(caret, caret);
+    });
+  };
   const feedbackId = `statement-feedback-${row.key}`;
   const line = (
     <p id={feedbackId} className={styles.feedback} data-kind={feedback.kind}>
@@ -157,7 +178,7 @@ export function StatementField({
             onChange({ ...row, format: event.currentTarget.value as StatementFormat })
           }
         >
-          <option value="latex">LaTeX</option>
+          <option value="latex">Math notation</option>
           <option value="mathjson">Structured notation (advanced)</option>
         </select>
         {onRemove === undefined ? null : (
@@ -168,15 +189,31 @@ export function StatementField({
       </div>
       <textarea
         id={`statement-${row.key}`}
+        ref={input}
         className={styles.mathInput}
         rows={2}
         spellCheck={false}
-        placeholder={row.format === "latex" ? "A \\cup B = B \\cup A" : '["Equal", "x", "y"]'}
+        placeholder={row.format === "latex" ? "e.g. p ∨ q or x + y = y + x" : '["Equal", "x", "y"]'}
         aria-describedby={feedbackId}
         aria-invalid={feedback.kind === "error"}
         value={row.text}
         onChange={(event) => onChange({ ...row, text: event.currentTarget.value })}
       />
+      {row.format === "latex" ? (
+        <div className={styles.symbolPicker} role="group" aria-label={`Symbols for ${label}`}>
+          {STATEMENT_SYMBOLS.map(({ symbol, label: name }) => (
+            <button
+              key={symbol}
+              type="button"
+              title={name}
+              aria-label={`Insert ${name}`}
+              onClick={() => insertSymbol(symbol)}
+            >
+              {symbol}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {feedback.kind === "parsed" ? (
         // The recognized statement, typeset: what the setup will actually read.
         <div className={styles.preview} data-preview="">

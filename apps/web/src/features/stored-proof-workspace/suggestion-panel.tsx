@@ -48,6 +48,12 @@ export type SuggestionPanelActions = Readonly<{
   onInputSummaryExpanded: (set: DisplayedSuggestionSet, suggestionId: string) => void;
 }>;
 
+const SOURCE_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "move", label: "Moves" },
+  { value: "result", label: "Library results" },
+] as const;
+
 const FIND_MORE_REASON_ID = "find-more-results-reason";
 
 /** The fragment that links to the panel (the active-selections card points here and focuses it). */
@@ -106,11 +112,18 @@ export function SuggestionPanel({
   onAskAgain,
   ...actions
 }: SuggestionPanelProps) {
+  const [source, setSource] = useState<(typeof SOURCE_FILTERS)[number]["value"]>("all");
   const findMoreBusy = findMoreStatus?.kind === "working";
   const displayedSet =
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.suggestionSet
       : undefined;
+  const items = displayedSet?.suggestions ?? [];
+  const mixedSources =
+    items.some(({ source }) => source === "move") &&
+    items.some(({ source }) => source === "result");
+  const visible =
+    !mixedSources || source === "all" ? items : items.filter((item) => item.source === source);
   const classes = new Map(
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.transitionClasses.map((entry) => [entry.suggestionId, entry.transitionClass])
@@ -158,7 +171,7 @@ export function SuggestionPanel({
    * the first stays where it is and the rest sit behind one summary line. Nothing is dropped.
    */
   const renderEntries = (set: DisplayedSuggestionSet) => {
-    const entries = layoutSuggestions(set);
+    const entries = layoutSuggestions({ suggestions: visible, variantGroups: set.variantGroups });
     const searchOnly = entries.filter((entry) =>
       entryContains(entry, (id) => abstractionOnly(set, id)),
     );
@@ -193,12 +206,7 @@ export function SuggestionPanel({
       tabIndex={-1}
     >
       <div className={styles.suggestionHeading}>
-        <div>
-          <h2>Suggestions</h2>
-          <p className={styles.suggestionMeta}>
-            Find a useful next step for the selected mathematics.
-          </p>
-        </div>
+        <h2>Suggestions</h2>
         {displayedSet ? (
           <details className={styles.suggestionRecord}>
             <summary>About this list</summary>
@@ -259,6 +267,20 @@ export function SuggestionPanel({
           findMoreBusy={findMoreBusy}
           findMoreDisabledReason={findMoreDisabledReason}
         />
+      ) : null}
+      {suggestions.kind === "ready" && mixedSources ? (
+        <div role="group" aria-label="Filter suggestions" className={styles.sourceFilters}>
+          {SOURCE_FILTERS.map(({ value, label }) => (
+            <button
+              type="button"
+              key={value}
+              aria-pressed={source === value}
+              onClick={() => setSource(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       ) : null}
       {suggestions.kind === "ready" ? (
         <ol className={styles.suggestions} data-testid="suggestion-list">
@@ -370,11 +392,12 @@ function bindActions(
 }
 
 function suggestionStatusText(state: SuggestionState): string {
-  if (state.kind === "idle") return "Select a statement or expression to see suggestions.";
+  if (state.kind === "idle")
+    return "Click a goal, an assumption, or part of a formula to see what you can do next.";
   if (state.kind === "loading") return "Finding suggestions for the current selection…";
   if (state.kind === "empty") return "No matching suggestions for this selection.";
   if (state.kind === "stale") return `This selection is out of date: ${state.message}`;
   if (state.kind === "rejected") return `Could not find suggestions: ${state.message}`;
   const count = state.suggestionSet.suggestions.length;
-  return `${count} suggestion${count === 1 ? "" : "s"} to explore. Preview a step to inspect its effect before applying.`;
+  return `${count} suggestion${count === 1 ? "" : "s"} available. Preview a step before applying it.`;
 }

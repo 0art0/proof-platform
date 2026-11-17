@@ -175,7 +175,7 @@ describe("ArtifactDownload", () => {
 });
 
 describe("LandingActions", () => {
-  it("puts the statement first and the other ways to begin quietly below it", () => {
+  it("offers a problem editor, an interactive example, and saved proof controls", () => {
     render(<LandingActions developmentSessionId="session:development" />);
     // The statement is all a new problem needs; it is carried to the problem page.
     const statement = screen.getByLabelText("New problem statement");
@@ -202,6 +202,9 @@ describe("LandingActions", () => {
       "href",
       "/sessions/session%3Adevelopment",
     );
-    expect(others).toContainElement(screen.getByRole("link", { name: "Explore an example" }));
+    expect(others).toContainElement(screen.getByText("Resume a saved proof"));
+    expect(
+      screen.getByRole("complementary", { name: "Try an interactive example" }),
+    ).toContainElement(screen.getByRole("link", { name: "Explore an example" }));
   });
 });

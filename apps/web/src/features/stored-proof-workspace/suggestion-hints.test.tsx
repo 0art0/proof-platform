@@ -150,7 +150,7 @@ describe("suggestion card guidance", () => {
 });
 
 describe("suggestion badges", () => {
-  it("marks mark-sorry as an unproved assumption beside its stored class", () => {
+  it("presents a sorry as an unproved assumption", () => {
     const set = setOf([
       suggestion("suggestion:sorry", "Mark as sorry", {
         source: "move",
@@ -165,9 +165,10 @@ describe("suggestion badges", () => {
     const badges = screen.getByRole("group", { name: "Classification of Mark as sorry" });
     const sorry = badges.querySelector('[data-badge="evidence"][data-evidence="sorry"]')!;
     expect(sorry).toHaveTextContent("Sorry (unproved assumption)");
-    expect(sorry).toHaveAttribute("title", expect.stringContaining("not an equivalence"));
-    // The stored class is not hidden, but the card says plainly that this is an assumption.
-    expect(screen.getByTestId("sorry-meaning")).toHaveTextContent("It is not an equivalence.");
+    expect(badges.querySelector('[data-badge="transition-class"]')).toBeNull();
+    expect(screen.getByTestId("sorry-meaning")).toHaveTextContent(
+      "adding it as an unproved assumption",
+    );
   });
 
   it("does not add a sorry badge to an ordinary move or result", () => {

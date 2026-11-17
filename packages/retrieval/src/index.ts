@@ -1189,7 +1189,8 @@ function moveContextIsAvailableForAssignments(
   if (
     operationKind !== "close-by-hypothesis" &&
     operationKind !== "apply-implication-hypothesis" &&
-    operationKind !== "expand-hypothesis-conjunction"
+    operationKind !== "expand-hypothesis-conjunction" &&
+    operationKind !== "split-hypothesis-disjunction"
   ) {
     return true;
   }
@@ -1200,13 +1201,17 @@ function moveContextIsAvailableForAssignments(
   const target = collection.find((entry) => entry.id === referenceSelection.anchor.target.id);
   if (target === undefined) return false;
   const bySlot = new Map(assignments.map(({ slot, subject }) => [slot.id, subject]));
-  if (operationKind === "expand-hypothesis-conjunction") {
-    // A partly-filled selection is offered only when a local conjunction could still fill the
-    // missing slot.
+  if (
+    operationKind === "expand-hypothesis-conjunction" ||
+    operationKind === "split-hypothesis-disjunction"
+  ) {
+    const conjunction = operationKind === "expand-hypothesis-conjunction";
+    const slot = conjunction ? "conjunction" : "disjunction";
+    const operator = conjunction ? "And" : "Or";
     return (
-      bySlot.has("conjunction") ||
+      bySlot.has(slot) ||
       target.sequent.context.hypotheses.some(
-        (hypothesis) => functionParts(hypothesis.statement.expression)?.operator === "And",
+        (hypothesis) => functionParts(hypothesis.statement.expression)?.operator === operator,
       )
     );
   }

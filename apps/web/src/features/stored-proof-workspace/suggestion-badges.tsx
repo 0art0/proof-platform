@@ -69,11 +69,13 @@ export function TransitionClassBadge({
   );
 }
 
+export const SORRY_MEANING = "This step closes the target by adding it as an unproved assumption.";
+
 const EVIDENCE_HINTS: Readonly<Record<TransitionEvidence, string>> = {
   structural: "Justified by a built-in logical rule.",
   "library-result": "Justified by a named library result that the proof cites.",
   "background-inference": "Justified by what your declared background knowledge allows.",
-  sorry: "Not proved: the claim is assumed and stays marked as a sorry. It is not an equivalence.",
+  sorry: SORRY_MEANING,
 };
 
 /** Structural, library-result, background-inference or sorry evidence of a recorded preview. */

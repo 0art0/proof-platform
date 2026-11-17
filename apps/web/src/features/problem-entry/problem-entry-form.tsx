@@ -71,6 +71,7 @@ export type ProblemEntryFormProps = Readonly<{
   createSessionId?: () => string;
   /** A statement typed on the landing page. */
   initialStatement?: string;
+  initialTitle?: string;
   /**
    * Where the guided entry left off when its drafted setup could not be used as it was: the form
    * it filled in (background, and any drafted variables, hypotheses and goals), the approvals it
@@ -107,13 +108,16 @@ export function ProblemEntryForm({
   navigate = (url) => window.location.assign(url),
   createSessionId = () => `session:${crypto.randomUUID()}`,
   initialStatement = "",
+  initialTitle = "",
   handover,
 }: ProblemEntryFormProps) {
   const [form, setForm] = useState<ProblemForm>(() => ({
     ...emptyProblemForm(),
     statement: initialStatement,
+    title: initialTitle,
     ...handover?.form,
   }));
+  const [edited, setEdited] = useState(false);
   const [reviewed, setReviewed] = useState<Reviewed>();
   const [notice, setNotice] = useState<Notice>();
   const [busy, setBusy] = useState<"review" | "approve">();
@@ -182,6 +186,7 @@ export function ProblemEntryForm({
   /** Every edit goes through here, and every edit invalidates the review. */
   const update = (change: (previous: ProblemForm) => ProblemForm) => {
     setForm(change);
+    setEdited(true);
     setReviewed(undefined);
     setNotice(undefined);
   };
@@ -298,6 +303,29 @@ export function ProblemEntryForm({
           </p>
         )}
         <Section title="Problem">
+          {handover === undefined && initialStatement === "" && initialTitle === "" ? (
+            <button
+              className={styles.secondary}
+              type="button"
+              onClick={() =>
+                update(() => ({
+                  ...emptyProblemForm(),
+                  title: "Introducing a disjunction",
+                  statement: "Assume p is true. Show that p or q is true.",
+                  backgroundLevel: "Elementary logic",
+                  backgroundSummary: "Propositional connectives and their basic rules.",
+                  declarations: [
+                    { key: 1, symbol: "p", sort: "proposition" },
+                    { key: 2, symbol: "q", sort: "proposition" },
+                  ],
+                  hypotheses: [{ key: 3, format: "latex", text: "p" }],
+                  goals: [{ key: 4, format: "latex", text: "p ∨ q" }],
+                }))
+              }
+            >
+              {edited ? "Replace setup with example" : "Fill in an example problem"}
+            </button>
+          ) : null}
           <div className={styles.fieldGroup}>
             <Field label="Problem statement" required>
               <textarea
@@ -417,6 +445,10 @@ export function ProblemEntryForm({
         </details>
 
         <Section title="What is known and what to prove">
+          <p className={styles.lead}>
+            List the symbols used in your problem, then enter the assumptions and the conclusion.
+            Use the symbol buttons to write statements like p ∨ q.
+          </p>
           <fieldset className={styles.rows}>
             <legend>Variables and objects</legend>
             {form.declarations.map((row, index) => (

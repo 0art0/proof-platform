@@ -16,6 +16,7 @@ import {
   MatchBadge,
   ProvenanceBadge,
   SourceBadge,
+  SORRY_MEANING,
   TransitionClassBadge,
   transitionMeaning,
 } from "./suggestion-badges";
@@ -148,15 +149,15 @@ export function SuggestionCard({
         <SourceBadge source={suggestion.source} />
         {macroStepCount === undefined ? null : <MacroBadge stepCount={macroStepCount} />}
         <CategoryBadge category={category} />
-        {sorry ? <EvidenceBadge evidence="sorry" /> : null}
-        {transitionClass === undefined ? null : (
+        {sorry ? (
+          <EvidenceBadge evidence="sorry" />
+        ) : transitionClass === undefined ? null : (
           <TransitionClassBadge transitionClass={transitionClass} />
         )}
       </div>
       {sorry ? (
         <p className={styles.transitionMeaning} data-testid="sorry-meaning">
-          This assumes the claim without proving it, and it stays marked as a sorry. It is not an
-          equivalence.
+          {SORRY_MEANING}
         </p>
       ) : transitionClass === undefined ? null : (
         <p className={styles.transitionMeaning}>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROBLEM_SETUP_LAYER_CHOICES,
@@ -170,6 +170,23 @@ async function reviewDraft() {
 }
 
 describe("ProblemEntryForm approval gate", () => {
+  it("offers an editable example and sends ordinary symbols through the setup check", async () => {
+    renderForm();
+    fireEvent.click(screen.getByRole("button", { name: "Fill in an example problem" }));
+    const goal = screen.getByLabelText("Goal 1") as HTMLTextAreaElement;
+    expect(goal).toHaveValue("p ∨ q");
+    goal.setSelectionRange(2, 3);
+    const symbols = screen.getByRole("group", { name: "Symbols for Goal 1" });
+    fireEvent.click(within(symbols).getByRole("button", { name: "Insert and" }));
+    expect(goal).toHaveValue("p ∧ q");
+    await reviewDraft();
+    expect(validateCalls()[0]?.body.draft).toMatchObject({
+      hypotheses: [{ format: "latex", latex: "p" }],
+      goals: [{ format: "latex", latex: expect.stringContaining("\\land") }],
+    });
+    expect(createCalls()).toHaveLength(0);
+  });
+
   it("posts nothing to the create endpoint before explicit approval", async () => {
     const navigate = renderForm();
     fillDraft();

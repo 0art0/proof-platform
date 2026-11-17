@@ -56,7 +56,11 @@ export default async function NewProblemPage({
           initialTitle={initialTitle}
         />
       ) : (
-        <ProblemEntryForm options={options} initialStatement={initialStatement} />
+        <ProblemEntryForm
+          options={options}
+          initialStatement={initialStatement}
+          initialTitle={initialTitle}
+        />
       )}
     </main>
   );

@@ -59,6 +59,22 @@ export function emptyProblemForm(): ProblemForm {
   };
 }
 
+export const STATEMENT_SYMBOLS = [
+  { symbol: "∧", label: "and", latex: "\\land" },
+  { symbol: "∨", label: "or", latex: "\\lor" },
+  { symbol: "¬", label: "not", latex: "\\neg" },
+  { symbol: "⇒", label: "implies", latex: "\\implies" },
+  { symbol: "≤", label: "less than or equal to", latex: "\\le" },
+  { symbol: "≥", label: "greater than or equal to", latex: "\\ge" },
+] as const;
+
+export function statementLatex(text: string): string {
+  return STATEMENT_SYMBOLS.reduce(
+    (value, { symbol, latex }) => value.replaceAll(symbol, ` ${latex} `),
+    text,
+  );
+}
+
 export type FormProblem = Readonly<{ field: string; message: string }>;
 
 export type FormToDraftResult =
@@ -75,7 +91,7 @@ export function formToDraft(form: ProblemForm, options: ProblemSetupOptions): Fo
         problems.push({ field, message: `${field} is empty.` });
         return { format: "latex", latex: " " };
       }
-      if (row.format === "latex") return { format: "latex", latex: row.text };
+      if (row.format === "latex") return { format: "latex", latex: statementLatex(row.text) };
       const expression = parseMathJsonText(row.text);
       if (!expression.ok) problems.push({ field, message: `${field}: ${expression.message}` });
       return { format: "mathjson", expression: expression.ok ? expression.expression : 0 };

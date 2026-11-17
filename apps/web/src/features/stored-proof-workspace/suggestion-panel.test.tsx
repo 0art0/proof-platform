@@ -392,6 +392,46 @@ describe("SuggestionPanel", () => {
     );
   });
 
+  it("filters available moves without changing the recorded set used to preview", () => {
+    const moveId = "suggestion:close";
+    const set = suggestionSet([
+      resultSuggestion(moveId, "Close by hypothesis", {
+        source: "move",
+        artifactId: "move:close-by-hypothesis",
+        selectionMatches: [
+          {
+            selectionId: "selection:primary",
+            patternId: `pattern:${moveId}`,
+            selectionSlotId: "target",
+          },
+        ],
+      }),
+      modusPonens,
+    ]);
+    const actions = noActions();
+    render(
+      <SuggestionPanel
+        suggestions={{ kind: "ready", suggestionSet: set, transitionClasses: [] }}
+        move={{ kind: "idle" }}
+        mutationPending={false}
+        presentation={presentation}
+        view="formal"
+        {...actions}
+      />,
+    );
+    const filters = within(screen.getByRole("group", { name: "Filter suggestions" }));
+    fireEvent.click(filters.getByRole("button", { name: "Moves" }));
+    expect(screen.queryByRole("heading", { name: "Modus ponens" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Preview changes" }));
+    expect(actions.onPreview).toHaveBeenCalledWith(set, moveId);
+
+    fireEvent.click(filters.getByRole("button", { name: "Library results" }));
+    expect(screen.getByRole("heading", { name: "Modus ponens" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Close by hypothesis" })).toBeNull();
+    fireEvent.click(filters.getByRole("button", { name: "All" }));
+    expect(screen.getByRole("heading", { name: "Close by hypothesis" })).toBeVisible();
+  });
+
   it("groups stored variants behind an expandable control without reranking", () => {
     const set = suggestionSet(
       [

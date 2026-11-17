@@ -241,6 +241,7 @@ test("the stored session and each contextual sequent survive reload", async ({ p
   await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
   await expect(page.getByText("session:development", { exact: true })).toBeVisible();
+  await page.getByText("Snapshot IDs", { exact: true }).click();
   await expect(page.getByText("state:development-root", { exact: true })).toBeVisible();
 
   const goal = page.locator('[data-target-id="goal:development-main"]');
@@ -254,6 +255,7 @@ test("the stored session and each contextual sequent survive reload", async ({ p
 
   await page.reload();
   await waitForWorkspace(page);
+  await page.getByText("Snapshot IDs", { exact: true }).click();
   await expect(page.getByText("node:development-root", { exact: true }).first()).toBeVisible();
 });
 

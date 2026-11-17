@@ -181,18 +181,71 @@ details[open] > .disclosure::before {
  * Landing: the statement first and large; everything else quiet below it.
  * ------------------------------------------------------------------------------------------- */
 .landing {
-  width: 100%;
-  max-width: 46rem;
-  margin: 0 auto;
-  padding-top: clamp(1.5rem, 8vh, 5rem);
+  max-width: 65rem;
+  padding-top: clamp(2.5rem, 9vh, 6rem);
+}
+
+.heroHeader {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .heroTitle {
   margin: 0;
-  font-size: clamp(1.75rem, 4vw, 2.5rem);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
+  font-size: clamp(2.25rem, 5vw, 4rem);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.landingGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.landingGrid .heroForm {
+  grid-template-rows: auto 1fr auto;
+  border-color: var(--border);
+  padding: clamp(1rem, 3vw, 1.5rem);
+}
+
+.landingGrid .heroForm:focus-within {
+  border-color: var(--focus);
+  box-shadow: var(--shadow-sm);
+}
+
+.exampleCard {
+  display: grid;
+  justify-items: start;
+  align-content: center;
+  gap: var(--space-3);
+  border: 1px solid var(--goal-border);
+  border-radius: var(--radius-card);
+  background: var(--goal-bg);
+  padding: clamp(1rem, 3vw, 1.5rem);
+}
+
+.exampleMath {
+  max-width: 100%;
+  color: var(--goal-fg);
+  font-family: var(--font-math);
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+}
+
+.exampleMath span {
+  padding-inline: 0.2em;
+}
+
+.exampleCard p {
+  color: var(--text-muted);
+}
+
+@media (max-width: 44rem) {
+  .landingGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .heroForm {
@@ -319,7 +372,8 @@ details[open] > .disclosure::before {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--space-2) var(--space-5);
-  padding: 0 var(--space-1);
+  border-top: 1px solid var(--border);
+  padding: var(--space-4) 0 0;
 }
 
 .fileOpen {
@@ -1246,4 +1300,18 @@ details.section[open] > :not(summary) {
   .reviewList dd {
     margin-bottom: var(--space-2);
   }
+}
+
+.symbolPicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.symbolPicker button {
+  min-width: 2rem;
+  min-height: var(--control-height-sm);
+  padding-inline: var(--space-2);
+  font-family: var(--font-math);
+  font-size: var(--text-lg);
 }

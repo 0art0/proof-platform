@@ -24,12 +24,11 @@ async function fillPropositionalDraft(page: Page) {
   await expect(page.getByText("Notation recognized.").first()).toBeVisible();
 }
 
-test("the landing page puts the statement first and the other ways quietly below", async ({
-  page,
-}) => {
+test("the landing page offers a problem editor, an example, and saved proofs", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "What would you like to prove?" })).toBeVisible();
-  await expect(page.getByLabel("New problem statement", { exact: true })).toBeFocused();
+  await expect(page.getByLabel("New problem statement", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("New problem statement", { exact: true })).not.toBeFocused();
   await expect(page.getByLabel("Artifact file", { exact: true })).toBeEnabled();
   await expect(page.getByText("Open a proof file")).toBeVisible();
   await expect(page.getByRole("link", { name: "Explore an example" })).toBeVisible();
@@ -39,6 +38,17 @@ test("the landing page puts the statement first and the other ways quietly below
   await page.getByRole("button", { name: "Resume proof" }).click();
   await expect(page).toHaveURL(/\/sessions\/session(%3A|:)development$/);
   await expect(page.getByLabel("Stored proof session", { exact: true })).toBeVisible();
+});
+
+test("the landing page fits a phone viewport and opens the interactive example", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await expect(page.getByLabel("New problem statement", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Explore an example" }).click();
+  await expect(page.getByRole("heading", { name: "Duplicated conjunction" })).toBeVisible();
 });
 
 test("a title added on the landing page travels with the statement", async ({ page }) => {

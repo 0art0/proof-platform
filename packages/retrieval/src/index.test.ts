@@ -139,7 +139,7 @@ function suggestionIds(
 describe("deterministic structural retrieval", () => {
   it("indexes every theorem variant and move pattern", () => {
     const index = indexFor();
-    expect(index).toMatchObject({ resultCount: 3, moveCount: 29, patternCount: 34 });
+    expect(index).toMatchObject({ resultCount: 3, moveCount: 29, patternCount: 35 });
   });
 
   it("matches representation variants and ranks exact, obligation-free results deterministically", () => {
@@ -283,6 +283,30 @@ describe("deterministic structural retrieval", () => {
         id.includes("apply-implication-hypothesis"),
       ),
     ).toBe(true);
+  });
+
+  it("offers case splitting from a target only when it has a local disjunction", () => {
+    const index = indexFor();
+    const result = index.query(
+      state("r", [{ id: "hypothesis:cases", expression: ["Or", "p", "q", "r"] }]),
+      selection(),
+      { limit: 100 },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      suggestions: expect.arrayContaining([
+        expect.objectContaining({
+          artifactId: "move:split-hypothesis-disjunction",
+          applicability: "requires-input",
+          unresolvedSelectionSlots: ["disjunction"],
+        }),
+      ]),
+    });
+    expect(
+      suggestionIds(index, state("r", [{ id: "hypothesis:p", expression: "p" }])).some((id) =>
+        id.includes("move:split-hypothesis-disjunction"),
+      ),
+    ).toBe(false);
   });
 
   it("filters moves with unavailable artifact dependencies", () => {

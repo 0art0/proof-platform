@@ -11,7 +11,12 @@ import {
   type PreviewTarget,
   type StatementChange,
 } from "./preview-diff";
-import { EvidenceBadge, TransitionClassBadge, transitionMeaning } from "./suggestion-badges";
+import {
+  EvidenceBadge,
+  SORRY_MEANING,
+  TransitionClassBadge,
+  transitionMeaning,
+} from "./suggestion-badges";
 import styles from "./suggestion-panel.module.css";
 
 type ViewProps = Readonly<{ presentation: Presentation; view: WorkspaceView }>;
@@ -27,17 +32,22 @@ export function PreviewDetails({
   view,
 }: ViewProps & Readonly<{ preview: MovePreview }>) {
   const diff = previewDiff(preview);
+  const evidence = transitionEvidenceOf(preview.operation, preview.evidence);
   const chosen = preview.menuSelection === undefined ? [] : chosenItems(preview.menuSelection);
   return (
     <section className={styles.previewPanel} aria-label="Move preview">
       <div className={styles.previewHeading}>
         <strong>Review the changes before applying</strong>
         <span className={styles.badgeRow}>
-          <TransitionClassBadge transitionClass={preview.transitionClass} />
-          <EvidenceBadge evidence={transitionEvidenceOf(preview.operation, preview.evidence)} />
+          {evidence === "sorry" ? null : (
+            <TransitionClassBadge transitionClass={preview.transitionClass} />
+          )}
+          <EvidenceBadge evidence={evidence} />
         </span>
       </div>
-      <p className={styles.previewMeaning}>{transitionMeaning(preview.transitionClass)}</p>
+      <p className={styles.previewMeaning}>
+        {evidence === "sorry" ? SORRY_MEANING : transitionMeaning(preview.transitionClass)}
+      </p>
       <PreviewConstantsNote constants={preview.constants} />
       <dl className={styles.previewCounts}>
         <div>

@@ -5,10 +5,11 @@
  */
 
 .tray {
-  composes: card from "../../ui/controls.module.css";
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  padding: 0 var(--space-1);
 }
 
 .help {
@@ -16,6 +17,7 @@
 }
 
 .trayActions {
+  flex-basis: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -147,6 +149,7 @@
 }
 
 .abstractList {
+  flex-basis: 100%;
   display: grid;
   gap: var(--space-2);
   margin: 0;
