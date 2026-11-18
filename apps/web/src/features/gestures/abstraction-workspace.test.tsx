@@ -301,7 +301,7 @@ describe("abstract selections in the stored workspace", () => {
       "li",
     )!;
     expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
-    expect(within(card).getByRole("button", { name: "Apply this step" })).toBeDisabled();
+    expect(within(card).queryByRole("button", { name: "Apply this step" })).not.toBeInTheDocument();
     expect(callsTo("/move-previews")).toHaveLength(0);
     expect(callsTo("/commands")).toHaveLength(0);
 

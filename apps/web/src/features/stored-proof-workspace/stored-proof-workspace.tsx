@@ -804,36 +804,41 @@ function StatefulStoredWorkspace({
               ? "No suggestions fit this selection"
               : `${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}`,
         };
-  const moveInstructions = (
-    <div key="move-instructions" className={styles.movesArea}>
-      <MoveInstructions
-        sessionId={session.id}
-        node={node}
-        operators={session.operators}
-        selections={selections}
-        presentation={presentation}
-        view={view}
-        enabled={aiExecutor}
-        moveAuthorEnabled={aiMoveAuthor}
-        readOnly={readOnly}
-        busy={mutationPending}
-        textareaRef={instructionsRef}
-        onApplyStart={beginExecutorApply}
-        onApplyEnd={endExecutorApply}
-        onApplied={adoptExecutorResult}
-      />
-      <ProofPlanPanel
-        sessionId={session.id}
-        node={node}
-        enabled={aiPlanner}
-        readOnly={readOnly}
-        busy={mutationPending}
-        onApplyStart={beginExecutorApply}
-        onApplyEnd={endExecutorApply}
-        onApplied={adoptPlanMove}
-      />
-    </div>
-  );
+  const moveInstructions =
+    !aiExecutor && !aiPlanner ? null : (
+      <div key="move-instructions" className={styles.movesArea}>
+        {aiExecutor ? (
+          <MoveInstructions
+            sessionId={session.id}
+            node={node}
+            operators={session.operators}
+            selections={selections}
+            presentation={presentation}
+            view={view}
+            enabled={aiExecutor}
+            moveAuthorEnabled={aiMoveAuthor}
+            readOnly={readOnly}
+            busy={mutationPending}
+            textareaRef={instructionsRef}
+            onApplyStart={beginExecutorApply}
+            onApplyEnd={endExecutorApply}
+            onApplied={adoptExecutorResult}
+          />
+        ) : null}
+        {aiPlanner ? (
+          <ProofPlanPanel
+            sessionId={session.id}
+            node={node}
+            enabled={aiPlanner}
+            readOnly={readOnly}
+            busy={mutationPending}
+            onApplyStart={beginExecutorApply}
+            onApplyEnd={endExecutorApply}
+            onApplied={adoptPlanMove}
+          />
+        ) : null}
+      </div>
+    );
   // "Find more results" is a library top-up (docs/ai-agents-architecture.md §2); where it is
   // unavailable the button is disabled and says why. "Describe a move" is offered only when the
   // move-instruction box can take a description.

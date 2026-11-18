@@ -220,12 +220,12 @@ describe("SuggestionCard", () => {
     const badges = within(card).getByRole("group", { name: "Classification of Modus ponens" });
     expect(within(badges).getByText("Near miss")).toBeVisible();
     expect(within(badges).getByText("Result application")).toBeVisible();
-    expect(within(card).getByText(/Applies if/)).toBeVisible();
     const details = within(card).getByText("Why this was suggested");
     const explanation = details.closest("details") as HTMLDetailsElement;
     expect(explanation).not.toHaveAttribute("open");
     explanation.open = true;
     fireEvent(explanation, new Event("toggle"));
+    expect(within(card).getByText(/Applies if/)).toBeVisible();
     const provenanceAndMatch = within(card).getByRole("group", {
       name: "Provenance and match for Modus ponens",
     });

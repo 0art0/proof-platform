@@ -125,22 +125,15 @@ export function SuggestionCard({
       data-category={category}
       data-active={active ? "true" : undefined}
     >
-      <header className={styles.cardHeader}>
-        <div>
-          <h3>
-            {suggestion.name}
-            {qualifier === undefined ? null : (
-              <span className={styles.cardQualifier} data-testid="card-qualifier">
-                {" "}
-                ({qualifier})
-              </span>
-            )}
-          </h3>
-        </div>
-        <span className={styles.applicability} data-applicability={suggestion.applicability}>
-          {suggestion.applicability === "applicable" ? "Ready to preview" : "Needs input"}
-        </span>
-      </header>
+      <h3>
+        {suggestion.name}
+        {qualifier === undefined ? null : (
+          <span className={styles.cardQualifier} data-testid="card-qualifier">
+            {" "}
+            ({qualifier})
+          </span>
+        )}
+      </h3>
       <div
         className={styles.badgeRow}
         aria-label={`Classification of ${suggestion.name}`}
@@ -167,60 +160,51 @@ export function SuggestionCard({
           {transitionMeaning(transitionClass)}
         </p>
       )}
-      {suggestion.reasons[0] === undefined ? null : (
-        <p className={styles.reasonLead} data-suggestion-reason>
-          <NaturalLanguageText text={suggestion.reasons[0]} />
-        </p>
-      )}
-      {suggestion.reasons.length > 1 ||
-      suggestion.selectionMatches.length > 0 ||
-      suggestion.substitutions.length > 0 ? (
-        <details className={styles.explanationDetails}>
-          <summary>Why this was suggested</summary>
-          {suggestion.reasons.length > 1 ? (
-            <ul aria-label={`Reasons for ${suggestion.name}`}>
-              {suggestion.reasons.slice(1).map((reason, index) => (
-                <li key={`${suggestion.id}:reason:${index + 1}`} data-suggestion-reason>
-                  <NaturalLanguageText text={reason} />
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          <div
-            className={styles.badgeRow}
-            aria-label={`Provenance and match for ${suggestion.name}`}
-            role="group"
-          >
-            <ProvenanceBadge />
-            <MatchBadge
-              exact={suggestion.exactRepresentationMatch}
-              abstractionFit={suggestion.abstractionFit}
-            />
-          </div>
-          <code>{suggestion.artifactId}</code>
-          <ul aria-label={`Matched selections for ${suggestion.name}`}>
-            {suggestion.selectionMatches.map((match) => (
-              <li key={`${match.selectionId}:${match.selectionSlotId ?? match.patternId}`}>
-                {match.selectionId} → {match.selectionSlotId ?? match.patternId}
+      <details className={styles.explanationDetails}>
+        <summary>Why this was suggested</summary>
+        {suggestion.reasons.length === 0 ? null : (
+          <ul aria-label={`Reasons for ${suggestion.name}`}>
+            {suggestion.reasons.map((reason, index) => (
+              <li key={`${suggestion.id}:reason:${index}`} data-suggestion-reason>
+                <NaturalLanguageText text={reason} />
               </li>
             ))}
           </ul>
-          {suggestion.substitutions.length === 0 ? null : (
-            <div className={styles.cardSection}>
-              <strong>Instantiation</strong>
-              <ul aria-label={`Instantiation for ${suggestion.name}`}>
-                {suggestion.substitutions.map(({ symbol, expression }) => (
-                  <li key={symbol}>
-                    <InlineLatex
-                      latex={`${presentation.latex(symbol)} \\mapsto ${presentation.latex(expression)}`}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </details>
-      ) : null}
+        )}
+        <div
+          className={styles.badgeRow}
+          aria-label={`Provenance and match for ${suggestion.name}`}
+          role="group"
+        >
+          <ProvenanceBadge />
+          <MatchBadge
+            exact={suggestion.exactRepresentationMatch}
+            abstractionFit={suggestion.abstractionFit}
+          />
+        </div>
+        <code>{suggestion.artifactId}</code>
+        <ul aria-label={`Matched selections for ${suggestion.name}`}>
+          {suggestion.selectionMatches.map((match) => (
+            <li key={`${match.selectionId}:${match.selectionSlotId ?? match.patternId}`}>
+              {match.selectionId} → {match.selectionSlotId ?? match.patternId}
+            </li>
+          ))}
+        </ul>
+        {suggestion.substitutions.length === 0 ? null : (
+          <div className={styles.cardSection}>
+            <strong>Instantiation</strong>
+            <ul aria-label={`Instantiation for ${suggestion.name}`}>
+              {suggestion.substitutions.map(({ symbol, expression }) => (
+                <li key={symbol}>
+                  <InlineLatex
+                    latex={`${presentation.latex(symbol)} \\mapsto ${presentation.latex(expression)}`}
+                  />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </details>
       {suggestion.predictedObligations === undefined ? null : (
         <details className={styles.nearMiss}>
           <summary>
@@ -297,14 +281,16 @@ export function SuggestionCard({
             ? "Preparing preview…"
             : "Preview changes"}
         </button>
-        <button
-          type="button"
-          className={styles.applyButton}
-          disabled={mutationPending || preview === undefined}
-          onClick={actions.onApply}
-        >
-          {active && move.kind === "applying" ? "Applying…" : "Apply this step"}
-        </button>
+        {preview === undefined && !(active && move.kind === "applying") ? null : (
+          <button
+            type="button"
+            className={styles.applyButton}
+            disabled={mutationPending || preview === undefined}
+            onClick={actions.onApply}
+          >
+            {active && move.kind === "applying" ? "Applying…" : "Apply this step"}
+          </button>
+        )}
       </div>
       {previewReason === undefined ? null : (
         <p id={reasonId} className={styles.previewReason}>

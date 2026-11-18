@@ -2,8 +2,8 @@
  * The suggestions rail (Folio). It sits beside the proof in a 24 to 28rem column (see
  * stored-proof-workspace.module.css), so every card must hold up at about 400px: tags wrap,
  * the two buttons share a row, and typeset maths scrolls inside its own box instead of
- * widening the card. A card of cards: each suggestion is a plain card with its name and
- * one status pill, a single row of neutral tags, and Preview (secondary) then Apply (primary).
+ * widening the card. A card of cards: each suggestion is a plain card with its name,
+ * classification, a disclosure for match details, and actions for the current stage.
  * Colour appears only where it carries meaning: strengthening (goal blue), weakening and sorry
  * (warning), and the +/- markers of a preview. The previewPanel/previewHeading/previewMeaning/
  * previewCounts/badgeRow classes are also used by the move executor's preview card.
@@ -142,36 +142,14 @@
   border-color: var(--border-control);
 }
 
-.cardHeader {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
 .suggestionCard h3 {
   margin: 0;
   overflow-wrap: anywhere;
 }
 
-.cardHeader > div {
-  min-width: 0;
-}
-
 .cardQualifier {
   color: var(--text-muted);
   font-weight: 400;
-}
-
-/* The one status pill: neutral; "Needs input" is outlined rather than coloured. */
-.applicability {
-  composes: pill from "../../ui/controls.module.css";
-  flex: none;
-}
-
-.applicability[data-applicability="requires-input"] {
-  border-color: var(--border-control);
-  background: transparent;
 }
 
 .suggestionCard details > summary {
@@ -183,11 +161,6 @@
 .suggestionCard .explanationDetails > * + *,
 .suggestionCard .nearMiss > * + * {
   margin-top: var(--space-2);
-}
-
-.reasonLead {
-  margin: 0;
-  color: var(--text-muted);
 }
 
 .transitionMeaning {

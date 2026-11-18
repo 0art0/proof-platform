@@ -352,7 +352,10 @@ describe("StoredProofWorkspace", () => {
       "Server first",
       "Server second",
     ]);
-    expect(screen.getByText("Server-supplied second reason")).toBeVisible();
+    const reason = screen.getByText("Server-supplied second reason");
+    expect(reason).not.toBeVisible();
+    (reason.closest("details") as HTMLDetailsElement).open = true;
+    expect(reason).toBeVisible();
   });
 
   it("shows a stale state when the service rejects an outdated snapshot anchor", async () => {
@@ -443,7 +446,9 @@ describe("StoredProofWorkspace", () => {
     rerender(
       <StoredProofWorkspace session={{ ...session, currentNodeId: nextNode.id }} node={nextNode} />,
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Select a statement or expression");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Click a goal, an assumption, or part of a formula",
+    );
 
     await act(async () => {
       pending.resolve(
@@ -480,11 +485,11 @@ describe("StoredProofWorkspace", () => {
     const card = await screen.findByText("Split goal conjunction");
     const container = card.closest("[data-suggestion-id]");
     expect(container).toHaveAttribute("data-applicability", "applicable");
-    expect(screen.getByText("The selected goal is a conjunction.")).toBeVisible();
     const explanation = screen
       .getByText("Why this was suggested")
       .closest("details") as HTMLDetailsElement;
     explanation.open = true;
+    expect(screen.getByText("The selected goal is a conjunction.")).toBeVisible();
     fireEvent(explanation, new Event("toggle"));
     expect(screen.getByText("The target slot is fully matched.")).toBeVisible();
     expect(screen.getByText("selection:primary → target")).toBeVisible();
@@ -514,7 +519,7 @@ describe("StoredProofWorkspace", () => {
     expect(within(card).getByText("Choose from the current context to continue")).toBeVisible();
     expect(within(card).getByText(/Choose the missing value from the options/)).toBeVisible();
     expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
-    expect(within(card).getByRole("button", { name: "Apply this step" })).toBeDisabled();
+    expect(within(card).queryByRole("button", { name: "Apply this step" })).not.toBeInTheDocument();
   });
 
   it("previews without advancing, then applies and clears transient evidence", async () => {
@@ -1303,13 +1308,11 @@ describe("StoredProofWorkspace move instructions", () => {
     expect(await screen.findByText(/AI step 1 of 2 from your description/)).toBeVisible();
   });
 
-  it("shows the box beside the proof, disabled with a reason when the model is not configured", () => {
+  it("leaves unavailable AI tools out of the workspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
-    const panel = screen.getByRole("region", { name: "Move instructions" });
-    expect(within(panel).getByRole("textbox", { name: "Describe a step" })).toBeDisabled();
-    const preview = within(panel).getByRole("button", { name: "Preview" });
-    expect(preview).toBeDisabled();
-    expect(preview).toHaveAccessibleDescription(/no AI provider is configured/);
+    expect(screen.queryByRole("region", { name: "Move instructions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Proof plan" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Available suggestions" })).toBeVisible();
   });
 
   it("is disabled with the read-only reason in an imported session", () => {
@@ -1892,7 +1895,7 @@ describe("StoredProofWorkspace layout", () => {
       "fetch",
       mockWithHistory(() => Promise.reject(new Error("Unexpected request"))),
     );
-    render(<StoredProofWorkspace session={session} node={node} />);
+    render(<StoredProofWorkspace session={session} node={node} aiExecutor />);
     expect(panelOrder()).toEqual(["proof", "suggestions", "moves"]);
   });
 

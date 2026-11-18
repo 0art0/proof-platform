@@ -290,23 +290,23 @@ test("modifier multiselection controls two-selection applicability", async ({ pa
   expect((await selectRange(goal, ["And", "p", "p", "q"])).selected).toBeDefined();
   const move = page.locator('[data-artifact-id="move:expand-hypothesis-conjunction"]');
   await expect(move).toBeVisible();
-  await expect(move.locator('[data-applicability="requires-input"]')).toBeVisible();
+  await expect(move).toHaveAttribute("data-applicability", "requires-input");
 
   expect(
     (await selectRange(conjunction, ["And", "p", "q"], { modifier: true })).selected,
   ).toBeDefined();
   await expect(page.locator("[data-selection-key]")).toHaveCount(2);
-  await expect(move.locator('[data-applicability="applicable"]')).toBeVisible();
+  await expect(move).toHaveAttribute("data-applicability", "applicable");
 
   await selectRange(conjunction, ["And", "p", "q"], { modifier: true });
   await expect(page.locator("[data-selection-key]")).toHaveCount(1);
-  await expect(move.locator('[data-applicability="requires-input"]')).toBeVisible();
+  await expect(move).toHaveAttribute("data-applicability", "requires-input");
 
   await selectRange(conjunction, ["And", "p", "q"], { modifier: true });
-  await expect(move.locator('[data-applicability="applicable"]')).toBeVisible();
+  await expect(move).toHaveAttribute("data-applicability", "applicable");
   await selectRange(goal, ["And", "p", "p", "q"], { modifier: true });
   await expect(page.locator("[data-selection-key]")).toHaveCount(1);
-  await expect(move.locator('[data-applicability="requires-input"]')).toBeVisible();
+  await expect(move).toHaveAttribute("data-applicability", "requires-input");
 });
 
 test("stale anchors are rejected and the persisted order and reasons are read back unchanged", async ({
@@ -415,7 +415,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   expect((await selectRange(goal, ["And", "p", "p", "q"])).selected).toBeDefined();
   const splitCard = page.locator('[data-artifact-id="move:split-goal-conjunction"]');
   await expect(splitCard).toBeVisible();
-  await expect(splitCard.locator('[data-applicability="applicable"]')).toBeVisible();
+  await expect(splitCard).toHaveAttribute("data-applicability", "applicable");
   await expect(splitCard.locator('[data-transition-class="equivalence"]')).toBeVisible();
   expect(await splitCard.locator("[data-suggestion-reason]").count()).toBeGreaterThan(0);
   await splitCard.getByText("Why this was suggested").click();
@@ -450,7 +450,9 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   expect(firstChildId).toBeTruthy();
   expect(firstChildId).not.toBe(rootNodeId);
   await expect(
-    page.getByText("Select a statement or expression to see suggestions."),
+    page.getByText(
+      "Click a goal, an assumption, or part of a formula to see what you can do next.",
+    ),
   ).toBeVisible();
 
   const staleApply = await page.evaluate(
@@ -483,7 +485,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
     (await selectRange(conjunction, ["And", "p", "q"], { modifier: true })).selected,
   ).toBeDefined();
   const expandCard = page.locator('[data-artifact-id="move:expand-hypothesis-conjunction"]');
-  await expect(expandCard.locator('[data-applicability="applicable"]')).toBeVisible();
+  await expect(expandCard).toHaveAttribute("data-applicability", "applicable");
   await expandCard.getByRole("button", { name: "Preview changes" }).click();
   await expect(expandCard.getByLabel("Move preview")).toBeVisible();
   await expandCard.getByRole("button", { name: "Apply this step" }).click();
@@ -550,38 +552,10 @@ test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw 
   expect(raw.state.id).toBe("state:development-root");
 });
 
-test("the move-instruction box is visible and explains why it is off without an AI provider", async ({
-  page,
-}) => {
+test("the workspace omits AI tools when the service has no provider", async ({ page }) => {
   await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
-
-  // The end-to-end deployment configures no AI provider, so the box is shown but disabled, and
-  // says why in place instead of hiding.
-  const panel = page.getByRole("region", { name: "Move instructions" });
-  await expect(panel).toBeVisible();
-  const description = panel.getByRole("textbox", { name: "Describe a step" });
-  await expect(description).toBeDisabled();
-  await expect(description).toHaveAttribute(
-    "placeholder",
-    "Describe a step, e.g. 'split into cases on whether n is even'",
-  );
-  const preview = panel.getByRole("button", { name: "Preview", exact: true });
-  await expect(preview).toBeDisabled();
-  await expect(panel).toContainText("no AI provider is configured");
-  // Nothing in the existing flow is displaced: the suggestion panel is still there.
+  await expect(page.getByRole("region", { name: "Move instructions" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Proof plan" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Available suggestions" })).toBeVisible();
-});
-
-test("the proof-plan panel is visible and explains why it is off without an AI provider", async ({
-  page,
-}) => {
-  await page.goto("/sessions/session%3Adevelopment");
-  await waitForWorkspace(page);
-
-  const panel = page.getByRole("region", { name: "Proof plan" });
-  await expect(panel).toBeVisible();
-  await expect(panel).toContainText("writes the whole proof as numbered steps");
-  await expect(panel.getByRole("button", { name: "Write a proof plan" })).toBeDisabled();
-  await expect(panel).toContainText("the planner or the step translator is not configured");
 });

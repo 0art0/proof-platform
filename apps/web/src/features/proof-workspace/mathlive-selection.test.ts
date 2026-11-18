@@ -95,13 +95,28 @@ describe("interactive LaTeX metadata", () => {
 
   it("only wraps leaves: removing the annotations gives the rendering back (property)", () => {
     const strip = (latex: string) => {
-      let previous;
-      let current = latex;
-      do {
-        previous = current;
-        current = current.replace(/\\htmlData\{[^{}]*\}\{((?:[^{}]|\{[^{}]*\})*)\}/g, "$1");
-      } while (current !== previous);
-      return current;
+      const annotation = /\\htmlData\{[^{}]*\}\{/;
+      let match: RegExpExecArray | null;
+      while ((match = annotation.exec(latex)) !== null) {
+        const bodyStart = match.index + match[0].length;
+        // An annotated body can contain several nested groups, including an accent over a
+        // named function. Escaped braces are literal delimiters, so they do not change depth.
+        const tokens = /\\.|[{}]/g;
+        tokens.lastIndex = bodyStart;
+        let depth = 1;
+        let token: RegExpExecArray | null;
+        while ((token = tokens.exec(latex)) !== null) {
+          if (token[0] === "{") depth += 1;
+          if (token[0] === "}") depth -= 1;
+          if (depth === 0) break;
+        }
+        if (token === null) throw new Error("Unclosed interactive LaTeX annotation");
+        latex =
+          latex.slice(0, match.index) +
+          latex.slice(bodyStart, token.index) +
+          latex.slice(token.index + 1);
+      }
+      return latex;
     };
     const name = fc.stringMatching(/^[A-Z][a-z]{1,8}$/);
     const variable = fc.constantFrom("a", "b", "c", "m", "r", "t", "x", "n");
@@ -115,7 +130,7 @@ describe("interactive LaTeX metadata", () => {
         expect(annotated).not.toMatch(/\\[A-Za-z]+\\htmlData/);
         expect(annotated).not.toMatch(/\\mathrm\{[^{}]*\\htmlData/);
       }),
-      { numRuns: 150 },
+      { numRuns: 150, examples: [["Arc", "Aa", "a", "a"]] },
     );
   });
 
