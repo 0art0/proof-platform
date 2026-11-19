@@ -44,7 +44,8 @@ export type ResultAdapterResult =
  * way, `applicationDirections` keep their meaning. Forward application derives
  * `B` from hypotheses matching the antecedent, and backward application reduces
  * a goal `B` to goals `A`. The cost is that an implication result is no longer a
- * premise-free `Implies`, so it cannot be a `rewrite-with-implication` source.
+ * premise-free `Implies`. The original rule is also retained for generalized rewriting,
+ * which uses it to transport directional relations through predicates.
  * Equivalences, equalities and other statements are never split, so they remain
  * premise-free rewrite sources when they have no premises.
  */
@@ -63,6 +64,11 @@ export function libraryResultToKernelResult(
     ];
     let conclusion: PlainMathJson = structuredClone(result.statement.expression);
     const implication = binaryOperands(conclusion, "Implies");
+    const congruence = result.congruenceSymbols;
+    const congruenceRule =
+      implication !== undefined
+        ? { premises: [...premises], conclusion: { expression: conclusion } }
+        : undefined;
     if (implication !== undefined) {
       const [antecedent, consequent] = implication;
       const conjuncts = operands(antecedent, "And");
@@ -78,6 +84,8 @@ export function libraryResultToKernelResult(
         sort: structuredClone(sort),
       })),
       premises,
+      ...(congruence === undefined ? {} : { congruenceSymbols: [...congruence] }),
+      ...(congruenceRule === undefined ? {} : { congruenceRule }),
       conclusion: { expression: conclusion },
       directions: [...result.applicationDirections] as ResultApplicationDirection[],
     };

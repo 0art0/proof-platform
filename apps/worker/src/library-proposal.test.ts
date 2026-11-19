@@ -149,6 +149,43 @@ describe("judging a top-up proposal that declares a constant", () => {
     expect(again.rejectedConstants).toEqual([]);
   });
 
+  it("keeps valid congruence tags on admission and rejects an unrelated symbol", () => {
+    const multiple = (symbol: string) => ["Multiply", symbol, ["Lcm", "a", "b"]];
+    const conclusion = ["Equal", multiple("a"), multiple("b")];
+    const judgeTagged = (congruenceSymbols: readonly string[]) =>
+      evaluateTopUpProposal({
+        callId: "llm-call:top-up",
+        context,
+        proposal: {
+          ...proposal,
+          results: [
+            {
+              ...proposal.results[0],
+              statement: { expression: conclusion },
+              premises: [{ expression: ["Equal", "a", "b"] }],
+              patterns: [{ ...proposal.results[0]?.patterns[0], expression: conclusion }],
+              congruenceSymbols,
+            },
+          ],
+        } as never,
+        operators: [DIVIDES, GCD],
+        profile,
+        existing: [],
+      });
+
+    expect(judgeTagged(["Multiply"]).results).toMatchObject([
+      { artifact: { approval: { status: "approved" }, congruenceSymbols: ["Multiply"] } },
+    ]);
+    const rejected = judgeTagged(["Gcd"]);
+    expect(rejected.results).toEqual([]);
+    expect(rejected.rejected).toMatchObject([
+      {
+        id: "result:lcm-multiples",
+        reasons: ["The congruence symbol Gcd is not applied in the statement."],
+      },
+    ]);
+  });
+
   it("sets the constant aside when it clashes, and the results that need it with it", () => {
     const clashing = { ...LCM, id: DIVIDES.id } as OperatorDeclaration;
     const rejected = evaluateTopUpProposal({

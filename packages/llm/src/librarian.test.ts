@@ -120,6 +120,30 @@ function wireProposal(
   return { result: { kind: "library-proposal", results, newConstants } };
 }
 
+it("records proposed congruence heads while reading old untagged responses", () => {
+  const call = prepared();
+  const response = (results: ReturnType<typeof wireResult>[]) => ({
+    kind: "library-proposal",
+    results,
+    newConstants: [],
+  });
+  const tagged = validateLlmOutput(
+    call,
+    response([wireResult({ congruenceSymbols: ["Multiply"] })]),
+  );
+  expect(tagged).toMatchObject({
+    ok: true,
+    output: { results: [{ congruenceSymbols: ["Multiply"] }] },
+  });
+  for (const untagged of [wireResult(), wireResult({ congruenceSymbols: [] })]) {
+    const parsed = validateLlmOutput(call, response([untagged]));
+    expect(parsed).toMatchObject({ ok: true, output: { kind: "library-proposal" } });
+    if (parsed.ok && parsed.output.kind === "library-proposal") {
+      expect(parsed.output.results[0]).not.toHaveProperty("congruenceSymbols");
+    }
+  }
+});
+
 describe("librarian context", () => {
   it("builds a frozen envelope of the request kind, background, constants and existing results", () => {
     const built = buildLibrarianContext(request());

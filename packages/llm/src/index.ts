@@ -38,6 +38,7 @@ import {
   LIBRARIAN_SYSTEM_MESSAGE,
   librarianContextSchema,
   librarianOutputSchema,
+  librarianReadableWireResultSchema,
   librarianWireResultSchema,
   normalizeLibrarianWireResult,
 } from "./librarian";
@@ -1538,7 +1539,7 @@ export function validateLlmOutput(
   }
 
   if (call.role === "librarian") {
-    const wireOutput = safeParsePlain(librarianWireResultSchema, candidate);
+    const wireOutput = safeParsePlain(librarianReadableWireResultSchema, candidate);
     const output =
       wireOutput === undefined || call.envelope.role !== "librarian"
         ? undefined

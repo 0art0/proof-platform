@@ -52,7 +52,7 @@ describe("createAiRuntime", () => {
     expect(runtime.librarian?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
       model: DEFAULT_LIBRARIAN_MODEL,
-      promptVersion: "librarian-v3",
+      promptVersion: "librarian-v4",
       maxOutputTokens: DEFAULT_LIBRARIAN_MAX_OUTPUT_TOKENS,
       reasoningEffort: DEFAULT_LIBRARIAN_REASONING_EFFORT,
     });

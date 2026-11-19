@@ -63,6 +63,7 @@ export const LIBRARY_PACK_IDS = [
   "pack:sets",
   "pack:divisibility",
   "pack:closure",
+  "pack:modular-arithmetic",
 ] as const;
 export type LibraryPackId = (typeof LIBRARY_PACK_IDS)[number];
 
@@ -142,6 +143,30 @@ export const DIVISIBILITY_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] 
   },
 ];
 
+/** Congruence means that the modulus divides the difference, including at modulus zero. */
+export const MODULAR_OPERATOR_DECLARATIONS: readonly OperatorDeclaration[] = [
+  {
+    id: operatorIdSchema.parse("operator:congruent"),
+    symbol: "Congruent",
+    signature: {
+      parameters: [INTEGER_SORT, INTEGER_SORT, INTEGER_SORT],
+      result: PROPOSITION_SORT,
+    },
+    presentation: {
+      displayName: "congruent modulo",
+      latex: { template: String.raw`#1\equiv #2\pmod{#3}`, precedence: "relation" },
+      naturalLanguage: [
+        {
+          template: "#1 is congruent to #2 modulo #3",
+          proposition: true,
+          negated: "#1 is not congruent to #2 modulo #3",
+        },
+      ],
+      domains: ["number-theory"],
+    },
+  },
+];
+
 /**
  * The closure pack's operator: a Kuratowski-style closure of a set of elements, the corpus's
  * research-notation case (design plan §21.5). It is presented as `\operatorname{cl}(A)` and read
@@ -199,6 +224,7 @@ type ResultSpec = Readonly<{
   directions: readonly ApplicationDirection[];
   patterns: readonly PatternSpec[];
   variants?: readonly VariantTransformation[];
+  congruenceSymbols?: readonly string[];
 }>;
 
 type PackSpec = Readonly<{
@@ -261,6 +287,50 @@ const real = (symbol: string) => [symbol, REAL_SORT] as const;
 const set = (symbol: string) => [symbol, ELEMENT_SET_SORT] as const;
 const element = (symbol: string) => [symbol, ELEMENT_SORT] as const;
 const integer = (symbol: string) => [symbol, INTEGER_SORT] as const;
+
+type CongruenceSpec = Omit<ResultSpec, "congruenceSymbols" | "directions" | "patterns"> &
+  Readonly<{
+    head: string;
+    premises: readonly [PlainMathJson, ...PlainMathJson[]];
+  }>;
+
+function congruenceRule({ head, statement, ...rule }: CongruenceSpec): ResultSpec {
+  const implication = Array.isArray(statement) && statement[0] === "Implies";
+  return {
+    ...rule,
+    statement,
+    congruenceSymbols: [head],
+    directions: ["forward", "backward"],
+    patterns: rulePatterns(
+      rule.premises[0],
+      implication ? (statement[2] as PlainMathJson) : statement,
+    ),
+  };
+}
+
+const notCongruence = congruenceRule({
+  slug: "not-equivalence-congruence",
+  name: "Negation preserves equivalence",
+  description: "Negating equivalent propositions gives equivalent negations.",
+  head: "Not",
+  parameters: [p("p"), p("q")],
+  premises: [["Equivalent", "p", "q"]],
+  statement: ["Equivalent", ["Not", "p"], ["Not", "q"]],
+  latex: String.raw`p\iff q\vdash (\neg p)\iff(\neg q)`,
+  naturalLanguage: "If p and q are equivalent, their negations are equivalent.",
+});
+
+const addEqualityCongruence = congruenceRule({
+  slug: "add-equality-congruence",
+  name: "Addition preserves equality",
+  description: "Adding a fixed number preserves equality.",
+  head: "Add",
+  parameters: [real("x"), real("y"), real("z")],
+  premises: [["Equal", "x", "y"]],
+  statement: ["Equal", ["Add", "x", "z"], ["Add", "y", "z"]],
+  latex: String.raw`x=y\vdash x+z=y+z`,
+  naturalLanguage: "If x equals y, then x + z equals y + z.",
+});
 
 const LOGIC_PACK: PackSpec = {
   id: "pack:elementary-logic",
@@ -355,6 +425,7 @@ const LOGIC_PACK: PackSpec = {
         },
       ],
     },
+    notCongruence,
   ],
 };
 
@@ -393,6 +464,7 @@ const EQUALITY_PACK: PackSpec = {
       patterns: rulePatterns(["Equal", "x", "y"], ["Equal", "x", "z"]),
       variants: ["bundle-premises"],
     },
+    addEqualityCongruence,
   ],
 };
 
@@ -421,33 +493,138 @@ function transitivity(
   };
 }
 
-function addMonotonicity(
-  slug: string,
-  name: string,
-  relation: "Less" | "LessEqual",
-  symbol: string,
-  phrase: string,
-): ResultSpec {
-  const conclusion: PlainMathJson = [relation, ["Add", "x", "z"], ["Add", "y", "z"]];
-  return {
-    slug,
-    name,
+const ORDER_RELATIONS = [
+  { head: "Less", slug: "less", latex: "<", phrase: "less than", ascending: true },
+  {
+    head: "LessEqual",
+    slug: "less-equal",
+    latex: String.raw`\le`,
+    phrase: "at most",
+    ascending: true,
+  },
+  { head: "Greater", slug: "greater", latex: ">", phrase: "greater than", ascending: false },
+  {
+    head: "GreaterEqual",
+    slug: "greater-equal",
+    latex: String.raw`\ge`,
+    phrase: "at least",
+    ascending: false,
+  },
+] as const;
+
+type OrderRelation = (typeof ORDER_RELATIONS)[number];
+type OperandPosition = "left" | "right";
+
+const OPERAND_POSITIONS: readonly OperandPosition[] = ["left", "right"];
+
+function orderOperations(relation: OrderRelation, position: OperandPosition): ResultSpec[] {
+  const { head, slug, latex, phrase } = relation;
+  const other = position === "right";
+  const args = (variable: string) => (other ? ["z", variable] : [variable, "z"]);
+  const addition: PlainMathJson = [head, ["Add", ...args("x")], ["Add", ...args("y")]];
+  const product: PlainMathJson = [head, ["Multiply", ...args("x")], ["Multiply", ...args("y")]];
+  const sum = (variable: string) => (other ? `z+${variable}` : `${variable}+z`);
+  const multiple = (variable: string) => (other ? `z ${variable}` : `${variable} z`);
+  const parameters = [real("x"), real("y"), real("z")];
+  const premise: PlainMathJson = [head, "x", "y"];
+  const addRule = congruenceRule({
+    slug: `${slug}-add-monotonicity${other ? "-right" : ""}`,
+    name:
+      !other && relation.ascending
+        ? `Monotonicity of addition for ${head === "Less" ? "<" : "≤"}`
+        : `Monotonicity of addition for ${phrase} (${position} operand)`,
     description: `Adding the same number to both sides preserves "${phrase}".`,
+    head: "Add",
+    parameters,
+    premises: [premise],
+    statement: addition,
+    latex: `x${latex} y\\vdash ${sum("x")}${latex} ${sum("y")}`,
+    naturalLanguage: `If x is ${phrase} y, then ${sum("x")} is ${phrase} ${sum("y")}.`,
+  });
+  const reverseProduct: PlainMathJson = [
+    head,
+    ["Multiply", ...args("y")],
+    ["Multiply", ...args("x")],
+  ];
+  return [
+    !other && relation.ascending ? { ...addRule, variants: ["contrapositive"] } : addRule,
+    congruenceRule({
+      slug: `${slug}-multiply-positive-${position}`,
+      name: `Monotonicity of multiplication by a positive number for ${phrase} (${position} operand)`,
+      description: `Multiplying both sides by a positive number preserves "${phrase}".`,
+      head: "Multiply",
+      parameters,
+      premises: [premise, ["Greater", "z", 0]],
+      statement: product,
+      latex: `x${latex} y,\\ z>0\\vdash ${multiple("x")}${latex} ${multiple("y")}`,
+      naturalLanguage: `If x is ${phrase} y and z is positive, then ${multiple("x")} is ${phrase} ${multiple("y")}.`,
+    }),
+    congruenceRule({
+      slug: `${slug}-multiply-negative-${position}`,
+      name: `Antitonicity of multiplication by a negative number for ${phrase} (${position} operand)`,
+      description: `Multiplying both sides by a negative number reverses "${phrase}".`,
+      head: "Multiply",
+      parameters,
+      premises: [premise, ["Less", "z", 0]],
+      statement: reverseProduct,
+      latex: `x${latex} y,\\ z<0\\vdash ${multiple("y")}${latex} ${multiple("x")}`,
+      naturalLanguage: `If x is ${phrase} y and z is negative, then ${multiple("y")} is ${phrase} ${multiple("x")}.`,
+    }),
+  ];
+}
+
+function compareEndpoints(
+  relation: OrderRelation,
+  comparison: OrderRelation,
+  position: OperandPosition,
+): ResultSpec {
+  const left = position === "left";
+  const oldValue: PlainMathJson = left ? [comparison.head, "x", "z"] : [comparison.head, "z", "x"];
+  const newValue: PlainMathJson = left ? [comparison.head, "y", "z"] : [comparison.head, "z", "y"];
+  const reverse = (relation.ascending === comparison.ascending) === left;
+  const statement: PlainMathJson = [
+    "Implies",
+    ...(reverse ? [newValue, oldValue] : [oldValue, newValue]),
+  ];
+  const comparisonText = (variable: string) =>
+    left ? `${variable}${comparison.latex} z` : `z${comparison.latex} ${variable}`;
+  const comparisonWords = (variable: string) =>
+    left ? `${variable} is ${comparison.phrase} z` : `z is ${comparison.phrase} ${variable}`;
+  const [from, to] = reverse ? ["y", "x"] : ["x", "y"];
+  return congruenceRule({
+    slug: `${relation.slug}-transport-${comparison.slug}-${position}`,
+    name: `Transport ${phraseFor(comparison)} along ${phraseFor(relation)} (${position} operand)`,
+    description: `Changing the ${position} operand of a comparison along the order yields an implication.`,
+    head: comparison.head,
     parameters: [real("x"), real("y"), real("z")],
-    premises: [[relation, "x", "y"]],
-    statement: conclusion,
-    latex: `x${symbol} y\\vdash x+z${symbol} y+z`,
-    naturalLanguage: `If x is ${phrase} y, then x + z is ${phrase} y + z.`,
-    directions: ["forward", "backward"],
-    patterns: rulePatterns([relation, "x", "y"], conclusion),
-    variants: ["contrapositive"],
-  };
+    premises: [[relation.head, "x", "y"]],
+    statement,
+    latex: `x${relation.latex} y\\vdash (${comparisonText(from)})\\implies(${comparisonText(to)})`,
+    naturalLanguage: `If x is ${relation.phrase} y, then ${comparisonWords(from)} implies ${comparisonWords(to)}.`,
+  });
+}
+
+const phraseFor = (relation: OrderRelation) => `“${relation.phrase}”`;
+
+function negateOrder(relation: OrderRelation): ResultSpec {
+  const { head, slug, latex, phrase } = relation;
+  return congruenceRule({
+    slug: `${slug}-negation-antitonicity`,
+    name: `Negation reverses ${phraseFor(relation)}`,
+    description: "Multiplying by −1 reverses the order.",
+    head: "Negate",
+    parameters: [real("x"), real("y")],
+    premises: [[head, "x", "y"]],
+    statement: [head, ["Negate", "y"], ["Negate", "x"]],
+    latex: `x${latex} y\\vdash -y${latex} -x`,
+    naturalLanguage: `If x is ${phrase} y, then −y is ${phrase} −x.`,
+  });
 }
 
 const ORDER_PACK: PackSpec = {
   id: "pack:order",
   name: "Order",
-  description: "Transitivity, antisymmetry, and monotonicity of addition for the real order.",
+  description: "Transitivity, antisymmetry, and congruence rules for the real order.",
   domain: "order",
   operators: [],
   results: [
@@ -475,20 +652,13 @@ const ORDER_PACK: PackSpec = {
       patterns: rulePatterns(["LessEqual", "x", "y"], ["Equal", "x", "y"]),
       variants: ["bundle-premises"],
     },
-    addMonotonicity(
-      "less-add-monotonicity",
-      "Monotonicity of addition for <",
-      "Less",
-      "<",
-      "less than",
-    ),
-    addMonotonicity(
-      "less-equal-add-monotonicity",
-      "Monotonicity of addition for ≤",
-      "LessEqual",
-      String.raw`\le`,
-      "at most",
-    ),
+    ...ORDER_RELATIONS.flatMap((relation) => [
+      ...OPERAND_POSITIONS.flatMap((position) => orderOperations(relation, position)),
+      negateOrder(relation),
+      ...ORDER_RELATIONS.flatMap((comparison) =>
+        OPERAND_POSITIONS.map((position) => compareEndpoints(relation, comparison, position)),
+      ),
+    ]),
   ],
 };
 
@@ -820,6 +990,71 @@ const CLOSURE_PACK: PackSpec = {
   ],
 };
 
+const congruent = (left: PlainMathJson, right: PlainMathJson): PlainMathJson => [
+  "Congruent",
+  left,
+  right,
+  "m",
+];
+
+function modularArithmeticCongruence(
+  head: "Add" | "Multiply",
+  position: OperandPosition,
+): ResultSpec {
+  const lhs = position === "left";
+  const addition = head === "Add";
+  const operation = addition ? "addition" : "multiplication";
+  const operands = (value: string): PlainMathJson =>
+    lhs ? [head, value, "z"] : [head, "z", value];
+  const term = (value: string) =>
+    lhs ? `${value}${addition ? "+" : " "}z` : `z${addition ? "+" : " "}${value}`;
+  return congruenceRule({
+    slug: `congruent-${head.toLowerCase()}-${position}`,
+    name: `Modular congruence of ${operation} (${position} operand)`,
+    description: `Integer ${operation} preserves congruence modulo a fixed modulus.`,
+    head,
+    parameters: [integer("x"), integer("y"), integer("z"), integer("m")],
+    premises: [congruent("x", "y")],
+    statement: congruent(operands("x"), operands("y")),
+    latex: `x\\equiv y\\pmod{m}\\vdash ${term("x")}\\equiv ${term("y")}\\pmod{m}`,
+    naturalLanguage: `If x and y are congruent modulo m, so are ${term("x")} and ${term("y")}.`,
+  });
+}
+
+function modularPredicateCongruence(position: OperandPosition): ResultSpec {
+  const left = position === "left";
+  const comparison = (value: PlainMathJson) =>
+    left ? congruent(value, "z") : congruent("z", value);
+  const displayed = (value: string) =>
+    left ? `${value}\\equiv z\\pmod{m}` : `z\\equiv ${value}\\pmod{m}`;
+  return congruenceRule({
+    slug: `congruent-predicate-${position}`,
+    name: `Modular congruence preserves the congruence predicate (${position} operand)`,
+    description:
+      "Either compared integer can be replaced by a congruent integer at the same modulus.",
+    head: "Congruent",
+    parameters: [integer("x"), integer("y"), integer("z"), integer("m")],
+    premises: [congruent("x", "y")],
+    statement: ["Equivalent", comparison("x"), comparison("y")],
+    latex: `x\\equiv y\\pmod{m}\\vdash (${displayed("x")})\\iff(${displayed("y")})`,
+    naturalLanguage:
+      "If x and y are congruent modulo m, replacing x by y in a congruence modulo m preserves its truth.",
+  });
+}
+
+const MODULAR_PACK: PackSpec = {
+  id: "pack:modular-arithmetic",
+  name: "Modular arithmetic",
+  description: "Congruence of integers modulo a fixed modulus.",
+  domain: "number-theory",
+  operators: MODULAR_OPERATOR_DECLARATIONS,
+  results: OPERAND_POSITIONS.flatMap((position) => [
+    modularArithmeticCongruence("Add", position),
+    modularArithmeticCongruence("Multiply", position),
+    modularPredicateCongruence(position),
+  ]),
+};
+
 const PACK_SPECS: readonly PackSpec[] = [
   LOGIC_PACK,
   EQUALITY_PACK,
@@ -828,6 +1063,7 @@ const PACK_SPECS: readonly PackSpec[] = [
   SET_PACK,
   DIVISIBILITY_PACK,
   CLOSURE_PACK,
+  MODULAR_PACK,
 ];
 
 let builtPacks: readonly LibraryPack[] | undefined;
@@ -950,6 +1186,7 @@ function resultInput(pack: PackSpec, spec: ResultSpec): unknown {
     statement: { expression: spec.statement },
     premises: (spec.premises ?? []).map((expression) => ({ expression })),
     sideConditions: [],
+    ...(spec.congruenceSymbols === undefined ? {} : { congruenceSymbols: spec.congruenceSymbols }),
     applicationDirections: spec.directions,
     patterns,
   };

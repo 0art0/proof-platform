@@ -185,7 +185,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: librarianModel,
-        promptVersion: "librarian-v3",
+        promptVersion: "librarian-v4",
         maxOutputTokens: librarianTokens,
         reasoningEffort: librarianReasoningEffort,
       }),

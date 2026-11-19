@@ -20,6 +20,7 @@ import {
   ELEMENT_SET_SORT,
   ELEMENT_SORT,
   INTEGER_SORT,
+  MODULAR_OPERATOR_DECLARATIONS,
   REAL_SORT,
   SET_OPERATOR_DECLARATIONS,
   type LibraryPackId,
@@ -815,6 +816,25 @@ export const EXTENDED_CORPUS: readonly CorpusProblem[] = [
         ["Equal", ["Multiply", "c", 0], 0],
         "An instance of multiplication by zero.",
       ),
+    ],
+  },
+  {
+    id: "corpus:congruent-addition",
+    title: "Adding the same integer preserves modular congruence",
+    statement:
+      "If a and b are congruent modulo m, show that a + c and b + c are congruent modulo m.",
+    domain: "number-theory",
+    packs: ["pack:modular-arithmetic"],
+    operators: MODULAR_OPERATOR_DECLARATIONS,
+    declarations: integers("a", "b", "c", "m"),
+    hypotheses: [["Congruent", "a", "b", "m"]],
+    goal: ["Congruent", ["Add", "a", "c"], ["Add", "b", "c"], "m"],
+    steps: [
+      {
+        note: "Reduce the congruence of sums to the congruence of their variable summands.",
+        selections: [goal(["Congruent", ["Add", "a", "c"], ["Add", "b", "c"], "m"])],
+        suggestion: result("congruent-add-left", "backward"),
+      },
     ],
   },
   {

@@ -12,7 +12,11 @@ import {
 } from "@proof/mathjson-model";
 import { z } from "zod";
 import { backgroundClassificationSchema, type BackgroundClassification } from "./background";
-import { mergeLibraryOperators, resultMentionedSymbols } from "./operator-environment";
+import {
+  appliedHeads,
+  mergeLibraryOperators,
+  resultMentionedSymbols,
+} from "./operator-environment";
 
 export const libraryArtifactKindSchema = z.enum(["definition", "result", "technique", "move"]);
 
@@ -34,6 +38,8 @@ export type LibraryLayerId = z.infer<typeof libraryLayerIdSchema>;
 
 export const applicationDirectionSchema = z.enum(["forward", "backward"]);
 export type ApplicationDirection = z.infer<typeof applicationDirectionSchema>;
+
+export const congruenceSymbolsSchema = z.array(z.string().min(1)).max(16);
 
 const deterministicRenderingsSchema = z
   .object({ latex: z.string().min(1), naturalLanguage: z.string().min(1) })
@@ -158,6 +164,8 @@ export type LibraryResult = LibraryArtifactCommon &
     applicationDirections: readonly ApplicationDirection[];
     patterns: readonly ResultPattern[];
     variantFamilyId?: VariantFamilyId | undefined;
+    /** Operator heads for which this theorem is a candidate congruence rule. */
+    congruenceSymbols?: readonly string[] | undefined;
     /** Present on the artifact that records a human review of a derived draft (N44). */
     review?: LibraryResultReview | undefined;
     /**
@@ -250,6 +258,7 @@ const rawResultSchema = z
     applicationDirections: z.array(applicationDirectionSchema).min(1),
     patterns: z.array(resultPatternSchema).min(1),
     variantFamilyId: variantFamilyIdSchema.optional(),
+    congruenceSymbols: congruenceSymbolsSchema.min(1).optional(),
     review: libraryResultReviewSchema.optional(),
     operators: z.array(operatorDeclarationSchema).min(1).max(MAX_RESULT_OPERATORS).optional(),
   })
@@ -359,6 +368,21 @@ export function createLibraryResultSchema(
       });
       const effective = addOperatorIssues(result, operators, context);
       if (effective !== undefined) addMathematicalIssues(result, effective, context);
+      if (result.congruenceSymbols !== undefined) {
+        const heads = appliedHeads(result.statement.expression);
+        addDuplicateStringIssues(result.congruenceSymbols, "congruence symbol", context, [
+          "congruenceSymbols",
+        ]);
+        result.congruenceSymbols.forEach((symbol, index) => {
+          if (!heads.has(symbol)) {
+            context.addIssue({
+              code: "custom",
+              message: `Congruence symbol ${symbol} must be applied in the statement.`,
+              path: ["congruenceSymbols", index],
+            });
+          }
+        });
+      }
       addResultReviewIssues(result, context);
     }),
   );

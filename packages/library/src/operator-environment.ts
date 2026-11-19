@@ -102,6 +102,25 @@ export function mentionedSymbols(
   return symbols;
 }
 
+/** The applied heads of a MathJSON expression, including long-form function nodes. */
+export function appliedHeads(
+  expression: PlainMathJson,
+  heads: Set<string> = new Set<string>(),
+): ReadonlySet<string> {
+  const application =
+    typeof expression === "object" && expression !== null && "fn" in expression
+      ? expression.fn
+      : Array.isArray(expression)
+        ? expression
+        : undefined;
+  if (application !== undefined) {
+    const [head, ...operands] = application as readonly PlainMathJson[];
+    if (typeof head === "string") heads.add(head);
+    operands.forEach((operand) => appliedHeads(operand, heads));
+  }
+  return heads;
+}
+
 /** The symbols a library result's statement, premises, side conditions and patterns mention. */
 export function resultMentionedSymbols(
   result: Readonly<{

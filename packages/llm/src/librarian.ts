@@ -17,7 +17,11 @@ import {
   type PlainMathJson,
   type Sort,
 } from "@proof/protocol";
-import { applicationDirectionSchema, applicationRequirementSchema } from "@proof/library";
+import {
+  applicationDirectionSchema,
+  applicationRequirementSchema,
+  congruenceSymbolsSchema,
+} from "@proof/library";
 import { z } from "zod";
 import { repairOperatorNotations } from "./notation";
 import {
@@ -232,6 +236,7 @@ export const librarianResultSchema = z
     parameters: z.array(universalParameterSchema).max(MAX_RESULT_PARAMETERS),
     statement: expressionSchema,
     premises: z.array(expressionSchema).max(MAX_RESULT_PREMISES),
+    congruenceSymbols: congruenceSymbolsSchema.min(1).optional(),
     applicationDirections: z.array(applicationDirectionSchema).min(1).max(2),
     patterns: z
       .array(
@@ -371,6 +376,7 @@ const wireResultSchema = z
       )
       .max(MAX_RESULT_PARAMETERS),
     premises: z.array(wireNodeSchema).max(MAX_RESULT_PREMISES),
+    congruenceSymbols: congruenceSymbolsSchema,
     statement: wireNodeSchema,
     applicationDirections: z.array(applicationDirectionSchema).min(1).max(2),
     patterns: z
@@ -389,7 +395,8 @@ const wireResultSchema = z
       .max(MAX_RESULT_PATTERNS),
   })
   .strict();
-type WireResult = z.infer<typeof wireResultSchema>;
+const legacyWireResultSchema = wireResultSchema.partial({ congruenceSymbols: true });
+type WireResult = z.infer<typeof legacyWireResultSchema>;
 
 const wireLibraryProposalSchema = z
   .object({
@@ -407,7 +414,15 @@ export const librarianWireResultSchema = z.union([
   librarianInsufficientContextSchema,
   librarianDeclinedSchema,
 ]);
-export type LibrarianWireResult = z.infer<typeof librarianWireResultSchema>;
+/** Older responses may omit the congruence index. The provider still receives a strict schema. */
+export const librarianReadableWireResultSchema = z.union([
+  wireLibraryProposalSchema.extend({
+    results: z.array(legacyWireResultSchema).max(MAX_LIBRARIAN_RESULTS),
+  }),
+  librarianInsufficientContextSchema,
+  librarianDeclinedSchema,
+]);
+export type LibrarianWireResult = z.infer<typeof librarianReadableWireResultSchema>;
 
 /**
  * Convert a provider result into the validated output. A new constant that repeats or clashes with
@@ -542,6 +557,9 @@ function buildResult(wire: WireResult, operatorSymbols: ReadonlySet<string>): Bu
       })),
       statement: { expression: wire.statement },
       premises: wire.premises.map((expression) => ({ expression })),
+      ...((wire.congruenceSymbols?.length ?? 0) === 0
+        ? {}
+        : { congruenceSymbols: wire.congruenceSymbols }),
       applicationDirections: wire.applicationDirections,
       patterns: wire.patterns.map(({ expression, direction, section, polarity, role }, index) => ({
         id: `pattern:library-${slug}-${index + 1}`,
@@ -724,17 +742,24 @@ const LIBRARIAN_REQUEST_KINDS_GUIDANCE =
 /** The message of calls recorded before the notation standards (`librarian-v2`). */
 const LIBRARIAN_V2_SYSTEM_MESSAGE = `${LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE} ${LIBRARIAN_REQUEST_KINDS_GUIDANCE}`;
 
+/**
+ * The notation-aware system message (`librarian-v3`). It keeps
+ * an initial library short, so that it is built in seconds: more can be added during the proof.
+ */
+const LIBRARIAN_V3_SYSTEM_MESSAGE =
+  `${LIBRARIAN_V2_SYSTEM_MESSAGE} ` +
+  "For an initial request, return the 6 to 12 most useful results rather than an exhaustive list, give each one or two patterns, and keep descriptions to one sentence: the library is built while the person waits, and results can be added during the proof. " +
+  CONSTANT_NOTATION_STANDARDS.replace("for every constant", "for every new constant");
+
 /** Every earlier system message a stored librarian call may carry. */
 export const LIBRARIAN_EARLIER_SYSTEM_MESSAGES: readonly string[] = [
   LIBRARIAN_PREVIOUS_SYSTEM_MESSAGE,
   LIBRARIAN_V2_SYSTEM_MESSAGE,
+  LIBRARIAN_V3_SYSTEM_MESSAGE,
 ];
 
-/**
- * The role's fixed system message (`librarian-v3`); stored calls are checked against it. It keeps
- * an initial library short, so that it is built in seconds: more can be added during the proof.
- */
 export const LIBRARIAN_SYSTEM_MESSAGE =
-  `${LIBRARIAN_V2_SYSTEM_MESSAGE} ` +
-  "For an initial request, return the 6 to 12 most useful results rather than an exhaustive list, give each one or two patterns, and keep descriptions to one sentence: the library is built while the person waits, and results can be added during the proof. " +
-  CONSTANT_NOTATION_STANDARDS.replace("for every constant", "for every new constant");
+  `${LIBRARIAN_V3_SYSTEM_MESSAGE} ` +
+  "For each supplied constant, include useful standard equality or equivalence congruence, monotonicity, antitonicity or other relation-preserving laws when justified by the background, prioritizing laws specific to that constant. State any guards such as positivity in premises. " +
+  'For each result return congruenceSymbols: the distinct operator heads whose arguments it transports, or an empty array for a result that does not transport a relation through an operator. For example, premises x < y and c > 0 with conclusion c*x < c*y have congruenceSymbols ["Multiply"]. State the precise changed argument and keep other arguments fixed. ' +
+  "When transporting through a predicate with a directional result, keep the implication as the conclusion (for example x < y proves (y < c implies x < c), tagged with Less).";

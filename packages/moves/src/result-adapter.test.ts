@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CORE_LOGIC_RESULTS, libraryResultSchema, type LibraryResult } from "@proof/library";
+import {
+  CORE_LOGIC_RESULTS,
+  libraryResultSchema,
+  starterLibraryPack,
+  type LibraryResult,
+} from "@proof/library";
 import { PROPOSITION_SORT } from "@proof/mathjson-model";
 import { approvedKernelResults, libraryResultToKernelResult } from "./index";
 
@@ -34,6 +39,10 @@ describe("libraryResultToKernelResult", () => {
         premises: [{ expression: ["Implies", "p", "q"] }, { expression: "p" }],
         conclusion: { expression: "q" },
         directions: ["forward"],
+        congruenceRule: {
+          premises: [],
+          conclusion: { expression: ["Implies", ["And", ["Implies", "p", "q"], "p"], "q"] },
+        },
       },
       diagnostics: [],
     });
@@ -87,6 +96,25 @@ describe("libraryResultToKernelResult", () => {
         // Only the top-level implication splits; a curried consequent stays whole.
         conclusion: { expression: ["Implies", "c", "a"] },
         directions: ["forward", "backward"],
+      },
+    });
+  });
+
+  it("indexes a tagged implication without changing its ordinary application", () => {
+    const rule = starterLibraryPack("pack:order").results.find(
+      ({ id }) => id === "result:less-transport-less-left",
+    );
+    if (rule === undefined) throw new Error("Missing order transport rule.");
+    expect(libraryResultToKernelResult(rule)).toMatchObject({
+      ok: true,
+      result: {
+        congruenceSymbols: ["Less"],
+        premises: [{ expression: ["Less", "x", "y"] }, { expression: ["Less", "y", "z"] }],
+        conclusion: { expression: ["Less", "x", "z"] },
+        congruenceRule: {
+          premises: [{ expression: ["Less", "x", "y"] }],
+          conclusion: { expression: ["Implies", ["Less", "y", "z"], ["Less", "x", "z"]] },
+        },
       },
     });
   });

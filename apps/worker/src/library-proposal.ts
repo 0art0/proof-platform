@@ -25,6 +25,7 @@ import type {
 } from "@proof/llm";
 import {
   admitLibraryArtifact,
+  appliedHeads,
   checkBackgroundAdmission,
   generateVariants,
   mentionedSymbols,
@@ -594,6 +595,9 @@ function assembleArtifact(
     sideConditions: [],
     applicationDirections: proposed.applicationDirections,
     patterns: proposed.patterns,
+    ...(proposed.congruenceSymbols === undefined
+      ? {}
+      : { congruenceSymbols: proposed.congruenceSymbols }),
   };
 }
 
@@ -658,6 +662,17 @@ function explainInvalidResult(
     }
   };
   check("The statement", proposed.statement.expression, true);
+  if (proposed.congruenceSymbols !== undefined) {
+    const heads = appliedHeads(proposed.statement.expression);
+    for (const symbol of new Set(proposed.congruenceSymbols)) {
+      if (!heads.has(symbol)) {
+        problems.push(`The congruence symbol ${symbol} is not applied in the statement.`);
+      }
+    }
+    if (new Set(proposed.congruenceSymbols).size !== proposed.congruenceSymbols.length) {
+      problems.push("A congruence symbol is repeated.");
+    }
+  }
   proposed.premises.forEach(({ expression }, index) =>
     check(`Premise ${index + 1}`, expression, true),
   );

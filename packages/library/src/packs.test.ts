@@ -7,6 +7,7 @@ import {
   DIVISIBILITY_OPERATOR_DECLARATIONS,
   ELEMENTARY_CORPUS,
   LIBRARY_PACK_IDS,
+  MODULAR_OPERATOR_DECLARATIONS,
   SET_OPERATOR_DECLARATIONS,
   admitLibraryArtifact,
   corpusRootState,
@@ -35,13 +36,14 @@ describe("starter domain packs", () => {
         ]),
       ),
     ).toEqual({
-      "pack:elementary-logic": { results: 7, variants: 1, families: 1 },
-      "pack:equality": { results: 3, variants: 1, families: 1 },
-      "pack:order": { results: 12, variants: 7, families: 5 },
+      "pack:elementary-logic": { results: 8, variants: 1, families: 1 },
+      "pack:equality": { results: 4, variants: 1, families: 1 },
+      "pack:order": { results: 70, variants: 7, families: 5 },
       "pack:arithmetic": { results: 13, variants: 5, families: 5 },
       "pack:sets": { results: 5, variants: 1, families: 1 },
       "pack:divisibility": { results: 5, variants: 1, families: 1 },
       "pack:closure": { results: 3, variants: 0, families: 0 },
+      "pack:modular-arithmetic": { results: 6, variants: 0, families: 0 },
     });
     packs.forEach((pack) => {
       expect(Object.isFrozen(pack)).toBe(true);
@@ -206,6 +208,7 @@ describe("starter domain packs", () => {
         ...SET_OPERATOR_DECLARATIONS,
         ...DIVISIBILITY_OPERATOR_DECLARATIONS,
         ...CLOSURE_OPERATOR_DECLARATIONS,
+        ...MODULAR_OPERATOR_DECLARATIONS,
       ]),
     ).toEqual([...LIBRARY_PACK_IDS]);
   });
@@ -225,6 +228,7 @@ describe("starter domain packs", () => {
       "pack:sets": ["Union", "Intersection"],
       "pack:divisibility": ["Divides"],
       "pack:closure": ["Closure"],
+      "pack:modular-arithmetic": ["Congruent"],
     });
   });
 
