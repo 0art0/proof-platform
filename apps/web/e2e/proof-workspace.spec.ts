@@ -573,6 +573,7 @@ test("inspect and apply an order rewrite with a sign obligation", async ({ page 
   const sessionId = await createIsolatedSession(page, draft);
   await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
   const goal = page.getByLabel("Goal 1 conclusion");
+  await expect(goal).toBeVisible();
   const point = await hoverGlyph(page, goal, "x");
   await expect(page.getByRole("tooltip")).toContainText("Context ·");
   await page.mouse.click(point.x, point.y);

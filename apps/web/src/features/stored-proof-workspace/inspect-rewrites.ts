@@ -41,6 +41,10 @@ export function createRewriteInspector(
         item.rewriteRelation !== undefined && (!relation || item.rewriteRelation === relation),
     );
     const shown = matches.slice(0, 3);
+    if (shown.length === 3 && shown.every((item) => item.source === shown[0]?.source)) {
+      const otherSource = matches.find((item) => item.source !== shown[0]?.source);
+      if (otherSource) shown[2] = otherSource;
+    }
     record({
       kind: "suggestions-displayed",
       nodeId,
