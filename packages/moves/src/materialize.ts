@@ -41,6 +41,7 @@ import {
   type ResultInstantiation,
   type RewriteLens,
   type RewriteSource,
+  type TransitionClass,
   type TransitionStatementTarget,
   type TransitionTarget,
 } from "@proof/kernel";
@@ -389,7 +390,7 @@ export function materializeGeneralizedRewrite(
   expected?: Readonly<{
     replacement: PlainMathJson;
     obligations: readonly PlainMathJson[];
-    transitionClass: import("@proof/kernel").TransitionClass;
+    transitionClass: TransitionClass;
   }>,
 ): MaterializationResult {
   const preview = previewGeneralizedRewrite(state, seed, environment);

@@ -89,7 +89,7 @@ async function session(
   return store;
 }
 
-type Slot = Readonly<{ target: string; statement?: string }>;
+type Slot = Readonly<{ target: string; statement?: string; path?: readonly number[] }>;
 
 /** Apply a displayed move suggestion the way the HTTP command route does. */
 async function applyMove(
@@ -97,6 +97,7 @@ async function applyMove(
   commandId: string,
   moveId: string,
   slots: readonly Slot[],
+  rewritesOnly = false,
 ): Promise<ProofNode> {
   const current = await loadCurrentProofSession(store, SESSION);
   if (current.status !== "loaded") throw new Error("session");
@@ -110,7 +111,7 @@ async function applyMove(
           ? { kind: "conclusion" }
           : { kind: "hypothesis", id: slot.statement },
     },
-    path: [],
+    path: slot.path ?? [],
   }));
   const recorded = await recordDisplayedSuggestionSet(store, INDEX, SESSION, {
     id: `set:${commandId}`,
@@ -124,7 +125,7 @@ async function applyMove(
               selection,
             })),
           },
-    options: { limit: 100 },
+    options: { limit: 100, rewritesOnly },
   });
   if (recorded.status !== "committed") throw new Error(JSON.stringify(recorded));
   const set: DisplayedSuggestionSet = recorded.suggestionSet;
@@ -212,6 +213,49 @@ function conclusions(node: ProofNode): unknown[] {
 }
 
 describe("previewSemanticReplay", () => {
+  it("re-matches a checked theorem rewrite on a renamed occurrence", async () => {
+    const nested = (left: string, right: string): PlainMathJson => [
+      "Or",
+      ["Not", ["Not", left]],
+      right,
+    ];
+    const store = await session([
+      { id: "goal:main", conclusion: nested("p", "q") },
+      { id: "goal:second", conclusion: nested("r", "s") },
+    ]);
+    const applied = await applyMove(
+      store,
+      "command:rewrite",
+      "result:double-negation",
+      [{ target: "goal:main", path: [0] }],
+      true,
+    );
+    expect(conclusions(applied)).toEqual([["Or", "p", "q"], nested("r", "s")]);
+    const previewed = await previewSemanticReplay(
+      store,
+      SESSION,
+      {
+        source: { fromNodeId: "node:root", toNodeId: applied.id },
+        commandId: "command:replay-rewrite",
+        focus: { kind: "goal", id: "goal:second" },
+      },
+      human,
+    );
+    expect(previewed).toMatchObject({
+      status: "loaded",
+      report: {
+        complete: true,
+        steps: [
+          {
+            status: "adapted",
+            source: "suggestion",
+            resultSubstitutions: [{ symbol: "p", expression: "r" }],
+          },
+        ],
+      },
+    });
+  });
+
   it("reports the adapted sequence onto an alpha-renamed goal without writing", async () => {
     const store = await session([
       { id: "goal:main", conclusion: swap("p", "q") },

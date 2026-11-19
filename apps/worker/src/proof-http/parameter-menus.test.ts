@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createProofNodeSchema,
+  suggestionAuthorizesMove,
+  type MovePreview,
   type DisplayedSuggestionSet,
   type MoveRequiresInputResponse,
   type ParameterMenuItemRecord,
@@ -341,6 +343,152 @@ describe("parameter menus through the proof HTTP service", () => {
       transitionClass: "equivalence",
       operation: { kind: "rewrite-with-equality", direction: "forward", path: [1, 0] },
     });
+  });
+
+  it("previews and applies a dragged order source with its checked side obligation", async () => {
+    const session = await startSession(
+      ["Less", ["Multiply", 1, 3], 4],
+      [{ id: "hypothesis:strict", expression: ["Less", 1, 2] }],
+    );
+    const request = {
+      id: "suggestion-set:order-rewrite",
+      selections: [at("hypothesis:strict"), at("conclusion", [0, 0])],
+      rewritesOnly: true,
+      rewriteRelation: "Less",
+    };
+    const response = await session.post("suggestion-sets", request);
+    expect(response.status).toBe(201);
+    const { suggestionSet } = await json<{ suggestionSet: DisplayedSuggestionSet }>(response);
+    const [checked] = suggestionSet.suggestions;
+    expect(suggestionSet.suggestions).toHaveLength(1);
+    expect(checked).toMatchObject({
+      source: "move",
+      rewriteRelation: "Less",
+      rewrite: {
+        source: { kind: "hypothesis", hypothesisId: "hypothesis:strict" },
+        replacement: 2,
+        obligations: [["Greater", 3, 0]],
+        transitionClass: "strengthening",
+      },
+    });
+    if (checked === undefined) throw new Error("Expected a checked order rewrite.");
+    const choice = {
+      commandId: "command:order-rewrite",
+      suggestionSetId: suggestionSet.id,
+      chosenSuggestionId: checked.id,
+    };
+    const previewResponse = await session.post("move-previews", choice);
+    expect(previewResponse.status).toBe(201);
+    const { preview } = await json<{ preview: MovePreview }>(previewResponse);
+    expect(preview.definitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "library-result",
+          id: "result:less-multiply-positive-left",
+        }),
+      ]),
+    );
+    if (preview.operation.kind !== "generalized-rewrite") {
+      throw new Error("Expected a generalized-rewrite operation.");
+    }
+    expect(suggestionAuthorizesMove(checked, preview.moveId, preview.operation)).toBe(true);
+    expect(
+      suggestionAuthorizesMove(checked, preview.moveId, { ...preview.operation, path: [1] }),
+    ).toBe(false);
+    expect(
+      suggestionAuthorizesMove(checked, preview.moveId, {
+        ...preview.operation,
+        congruenceResultIds: [],
+      }),
+    ).toBe(false);
+    const applied = await session.post("commands", choice);
+    expect(applied.status).toBe(201);
+    const { node } = await json<{ node: ProofNode }>(applied);
+    expect(conclusionOf(node)).toEqual(["Less", ["Multiply", 2, 3], 4]);
+    expect(node.state.obligations.map(({ sequent }) => sequent.conclusion.expression)).toEqual([
+      ["Greater", 3, 0],
+    ]);
+    const historical = await fetch(`${session.sessionUrl}/suggestion-sets/${suggestionSet.id}`);
+    expect(historical.status).toBe(200);
+    expect(await json(historical)).toMatchObject({ suggestionSet });
+  });
+
+  it("instantiates an approved equality result at an exact term occurrence", async () => {
+    const session = await startSession(["Equal", ["Add", 5, 0], 5]);
+    const response = await session.post("suggestion-sets", {
+      id: "suggestion-set:add-zero",
+      selections: [at("conclusion", [0])],
+      rewritesOnly: true,
+      rewriteResultId: "result:add-zero",
+    });
+    expect(response.status).toBe(201);
+    const { suggestionSet } = await json<{ suggestionSet: DisplayedSuggestionSet }>(response);
+    const checked = suggestionSet.suggestions.find(
+      ({ rewrite }) => rewrite?.direction === "forward",
+    );
+    expect(checked).toMatchObject({
+      artifactId: "result:add-zero",
+      rewriteRelation: "Equal",
+      rewrite: {
+        replacement: 5,
+        source: { kind: "result", resultId: "result:add-zero", instantiation: { x: 5 } },
+      },
+    });
+    if (checked === undefined) throw new Error("Expected the checked additive identity.");
+    const applied = await session.post("commands", {
+      commandId: "command:add-zero",
+      suggestionSetId: suggestionSet.id,
+      chosenSuggestionId: checked.id,
+    });
+    expect(applied.status).toBe(201);
+    const { node } = await json<{ node: ProofNode }>(applied);
+    expect(conclusionOf(node)).toEqual(["Equal", 5, 5]);
+    expect(await historyEdge(session, "command:add-zero")).toMatchObject({
+      evidence: "library-result",
+      transitionClass: "equivalence",
+    });
+  });
+
+  it("applies a theorem to a nested hypothesis and retains its other premise as an obligation", async () => {
+    const session = await startSession("r", [
+      { id: "hypothesis:nested", expression: ["Or", ["Implies", "p", "q"], "r"] },
+    ]);
+    const response = await session.post("suggestion-sets", {
+      id: "suggestion-set:deep-implication",
+      selections: [at("hypothesis:nested", [0])],
+      rewritesOnly: true,
+      rewriteResultId: "result:modus-tollens",
+      rewriteRelation: "Implies",
+    });
+    expect(response.status).toBe(201);
+    const { suggestionSet } = await json<{ suggestionSet: DisplayedSuggestionSet }>(response);
+    const checked = suggestionSet.suggestions.find(
+      ({ rewrite }) => rewrite?.direction === "forward",
+    );
+    expect(checked).toMatchObject({
+      rewrite: {
+        source: { kind: "result", resultId: "result:modus-tollens", premiseIndex: 0 },
+        replacement: ["Not", "p"],
+        obligations: [["Not", "q"]],
+      },
+    });
+    if (checked === undefined) throw new Error("Expected the checked modus tollens rewrite.");
+    const applied = await session.post("commands", {
+      commandId: "command:deep-implication",
+      suggestionSetId: suggestionSet.id,
+      chosenSuggestionId: checked.id,
+    });
+    expect(applied.status).toBe(201);
+    const { node } = await json<{ node: ProofNode }>(applied);
+    expect(node.state.goals[0]?.sequent.context.hypotheses).toEqual([
+      { id: "hypothesis:nested", statement: { expression: ["Or", ["Not", "p"], "r"] } },
+    ]);
+    expect(node.state.obligations.map(({ sequent }) => sequent.conclusion.expression)).toEqual([
+      ["Not", "q"],
+    ]);
+    expect(node.state.obligations[0]?.sequent.context.hypotheses).toEqual([
+      { id: "hypothesis:nested", statement: { expression: ["Or", ["Implies", "p", "q"], "r"] } },
+    ]);
   });
 
   it("rejects unknown, stale and expression-valued menu choices without recording anything", async () => {
