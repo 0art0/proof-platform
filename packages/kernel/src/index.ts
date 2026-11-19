@@ -13,7 +13,7 @@ import {
   type ProofStateId,
   type StatementId,
 } from "@proof/mathjson-model";
-import type { RewriteLens, RewriteSource } from "./deep-rewrite";
+import type { GeneralizedRewriteSource, RewriteLens, RewriteSource } from "./deep-rewrite";
 import type { ConstructionOperation, ConstructionOperationKind } from "./constructions";
 import {
   parseKernelResultCatalog,
@@ -30,7 +30,12 @@ export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equiv
 export { functionParts, operatorOperands, symbolValue, type FunctionParts } from "./expression";
 export { hasExactKeys, isStrictRecord } from "./runtime";
 export { sorryClosure, type SorryClosure, type SorryClosureResult } from "./obligations";
-export { locateRewriteOccurrence, type RewriteLens, type RewriteSource } from "./deep-rewrite";
+export {
+  locateRewriteOccurrence,
+  type GeneralizedRewriteSource,
+  type RewriteLens,
+  type RewriteSource,
+} from "./deep-rewrite";
 export { rewriteRelationOf } from "./operations/generalized-rewrite";
 export {
   RESULT_APPLICATION_DIRECTIONS,
@@ -300,7 +305,7 @@ export type GeneralizedRewriteSelection = Readonly<{
   statement: TransitionStatementTarget;
   path: readonly number[];
   lens?: RewriteLens;
-  source: RewriteSource;
+  source: GeneralizedRewriteSource;
   /** Select the left-hand or right-hand side of the source as the occurrence to replace. */
   direction: "forward" | "backward";
   /** Ordered lifting witnesses pinned on a recorded rewrite. */

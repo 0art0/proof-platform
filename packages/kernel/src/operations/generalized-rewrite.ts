@@ -117,8 +117,28 @@ function sourceInstance(
       `The result ${source.resultId} is not approved for ${direction} application.`,
     );
   }
+  const selectedPremise =
+    source.premiseIndex === undefined ? undefined : result.premises[source.premiseIndex];
+  if (source.premiseIndex !== undefined && selectedPremise === undefined) {
+    return fail(
+      "index-out-of-range",
+      "The indexed antecedent is not a premise of the rewrite result.",
+    );
+  }
+  // P, Γ ⊢ C is also Γ ⊢ (P ⇒ C). The selected premise becomes the
+  // implication's left side while the other premises remain side conditions.
+  const sourceRule: KernelResult =
+    selectedPremise === undefined
+      ? ruleView(result)
+      : {
+          ...result,
+          premises: result.premises.filter((_premise, index) => source.premiseIndex !== index),
+          conclusion: {
+            expression: ["Implies", selectedPremise.expression, result.conclusion.expression],
+          },
+        };
   return instantiateResultRule(
-    ruleView(result),
+    sourceRule,
     source.instantiation,
     occurrence.declarations,
     operators,

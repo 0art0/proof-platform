@@ -29,10 +29,15 @@ import { hasExactKeys, isStrictRecord } from "./runtime";
  */
 export type RewriteLens = Readonly<{ startOperand: number; endOperand: number }>;
 
-/** Where a deep rewrite's `Equivalent` or `Implies` statement comes from. */
+/** Where a deep rewrite statement comes from. */
 export type RewriteSource =
   | Readonly<{ kind: "hypothesis"; hypothesisId: StatementId }>
   | Readonly<{ kind: "result"; resultId: KernelResultId; instantiation: ResultInstantiation }>;
+
+/** A generalized rewrite can use one theorem premise as an implication antecedent. */
+export type GeneralizedRewriteSource =
+  | Extract<RewriteSource, { kind: "hypothesis" }>
+  | (Extract<RewriteSource, { kind: "result" }> & Readonly<{ premiseIndex?: number }>);
 
 /**
  * One rewrite occurrence inside a statement. `polarity` is the overall
@@ -52,7 +57,11 @@ export type RewriteOccurrence = Readonly<{
   replace: (replacement: PlainMathJson) => PlainMathJson | undefined;
 }>;
 
-type RewriteBinding = Readonly<{ name: string; universalDeclaration?: PlainMathJson }>;
+type RewriteBinding = Readonly<{
+  name: string;
+  universalDeclaration?: PlainMathJson;
+  inheritsSort: boolean;
+}>;
 
 export type RewriteAncestor = Readonly<{
   parts: FunctionParts;
@@ -124,10 +133,11 @@ export function locateRewriteOccurrence(
             ({ symbol }) => symbol === binding.name,
           );
           const standardDomain = sort === undefined ? undefined : standardSortDomain(sort);
+          const inheritsSort = binding.form === "symbol" && custom === undefined;
           const universalDeclaration: PlainMathJson | undefined =
             binding.form === "element"
               ? parts.operands[index]
-              : binding.form === "symbol" && custom === undefined
+              : inheritsSort
                 ? binding.symbol
                 : standardDomain === undefined
                   ? undefined
@@ -136,6 +146,7 @@ export function locateRewriteOccurrence(
             ...scope,
             {
               name: binding.name,
+              inheritsSort,
               ...(universalDeclaration === undefined ? {} : { universalDeclaration }),
             },
           ];
@@ -227,10 +238,15 @@ export function closeRewriteCondition(
   operators: readonly OperatorDeclaration[],
 ): PlainMathJson | undefined {
   let closed = expression;
+  const inheritedSorts = new Set<string>();
   for (const binding of [...scope].reverse()) {
-    if (!freeSymbolNames(closed, { operators }).includes(binding.name)) continue;
+    const providesSort = inheritedSorts.delete(binding.name);
+    if (!providesSort && !freeSymbolNames(closed, { operators }).includes(binding.name)) continue;
     if (binding.universalDeclaration === undefined) return undefined;
     closed = ["ForAll", binding.universalDeclaration, closed];
+    // A bare declaration's sort is read from the enclosing scope, even when
+    // it shadows that scope's symbol and leaves no ordinary free occurrence.
+    if (binding.inheritsSort) inheritedSorts.add(binding.name);
   }
   return closed;
 }
@@ -296,7 +312,8 @@ export function parseRewriteSource(
   value: unknown,
   isInstantiation: (candidate: unknown) => boolean,
   copyInstantiation: (candidate: unknown) => ResultInstantiation,
-): RewriteSource | undefined {
+  allowPremiseIndex = false,
+): GeneralizedRewriteSource | undefined {
   if (!isStrictRecord(value)) return undefined;
   if (value.kind === "hypothesis" && hasExactKeys(value, ["kind", "hypothesisId"])) {
     const hypothesisId = statementIdSchema.safeParse(value.hypothesisId);
@@ -304,11 +321,22 @@ export function parseRewriteSource(
       ? { kind: "hypothesis", hypothesisId: hypothesisId.data }
       : undefined;
   }
-  if (value.kind === "result" && hasExactKeys(value, ["kind", "resultId", "instantiation"])) {
+  const hasPremiseIndex = allowPremiseIndex && Object.hasOwn(value, "premiseIndex");
+  if (
+    value.kind === "result" &&
+    hasExactKeys(value, [
+      "kind",
+      "resultId",
+      "instantiation",
+      ...(hasPremiseIndex ? ["premiseIndex"] : []),
+    ])
+  ) {
     const resultId = kernelResultIdSchema.safeParse(value.resultId);
     if (!resultId.success || !isInstantiation(value.instantiation)) return undefined;
+    if (hasPremiseIndex && !isNonnegativeInteger(value.premiseIndex)) return undefined;
     return {
       kind: "result",
+      ...(hasPremiseIndex ? { premiseIndex: value.premiseIndex as number } : {}),
       resultId: resultId.data,
       instantiation: copyInstantiation(value.instantiation),
     };
