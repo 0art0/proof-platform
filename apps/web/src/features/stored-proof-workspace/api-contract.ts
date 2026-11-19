@@ -129,16 +129,17 @@ export const suggestionApiSuccessSchema = z
       })
       .strict()
       .superRefine(({ suggestionSet, transitionClasses }, context) => {
-        const moveSuggestionIds = suggestionSet.suggestions
-          .filter(({ source }) => source === "move")
+        const classifiedIds = suggestionSet.suggestions
+          .filter(({ source, rewrite }) => source === "move" || rewrite !== undefined)
           .map(({ id }) => id);
         if (
-          moveSuggestionIds.length !== transitionClasses.length ||
-          moveSuggestionIds.some((id, index) => transitionClasses[index]?.suggestionId !== id)
+          classifiedIds.length !== transitionClasses.length ||
+          classifiedIds.some((id, index) => transitionClasses[index]?.suggestionId !== id)
         ) {
           context.addIssue({
             code: "custom",
-            message: "Transition classes must identify every displayed move in persisted order.",
+            message:
+              "Transition classes must identify every displayed move and checked rewrite in persisted order.",
           });
         }
       }),

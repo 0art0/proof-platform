@@ -657,7 +657,6 @@ function StatefulStoredWorkspace({
   const catalogRevision = topUp.status.kind === "done" ? topUp.status : undefined;
   const inspectRewrites = useMemo(() => {
     // A catalog top-up can add moves at the same node.
-    void catalogRevision;
     return createRewriteInspector(
       session.id,
       node.id,

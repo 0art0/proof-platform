@@ -828,12 +828,12 @@ function transitionClassesMatchSuggestionSet(input: {
   suggestionSet: DisplayedSuggestionSet;
   transitionClasses: readonly SuggestionTransitionClass[];
 }): boolean {
-  const moveSuggestionIds = input.suggestionSet.suggestions
-    .filter(({ source }) => source === "move")
+  const classifiedIds = input.suggestionSet.suggestions
+    .filter(({ source, rewrite }) => source === "move" || rewrite !== undefined)
     .map(({ id }) => id);
   return (
-    moveSuggestionIds.length === input.transitionClasses.length &&
-    moveSuggestionIds.every(
+    classifiedIds.length === input.transitionClasses.length &&
+    classifiedIds.every(
       (suggestionId, index) => input.transitionClasses[index]?.suggestionId === suggestionId,
     )
   );
