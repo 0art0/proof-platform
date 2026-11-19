@@ -195,6 +195,19 @@ describe("move executor context", () => {
     );
   });
 
+  it("accepts approved results carrying kernel congruence metadata", () => {
+    const ordinary = kernelResult("result:congruence", ["Implies", "x", "x"], ["x"]);
+    const annotated = {
+      ...ordinary,
+      congruenceSymbols: ["Implies"],
+      congruenceRule: {
+        premises: [],
+        conclusion: { expression: ["Implies", "x", ordinary.conclusion.expression] },
+      },
+    };
+    expect(envelope({ results: [annotated] })).toEqual(envelope({ results: [ordinary] }));
+  });
+
   it("works without selections and for a technique source", () => {
     const built = envelope({ selections: [], source: "shortlisted-technique" });
     expect(built.role === "move-executor" && built.context.selections).toEqual([]);

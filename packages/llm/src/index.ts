@@ -747,16 +747,26 @@ export function buildMoveShortlisterContext(input: unknown): BuildLlmContextResu
   });
 }
 
+const executorResultStatementSchema = z.looseObject({ expression: plainMathJsonSchema });
+
 const executorResultInputSchema = z
   .object({
     id: stableIdentifierSchema,
     parameters: z.array(z.object({ symbol: z.string().min(1), sort: sortSchema }).strict()),
-    premises: z.array(z.looseObject({ expression: plainMathJsonSchema })),
-    conclusion: z.looseObject({ expression: plainMathJsonSchema }),
+    premises: z.array(executorResultStatementSchema),
+    conclusion: executorResultStatementSchema,
     directions: z
       .array(z.enum(["forward", "backward"]))
       .min(1)
       .max(2),
+    congruenceSymbols: z.array(z.string().min(1)).optional(),
+    congruenceRule: z
+      .object({
+        premises: z.array(executorResultStatementSchema),
+        conclusion: executorResultStatementSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
