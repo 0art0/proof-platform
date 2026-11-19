@@ -314,14 +314,9 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
               resolved.subjects,
               this.#operators,
               options.rewriteResultId,
+              options.rewriteRelation,
             ),
-          ]
-            .filter(
-              ({ rewriteRelation }) =>
-                options.rewriteRelation === undefined ||
-                rewriteRelation === options.rewriteRelation,
-            )
-            .sort(compareSuggestions)
+          ].sort(compareSuggestions)
         : [];
     const sortCache = new Map<string, TypeFit>();
     const available = new Set<string>(
@@ -350,7 +345,9 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
       : options.limitIsDefault
         ? [
             ...selectWithCategoryDiversity(ranked, options.limit),
-            ...selectWithCategoryDiversity(rewrites, 2),
+            ...(options.rewriteRelation === undefined && options.rewriteResultId === undefined
+              ? selectDefaultRewrites(rewrites)
+              : selectWithCategoryDiversity(rewrites, 2)),
           ]
         : selectWithCategoryDiversity(
             [...ranked, ...rewrites].sort(compareSuggestions),
@@ -1502,6 +1499,16 @@ function describeObligation(obligation: PredictedObligation): string {
 
 /** Index of the "no new obligations" component in every suggestion rank. */
 const RANK_NO_NEW_OBLIGATIONS = 1;
+
+/** Prefer a local and an approved library source when both are available. */
+function selectDefaultRewrites(
+  ranked: readonly RetrievalSuggestion[],
+): readonly RetrievalSuggestion[] {
+  const first = ranked[0];
+  if (first === undefined) return [];
+  const second = ranked.find(({ source }) => source !== first.source) ?? ranked[1];
+  return second === undefined ? [first] : [first, second];
+}
 
 /** Slots reserved per category when the limit truncates, so no category is crowded out. */
 const RESERVED_SLOTS_PER_CATEGORY = 2;
