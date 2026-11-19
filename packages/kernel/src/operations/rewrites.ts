@@ -126,6 +126,7 @@ export function rewriteStatement(
     operation.statement.kind === "conclusion" ? "positive" : "negative",
     sequent.context.declarations,
     operators,
+    false,
   );
   if (occurrence === undefined) {
     return internalFailure(
