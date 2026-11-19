@@ -62,7 +62,8 @@ describe("formalizerLibraryResults", () => {
     const all = starterLibraryPacks();
     const packOriginals = all
       .flatMap((pack) => pack.results)
-      .filter(({ provenance }) => provenance.kind !== "derived-variant");
+      .filter(({ provenance }) => provenance.kind !== "derived-variant")
+      .sort((a, b) => b.priority - a.priority);
     const shown = formalizerLibraryResults(all, library(40, 2));
     expect(shown).toHaveLength(MAX_FORMALIZER_LIBRARY_RESULTS);
     const ids = shown.map(({ id }) => id);
@@ -73,6 +74,13 @@ describe("formalizerLibraryResults", () => {
       packOriginals.slice(0, MAX_FORMALIZER_LIBRARY_RESULTS - 40).map(({ id }) => id),
     );
     expect(ids.some((id) => id.includes("/"))).toBe(false);
+  });
+
+  it("keeps divisibility and set results in context alongside the order pack", () => {
+    const shown = formalizerLibraryResults(starterLibraryPacks(), undefined);
+    expect(shown.map(({ id }) => id)).toEqual(
+      expect.arrayContaining(["result:divides-transitivity", "result:subset-transitivity"]),
+    );
   });
 
   it("beyond the cap shows variants only after every original", () => {
