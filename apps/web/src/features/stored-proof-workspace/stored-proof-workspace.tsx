@@ -24,7 +24,7 @@ import { usePresentation } from "../proof-workspace/presentation";
 import { LibraryDrawer } from "../library-drawer";
 import { ConditionalLemmaPanel } from "../conditional-lemma";
 import { InquiryPanel } from "../inquiry-panel";
-import { GestureTray, useDragGestures } from "../gestures";
+import { GestureTray, useDragGestures, type DropPlan } from "../gestures";
 import { recordRecentSession } from "../problem-entry/recent-sessions";
 import { macroNames, useMacroInfo } from "./macro-info";
 import { WorkspaceHeader, branchBreadcrumb } from "./workspace-header";
@@ -41,6 +41,8 @@ import {
   requestMovePreview,
   requestSuggestions,
 } from "./stored-proof-requests";
+import { ALL_REWRITES, RewriteInspectionContext } from "../proof-workspace/rewrite-inspection";
+import { createRewriteInspector } from "./inspect-rewrites";
 import { toDescriptor } from "./selection-descriptor";
 import { createInteractionRecorder } from "./interaction-recorder";
 import { ConstantsPanel } from "./constants-panel";
@@ -113,6 +115,7 @@ function StatefulStoredWorkspace({
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
   const [suggestions, setSuggestions] = useState<SuggestionState>({ kind: "idle" });
+  const [relation, setRelation] = useState("");
   const [moveState, setMoveState] = useState<MoveState>({ kind: "idle" });
   const [history, setHistory] = useState<HistoryState>({ kind: "loading" });
   const [notice, setNotice] = useState<Notice>();
@@ -141,7 +144,7 @@ function StatefulStoredWorkspace({
   const shownPreview = useRef<MovePreview | undefined>(undefined);
   // Drag gestures are created after previewSuggestion; these let earlier callbacks reach them.
   const notifyDragSelection = useRef<
-    ((selections: readonly AnchoredProofSelection[]) => void) | undefined
+    ((selections: readonly AnchoredProofSelection[]) => DropPlan | undefined) | undefined
   >(undefined);
   const resetDrag = useRef<(() => void) | undefined>(undefined);
 
@@ -236,11 +239,11 @@ function StatefulStoredWorkspace({
   );
 
   const handleSelectionChange = useCallback(
-    (selections: readonly AnchoredProofSelection[]) => {
+    (selections: readonly AnchoredProofSelection[], focus = relation) => {
       if (mutationPendingRef.current) return;
       setSelections(selections);
       updateAbstract({ type: "retain", selections });
-      notifyDragSelection.current?.(selections);
+      const drop = notifyDragSelection.current?.(selections);
       // The workspace of a newly committed snapshot reports its empty selection once it mounts.
       // Nothing changed, so keep the notice of the apply or backtrack that produced it.
       const empty = selections.length === 0;
@@ -272,6 +275,10 @@ function StatefulStoredWorkspace({
       }
       const request = suggestionRequestSchema.safeParse({
         id: suggestionSetId(node.state.id, generation),
+        ...(focus && !drop
+          ? { rewritesOnly: true, ...(focus === ALL_REWRITES ? {} : { rewriteRelation: focus }) }
+          : {}),
+        ...(drop?.source.kind === "result" ? { rewriteResultId: drop.source.artifactId } : {}),
         selections: selections.map((selection, position) =>
           toDescriptor(
             selection,
@@ -349,6 +356,7 @@ function StatefulStoredWorkspace({
       node.state,
       recordInteraction,
       rejectShownPreview,
+      relation,
       session.id,
       session.operators,
       updateAbstract,
@@ -646,6 +654,17 @@ function StatefulStoredWorkspace({
     activated:
       constantsRead.view.kind === "ready" ? constantsRead.view.constants.activated : undefined,
   });
+  const catalogRevision = topUp.status.kind === "done" ? topUp.status : undefined;
+  const inspectRewrites = useMemo(() => {
+    // A catalog top-up can add moves at the same node.
+    void catalogRevision;
+    return createRewriteInspector(
+      session.id,
+      node.id,
+      recordInteraction,
+      relation === ALL_REWRITES ? "" : relation,
+    );
+  }, [session.id, node.id, recordInteraction, relation, catalogRevision]);
   // Library results and previews may use library constants the proof does not have yet; they are
   // shown in their own notation, while the proof state itself uses only the proof's constants.
   const availableOperators = useMemo(
@@ -851,6 +870,17 @@ function StatefulStoredWorkspace({
       ) : null}
       <SuggestionPanel
         suggestions={suggestions}
+        relation={relation}
+        onRelationChange={(focus) => {
+          setRelation(focus);
+          if (selections.length > 0) handleSelectionChange(selections, focus);
+        }}
+        relationSymbols={catalogOperators
+          .filter(
+            (op) =>
+              op.signature.parameters.length >= 2 && op.signature.result.kind === "proposition",
+          )
+          .map((op) => op.symbol)}
         move={moveState}
         mutationPending={mutationPending || readOnly}
         authorMovesHref={readOnly ? undefined : movesHref(session.id)}
@@ -931,16 +961,18 @@ function StatefulStoredWorkspace({
           data-busy={mutationPending}
           aria-busy={mutationPending}
         >
-          <ProofWorkspace
-            key={node.id}
-            node={node}
-            operators={session.operators}
-            view={view}
-            onSelectionChange={handleSelectionChange}
-            gestures={drag.bindings}
-            selectionRequest={drag.selectionRequest}
-            suggestionsLink={suggestionsLink}
-          />
+          <RewriteInspectionContext.Provider value={inspectRewrites}>
+            <ProofWorkspace
+              key={node.id}
+              node={node}
+              operators={session.operators}
+              view={view}
+              onSelectionChange={handleSelectionChange}
+              gestures={drag.bindings}
+              selectionRequest={drag.selectionRequest}
+              suggestionsLink={suggestionsLink}
+            />
+          </RewriteInspectionContext.Provider>
         </div>
         {/* Stacked, the suggestions follow the proof directly; in two columns the move
             instructions sit under the proof and the suggestions beside it. The document order

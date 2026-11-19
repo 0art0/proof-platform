@@ -559,3 +559,30 @@ test("the workspace omits AI tools when the service has no provider", async ({ p
   await expect(page.getByRole("region", { name: "Proof plan" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Available suggestions" })).toBeVisible();
 });
+
+test("inspect and apply an order rewrite with a sign obligation", async ({ page }) => {
+  const draft: IsolatedDraft = {
+    problem: { title: "Bound a product", statement: "Use x ≤ y to bound x times c." },
+    background: { level: "real arithmetic", summary: "Order on the reals.", assumptions: [] },
+    libraryLayerIds: ["layer:global"],
+    packs: ["pack:order", "pack:arithmetic"],
+    declarations: ["x", "y", "c", "z"].map((symbol) => ({ symbol, sort: "real" })),
+    hypotheses: [{ format: "mathjson", expression: ["LessEqual", "x", "y"] }],
+    goals: [{ format: "mathjson", expression: ["LessEqual", ["Multiply", "x", "c"], "z"] }],
+  };
+  const sessionId = await createIsolatedSession(page, draft);
+  await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
+  const goal = page.getByLabel("Goal 1 conclusion");
+  const point = await hoverGlyph(page, goal, "x");
+  await expect(page.getByRole("tooltip")).toContainText("Context ·");
+  await page.mouse.click(point.x, point.y);
+  await page.getByLabel("Relation focus").selectOption("LessEqual");
+  const rewrite = page.locator('li[data-rewrite-relation="LessEqual"][data-source="move"]').first();
+  await rewrite.getByRole("button", { name: "Preview changes" }).click();
+  await expect(
+    rewrite.getByRole("list", { name: "New obligations" }).getByRole("listitem"),
+  ).toHaveCount(1);
+  await expect(page.getByLabel("Obligation 1 conclusion")).toHaveCount(0);
+  await rewrite.getByRole("button", { name: "Apply this step" }).click();
+  await expect(page.getByLabel("Obligation 1 conclusion")).toBeVisible();
+});

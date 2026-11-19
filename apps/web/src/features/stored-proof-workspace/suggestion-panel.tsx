@@ -4,6 +4,11 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, ProofEdge } from "@proof/protocol";
+import {
+  ALL_REWRITES,
+  COMMON_REWRITE_RELATIONS,
+  relationName,
+} from "../proof-workspace/rewrite-inspection";
 import type { WorkspaceView } from "../proof-workspace";
 import { AiShortlist } from "./ai-shortlist";
 import { TopUpNotice, type TopUpStatus } from "./library-top-up";
@@ -62,6 +67,9 @@ export const SUGGESTION_PANEL_ID = "suggestion-panel";
 export type SuggestionPanelProps = SuggestionPanelActions &
   Readonly<{
     suggestions: SuggestionState;
+    relation?: string;
+    relationSymbols?: readonly string[];
+    onRelationChange?: (relation: string) => void;
     move: MoveState;
     mutationPending: boolean;
     presentation: Presentation;
@@ -98,6 +106,9 @@ export type SuggestionPanelProps = SuggestionPanelActions &
  */
 export function SuggestionPanel({
   suggestions,
+  relation = "",
+  relationSymbols = [],
+  onRelationChange,
   move,
   mutationPending,
   presentation,
@@ -122,8 +133,19 @@ export function SuggestionPanel({
   const mixedSources =
     items.some(({ source }) => source === "move") &&
     items.some(({ source }) => source === "result");
-  const visible =
-    !mixedSources || source === "all" ? items : items.filter((item) => item.source === source);
+  const relations = new Set(
+    items.flatMap((item) => (item.rewriteRelation ? [item.rewriteRelation] : [])),
+  );
+  for (const symbol of [...COMMON_REWRITE_RELATIONS, ...relationSymbols]) relations.add(symbol);
+  if (relation && relation !== ALL_REWRITES) relations.add(relation);
+  const visible = items.filter(
+    (item) =>
+      ((!mixedSources || source === "all" || item.source === source) &&
+        (!relation ||
+          item.rewriteRelation === relation ||
+          (relation === ALL_REWRITES && item.rewriteRelation !== undefined))) ||
+      (move.kind !== "idle" && item.id === move.suggestionId),
+  );
   const classes = new Map(
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.transitionClasses.map((entry) => [entry.suggestionId, entry.transitionClass])
@@ -134,7 +156,7 @@ export function SuggestionPanel({
     <SuggestionCard
       key={suggestion.id}
       suggestion={suggestion}
-      transitionClass={classes.get(suggestion.id)}
+      transitionClass={suggestion.rewrite?.transitionClass ?? classes.get(suggestion.id)}
       macro={suggestion.source === "move" ? macros.get(suggestion.artifactId) : undefined}
       qualifier={qualifiers.get(suggestion.id)}
       move={move}
@@ -268,6 +290,25 @@ export function SuggestionPanel({
           findMoreDisabledReason={findMoreDisabledReason}
         />
       ) : null}
+      {onRelationChange ? (
+        <label className={styles.relationFilter}>
+          Work with
+          <select
+            aria-label="Relation focus"
+            value={relation}
+            disabled={move.kind === "applying"}
+            onChange={(event) => onRelationChange(event.target.value)}
+          >
+            <option value="">All moves</option>
+            <option value={ALL_REWRITES}>All rewrites</option>
+            {[...relations].sort().map((symbol) => (
+              <option key={symbol} value={symbol}>
+                {relationName(symbol)}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {suggestions.kind === "ready" && mixedSources ? (
         <div role="group" aria-label="Filter suggestions" className={styles.sourceFilters}>
           {SOURCE_FILTERS.map(({ value, label }) => (
@@ -281,6 +322,9 @@ export function SuggestionPanel({
             </button>
           ))}
         </div>
+      ) : null}
+      {suggestions.kind === "ready" && visible.length === 0 ? (
+        <p>No suggestions match the current filters.</p>
       ) : null}
       {suggestions.kind === "ready" ? (
         <ol className={styles.suggestions} data-testid="suggestion-list">

@@ -55,6 +55,9 @@ export function LibraryDetail({
         <Fact label="Layer">{layerLabel(artifact.layer)}</Fact>
         <Fact label="Source">{sourceLabel(entry.source)}</Fact>
         <Fact label="Domains">{artifact.classification.domains.join(", ")}</Fact>
+        {artifact.congruenceSymbols?.length ? (
+          <Fact label="Congruence for">{artifact.congruenceSymbols.join(", ")}</Fact>
+        ) : null}
         <Fact label="Level">{artifact.classification.level}</Fact>
         <Fact label="Origin">{provenanceLabel(artifact.provenance)}</Fact>
         <Fact label="Approval">

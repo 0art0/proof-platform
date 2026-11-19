@@ -7,7 +7,6 @@ import {
   chooseDroppedSuggestion,
   dragSourceForSelection,
   dragSourceKey,
-  dropTargetFor,
   planDrop,
   suggestionSetMatchesPlan,
 } from "./drop-resolution";
@@ -72,13 +71,6 @@ describe("drag sources", () => {
     expect(dragSourceKey(hypothesis)).toBe(dragSourceKey({ ...hypothesis, label: "renamed" }));
     expect(dragSourceKey(hypothesis)).not.toBe(dragSourceKey(term));
   });
-
-  it("drops a hypothesis on the whole conclusion and other sources on the occurrence", () => {
-    const occurrence = exact(anchor(), [1]);
-    expect(dropTargetFor(hypothesis, anchor(), occurrence)).toEqual(exact(anchor(), []));
-    expect(dropTargetFor(term, anchor(), occurrence)).toBe(occurrence);
-    expect(dropTargetFor(result, anchor(), occurrence)).toBe(occurrence);
-  });
 });
 
 describe("planning a drop", () => {
@@ -89,6 +81,17 @@ describe("planning a drop", () => {
       plan: { kind: "hypothesis-on-goal", selections: [hypothesis.selection, goal] },
     });
     const slot = exact(anchor(), [1]);
+    const otherHypothesis = exact(
+      anchor({ kind: "hypothesis", id: "hypothesis:h2" } as never),
+      [0],
+    );
+    expect(planDrop(hypothesis, otherHypothesis, STATE)).toMatchObject({
+      ok: true,
+      plan: {
+        kind: "hypothesis-on-expression",
+        selections: [hypothesis.selection, otherHypothesis],
+      },
+    });
     const withTerm = dragSourceForSelection(exact(anchor(), [0]), "term");
     expect(planDrop(withTerm, slot, STATE)).toMatchObject({
       ok: true,
@@ -102,11 +105,7 @@ describe("planning a drop", () => {
 
   it("refuses every unsupported combination with a no-move message", () => {
     const refusals = [
-      planDrop(
-        hypothesis,
-        exact(anchor({ kind: "hypothesis", id: "hypothesis:h2" } as never)),
-        STATE,
-      ),
+      planDrop(hypothesis, exact(hypothesisAnchor, [0]), STATE),
       planDrop(hypothesis, exact(anchor(undefined, "goal:other")), STATE),
       planDrop(hypothesis, exact(anchor(undefined, "goal:a", "state:old")), STATE),
       planDrop(result, exact(anchor(undefined, "goal:a", "state:old")), STATE),

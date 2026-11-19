@@ -123,6 +123,8 @@ export function transitionEvidenceOf(
   if (operation.kind === "mark-sorry") return "sorry";
   if (operation.kind === "close-by-accepted-inference") return "background-inference";
   const record = operation as Readonly<Record<string, unknown>>;
+  if (Array.isArray(record.congruenceResultIds) && record.congruenceResultIds.length > 0)
+    return "library-result";
   if (typeof record.resultId === "string") return "library-result";
   const source = record.source;
   if (typeof source === "object" && source !== null && "resultId" in source) {
@@ -141,7 +143,9 @@ export type SuggestionCategory = "immediate" | "near-miss" | "requires-input";
 
 export function suggestionCategory(suggestion: Suggestion): SuggestionCategory {
   if (suggestion.applicability === "requires-input") return "requires-input";
-  return suggestion.predictedObligations === undefined ? "immediate" : "near-miss";
+  return suggestion.predictedObligations !== undefined || suggestion.rewrite?.obligations.length
+    ? "near-miss"
+    : "immediate";
 }
 
 export type SuggestionLayoutEntry =

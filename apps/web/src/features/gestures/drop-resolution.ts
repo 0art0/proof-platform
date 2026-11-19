@@ -4,7 +4,8 @@ import { proofSelectionKey, selectionsOverlap } from "../proof-workspace/selecti
 import type { DragSource } from "./drag-state";
 
 /** The three drag gestures of design plan §8.3. */
-export type DragKind = "result-on-expression" | "hypothesis-on-goal" | "term-on-slot";
+export type DragKind =
+  "result-on-expression" | "hypothesis-on-goal" | "hypothesis-on-expression" | "term-on-slot";
 
 export type DropPlan = Readonly<{
   kind: DragKind;
@@ -36,18 +37,6 @@ export function dragSourceForSelection(
   return { kind: wholeHypothesis ? "hypothesis" : "term", selection, label };
 }
 
-/**
- * The occurrence a drop names. Dropping a hypothesis onto a goal always targets the whole
- * conclusion; other drops target the occurrence under the pointer (or the active selection).
- */
-export function dropTargetFor(
-  source: DragSource,
-  anchor: StatementAnchor,
-  occurrence: AnchoredProofSelection,
-): AnchoredProofSelection {
-  return source.kind === "hypothesis" ? { kind: "exact", anchor, path: [] } : occurrence;
-}
-
 function sameTarget(left: StatementAnchor, right: StatementAnchor): boolean {
   return left.target.kind === right.target.kind && left.target.id === right.target.id;
 }
@@ -74,13 +63,18 @@ export function planDrop(
     return refuse("the source and target belong to different goals or obligations.");
   }
   if (source.kind === "hypothesis") {
-    if (target.anchor.statement.kind !== "conclusion") {
-      return refuse("a hypothesis can only be dropped on a goal or obligation conclusion.");
+    if (selectionsOverlap(source.selection, target)) {
+      return refuse("a hypothesis cannot rewrite itself.");
     }
     return {
       ok: true,
       plan: {
-        kind: "hypothesis-on-goal",
+        kind:
+          target.anchor.statement.kind === "conclusion" &&
+          target.kind === "exact" &&
+          target.path.length === 0
+            ? "hypothesis-on-goal"
+            : "hypothesis-on-expression",
         source,
         target,
         selections: [source.selection, target],
@@ -119,13 +113,14 @@ function fitsDrop(plan: DropPlan, suggestion: DisplayedSuggestion): boolean {
   const from = slotOf(suggestion, 1);
   const to = slotOf(suggestion, 2);
   if (from === undefined || to === undefined) return false;
-  if (plan.kind === "hypothesis-on-goal") {
+  if (plan.source.kind === "hypothesis") {
     return !TARGET_SLOTS.has(from) && !TERM_SLOTS.has(from) && TARGET_SLOTS.has(to);
   }
   return TERM_SLOTS.has(from) && !TERM_SLOTS.has(to);
 }
 
 function verbFor(plan: DropPlan, suggestion: DisplayedSuggestion): string {
+  if (suggestion.rewriteRelation !== undefined) return "Rewrite";
   if (suggestion.source === "result") return "Apply result";
   if (plan.kind === "term-on-slot") return "Instantiate";
   if (/rewrite/i.test(suggestion.artifactId)) return "Rewrite";
@@ -144,15 +139,13 @@ export function chooseDroppedSuggestion(
   set: DisplayedSuggestionSet,
 ): DroppedSuggestion | undefined {
   const source = plan.source;
+  const candidates = set.suggestions.filter((suggestion) =>
+    source.kind === "result"
+      ? suggestion.source === "result" && suggestion.artifactId === source.artifactId
+      : fitsDrop(plan, suggestion),
+  );
   const chosen =
-    plan.kind === "result-on-expression"
-      ? set.suggestions.find(
-          (suggestion) =>
-            source.kind === "result" &&
-            suggestion.source === "result" &&
-            suggestion.artifactId === source.artifactId,
-        )
-      : set.suggestions.find((suggestion) => fitsDrop(plan, suggestion));
+    candidates.find((suggestion) => suggestion.rewriteRelation !== undefined) ?? candidates[0];
   return chosen === undefined
     ? undefined
     : { suggestionId: chosen.id, verb: verbFor(plan, chosen) };
@@ -182,6 +175,7 @@ export function suggestionSetMatchesPlan(plan: DropPlan, set: DisplayedSuggestio
 
 const KIND_LABELS: Readonly<Record<DragKind, string>> = {
   "result-on-expression": "result onto expression",
+  "hypothesis-on-expression": "hypothesis onto expression",
   "hypothesis-on-goal": "hypothesis onto goal",
   "term-on-slot": "term onto slot",
 };

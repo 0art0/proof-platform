@@ -48,6 +48,19 @@ export function PreviewDetails({
       <p className={styles.previewMeaning}>
         {evidence === "sorry" ? SORRY_MEANING : transitionMeaning(preview.transitionClass)}
       </p>
+      {preview.operation.kind === "generalized-rewrite" &&
+      preview.operation.congruenceResultIds?.length ? (
+        <details>
+          <summary>Congruence lemmas used</summary>
+          <ol>
+            {preview.operation.congruenceResultIds.map((id, index) => (
+              <li key={index}>
+                <code>{id}</code>
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
       <PreviewConstantsNote constants={preview.constants} />
       <dl className={styles.previewCounts}>
         <div>

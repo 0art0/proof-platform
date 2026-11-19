@@ -6,7 +6,6 @@ export {
   NO_MOVE_MESSAGE,
   chooseDroppedSuggestion,
   dragSourceForSelection,
-  dropTargetFor,
   planDrop,
 } from "./drop-resolution";
 export type { DragKind, DropPlan } from "./drop-resolution";

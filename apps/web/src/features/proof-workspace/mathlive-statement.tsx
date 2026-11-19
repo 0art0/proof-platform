@@ -1,7 +1,7 @@
 "use client";
 
 import type { MathfieldElement as MathfieldElementType } from "mathlive";
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { renderMathJson, type PlainMathJson } from "@proof/mathjson-model";
 import type {
   AnchoredProofSelection,
@@ -23,6 +23,8 @@ import {
 } from "./mathlive-hover";
 import gestureStyles from "../gestures/gestures.module.css";
 import styles from "./proof-workspace.module.css";
+
+import { RewriteInspectionContext, type RewriteInspection } from "./rewrite-inspection";
 
 let mathfieldElementCtor: Promise<typeof MathfieldElementType> | undefined;
 
@@ -60,11 +62,12 @@ const POLARITY_SIGNS: Readonly<Record<SelectionPolarity, string>> = Object.freez
 });
 
 /** The proposition under the pointer and where it is drawn, relative to the statement. */
-type HoveredPosition = Readonly<{ polarity: SelectionPolarity; box: HoverBox }>;
+type HoveredPosition = Readonly<{ polarity: SelectionPolarity; path: OperandPath; box: HoverBox }>;
 
 function sameHover(left: HoveredPosition | undefined, right: HoveredPosition): boolean {
   return (
     left?.polarity === right.polarity &&
+    left.path.join(".") === right.path.join(".") &&
     left.box.left === right.box.left &&
     left.box.right === right.box.right &&
     left.box.top === right.box.top &&
@@ -146,8 +149,16 @@ export function MathLiveStatement({
           expression,
           anchorRef.current,
         );
+        const hit = repeatable
+          ? occurrenceAtPoint(readOccurrenceTable(field.shadowRoot), {
+              x: event.clientX,
+              y: event.clientY,
+            })
+          : undefined;
         onGestureRef.current({
-          selection: interpreted.selection,
+          selection: hit
+            ? { kind: "exact", anchor: anchorRef.current, path: hit.path }
+            : interpreted.selection,
           modifier: event.ctrlKey || event.metaKey,
           repeatable,
           ...(interpreted.interpretation.kind === "fallback"
@@ -174,6 +185,7 @@ export function MathLiveStatement({
         const origin = frame.getBoundingClientRect();
         const next: HoveredPosition = {
           polarity: node.position.polarity,
+          path: hit.path,
           box: {
             left: box.left - origin.left,
             right: box.right - origin.left,
@@ -227,13 +239,19 @@ export function MathLiveStatement({
         onDrop: (event: DragEvent<HTMLDivElement>) => {
           event.preventDefault();
           setDropOver(false);
+          const table = readOccurrenceTable(fieldRef.current?.shadowRoot ?? null);
+          const point = { x: event.clientX, y: event.clientY };
+          const hit = occurrenceAtPoint(table, point);
+          // Empty space inside the drop zone names the entire statement.
           dropZone.onDrop(
-            readAnchoredOccurrenceAtPoint(
-              fieldRef.current as unknown as MathLivePointPort | undefined,
-              expression,
-              anchorRef.current,
-              { x: event.clientX, y: event.clientY },
-            ),
+            table.length > 0
+              ? { kind: "exact", anchor: anchorRef.current, path: hit?.path ?? [] }
+              : readAnchoredOccurrenceAtPoint(
+                  fieldRef.current as unknown as MathLivePointPort | undefined,
+                  expression,
+                  anchorRef.current,
+                  point,
+                ),
           );
         },
       }
@@ -260,7 +278,13 @@ export function MathLiveStatement({
             {rendered.ok ? rendered.latex : "Unable to render MathJSON"}
           </span>
         </div>
-        {hovered === undefined ? null : <HoveredPositionMark hovered={hovered} />}
+        {hovered === undefined ? null : (
+          <HoveredPositionMark
+            key={serializedAnchor + "#" + hovered.path.join(".")}
+            anchor={anchorRef.current}
+            hovered={hovered}
+          />
+        )}
       </div>
       {dropReady ? (
         <span className={gestureStyles.dropHint}>Drop here to preview a move</span>
@@ -271,8 +295,26 @@ export function MathLiveStatement({
 
 /** Outlines the hovered proposition and names its position. Neither takes pointer events. */
 function HoveredPositionMark({
-  hovered: { polarity, box },
-}: Readonly<{ hovered: HoveredPosition }>) {
+  anchor,
+  hovered: { polarity, box, path },
+}: Readonly<{ anchor: StatementAnchor; hovered: HoveredPosition }>) {
+  const inspect = useContext(RewriteInspectionContext);
+  const [result, setResult] = useState<RewriteInspection | "unavailable">();
+  // The parent keys this tooltip by snapshot, statement and exact operand path.
+  const [occurrence] = useState<AnchoredProofSelection>(() => ({ kind: "exact", anchor, path }));
+  useEffect(() => {
+    setResult(undefined);
+    if (inspect === undefined) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      const found = await inspect(occurrence, controller.signal);
+      if (!controller.signal.aborted) setResult(found ?? "unavailable");
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [inspect, occurrence]);
   return (
     <>
       <span
@@ -293,6 +335,18 @@ function HoveredPositionMark({
         style={{ left: box.left, top: box.top }}
       >
         <span aria-hidden="true">{POLARITY_SIGNS[polarity]}</span> {POLARITY_LABELS[polarity]}
+        {result === "unavailable" ? (
+          <small>Move lookup unavailable</small>
+        ) : result ? (
+          <>
+            {result.names.length === 0 ? (
+              <small>No matching rewrites</small>
+            ) : (
+              result.names.map((name, index) => <small key={index}>{name}</small>)
+            )}
+            {result.remaining > 0 ? <small>{result.remaining} more rewrites</small> : null}
+          </>
+        ) : null}
       </span>
     </>
   );

@@ -699,3 +699,19 @@
     margin-bottom: var(--space-1);
   }
 }
+
+.relationFilter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.relationFilter select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+}

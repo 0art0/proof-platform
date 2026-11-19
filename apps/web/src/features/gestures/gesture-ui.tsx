@@ -243,9 +243,9 @@ export function GestureTray({ bindings, selections, view, abstraction }: Gesture
         <details className={styles.trayDetails}>
           <summary>Dragging and keyboard help</summary>
           <p className={styles.help}>
-            Drag a hypothesis onto a goal, a term onto another occurrence, or a library result onto
-            an expression. Every drop shows a preview first. Keyboard: pick something up, select the
-            target, then choose Drop on selection.
+            Drag a hypothesis onto a goal or another hypothesis, a term onto another occurrence, or
+            a library result onto an expression. Every drop shows a preview first. Keyboard: pick
+            something up, select the target, then choose Drop on selection.
           </p>
         </details>
       ) : null}

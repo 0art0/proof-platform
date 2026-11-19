@@ -62,6 +62,7 @@ export const libraryArtifactViewSchema = z
     parameters: z.array(z.object({ symbol: z.string() }).passthrough()).optional(),
     statement: statementSchema.optional(),
     premises: z.array(statementSchema).optional(),
+    congruenceSymbols: z.array(z.string()).optional(),
     sideConditions: z
       .array(z.object({ id: z.string(), description: z.string() }).passthrough())
       .optional(),

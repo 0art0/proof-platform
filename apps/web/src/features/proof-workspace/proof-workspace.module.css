@@ -450,6 +450,12 @@
   pointer-events: none;
 }
 
+.hoverLabel small {
+  display: block;
+  max-width: min(24rem, 60vw);
+  white-space: normal;
+}
+
 .selectedBadge {
   composes: pill from "../../ui/controls.module.css";
 }

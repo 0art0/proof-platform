@@ -4,7 +4,7 @@ import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, MovePreview, ProofEdge } from "@proof/protocol";
 import { useId } from "react";
 import type { WorkspaceView } from "../proof-workspace";
-import { InlineLatex, NaturalLanguageText } from "../proof-workspace/presentation";
+import { InlineLatex, NaturalLanguageText, StatementView } from "../proof-workspace/presentation";
 import type { MacroInfo } from "./macro-info";
 import { ParameterMenu, type DisplayedParameterMenu } from "./parameter-menu";
 import { PreviewDetails } from "./preview-details";
@@ -120,6 +120,7 @@ export function SuggestionCard({
       className={styles.suggestionCard}
       data-applicability={suggestion.applicability}
       data-artifact-id={suggestion.artifactId}
+      data-rewrite-relation={suggestion.rewriteRelation}
       data-suggestion-id={suggestion.id}
       data-source={suggestion.source}
       data-category={category}
@@ -134,6 +135,19 @@ export function SuggestionCard({
           </span>
         )}
       </h3>
+      {suggestion.rewrite ? (
+        <p>
+          Replace with{" "}
+          <StatementView
+            expression={suggestion.rewrite.replacement}
+            presentation={presentation}
+            view={view}
+          />
+          {suggestion.rewrite.obligations.length > 0
+            ? ` · ${suggestion.rewrite.obligations.length} side goal${suggestion.rewrite.obligations.length === 1 ? "" : "s"}`
+            : null}
+        </p>
+      ) : null}
       <div
         className={styles.badgeRow}
         aria-label={`Classification of ${suggestion.name}`}

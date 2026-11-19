@@ -62,6 +62,9 @@ export const suggestionRequestSchema = z
   .object({
     id: suggestionSetIdSchema,
     selections: z.array(proofSelectionDescriptorSchema).min(1).max(16),
+    rewritesOnly: z.boolean().optional(),
+    rewriteRelation: z.string().min(1).optional(),
+    rewriteResultId: stableIdentifierSchema.optional(),
   })
   .strict();
 

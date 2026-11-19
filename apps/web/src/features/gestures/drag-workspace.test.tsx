@@ -390,7 +390,7 @@ describe("drag gestures in the stored workspace", () => {
     click("Pick up hypothesis");
     click("Drop on hypothesis");
     expect(screen.getByTestId("drag-outcome")).toHaveTextContent(
-      "No move applies here: a hypothesis can only be dropped on a goal",
+      "No move applies here: a hypothesis cannot rewrite itself",
     );
     expect(calls).toHaveLength(0);
   });

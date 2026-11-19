@@ -16,7 +16,6 @@ import {
   NO_MOVE_MESSAGE,
   chooseDroppedSuggestion,
   describeDragKind,
-  dropTargetFor,
   planDrop,
   suggestionSetMatchesPlan,
   type DropPlan,
@@ -58,7 +57,7 @@ export type DragGestures = Readonly<{
   bindings: GestureBindings;
   selectionRequest: SelectionRequest | undefined;
   /** Report every selection change: a change that is not the drop's own abandons the drop. */
-  notifySelectionChange: (selections: readonly AnchoredProofSelection[]) => void;
+  notifySelectionChange: (selections: readonly AnchoredProofSelection[]) => DropPlan | undefined;
   /** Forget everything carried or pending (a new proof snapshot). */
   reset: () => void;
 }>;
@@ -106,10 +105,10 @@ export function useDragGestures({
   const cancel = useCallback(() => dispatch({ type: "cancel" }), []);
 
   const dropOn = useCallback(
-    (anchor: StatementAnchor, occurrence: AnchoredProofSelection) => {
+    (_anchor: StatementAnchor, occurrence: AnchoredProofSelection) => {
       const current = stateRef.current;
       if (!enabled || current.phase !== "carrying") return;
-      const target = dropTargetFor(current.source, anchor, occurrence);
+      const target = occurrence;
       dispatch({ type: "drop", target });
       const planned = planDrop(current.source, target, stateId);
       if (!planned.ok) {
@@ -130,7 +129,7 @@ export function useDragGestures({
       const expected = current.plan.selections.map(proofSelectionKey);
       if (keys.length === expected.length && keys.every((key, index) => key === expected[index])) {
         current.requested = true;
-        return;
+        return current.plan;
       }
       settle({ kind: "cancelled", message: "Drop cancelled: the selection changed." });
     },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useReducer, useRef } from "react";
+import { useEffect, useId, useMemo, useReducer, useRef } from "react";
 import { createProofNodeSchema, type OperatorDeclaration, type ProofNode } from "@proof/protocol";
 import {
   formatOperandPath,
@@ -57,7 +57,7 @@ export function ProofWorkspace({
   selectionRequest,
   suggestionsLink,
 }: ProofWorkspaceProps) {
-  const node = parseProofNode(nodeInput, operators);
+  const node = useMemo(() => parseProofNode(nodeInput, operators), [nodeInput, operators]);
   if (node === undefined) {
     return <InvalidProofWorkspace onSelectionChange={onSelectionChange} />;
   }
