@@ -240,6 +240,30 @@ describe("generalized rewriting", () => {
     });
   });
 
+  it("preserves the scope that determines the sort of a shadowing bare quantifier", () => {
+    const cancellation = rule(
+      "divide-self",
+      "t",
+      [["NotEqual", "t", 0]],
+      ["Equal", ["Divide", "t", "t"], 1],
+    );
+    const input = state([
+      "ForAll",
+      ["Element", "u", "RealNumbers"],
+      ["ForAll", "u", ["Equal", ["Divide", "u", "u"], 3]],
+    ]);
+    const select = selection([1, 1, 0], {
+      source: { kind: "result", resultId: cancellation.id, instantiation: { t: "u" } },
+    });
+    expect(previewGeneralizedRewrite(input, select, environment(cancellation))).toMatchObject({
+      ok: true,
+      obligations: [
+        ["ForAll", ["Element", "u", "RealNumbers"], ["ForAll", "u", ["NotEqual", "u", 0]]],
+      ],
+    });
+    expect(apply(input, select, cancellation)).toMatchObject({ ok: true });
+  });
+
   it("combines conditional arithmetic lifting with endpoint transport and pins both witnesses", () => {
     const input = state(["Less", ["Multiply", "a", "c"], 20], { source: ["Less", "a", "b"] });
     const select = selection([0, 0]);
@@ -290,6 +314,70 @@ describe("generalized rewriting", () => {
         environment(differentWitness, lessMultiply, lessTransport),
       ),
     ).toMatchObject({ ok: true, congruenceResultIds: [lessMultiply.id, lessTransport.id] });
+  });
+
+  it("deeply applies an ordinary theorem by turning one indexed premise into the antecedent", () => {
+    const conjunction = rule("and-intro", "pq", ["p", "q"], ["And", "p", "q"], PROPOSITION_SORT);
+    const source = {
+      kind: "result",
+      resultId: conjunction.id,
+      instantiation: { p: "p", q: "q" },
+      premiseIndex: 0,
+    } as const;
+    const goal = state(["Or", ["And", "p", "q"], "r"]);
+    const backward = selection([0], { source, direction: "backward" });
+    expect(apply(goal, backward, conjunction)).toMatchObject({
+      ok: true,
+      transitionClass: "strengthening",
+      state: {
+        goals: [{ sequent: { conclusion: { expression: ["Or", "p", "r"] } } }],
+        obligations: [{ sequent: { conclusion: { expression: "q" } } }],
+      },
+    });
+
+    const hypothesis = state("r", { target: ["And", "p", "r"], guard: "q" });
+    const forward = selection([0], {
+      source,
+      statement: { kind: "hypothesis", id: statementIdSchema.parse("hyp:target") },
+    });
+    expect(apply(hypothesis, forward, conjunction)).toMatchObject({
+      ok: true,
+      transitionClass: "strengthening",
+      state: {
+        goals: [
+          {
+            sequent: {
+              context: {
+                hypotheses: [
+                  { statement: { expression: ["And", ["And", "p", "q"], "r"] } },
+                  { statement: { expression: "q" } },
+                ],
+              },
+            },
+          },
+        ],
+        obligations: [],
+      },
+    });
+    const invalid = selection([0], {
+      source: { ...source, premiseIndex: 2 },
+      direction: "backward",
+    });
+    expect(previewGeneralizedRewrite(goal, invalid, environment(conjunction))).toMatchObject({
+      ok: false,
+      code: "index-out-of-range",
+    });
+    expect(
+      applyTransition(
+        goal,
+        {
+          ...base,
+          ...backward,
+          kind: "rewrite-with-equivalence",
+        },
+        environment(conjunction),
+      ),
+    ).toMatchObject({ ok: false, diagnostics: [{ code: "invalid-operation" }] });
   });
 
   it("requires congruence transport for the same parameter and refuses unapproved argument lifting", () => {
@@ -412,7 +500,15 @@ describe("generalized rewriting", () => {
             guard: ["Greater", c, 0],
           });
           const output = apply(input, selection([0, 0]), lessMultiply, lessTransport);
-          expect(output).toMatchObject({ ok: true, state: { obligations: [] } });
+          expect(output).toMatchObject({
+            ok: true,
+            state: {
+              goals: [
+                { sequent: { conclusion: { expression: ["Less", ["Multiply", b, c], boundary] } } },
+              ],
+              obligations: [],
+            },
+          });
           expect(!(b * c < boundary) || a * c < boundary).toBe(true);
         },
       ),

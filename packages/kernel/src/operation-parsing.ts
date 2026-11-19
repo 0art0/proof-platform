@@ -18,8 +18,8 @@ import {
   copyRewriteLens,
   isRewriteLens,
   parseRewriteSource,
+  type GeneralizedRewriteSource,
   type RewriteLens,
-  type RewriteSource,
 } from "./deep-rewrite";
 import type {
   KernelOperation,
@@ -512,12 +512,12 @@ const OPERATION_BUILDERS: { readonly [Kind in PlainKind]: OperationBuilder<Kind>
 
 type RewriteFields = Readonly<{
   statement: TransitionStatementTarget | undefined;
-  source: RewriteSource | undefined;
+  source: GeneralizedRewriteSource | undefined;
   lens: Readonly<{ lens?: RewriteLens }>;
 }>;
 
 /** Validate the fields only rewrites have, in order: path, direction, statement, lens, source. */
-function readRewriteFields(value: Fields): RuntimeParseResult<RewriteFields> {
+function readRewriteFields(value: Fields, kind: RewriteKind): RuntimeParseResult<RewriteFields> {
   if ("path" in value && !isOperandPath(value.path)) {
     return runtimeFailure("A rewrite path must be a dense list of operand indices.", ["path"]);
   }
@@ -541,7 +541,12 @@ function readRewriteFields(value: Fields): RuntimeParseResult<RewriteFields> {
     : {};
   const source =
     "source" in value
-      ? parseRewriteSource(value.source, isInstantiation, copyInstantiation)
+      ? parseRewriteSource(
+          value.source,
+          isInstantiation,
+          copyInstantiation,
+          kind === "generalized-rewrite",
+        )
       : undefined;
   if ("source" in value && source === undefined) {
     return runtimeFailure(
@@ -557,7 +562,7 @@ function parseRewriteOperation(
   value: Fields,
   common: OperationBase,
 ): RuntimeParseResult<KernelOperation> {
-  const fields = readRewriteFields(value);
+  const fields = readRewriteFields(value, kind);
   if (!fields.success) return fields;
   const { statement, source, lens } = fields.data;
   switch (kind) {
