@@ -58,7 +58,12 @@ import {
 } from "./move-author";
 import { abstractSituation } from "./move-author-situation";
 import {
+  normalizeProofDraftWireResult,
   normalizeProofPlannerWireResult,
+  PROOF_DRAFT_SYSTEM_MESSAGE,
+  proofDraftContextSchema,
+  proofDraftOutputSchema,
+  proofDraftWireResultSchema,
   proofPlannerContextSchema,
   proofPlannerOutputSchema,
   proofPlannerSystemMessage,
@@ -129,6 +134,7 @@ export const SUPPORTED_LLM_ROLES = [
   "move-executor",
   "librarian",
   "move-author",
+  "proof-draft",
   "proof-planner",
   "step-translator",
 ] as const;
@@ -470,6 +476,13 @@ const librarianEnvelopeSchema = z
     context: librarianContextSchema,
   })
   .strict();
+const proofDraftEnvelopeSchema = z
+  .object({
+    ...envelopeBaseShape,
+    role: z.literal("proof-draft"),
+    context: proofDraftContextSchema,
+  })
+  .strict();
 const proofPlannerEnvelopeSchema = z
   .object({
     ...envelopeBaseShape,
@@ -492,6 +505,7 @@ export const llmContextEnvelopeSchema = z.discriminatedUnion("role", [
   moveExecutorEnvelopeSchema,
   librarianEnvelopeSchema,
   moveAuthorEnvelopeSchema,
+  proofDraftEnvelopeSchema,
   proofPlannerEnvelopeSchema,
   stepTranslatorEnvelopeSchema,
 ]);
@@ -1305,6 +1319,7 @@ export type ValidatedLlmOutput =
   | z.infer<typeof executorOutputSchema>
   | z.infer<typeof librarianOutputSchema>
   | z.infer<typeof moveAuthorOutputSchema>
+  | z.infer<typeof proofDraftOutputSchema>
   | z.infer<typeof proofPlannerOutputSchema>
   | z.infer<typeof stepTranslatorOutputSchema>;
 
@@ -1315,6 +1330,7 @@ const shortlisterWireSchema = z.object({ result: shortlisterOutputSchema }).stri
 const formalizerWireSchema = z.object({ result: formalizerWireResultSchema }).strict();
 const executorWireSchema = z.object({ result: executorWireResultSchema }).strict();
 const moveAuthorWireSchema = z.object({ result: moveAuthorWireResultSchema }).strict();
+const proofDraftWireSchema = z.object({ result: proofDraftWireResultSchema }).strict();
 const proofPlannerWireSchema = z.object({ result: proofPlannerWireResultSchema }).strict();
 /** Jev is not called with a JSON schema; this root only describes the validated output. */
 const stepTranslatorWireSchema = z.object({ result: stepTranslatorOutputSchema }).strict();
@@ -1359,6 +1375,7 @@ export function llmOutputSchemaForRole(role: SupportedLlmRole): z.ZodType {
   if (role === "move-executor") return executorWireSchema;
   if (role === "librarian") return librarianWireSchema;
   if (role === "move-author") return moveAuthorWireSchema;
+  if (role === "proof-draft") return proofDraftWireSchema;
   if (role === "proof-planner") return proofPlannerWireSchema;
   if (role === "step-translator") return stepTranslatorWireSchema;
   return shortlisterWireSchema;
@@ -1466,7 +1483,8 @@ export const FORMALIZER_BUILTIN_LATEX: readonly (readonly [symbol: string, latex
 ];
 const FORMALIZER_SYSTEM_MESSAGE = `${FORMALIZER_BASE_SYSTEM_MESSAGE} Formalize using only the operators listed in approvedLibrary.operators (the selected packs' operators and the user's approved background constants), the built-in symbols, and your own declarations; never invent, rename, or redefine an operator. The built-in symbols are always available, need no approval and are never listed in approvedLibrary.operators, even when that list is empty; write them with exactly this LaTeX: ${FORMALIZER_BUILTIN_LATEX.map(([symbol, latex]) => `${symbol} ${latex}`).join("; ")}. Write implication as \\implies, never \\to or \\rightarrow, which denote a function arrow. Never ask for a definition of a built-in symbol. If the problem needs an operator that is neither listed nor built in, return an insufficient-context request for an operator definition instead of using it. The worker rejects any other operator as an unapproved constant.`;
 
-const PROOF_PLANNER_SYSTEM_MESSAGE = proofPlannerSystemMessage(FORMALIZER_BUILTIN_LATEX);
+const PREVIOUS_PROOF_PLANNER_SYSTEM_MESSAGE = proofPlannerSystemMessage(FORMALIZER_BUILTIN_LATEX);
+const PROOF_PLANNER_SYSTEM_MESSAGE = `If blueprint is supplied, adapt its independent proof into a motivated blueprint for the supplied initial goal and hypotheses. Preserve its mathematical idea where possible, using what the current proof state has already established. Split the reasoning into steps that the listed moves and approved results can realize. In by.method, name the relevant available move when you can, and use actsOn to identify what Jev should select. Avoid local assume lemmas and backward sub-proofs of have steps, which the platform cannot realize. If the available moves and results leave a necessary mathematical gap that you cannot work around, return insufficient-context and identify the gap. Keep the blueprint readable as a natural-language proof. ${PREVIOUS_PROOF_PLANNER_SYSTEM_MESSAGE}`;
 /**
  * The fixed system message new calls of a role are prepared with. It is public so that a person
  * can read exactly what a role is told; it never varies with the request.
@@ -1484,6 +1502,7 @@ function expectedSystemMessage(role: SupportedLlmRole): string {
   if (role === "librarian") return LIBRARIAN_SYSTEM_MESSAGE;
   if (role === "move-executor") return MOVE_EXECUTOR_SYSTEM_MESSAGE;
   if (role === "move-author") return MOVE_AUTHOR_SYSTEM_MESSAGE;
+  if (role === "proof-draft") return PROOF_DRAFT_SYSTEM_MESSAGE;
   if (role === "proof-planner") return PROOF_PLANNER_SYSTEM_MESSAGE;
   if (role === "step-translator") return STEP_TRANSLATOR_SYSTEM_MESSAGE;
   return SHORTLISTER_SYSTEM_MESSAGE;
@@ -1516,6 +1535,7 @@ function acceptsSystemMessage(role: SupportedLlmRole, content: string): boolean 
       BACKGROUND_PROPOSER_EARLIER_SYSTEM_MESSAGES.includes(content)) ||
     (role === "librarian" && LIBRARIAN_EARLIER_SYSTEM_MESSAGES.includes(content)) ||
     (role === "move-author" && content === MOVE_AUTHOR_PREVIOUS_SYSTEM_MESSAGE) ||
+    (role === "proof-planner" && content === PREVIOUS_PROOF_PLANNER_SYSTEM_MESSAGE) ||
     (role === "move-executor" && content === MOVE_EXECUTOR_PREVIOUS_SYSTEM_MESSAGE)
   );
 }
@@ -1625,6 +1645,17 @@ export function validateLlmOutput(
     return problem === undefined
       ? { ok: true, output: freezeDetached(output), diagnostics: [] }
       : failure("invalid-output", problem);
+  }
+
+  if (call.role === "proof-draft") {
+    const wire = safeParsePlain(proofDraftWireResultSchema, candidate);
+    const output =
+      wire === undefined
+        ? safeParsePlain(proofDraftOutputSchema, candidate)
+        : normalizeProofDraftWireResult(wire);
+    return output === undefined
+      ? failure("invalid-output", "The proof draft is malformed.")
+      : { ok: true, output: freezeDetached(output), diagnostics: [] };
   }
 
   if (call.role === "proof-planner") {
@@ -1841,6 +1872,7 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
         executorOutputSchema,
         librarianOutputSchema,
         moveAuthorOutputSchema,
+        proofDraftOutputSchema,
         proofPlannerOutputSchema,
         stepTranslatorOutputSchema,
       ])
@@ -1892,6 +1924,8 @@ export const llmCallEvidenceSchema: z.ZodType<LlmCallEvidence> = z
           !librarianOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "move-author" &&
           !moveAuthorOutputSchema.safeParse(evidence.output).success) ||
+        (evidence.role === "proof-draft" &&
+          !proofDraftOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "proof-planner" &&
           !proofPlannerOutputSchema.safeParse(evidence.output).success) ||
         (evidence.role === "step-translator" &&

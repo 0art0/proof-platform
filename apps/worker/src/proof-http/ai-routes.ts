@@ -315,11 +315,13 @@ function capabilities(context: ServiceContext) {
   };
 }
 
-/** The roles a person meets while entering a problem, whose instructions they can read. */
+/** The roles whose instructions are shown in the UI. */
 const PUBLISHED_PROMPT_ROLES = [
   "background-proposer",
   "librarian",
   "proof-state-formalizer",
+  "proof-draft",
+  "proof-planner",
 ] as const satisfies readonly SupportedLlmRole[];
 
 function prompts(context: ServiceContext) {

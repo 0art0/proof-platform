@@ -4,6 +4,7 @@ import styles from "./page.module.css";
 import {
   ProofServiceError,
   readAiCapabilities,
+  readAiPrompts,
   readCurrentProofSession,
   readProofSessionMetadata,
 } from "../../../server/proof-service";
@@ -28,9 +29,10 @@ export default async function SessionPage({
     }
     throw error;
   }
-  const [metadata, capabilities] = await Promise.all([
+  const [metadata, capabilities, prompts] = await Promise.all([
     readProofSessionMetadata(loaded.session.id),
     readAiCapabilities(),
+    readAiPrompts(),
   ]);
   // A name the person gave the session comes first; the approved problem title is the fallback.
   const session =
@@ -52,7 +54,11 @@ export default async function SessionPage({
         aiExecutor={capabilities["move-executor"]}
         aiLibrarian={capabilities.librarian}
         aiMoveAuthor={capabilities["move-author"]}
-        aiPlanner={capabilities["proof-planner"] && capabilities["step-translator"]}
+        aiDraft={capabilities["proof-draft"]}
+        aiPlanner={capabilities["proof-planner"]}
+        aiTranslator={capabilities["step-translator"]}
+        draftPrompt={prompts.proofDraft}
+        blueprintPrompt={prompts.proofPlanner}
       />
     </main>
   );

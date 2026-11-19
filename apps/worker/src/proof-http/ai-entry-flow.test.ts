@@ -351,7 +351,7 @@ describe("edits reach a library built from the proposal", () => {
 });
 
 describe("published prompts", () => {
-  it("shows the exact system message of each problem-entry role", async () => {
+  it("shows the system messages for problem entry and proof drafting", async () => {
     const { origin } = await proposed();
     const response = await fetch(`${origin}/ai/prompts`);
     expect(response.status).toBe(200);
@@ -361,10 +361,14 @@ describe("published prompts", () => {
     expect(Object.keys(body.roles).sort()).toEqual([
       "background-proposer",
       "librarian",
+      "proof-draft",
+      "proof-planner",
       "proof-state-formalizer",
     ]);
     expect(body.roles["background-proposer"]?.systemMessage).toContain("Notation standards");
     expect(body.roles["librarian"]?.systemMessage).toContain("You are given no problem");
+    expect(body.roles["proof-draft"]?.systemMessage).toContain("context.statement");
+    expect(body.roles["proof-planner"]?.systemMessage).toContain("adapt its independent proof");
     expect(body.roles["background-proposer"]?.promptVersion).toBe("library-test-v1");
     expect(body.roles["proof-state-formalizer"]?.promptVersion).toBeNull();
     expect((await post(origin, "/ai/prompts", {})).status).toBe(405);

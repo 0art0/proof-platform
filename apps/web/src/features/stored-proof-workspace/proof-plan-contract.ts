@@ -53,6 +53,7 @@ const renderedStepSchema = z
 export const planViewSchema = z
   .object({
     status: z.literal("planned"),
+    prompt: z.string().optional(),
     callId: z.string().min(1),
     plan: z
       .object({
@@ -77,6 +78,19 @@ export const planViewSchema = z
   })
   .loose();
 export type PlanView = z.infer<typeof planViewSchema>;
+
+export const proofDraftViewSchema = z.object({
+  status: z.literal("drafted"),
+  callId: z.string().min(1),
+  prompt: z.string(),
+  draft: z.object({
+    sketch: z.string(),
+    steps: z
+      .array(z.object({ title: z.string(), motivation: z.string(), reasoning: z.string() }))
+      .min(1),
+  }),
+});
+export type ProofDraftView = z.infer<typeof proofDraftViewSchema>;
 
 const candidateSchema = z
   .object({
@@ -144,6 +158,7 @@ const answerSchema = <Data extends z.ZodType>(data: Data) =>
 const planAnswerSchema = answerSchema(
   z.union([
     planViewSchema,
+    proofDraftViewSchema,
     z.object({ status: z.literal("planning"), callId: z.string().min(1) }).loose(),
     z
       .object({
@@ -156,6 +171,7 @@ const planAnswerSchema = answerSchema(
 
 export type PlanOutcome =
   | Readonly<{ kind: "planned"; view: PlanView }>
+  | Readonly<{ kind: "drafted"; view: ProofDraftView }>
   | Readonly<{ kind: "planning"; callId: string }>
   | Readonly<{ kind: "note"; message: string }>
   | Readonly<{ kind: "error"; message: string }>;
@@ -244,18 +260,20 @@ function planOutcome(status: number, json: unknown): PlanOutcome {
       message: failureMessage(status, answer.error.code, answer.error.message).message,
     };
   const data = answer.data;
-  if (data.status === "planned") return { kind: "planned", view: data as PlanView };
-  if (data.status === "planning")
-    return { kind: "planning", callId: (data as { callId: string }).callId };
-  const result = (data as { result: { missing?: string; reason?: string } }).result;
+  if (data.status === "drafted") return { kind: "drafted", view: data };
+  if (data.status === "planned") return { kind: "planned", view: data };
+  if (data.status === "planning") return { kind: "planning", callId: data.callId };
+  const { result } = data;
   return data.status === "declined"
-    ? { kind: "note", message: `The planner declined: ${result.reason ?? ""}` }
-    : { kind: "note", message: `The planner needs more context: ${result.missing ?? ""}` };
+    ? { kind: "note", message: `The model declined: ${result.reason ?? ""}` }
+    : { kind: "note", message: `The model needs more context: ${result.missing ?? ""}` };
 }
 
 export async function requestProofPlan(
   sessionId: string,
-  request: Readonly<{ id: string; expectedCurrentNodeId: string }>,
+  request:
+    | Readonly<{ id: string; stage: "draft" }>
+    | Readonly<{ id: string; expectedCurrentNodeId: string; draftCallId: string }>,
 ): Promise<PlanOutcome> {
   try {
     const { status, json } = await post(sessionPath(sessionId, "ai-proof-plan"), request);

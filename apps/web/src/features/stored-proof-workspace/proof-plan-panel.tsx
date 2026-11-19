@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ProofNode } from "@proof/protocol";
+import { PromptTip } from "../problem-entry/prompt-tip";
 import { InlineLatex } from "../proof-workspace/presentation";
 import {
+  proofDraftViewSchema,
   readProofPlan,
   requestPlanApply,
   requestPlanTranslation,
@@ -11,6 +13,7 @@ import {
   type PlanCandidate,
   type PlanStep,
   type PlanView,
+  type ProofDraftView,
   type Translation,
 } from "./proof-plan-contract";
 import {
@@ -37,9 +40,6 @@ const POLL_INTERVAL_MS = 3_000;
 const POLL_LIMIT_MS = 12 * 60_000;
 const MAX_RUN_MOVES = 200;
 
-export const PROOF_PLAN_HINT =
-  "A model writes the whole proof as numbered steps, each with why it is a natural next step. The platform then turns each step into its own moves, one at a time, and says when a step needs a move it does not have. You see and confirm every move.";
-
 const FORM_KEYWORDS: Readonly<Record<string, string>> = {
   suffices: "SUFFICES",
   have: "HAVE",
@@ -65,26 +65,38 @@ const STATUS_WORDS: Readonly<Record<UnitStatus, string>> = {
 export type ProofPlanPanelProps = Readonly<{
   sessionId: string;
   node: ProofNode;
-  /** Whether the proof service has both a planner and a step translator. */
-  enabled: boolean;
+  draftEnabled: boolean;
+  blueprintEnabled: boolean;
+  translatorEnabled: boolean;
+  hasStatement: boolean;
+  draftPrompt?: string | undefined;
+  blueprintPrompt?: string | undefined;
   readOnly: boolean;
   /** Another proof command is being applied. */
   busy: boolean;
   onApplyStart: () => boolean;
   onApplyEnd: () => void;
   /** Called after a move was committed; the page reloads the proof. */
-  onApplied: (applied: Readonly<{ nodeId: string; name: string }>) => void | Promise<void>;
+  onApplied: (applied: Readonly<{ nodeId: string; name: string }>) => boolean | Promise<boolean>;
   createId?: (prefix: string) => string;
 }>;
 
-type Stored = Readonly<{ view: PlanView; walk: Walk }>;
+type AppliedMove = Readonly<{
+  callId: string;
+  stepNumber: string;
+  label: string;
+  motivation: string | null;
+  actor: "agent" | "human";
+  transitionClass: Extract<Translation, { status: "proposed" }>["preview"]["transitionClass"];
+}>;
+type Stored = Readonly<{ view: PlanView; walk: Walk; appliedMoves?: readonly AppliedMove[] }>;
 
 type Phase =
   | Readonly<{ kind: "idle" }>
-  | Readonly<{ kind: "planning"; callId: string }>
+  | Readonly<{ kind: "planning"; stage: "draft" | "blueprint" }>
   | Readonly<{ kind: "translating" }>
   | Readonly<{ kind: "proposed"; translation: Extract<Translation, { status: "proposed" }> }>
-  | Readonly<{ kind: "applying" }>
+  | Readonly<{ kind: "applying"; label: string }>
   /** The unit stopped (missing move, unsure, stuck); its alternatives can still be chosen. */
   | Readonly<{
       kind: "stopped";
@@ -123,7 +135,12 @@ function saveStored(sessionId: string, stored: Stored | undefined) {
 export function ProofPlanPanel({
   sessionId,
   node,
-  enabled,
+  draftEnabled,
+  blueprintEnabled,
+  translatorEnabled,
+  hasStatement,
+  draftPrompt,
+  blueprintPrompt,
   readOnly,
   busy,
   onApplyStart,
@@ -132,6 +149,7 @@ export function ProofPlanPanel({
   createId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
 }: ProofPlanPanelProps) {
   const [stored, setStored] = useState<Stored>();
+  const [draft, setDraft] = useState<ProofDraftView>();
   const [phase, setPhase] = useState<Phase>(IDLE);
   const [running, setRunning] = useState(false);
   const runningRef = useRef(false);
@@ -140,6 +158,12 @@ export function ProofPlanPanel({
   useEffect(() => {
     mounted.current = true;
     setStored(loadStored(sessionId));
+    try {
+      const saved = window.sessionStorage.getItem(`proof-draft:${sessionId}`);
+      setDraft(saved === null ? undefined : proofDraftViewSchema.safeParse(JSON.parse(saved)).data);
+    } catch {
+      setDraft(undefined);
+    }
     return () => {
       mounted.current = false;
       runningRef.current = false;
@@ -151,53 +175,71 @@ export function ProofPlanPanel({
     saveStored(sessionId, next);
   };
 
-  const unavailable = !enabled
-    ? "Proof plans are unavailable: the planner or the step translator is not configured for this service."
-    : readOnly
-      ? `${READ_ONLY_REASON}: no plan can be walked.`
-      : undefined;
   const working =
     phase.kind === "planning" || phase.kind === "translating" || phase.kind === "applying";
   const walk = stored?.walk;
   const moved = walk !== undefined && walk.nodeId !== node.id;
+  const draftUnavailable = !hasStatement
+    ? "This session has no problem statement."
+    : !draftEnabled
+      ? "The proof draft model is unavailable."
+      : undefined;
+  const blueprintUnavailable = readOnly
+    ? READ_ONLY_REASON
+    : !blueprintEnabled
+      ? "The blueprint model is unavailable."
+      : undefined;
+  const walkUnavailable = readOnly
+    ? READ_ONLY_REASON
+    : !translatorEnabled
+      ? "Jev is unavailable."
+      : undefined;
 
-  const adoptPlan = (view: PlanView) => {
-    update({ view, walk: startWalk(view, node.id) });
-    setPhase(
-      view.initialState.nodeId === node.id
-        ? IDLE
+  const writePlan = async (stage: "draft" | "blueprint") => {
+    if (working || running || busy) return;
+    const callId = createId(`llm-call:${stage}`);
+    const request =
+      stage === "draft"
+        ? { id: callId, stage }
         : {
-            kind: "note",
-            tone: "info",
-            message: "The proof moved on while the plan was written; the walk starts from here.",
-          },
-    );
-  };
-
-  const writePlan = async () => {
-    if (unavailable !== undefined || working) return;
-    const callId = createId("llm-call:plan");
-    setPhase({ kind: "planning", callId });
-    let outcome = await requestProofPlan(sessionId, { id: callId, expectedCurrentNodeId: node.id });
+            id: callId,
+            expectedCurrentNodeId: node.id,
+            draftCallId: draft?.callId ?? "",
+          };
+    setPhase({ kind: "planning", stage });
+    let outcome = await requestProofPlan(sessionId, request);
     const began = Date.now();
     while (outcome.kind === "planning" && mounted.current && Date.now() - began < POLL_LIMIT_MS) {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      if (!mounted.current) return;
       outcome = await readProofPlan(sessionId, outcome.callId);
     }
     if (!mounted.current) return;
-    if (outcome.kind === "planned") adoptPlan(outcome.view);
-    else if (outcome.kind === "planning") {
-      setPhase({
-        kind: "note",
-        tone: "warning",
-        message: "The plan did not arrive in time. Try again later.",
+    if (outcome.kind === "drafted") {
+      setDraft(outcome.view);
+      try {
+        window.sessionStorage.setItem(`proof-draft:${sessionId}`, JSON.stringify(outcome.view));
+      } catch {
+        // The draft remains available for this page.
+      }
+      update(undefined);
+      setPhase(IDLE);
+    } else if (outcome.kind === "planned") {
+      update({
+        view: outcome.view,
+        walk: startWalk(outcome.view, outcome.view.initialState.nodeId),
       });
-    } else
+      setPhase(IDLE);
+    } else {
       setPhase({
         kind: "note",
         tone: outcome.kind === "note" ? "info" : "warning",
-        message: outcome.message,
+        message:
+          outcome.kind === "planning"
+            ? "The model did not finish in time. Try again later."
+            : outcome.message,
       });
+    }
   };
 
   /** Translate the next move of the current unit; returns the walk and translation it led to. */
@@ -244,7 +286,7 @@ export function ProofPlanPanel({
     translation: Extract<Translation, { status: "proposed" }>,
   ): Promise<Walk | undefined> => {
     if (busy || !onApplyStart()) return undefined;
-    setPhase({ kind: "applying" });
+    setPhase({ kind: "applying", label: translation.choice.label });
     try {
       const outcome = await requestPlanApply(sessionId, {
         callId: translation.callId,
@@ -258,10 +300,26 @@ export function ProofPlanPanel({
       }
       const name = translation.choice.label;
       const next = afterApplied(current.walk, name, outcome.nodeId);
-      update({ ...current, walk: next });
+      const unit = currentUnit(current.walk);
+      const step = current.view.plan.steps.find(({ id }) => id === unit?.stepId);
+      update({
+        ...current,
+        walk: next,
+        appliedMoves: [
+          ...(current.appliedMoves ?? []),
+          {
+            callId: translation.callId,
+            stepNumber: unit?.number ?? "",
+            label: name,
+            motivation: step?.motivation ?? null,
+            actor: translation.actor.kind,
+            transitionClass: translation.preview.transitionClass,
+          },
+        ],
+      });
+      const adopted = await onApplied({ nodeId: outcome.nodeId, name });
       setPhase(IDLE);
-      await onApplied({ nodeId: outcome.nodeId, name });
-      return next;
+      return adopted ? next : undefined;
     } finally {
       onApplyEnd();
     }
@@ -273,7 +331,7 @@ export function ProofPlanPanel({
   };
 
   const runToEnd = async () => {
-    if (stored === undefined || working || busy) return;
+    if (stored === undefined || working || busy || runningRef.current) return;
     runningRef.current = true;
     setRunning(true);
     let current: Stored = stored;
@@ -288,10 +346,11 @@ export function ProofPlanPanel({
         current = { ...current, walk: translated.walk };
         const { translation } = translated;
         if (translation?.status === "proposed") {
+          if (!runningRef.current) return;
           const applied = await apply(current, translation);
           if (applied === undefined) return;
           current = { ...current, walk: applied };
-        } else if (translation?.status !== "realized" && translation?.status !== "unsupported") {
+        } else if (translation?.status !== "realized") {
           return;
         }
       }
@@ -312,151 +371,224 @@ export function ProofPlanPanel({
     await translate(stored, candidate.id, callId);
   };
 
-  const blocked =
-    unavailable ??
-    (busy
-      ? "Another step is being applied; wait for it to finish."
-      : working
-        ? "A request is already running."
-        : undefined);
-
+  const blocked = busy || working || running;
+  const moveBlocked = blocked || walkUnavailable !== undefined || moved;
   const report =
     stored === undefined || walk === undefined ? undefined : missingMoveReport(walk, stored.view);
 
   return (
     <section className={styles.panel} aria-label="Proof plan" data-testid="proof-plan">
       <h2>Proof plan</h2>
-      <p className={styles.hint}>{PROOF_PLAN_HINT}</p>
-      <div className={styles.actions}>
-        <button
-          type="button"
-          className={stored === undefined ? styles.primary : styles.secondary}
-          disabled={blocked !== undefined}
-          onClick={() => void writePlan()}
-        >
-          {phase.kind === "planning"
-            ? "Writing the plan…"
-            : stored === undefined
-              ? "Write a proof plan"
-              : "Write a new plan"}
-        </button>
-        {stored === undefined ? null : (
+      <section className={planStyles.stage} aria-label="Independent proof">
+        <h3>
+          Independent proof{" "}
+          <PromptTip label="Independent proof" prompt={draft?.prompt ?? draftPrompt} />
+        </h3>
+        <div className={styles.actions}>
           <button
             type="button"
-            className={styles.ghost}
-            disabled={working}
-            onClick={() => {
-              update(undefined);
-              setPhase(IDLE);
-            }}
+            className={styles.secondary}
+            disabled={blocked || draftUnavailable !== undefined}
+            onClick={() => void writePlan("draft")}
           >
-            Close plan
+            {phase.kind === "planning" && phase.stage === "draft"
+              ? "Writing the independent proof…"
+              : draft === undefined
+                ? "Write independent proof"
+                : "Write a new independent proof"}
           </button>
+          {draftUnavailable === undefined ? null : (
+            <span className={styles.reason}>{draftUnavailable}</span>
+          )}
+        </div>
+        {draft === undefined ? null : (
+          <>
+            <p className={planStyles.prose}>{draft.draft.sketch}</p>
+            <ol className={planStyles.draftSteps}>
+              {draft.draft.steps.map(({ title, motivation, reasoning }, index) => (
+                <li key={index}>
+                  <strong>{title}</strong>
+                  <p className={planStyles.prose}>
+                    <em>Motivation</em> {motivation}
+                  </p>
+                  <p className={planStyles.prose}>{reasoning}</p>
+                </li>
+              ))}
+            </ol>
+          </>
         )}
-        <span className={styles.reason}>
-          {blocked ??
-            (phase.kind === "planning" ? "Writing a careful proof can take a few minutes." : "")}
-        </span>
-      </div>
+      </section>
+
+      <section className={planStyles.stage} aria-label="Blueprint">
+        <h3>
+          Blueprint <PromptTip label="Blueprint" prompt={stored?.view.prompt ?? blueprintPrompt} />
+        </h3>
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={styles.secondary}
+            disabled={blocked || draft === undefined || blueprintUnavailable !== undefined}
+            onClick={() => void writePlan("blueprint")}
+          >
+            {phase.kind === "planning" && phase.stage === "blueprint"
+              ? "Adapting the proof…"
+              : stored === undefined
+                ? "Build blueprint"
+                : "Rebuild blueprint"}
+          </button>
+          {stored === undefined ? null : (
+            <button
+              type="button"
+              className={styles.ghost}
+              disabled={blocked}
+              onClick={() => {
+                update(undefined);
+                setPhase(IDLE);
+              }}
+            >
+              Close blueprint
+            </button>
+          )}
+          {blueprintUnavailable === undefined ? null : (
+            <span className={styles.reason}>{blueprintUnavailable}</span>
+          )}
+        </div>
+        {stored === undefined || walk === undefined ? null : (
+          <>
+            <p className={planStyles.prose}>
+              <strong>Goal</strong> {stored.view.plan.theorem.prose}
+            </p>
+            <p className={planStyles.prose}>{stored.view.plan.sketch}</p>
+            <PlanTree view={stored.view} walk={walk} />
+          </>
+        )}
+      </section>
 
       {phase.kind === "note" ? (
         <p className={styles.note} data-tone={phase.tone} role="status">
           {phase.message}
         </p>
       ) : null}
-      {phase.kind === "stopped" ? (
-        <StoppedUnit
-          translation={phase.translation}
-          busy={busy || working}
-          onChoose={(candidate, callId) => void chooseInstead(candidate, callId)}
-        />
-      ) : null}
-
-      {stored === undefined || walk === undefined ? null : (
-        <>
-          <p className={planStyles.detail}>
-            <strong>Theorem.</strong>{" "}
-            {stored.view.rendered.theorem === null ? (
-              stored.view.plan.theorem.prose
-            ) : (
-              <InlineLatex latex={stored.view.rendered.theorem} />
-            )}
-          </p>
-          <p className={planStyles.detail}>
-            <strong>Sketch.</strong> {stored.view.plan.sketch}
-          </p>
-          <PlanTree view={stored.view} walk={walk} />
-
-          {moved && !working ? (
-            <div className={styles.note} data-tone="warning" role="status">
-              <p>
-                The proof changed outside the plan. Continue the plan from the current state, or
-                close it.
+      <section className={planStyles.stage} aria-label="Proof on the platform">
+        <h3>Proof on the platform</h3>
+        {walkUnavailable === undefined ? null : <p className={styles.reason}>{walkUnavailable}</p>}
+        {phase.kind === "stopped" ? (
+          <StoppedUnit
+            translation={phase.translation}
+            busy={moveBlocked}
+            onChoose={(candidate, callId) => void chooseInstead(candidate, callId)}
+          />
+        ) : null}
+        {stored === undefined || walk === undefined ? (
+          <p className={styles.hint}>Build a blueprint to start Jev.</p>
+        ) : (
+          <>
+            <div role="status" className={styles.hint}>
+              {phase.kind === "translating"
+                ? `Jev is choosing a move for step ${currentUnit(walk)?.number ?? ""}.`
+                : null}
+              {phase.kind === "applying" ? `Applying ${phase.label}…` : null}
+              {phase.kind === "idle" &&
+              !walkFinished(walk) &&
+              (stored.appliedMoves?.length ?? 0) > 0
+                ? `Applied ${stored.appliedMoves?.at(-1)?.label}.`
+                : null}
+            </div>
+            {moved && !working ? (
+              <div className={styles.note} data-tone="warning" role="status">
+                <p>
+                  The proof changed outside the plan. Continue the plan from the current state, or
+                  close it.
+                </p>
+                <div className={styles.actions}>
+                  <button
+                    type="button"
+                    className={styles.secondary}
+                    onClick={() => update({ ...stored, walk: continueFrom(walk, node.id) })}
+                    disabled={blocked || walkUnavailable !== undefined}
+                  >
+                    Continue from here
+                  </button>
+                </div>
+              </div>
+            ) : walkFinished(walk) ? (
+              <p className={styles.note} role="status">
+                Jev reached the end of the blueprint.
               </p>
+            ) : (
               <div className={styles.actions}>
                 <button
                   type="button"
-                  className={styles.secondary}
-                  onClick={() => update({ ...stored, walk: continueFrom(walk, node.id) })}
+                  className={styles.primary}
+                  disabled={moveBlocked || phase.kind === "proposed"}
+                  onClick={() => void nextMove()}
                 >
-                  Continue from here
+                  {phase.kind === "translating" ? "Translating…" : "Next move"}
+                </button>
+                {running ? (
+                  <button
+                    type="button"
+                    className={styles.secondary}
+                    onClick={() => {
+                      runningRef.current = false;
+                    }}
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.secondary}
+                    disabled={moveBlocked || phase.kind === "proposed"}
+                    onClick={() => void runToEnd()}
+                  >
+                    Run to the end
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={styles.ghost}
+                  disabled={moveBlocked}
+                  onClick={skip}
+                >
+                  Skip step
                 </button>
               </div>
-            </div>
-          ) : walkFinished(walk) ? (
-            <p className={styles.note} role="status">
-              The walk reached the end of the plan.
-            </p>
-          ) : (
-            <div className={styles.actions}>
-              <button
-                type="button"
-                className={styles.primary}
-                disabled={blocked !== undefined || phase.kind === "proposed"}
-                onClick={() => void nextMove()}
-              >
-                {phase.kind === "translating" ? "Translating…" : "Next move"}
-              </button>
-              {running ? (
-                <button
-                  type="button"
-                  className={styles.secondary}
-                  onClick={() => {
-                    runningRef.current = false;
-                  }}
-                >
-                  Stop
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className={styles.secondary}
-                  disabled={blocked !== undefined || phase.kind === "proposed"}
-                  onClick={() => void runToEnd()}
-                >
-                  Run to the end
-                </button>
-              )}
-              <button type="button" className={styles.ghost} disabled={working} onClick={skip}>
-                Skip step
-              </button>
-            </div>
-          )}
+            )}
 
-          {phase.kind === "proposed" ? (
-            <ProposedMove
-              translation={phase.translation}
-              busy={busy || working}
-              onApply={() => void apply(stored, phase.translation)}
-              onChoose={(candidate) => void chooseInstead(candidate, phase.translation.callId)}
-            />
-          ) : null}
+            {phase.kind === "proposed" ? (
+              <ProposedMove
+                translation={phase.translation}
+                busy={moveBlocked}
+                onApply={() => void apply(stored, phase.translation)}
+                onChoose={(candidate) => void chooseInstead(candidate, phase.translation.callId)}
+              />
+            ) : null}
 
-          {report === undefined || report.entries.length === 0 ? null : (
-            <MissingMoves report={report} />
-          )}
-        </>
-      )}
+            {stored.appliedMoves === undefined || stored.appliedMoves.length === 0 ? null : (
+              <ol className={planStyles.draftSteps} aria-label="Applied proof moves">
+                {stored.appliedMoves.map((move) => (
+                  <li key={move.callId}>
+                    <strong>
+                      {move.stepNumber} {move.label}
+                    </strong>{" "}
+                    <TransitionClassBadge transitionClass={move.transitionClass} />
+                    {move.actor === "human" ? (
+                      <span className={styles.hint}> Chosen manually</span>
+                    ) : null}
+                    {move.motivation === null ? null : (
+                      <p className={planStyles.prose}>{move.motivation}</p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+            {report === undefined || report.entries.length === 0 ? null : (
+              <MissingMoves report={report} />
+            )}
+          </>
+        )}
+      </section>
     </section>
   );
 }
@@ -513,7 +645,13 @@ function StepStatement({
   rendered,
 }: Readonly<{ step: PlanStep; rendered: PlanView["rendered"]["steps"][string] | undefined }>) {
   const show = (latex: string | null | undefined, prose: string) =>
-    latex === null || latex === undefined ? <span>{prose}</span> : <InlineLatex latex={latex} />;
+    latex === null || latex === undefined || latex === prose ? (
+      <span>{prose}</span>
+    ) : (
+      <span>
+        {prose} <InlineLatex latex={latex} />
+      </span>
+    );
   return (
     <span>
       {step.assumptions.length === 0 ? null : (

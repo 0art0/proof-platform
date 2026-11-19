@@ -35,6 +35,7 @@ describe("readAiCapabilities", () => {
           "move-shortlister": true,
           "move-executor": true,
           "move-author": true,
+          "proof-draft": false,
           "proof-planner": true,
           "step-translator": false,
           attestor: true,
@@ -49,6 +50,7 @@ describe("readAiCapabilities", () => {
       "move-shortlister": true,
       "move-executor": true,
       "move-author": true,
+      "proof-draft": false,
       "proof-planner": true,
       "step-translator": false,
     });

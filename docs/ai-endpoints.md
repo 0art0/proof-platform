@@ -26,9 +26,8 @@ PROOF_STORE=memory node --env-file=.env.local --import tsx apps/worker/src/main.
 
 For an existing PostgreSQL database, apply migrations `0013_llm_formalizer_role.sql`,
 `0015_llm_background_proposer_role.sql`, `0016_llm_librarian_role.sql` and
-`0017_llm_move_executor_role.sql`, `0019_llm_move_author_role.sql` and
-`0020_llm_proof_plan_roles.sql` before starting the updated
-worker (each widens the `llm_calls`
+`0017_llm_move_executor_role.sql`, `0019_llm_move_author_role.sql`,
+`0020_llm_proof_plan_roles.sql` and `0022_llm_proof_draft_role.sql` before starting the updated worker (each widens the `llm_calls`
 role constraint; background and library decisions reuse the `llm_topic_decisions` table). A
 single-instance deployment can use `PROOF_AUTO_MIGRATE=true`; the normal migration runner is
 `npm run migrate`.
@@ -59,11 +58,12 @@ defaults
 to `0.55`; Jev's native confidence and candidate probabilities are included in the stored structured
 evidence. Missing credentials disable these routes. No model fallback is silently selected.
 
-The proof planner defaults to `openai/gpt-6-luna` with `xhigh` reasoning effort, a 32,000 token
-output limit and its own 600000 ms budget (`PROOF_AI_PLANNER_MODEL`,
-`PROOF_AI_PLANNER_REASONING_EFFORT`, `PROOF_AI_PLANNER_MAX_OUTPUT_TOKENS`,
-`PROOF_AI_PLANNER_TIMEOUT_MS`). The step translator defaults to `typesafe-ai/jev` with a confidence
-threshold of `0.5` (`PROOF_AI_TRANSLATOR_MODEL`, `PROOF_AI_TRANSLATOR_MIN_CONFIDENCE`) and shares
+The independent proof writer and blueprint planner default to `openai/gpt-6.2-sol` with medium
+reasoning effort. The writer uses 16,000 output tokens and the shared `PROOF_AI_TIMEOUT_MS`.
+The planner uses 32,000 output tokens and a 600,000 ms budget. The `PROOF_AI_PROOF_DRAFT_` and
+`PROOF_AI_PLANNER_` prefixes each support `MODEL`, `REASONING_EFFORT`, `MAX_OUTPUT_TOKENS` and
+`TIMEOUT_MS`. The step translator defaults to `typesafe-ai/jev` with a confidence threshold of
+`0.5` (`PROOF_AI_TRANSLATOR_MODEL`, `PROOF_AI_TRANSLATOR_MIN_CONFIDENCE`) and shares
 `PROOF_AI_TIMEOUT_MS`.
 
 ## Cost guard and status codes
@@ -963,41 +963,40 @@ approved. The link grants no authority. Review is the ordinary `review-move-draf
 against the generality questions of refinement section 7.2; the proposed move is retrievable and
 applicable in the session only after an approval, with its provenance intact.
 
-## Proof plans (proof planner and step translator)
+## Proof plans
 
-`docs/motivated-proof-plans.md` is the design; this section is the routes as they ship. A strong
-model writes one structured proof in Lamport's style; the platform walks it one unit at a time, and
-Jev turns each unit into displayed suggestions and menu items. Every route is session-scoped and
-refuses a read-only session (`409 session-read-only`) and a stale node (`409 stale-evidence`).
+### Write an independent proof and build its blueprint
 
-### Write a plan
+`POST /proof-sessions/:sessionId/ai/proof-plan` accepts a draft request or a blueprint request.
 
-`POST /proof-sessions/:sessionId/ai/proof-plan` accepts `{ "id", "expectedCurrentNodeId" }`. The
-worker builds the planner's context deterministically: the session's problem statement and
-background (from its metadata; without metadata `409 plan-context-unavailable`), its effective
-operators, up to 64 library results (results first, then variants), and the first open goal with its
-declarations and hypotheses, labelled `H1`, `H2`, ... in order. The planner is a stateful proof agent
-(design plan §15.1), the one role that sees the original problem.
+- `{ "id", "stage": "draft" }` sends only the session's original problem statement to the
+  `proof-draft` role. A successful response has `status: "drafted"`, the recorded `callId`, the
+  `prompt`, and a `draft` with a sketch and natural-language steps. Each step has a title,
+  motivation and reasoning. A session without a problem statement returns
+  `409 problem-statement-unavailable`.
+- `{ "id", "draftCallId", "expectedCurrentNodeId" }` adapts a validated draft of the same session
+  and problem into a blueprint. The `proof-planner` role sees that draft, the session's background,
+  active operators, available moves and macros, up to 64 approved library results, and the
+  current first open goal and its hypotheses. The earlier request shape without `draftCallId`
+  still writes a plan directly. Blueprint requests reject read-only sessions and stale nodes.
 
-The output is validated as section 2.5 of the design says: form rules, the QED rule, contiguous
-sub-proofs, depth and size limits, and Lamport's scope for every `by.facts` and `actsOn` entry; every
-`by.results` entry must be a result the planner was shown. A plan that breaks a rule is recorded and
-answered `422` with the diagnostic naming the step.
+The worker checks step forms, QED placement, sub-proof order and depth, and the scope of every
+cited fact and selected statement. A blueprint can cite library results from its recorded context.
+Invalid model output is recorded and returns `422` with a diagnostic.
 
-The request waits up to 15 seconds (the service option `planAnswerWaitMs`). A plan written in time
-is answered `200`; otherwise `202 { status: "planning", callId }`, while the durable call continues.
-`GET /proof-sessions/:sessionId/ai/proof-plan/:callId` then answers `{ status: "planning" }` until the
-call is stored, and the plan afterwards. A plan is answered as `status: "planned"` with:
+Either request may return `202 planning` with a `callId` after 15 seconds. Poll
+`GET /proof-sessions/:sessionId/ai/proof-plan/:callId` for `planning` or the final response.
+The final `declined` and `insufficient-context` responses carry the model's explanation.
 
-- `plan`: the stored plan (`theorem`, `sketch`, `steps`);
-- `numbers`: each step's Lamport number (`⟨level⟩index`) and level;
-- `units`: the walking order, each with its focus key (`theorem` or `case:<label>`) and, for a local
-  `assume` lemma or a `have` proved by backward steps, why it is `unsupported`;
-- `rendered`: each statement's LaTeX serialized from its parsed MathJSON, or `null` when it does not
-  parse. Clients typeset only this, never the model's own LaTeX;
-- `warnings`: the fields whose LaTeX does not parse in the session's notation.
+A `planned` response carries the stored `plan`, its draft's call ID when supplied, and the
+planner's prompt. The `initialState` identifies the node and focused goal. The `numbers` field
+gives each step's Lamport number and level, and `units` gives the walking order and focus keys.
+`rendered` contains LaTeX serialized from parsed MathJSON, or `null` when parsing fails.
+`warnings` identifies the fields that failed to parse.
 
-`insufficient-context` and `declined` are answered `200` with the planner's `result`.
+The workspace shows the independent proof and blueprint alongside the platform's applied moves.
+The information icons show the system prompts published by `GET /ai/prompts` and use the
+recorded prompt once a corresponding proof is available.
 
 ### Translate one move
 

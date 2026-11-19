@@ -1,31 +1,30 @@
 # Motivated proof plans
 
-A strong model writes a whole structured, motivated proof of the problem first. The platform then
-walks that proof one step at a time, and Jev turns each step into actions the platform already
-offers: a selection, one of the displayed suggestions, and items from its menus. The person steps
-through the walk and sees what every step produced. A step that no displayed action can carry out
-is reported as a missing move. This is the failure mode of refinement §2.1: "a mathematician can
-give a convincing motivated account that the interface cannot express."
+Sol writes an independent motivated proof from the problem statement. A second Sol call adapts it
+into a blueprint using the current goal, the session's approved library and the available moves.
+Jev walks the blueprint one step at a time by choosing among displayed suggestions and menu items.
+The workspace shows the independent proof, the blueprint and the applied moves as they happen.
 
 This document refines design plan §13, §15 and §18, refinement §2, and
 `docs/ai-agents-architecture.md`. `docs/ai-endpoints.md` documents the routes as they ship.
 
 ## 1. Roles and boundaries
 
-| Role              | Model (default)     | Sees                                                                       | Produces                                |
-| ----------------- | ------------------- | -------------------------------------------------------------------------- | --------------------------------------- |
-| `proof-planner`   | `openai/gpt-6-luna` | problem, background, active constants, session library, initial state      | one structured proof (§2), or a refusal |
-| `step-translator` | `typesafe-ai/jev`   | one plan step, its enclosing claim, the focused sequent, candidate actions | a probability over the candidates (§4)  |
+| Role              | Model (default)      | Sees                                                                        | Produces                                 |
+| ----------------- | -------------------- | --------------------------------------------------------------------------- | ---------------------------------------- |
+| `proof-draft`     | `openai/gpt-6.2-sol` | the original problem statement                                              | a prose sketch and motivated proof steps |
+| `proof-planner`   | `openai/gpt-6.2-sol` | draft, problem, background, active constants, library, moves and first goal | a structured blueprint (§2) or a refusal |
+| `step-translator` | `typesafe-ai/jev`    | one blueprint step, its enclosing claim, the focused sequent and candidates | a probability over the candidates (§4)   |
 
-- **The planner is a stateful proof agent** (design plan §15.1). It is the one role that receives
-  the original problem. Its output is a static record: the stored, validated plan is never
-  regenerated or rewritten, and later steps are translated from the stored copy.
+- **The two written proofs are stored as static records.** The blueprint references the
+  validated draft call. Each translation uses the saved blueprint for the requested unit.
 - **The translator has minimal context** (§15.3). It never sees the problem text, the rest of the
   plan or other branches, only the step, the claim the step is part of proving, the focused goal and
   the deterministically computed candidates.
-- **Neither role mutates proof state.** Jev only chooses among displayed suggestions and displayed
-  menu items. The platform previews the choice through the ordinary preview path, and the person
-  applies it. The commit is an ordinary command through the command service and the kernel, with an
+- **Model output is recorded evidence.** Jev only chooses among displayed suggestions and displayed
+  menu items. The platform previews the choice through the ordinary preview path. The person can
+  apply the preview or start a run that applies Jev's confident choices as it goes. Each move is
+  committed through the command service and kernel with an
   `agent` actor (`actor:proof-planner`), so history keeps the stateful-agent provenance apart from
   human choices (§15.4). A choice the person makes from the alternatives instead is a human command.
 - **Deterministic work runs first.** Candidate enumeration, menu generation, numbering, scoping
@@ -316,18 +315,18 @@ probabilities and the confidence. The confidence threshold is
 
 The workspace gains a **Proof plan** panel beside the move-instructions panel.
 
-- "Write a proof plan" asks the planner (disabled, with the reason, when the role is not
-  configured or the session is read-only). Writing at high effort can take minutes, which the
-  button says.
-- The plan is shown as Lamport's tree: `⟨1⟩1`, `⟨2⟩3`, with form keywords (SUFFICES, CASE, PICK,
-  WITNESS, QED), the claim in LaTeX (prose when it did not parse), and the motivation and
-  justification under each step, collapsible by level. The sketch is shown first.
+- **Write independent proof** generates the prose proof. **Build blueprint** adapts it to the
+  first open goal. The prompt information icons open on hover, focus or click.
+- The blueprint displays its sketch and Lamport's numbered steps with the prose claim,
+  parsed LaTeX where available, motivation, and justification.
 - The current unit is highlighted. **Next move** translates it and shows the proposed move: the
   selected statements, the suggestion's name, the menu choices, Jev's confidence, the transition
   class (equivalence, strengthening or weakening) and the ordinary before/after preview, with the
   next best candidates beneath. **Apply** commits it; **Choose this instead** on an alternative
   previews that one as the person's own choice; **Skip step** moves on.
-- **Run to the end** repeats Next move and Apply until a unit stops being `proposed` or `realized`.
+- **Run to the end** repeats Next move and Apply until the blueprint finishes, a move cannot be
+  completed, or the user selects Stop. The platform proof updates after each committed move.
+  The applied-move log shows the motivation from the blueprint and the transition class.
 - Every unit shows its status as a mark in the tree. "Missing moves" lists the report (§3.4) and can
   be copied as JSON.
 - The walk's progress is kept in the tab's session storage, anchored to the plan's call ID and to
@@ -336,13 +335,14 @@ The workspace gains a **Proof plan** panel beside the move-instructions panel.
 
 ## 6. Configuration
 
-| Variable prefix        | Default                                                         |
-| ---------------------- | --------------------------------------------------------------- |
-| `PROOF_AI_PLANNER_`    | `openai/gpt-6-luna`, `xhigh`, 32,000 tokens, timeout 600,000 ms |
-| `PROOF_AI_TRANSLATOR_` | `typesafe-ai/jev`, minimum confidence 0.5                       |
+| Variable prefix         | Default                                                           |
+| ----------------------- | ----------------------------------------------------------------- |
+| `PROOF_AI_PROOF_DRAFT_` | `openai/gpt-6.2-sol`, `medium`, 16,000 tokens, shared timeout     |
+| `PROOF_AI_PLANNER_`     | `openai/gpt-6.2-sol`, `medium`, 32,000 tokens, timeout 600,000 ms |
+| `PROOF_AI_TRANSLATOR_`  | `typesafe-ai/jev`, minimum confidence 0.5                         |
 
-Both roles report themselves in `GET /ai/capabilities`, share the cost guard, and widen the call
-role constraint in migration `0020_llm_proof_plan_roles.sql`.
+All three roles report themselves in `GET /ai/capabilities` and share the cost guard. Migration
+`0022_llm_proof_draft_role.sql` widens the call role constraint for the independent writer.
 
 ## 7. Open questions
 
@@ -350,16 +350,13 @@ role constraint in migration `0020_llm_proof_plan_roles.sql`.
   claims need one. It belongs in the move library with its own review, not in the translator.
 - **Two-premise forward steps.** Retrieval finds premises among the hypotheses. When it cannot, the
   candidate list lacks the right action; the report will show how often this happens.
-- **Planner–platform vocabulary.** The planner is not told the move catalog, deliberately: the
-  plan should be the motivated proof a mathematician would write, so that gaps show up. Whether a
-  "platform-aware" planning mode is also useful is for evaluation.
 
 ## 8. Implementation status
 
 Implemented as designed; `docs/ai-endpoints.md` ("Proof plans") documents the routes. Where the
 implementation refines the design:
 
-- **Asynchronous planning.** An `xhigh` plan can outlast an HTTP exchange (Node's `fetch` stops
+- **Asynchronous planning.** Writing either proof can outlast an HTTP exchange (Node's `fetch` stops
   waiting for headers after 300 s). The plan request waits 15 s and otherwise answers
   `202 planning`; the durable call continues and the plan is read back by its call ID, which the
   panel polls.

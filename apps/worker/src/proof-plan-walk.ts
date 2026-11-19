@@ -32,7 +32,7 @@ type Goal = ProofNode["state"]["goals"][number];
 type Operators = readonly OperatorDeclaration[];
 
 /** Never offered to Jev: sorries stay user-selected and attestation is a separate role. */
-const EXCLUDED_ARTIFACTS: ReadonlySet<string> = new Set([
+export const EXCLUDED_TRANSLATOR_ARTIFACTS: ReadonlySet<string> = new Set([
   "move:mark-sorry",
   "move:close-by-accepted-inference",
 ]);
@@ -479,7 +479,7 @@ type Suggestion = DisplayedSuggestionSet["suggestions"][number];
 
 function applicableSuggestion(suggestion: Suggestion): boolean {
   return (
-    !EXCLUDED_ARTIFACTS.has(suggestion.artifactId) &&
+    !EXCLUDED_TRANSLATOR_ARTIFACTS.has(suggestion.artifactId) &&
     suggestion.unresolvedSelectionSlots.length === 0
   );
 }

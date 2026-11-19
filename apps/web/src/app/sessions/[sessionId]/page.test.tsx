@@ -10,19 +10,20 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
-const { readAiCapabilities, readCurrentProofSession, readProofSessionMetadata } = vi.hoisted(
-  () => ({
+const { readAiCapabilities, readAiPrompts, readCurrentProofSession, readProofSessionMetadata } =
+  vi.hoisted(() => ({
     readAiCapabilities: vi.fn(),
+    readAiPrompts: vi.fn().mockResolvedValue({ proofDraft: "Draft prompt" }),
     readCurrentProofSession: vi.fn(),
     readProofSessionMetadata: vi.fn(),
-  }),
-);
+  }));
 vi.mock("../../../server/proof-service", () => ({
   ProofServiceError: class extends Error {
     status = 500;
     code = "x";
   },
   readAiCapabilities,
+  readAiPrompts,
   readCurrentProofSession,
   readProofSessionMetadata,
 }));
@@ -50,7 +51,10 @@ async function workspaceProps() {
       aiExecutor: boolean;
       aiLibrarian: boolean;
       aiMoveAuthor: boolean;
+      aiDraft: boolean;
       aiPlanner: boolean;
+      aiTranslator: boolean;
+      draftPrompt: string;
     }>;
   }>;
   expect(isValidElement(page)).toBe(true);
@@ -66,6 +70,7 @@ describe("the session page", () => {
       "move-shortlister": true,
       "move-executor": true,
       "move-author": true,
+      "proof-draft": true,
       "proof-planner": true,
       "step-translator": true,
     });
@@ -88,6 +93,9 @@ describe("the session page", () => {
     expect(props.aiLibrarian).toBe(true);
     expect(props.aiMoveAuthor).toBe(true);
     expect(props.aiPlanner).toBe(true);
+    expect(props.aiDraft).toBe(true);
+    expect(props.aiTranslator).toBe(true);
+    expect(props.draftPrompt).toBe("Draft prompt");
   });
 
   it("opens a session without stored metadata under its id", async () => {
@@ -98,6 +106,7 @@ describe("the session page", () => {
       "move-shortlister": false,
       "move-executor": false,
       "move-author": false,
+      "proof-draft": true,
       "proof-planner": true,
       "step-translator": false,
     });
@@ -109,7 +118,7 @@ describe("the session page", () => {
     expect(props.aiExecutor).toBe(false);
     expect(props.aiLibrarian).toBe(false);
     expect(props.aiMoveAuthor).toBe(false);
-    // Walking a plan needs both roles.
-    expect(props.aiPlanner).toBe(false);
+    expect(props.aiPlanner).toBe(true);
+    expect(props.aiTranslator).toBe(false);
   });
 });

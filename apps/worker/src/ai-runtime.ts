@@ -22,6 +22,9 @@ import {
   DEFAULT_PLANNER_MODEL,
   DEFAULT_PLANNER_REASONING_EFFORT,
   DEFAULT_PLANNER_TIMEOUT_MS,
+  DEFAULT_PROOF_DRAFT_MODEL,
+  DEFAULT_PROOF_DRAFT_MAX_OUTPUT_TOKENS,
+  DEFAULT_PROOF_DRAFT_REASONING_EFFORT,
   DEFAULT_TRANSLATOR_MIN_CONFIDENCE,
   DEFAULT_TRANSLATOR_MODEL,
   DEFAULT_SHORTLISTER_MIN_CONFIDENCE,
@@ -113,6 +116,17 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
     env.PROOF_AI_LIBRARIAN_REASONING_EFFORT,
     DEFAULT_LIBRARIAN_REASONING_EFFORT,
   );
+  const draftModel = nonEmpty(env.PROOF_AI_PROOF_DRAFT_MODEL) ?? DEFAULT_PROOF_DRAFT_MODEL;
+  const draftTokens = positiveInteger(
+    env.PROOF_AI_PROOF_DRAFT_MAX_OUTPUT_TOKENS,
+    DEFAULT_PROOF_DRAFT_MAX_OUTPUT_TOKENS,
+  );
+  const draftReasoningEffort = parseReasoningEffort(
+    "PROOF_AI_PROOF_DRAFT_REASONING_EFFORT",
+    env.PROOF_AI_PROOF_DRAFT_REASONING_EFFORT,
+    DEFAULT_PROOF_DRAFT_REASONING_EFFORT,
+  );
+  const draftTimeoutMs = positiveInteger(env.PROOF_AI_PROOF_DRAFT_TIMEOUT_MS, timeoutMs);
   const plannerModel = nonEmpty(env.PROOF_AI_PLANNER_MODEL) ?? DEFAULT_PLANNER_MODEL;
   const plannerTokens = positiveInteger(
     env.PROOF_AI_PLANNER_MAX_OUTPUT_TOKENS,
@@ -238,6 +252,22 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
         reasoningEffort: authorReasoningEffort,
       }),
     },
+    "proof-draft": {
+      transport: createVercelStructuredOutputTransport({
+        apiKey: key.apiKey,
+        model: draftModel,
+        reasoningEffort: draftReasoningEffort,
+        maxOutputTokens: draftTokens,
+        timeoutMs: draftTimeoutMs,
+      }),
+      dispatch: Object.freeze({
+        provider: "vercel-ai-gateway",
+        model: draftModel,
+        promptVersion: "proof-draft-v1",
+        maxOutputTokens: draftTokens,
+        reasoningEffort: draftReasoningEffort,
+      }),
+    },
     "proof-planner": {
       transport: createVercelStructuredOutputTransport({
         apiKey: key.apiKey,
@@ -249,7 +279,7 @@ export function createAiRuntime(env: Readonly<Record<string, string | undefined>
       dispatch: Object.freeze({
         provider: "vercel-ai-gateway",
         model: plannerModel,
-        promptVersion: "proof-planner-v1",
+        promptVersion: "proof-planner-v2",
         maxOutputTokens: plannerTokens,
         reasoningEffort: plannerReasoningEffort,
       }),

@@ -31,8 +31,7 @@ export function PromptTip({
         i
       </button>
       <span role="tooltip" id={id} className={styles.promptTipBody}>
-        <strong>{label}</strong>
-        {prompt}
+        <strong>{label}</strong> {prompt}
       </span>
     </span>
   );

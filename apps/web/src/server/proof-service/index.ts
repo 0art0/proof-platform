@@ -1675,6 +1675,7 @@ export type AiRole =
   | "move-shortlister"
   | "move-executor"
   | "move-author"
+  | "proof-draft"
   | "proof-planner"
   | "step-translator";
 export type AiCapabilities = Readonly<Record<AiRole, boolean>>;
@@ -1685,21 +1686,26 @@ export const NO_AI_CAPABILITIES: AiCapabilities = Object.freeze({
   "move-shortlister": false,
   "move-executor": false,
   "move-author": false,
+  "proof-draft": false,
   "proof-planner": false,
   "step-translator": false,
 });
 
 const aiCapabilitiesSchema = z.object({ roles: z.record(z.string(), z.boolean()) }).strict();
 
-/** Which AI roles are configured on the worker; an unreachable worker means none are. */
+export type AiPrompts = Readonly<{
+  background?: string;
+  library?: string;
+  formalizer?: string;
+  proofDraft?: string;
+  proofPlanner?: string;
+}>;
 const aiPromptsSchema = z.object({
   roles: z.record(z.string(), z.object({ systemMessage: z.string() }).passthrough()),
 });
 
-/** What the problem-entry roles are told; empty when the worker cannot say. Never throws. */
-export async function readAiPrompts(
-  options: ProofServiceRequestOptions = {},
-): Promise<Readonly<{ background?: string; library?: string; formalizer?: string }>> {
+/** The system prompts shown in the workspace and problem entry. */
+export async function readAiPrompts(options: ProofServiceRequestOptions = {}): Promise<AiPrompts> {
   try {
     const response = await requestProofService("/ai/prompts", {
       method: "GET",
@@ -1708,20 +1714,25 @@ export async function readAiPrompts(
     const value = await readValidatedEnvelope(response);
     const parsed = aiPromptsSchema.safeParse(value);
     if (response.status !== 200 || !parsed.success) return {};
-    const message = (role: string) => parsed.data.roles[role]?.systemMessage;
-    const prompts: { background?: string; library?: string; formalizer?: string } = {};
-    const background = message("background-proposer");
-    const library = message("librarian");
-    const formalizer = message("proof-state-formalizer");
-    if (background !== undefined) prompts.background = background;
-    if (library !== undefined) prompts.library = library;
-    if (formalizer !== undefined) prompts.formalizer = formalizer;
-    return prompts;
+    const roles = {
+      background: "background-proposer",
+      library: "librarian",
+      formalizer: "proof-state-formalizer",
+      proofDraft: "proof-draft",
+      proofPlanner: "proof-planner",
+    } satisfies Record<keyof AiPrompts, AiRole>;
+    return Object.fromEntries(
+      Object.entries(roles).flatMap(([key, role]) => {
+        const message = parsed.data.roles[role]?.systemMessage;
+        return message === undefined ? [] : [[key, message]];
+      }),
+    );
   } catch {
     return {};
   }
 }
 
+/** Which AI roles are configured on the worker; an unreachable worker means none are. */
 export async function readAiCapabilities(
   options: ProofServiceRequestOptions = {},
 ): Promise<AiCapabilities> {
@@ -1741,6 +1752,7 @@ export async function readAiCapabilities(
       "move-shortlister": roles["move-shortlister"] === true,
       "move-executor": roles["move-executor"] === true,
       "move-author": roles["move-author"] === true,
+      "proof-draft": roles["proof-draft"] === true,
       "proof-planner": roles["proof-planner"] === true,
       "step-translator": roles["step-translator"] === true,
     };

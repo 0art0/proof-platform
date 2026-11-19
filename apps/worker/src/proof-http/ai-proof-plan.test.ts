@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   NO_MOVE_CHOICE_ID,
   translatorQuestions,
+  type PreparedLlmCall,
   type LlmTransport,
   type ProofPlanProposal,
   type ProofPlanStep,
@@ -105,6 +106,20 @@ const PLAN: ProofPlanProposal = {
   ],
 };
 
+const DRAFT = {
+  kind: "proof-draft",
+  sketch: "Take the conjunction apart and use both facts.",
+  steps: [
+    {
+      title: "Extract the two conjuncts",
+      motivation: "Both conjuncts appear in the goal.",
+      reasoning: "From p and q we get p and q separately, so q and p follows.",
+    },
+  ],
+};
+
+const DRAFT_WIRE = { sketch: DRAFT.sketch, steps: DRAFT.steps, obstacle: null };
+
 /** A scripted Jev: picks the first candidate whose artifact is in `prefer`, or a reserved outcome. */
 function scriptedJev(script: {
   prefer?: readonly string[];
@@ -153,6 +168,7 @@ async function startScenario(
     jev?: ReturnType<typeof scriptedJev>;
     ai?: boolean;
     planner?: LlmTransport;
+    writer?: LlmTransport;
     planAnswerWaitMs?: number;
   } = {},
 ) {
@@ -169,6 +185,10 @@ async function startScenario(
   });
   const jev = options.jev ?? scriptedJev({ prefer: [] });
   const ai: AiRuntime = {
+    "proof-draft": {
+      transport: options.writer ?? (async () => ({ result: DRAFT_WIRE })),
+      dispatch: { provider: "fixture", model: "fixture-writer", promptVersion: "test" },
+    },
     "proof-planner": {
       transport:
         options.planner ??
@@ -327,7 +347,7 @@ describe("proof plans", () => {
     throw new Error("The plan was never stored.");
   });
 
-  it("walks the plan to a solved proof with Jev's choices, applied as the planning agent", async () => {
+  it("writes an independent draft, adapts its blueprint, and walks it to a solved proof with Jev", async () => {
     const jev = scriptedJev({
       prefer: [
         "move:expand-hypothesis-conjunction",
@@ -335,11 +355,52 @@ describe("proof plans", () => {
         "move:close-by-hypothesis",
       ],
     });
-    const scenario = await startScenario({ jev });
-    const planned = await scenario.post("/ai/proof-plan", {
-      id: "llm-call:plan-1",
+    const calls: PreparedLlmCall[] = [];
+    const scenario = await startScenario({
+      jev,
+      writer: async (call) => {
+        calls.push(call);
+        return { result: DRAFT_WIRE };
+      },
+      planner: async (call) => {
+        calls.push(call);
+        return { result: { ...PLAN, kind: "proof" } };
+      },
+    });
+    const draftId = "llm-call:independent";
+    const drafted = await scenario.post("/ai/proof-plan", { id: draftId, stage: "draft" });
+    expect(drafted).toMatchObject({ status: 200, body: { status: "drafted", draft: DRAFT } });
+    expect(calls[0]?.envelope.context).toEqual({ statement: "Assuming p and q, show q and p." });
+    expect((await scenario.get(`/ai/proof-plan/${draftId}`)).body.draft).toEqual(DRAFT);
+    const invalid = await scenario.post("/ai/proof-plan", {
+      id: "llm-call:invalid-blueprint",
+      draftCallId: "llm-call:missing",
       expectedCurrentNodeId: ROOT_ID,
     });
+    expect(invalid.status).toBe(404);
+    expect(calls).toHaveLength(1);
+
+    const planned = await scenario.post("/ai/proof-plan", {
+      id: "llm-call:plan-1",
+      draftCallId: draftId,
+      expectedCurrentNodeId: ROOT_ID,
+    });
+    expect(planned).toMatchObject({
+      status: 200,
+      body: { status: "planned", draftCallId: draftId },
+    });
+    expect(calls[1]?.envelope.context).toMatchObject({
+      initialState: { nodeId: ROOT_ID, hypotheses: [{ label: "H1" }] },
+      blueprint: {
+        draftCallId: draftId,
+        draft: DRAFT,
+        moves: expect.arrayContaining([
+          expect.objectContaining({ id: "move:expand-hypothesis-conjunction" }),
+        ]),
+      },
+    });
+    expect(JSON.stringify(calls[1]?.envelope.context)).not.toContain("move:mark-sorry");
+    expect(await scenario.currentNodeId()).toBe(ROOT_ID);
     const statuses = await walk(scenario, planned.body.callId, planned.body.units);
     // have-q takes one move; have-p already holds; the QED splits and closes both halves.
     expect(statuses).toEqual(["have-q:realized:1", "have-p:realized:0", "qed:realized:3"]);

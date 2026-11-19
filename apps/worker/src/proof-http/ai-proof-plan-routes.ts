@@ -1,9 +1,9 @@
 /**
  * Motivated proof plans (`docs/motivated-proof-plans.md`), all session-scoped:
  *
- * - `POST /proof-sessions/:id/ai/proof-plan` asks the planner for one structured proof of the
- *   current goal and answers with the stored plan, its numbering and its walking units.
- * - `GET /proof-sessions/:id/ai/proof-plan/:callId` reads a stored plan back the same way.
+ * - `POST /proof-sessions/:id/ai/proof-plan` writes an independent draft or adapts it to the
+ *   current goal as a blueprint with numbered walking units.
+ * - `GET /proof-sessions/:id/ai/proof-plan/:callId` reads the stored draft or blueprint.
  * - `POST /proof-sessions/:id/ai/proof-plan/translate` translates one move of one unit: the
  *   realization check, the candidate actions, Jev's choice and menus, and the ordinary preview.
  *   Nothing is committed.
@@ -22,9 +22,11 @@ import {
   buildProofPlannerContext,
   buildStepTranslatorContext,
   criterionLabel,
+  llmCallIdSchema,
   menuQuestionId,
   prepareLlmCall,
   proofPlanWalk,
+  type LlmContextEnvelope,
   type PreparedLlmCall,
   type ProofPlanProposal,
   type ProofPlannerContext,
@@ -44,6 +46,7 @@ import {
   type StoredLlmCall,
 } from "../llm-call-repository";
 import {
+  EXCLUDED_TRANSLATOR_ARTIFACTS,
   candidateActions,
   checkRealization,
   followFocus,
@@ -83,9 +86,17 @@ const DEFAULT_PLAN_ANSWER_WAIT_MS = 15_000;
 const MAX_MENU_ROUNDS = 3;
 const ALTERNATIVES_SHOWN = 3;
 
-const planRequestSchema = z
-  .object({ id: stableIdentifierSchema, expectedCurrentNodeId: stableIdentifierSchema })
-  .strict();
+const draftRequestSchema = z.object({ id: llmCallIdSchema, stage: z.literal("draft") }).strict();
+const planRequestSchema = z.union([
+  draftRequestSchema,
+  z
+    .object({
+      id: stableIdentifierSchema,
+      expectedCurrentNodeId: stableIdentifierSchema,
+      draftCallId: stableIdentifierSchema.optional(),
+    })
+    .strict(),
+]);
 
 const labelSchema = z.string().min(1).max(48);
 const translateRequestSchema = z
@@ -286,16 +297,34 @@ export async function writeProofPlan(
   const requestData = planRequestSchema.safeParse(body.value);
   if (!requestData.success)
     return writeJson(response, 400, problem("The proof-plan request is invalid."));
-  const configured = context.ai?.["proof-planner"];
+  const data = requestData.data;
+  const isDraft = "stage" in data;
+  const role = isDraft ? "proof-draft" : "proof-planner";
+  const configured = context.ai?.[role];
   if (configured === undefined || context.llmCalls === undefined)
-    return reply(response, disabled("Proof planning"));
-  const { id, expectedCurrentNodeId } = requestData.data;
+    return reply(response, disabled(isDraft ? "Proof drafting" : "Proof planning"));
   const loaded = await loadCurrentProofSession(context.store, sessionId);
   if (loaded.status !== "loaded") {
     return writeJson(response, repositoryFailureStatus(loaded), {
       diagnostics: loaded.diagnostics,
     });
   }
+  if (isDraft) {
+    const statement = loaded.session.metadata?.problem.statement;
+    if (statement === undefined) {
+      return reply(
+        response,
+        diagnostics(409, "problem-statement-unavailable", "This session has no problem statement."),
+      );
+    }
+    return dispatchPlanCall(context, sessionId, response, configured, loaded.session.operators, {
+      id: data.id,
+      schemaVersion: "llm-context/v1",
+      role: "proof-draft",
+      context: { statement },
+    });
+  }
+  const { id, expectedCurrentNodeId, draftCallId } = data;
   if (loaded.session.readOnly === true) {
     return reply(
       response,
@@ -328,9 +357,65 @@ export async function writeProofPlan(
       response,
       diagnostics(409, "plan-context-unavailable", built.message, { status: "unavailable" }),
     );
-  const envelope = buildProofPlannerContext({ id, context: built.context });
+  let blueprint: ProofPlannerContext["blueprint"];
+  if (draftCallId !== undefined) {
+    const read = await readLlmCall(context.llmCalls, sessionOwner(sessionId), draftCallId);
+    if (read.status !== "found")
+      return writeJson(response, repositoryStatus(read), { diagnostics: read.diagnostics });
+    const { record } = read;
+    const envelope = record.preparedCall.envelope;
+    const draft =
+      record.status === "completed" && record.evidence.status === "validated"
+        ? record.evidence.output
+        : undefined;
+    if (
+      envelope.role !== "proof-draft" ||
+      envelope.context.statement !== built.context.problem.statement ||
+      draft?.kind !== "proof-draft"
+    ) {
+      return reply(
+        response,
+        diagnostics(409, "draft-not-available", "A validated draft of this problem is required."),
+      );
+    }
+    const moves = [
+      ...context.definitions.moves,
+      ...(context.definitions.macros ?? []).map(({ move }) => move),
+    ];
+    blueprint = {
+      draftCallId,
+      draft,
+      moves: moves
+        .filter((move) => !EXCLUDED_TRANSLATOR_ARTIFACTS.has(move.id))
+        .map((move) => ({
+          id: move.id,
+          name: move.name,
+          description: move.description,
+          selectionKinds: move.selectionContract.slots.map(({ role, required }) =>
+            required ? role : `optional ${role}`,
+          ),
+          sideConditions: [...move.contextRequirements, ...move.sideConditions],
+          transitionClass: move.transitionClass,
+        })),
+    };
+  }
+  const envelope = buildProofPlannerContext({
+    id,
+    context: { ...built.context, ...(blueprint === undefined ? {} : { blueprint }) },
+  });
   if (!envelope.ok) return writeJson(response, 400, { diagnostics: envelope.diagnostics });
-  const prepared = prepareLlmCall(envelope.envelope);
+  await dispatchPlanCall(context, sessionId, response, configured, operators, envelope.envelope);
+}
+
+async function dispatchPlanCall(
+  context: ServiceContext,
+  sessionId: string,
+  response: ServerResponse,
+  configured: AiRoleRuntime,
+  operators: ProofSession["operators"],
+  envelope: LlmContextEnvelope,
+): Promise<void> {
+  const prepared = prepareLlmCall(envelope);
   if (!prepared.ok) return writeJson(response, 400, { diagnostics: prepared.diagnostics });
   // Writing a whole proof can outlast an HTTP exchange. The durable call keeps running; a request
   // that is not answered in time says so, and the plan is read back by its call ID.
@@ -363,11 +448,7 @@ function writePlanEvidence(
 ): void {
   const evidence = record.evidence;
   const envelope = record.preparedCall.envelope;
-  if (
-    evidence.status !== "validated" ||
-    evidence.output === undefined ||
-    envelope.role !== "proof-planner"
-  ) {
+  if (evidence.status !== "validated" || evidence.output === undefined) {
     return writeJson(response, evidence.status === "transport-failed" ? 503 : 422, {
       status: evidence.status,
       callId: record.id,
@@ -376,7 +457,17 @@ function writePlanEvidence(
     });
   }
   const output = evidence.output;
-  if (output.kind !== "proof-plan") {
+  const prompt = record.preparedCall.messages[0].content;
+  if (envelope.role === "proof-draft" && output.kind === "proof-draft") {
+    return writeJson(response, 200, {
+      status: "drafted",
+      callId: record.id,
+      draft: output,
+      prompt,
+      replayed,
+    });
+  }
+  if (output.kind !== "proof-plan" || envelope.role !== "proof-planner") {
     return writeJson(response, 200, {
       status: output.kind,
       callId: record.id,
@@ -391,6 +482,8 @@ function writePlanEvidence(
     status: "planned",
     callId: record.id,
     replayed,
+    prompt,
+    draftCallId: envelope.context.blueprint?.draftCallId,
     ...view,
     diagnostics: [],
   });
@@ -412,10 +505,11 @@ export async function readProofPlan(
   const read = await readLlmCall(context.llmCalls, sessionOwner(sessionId), callId);
   if (read.status !== "found")
     return writeJson(response, repositoryStatus(read), { diagnostics: read.diagnostics });
-  if (read.record.role === "proof-planner" && read.record.status === "dispatching") {
+  const planRole = read.record.role === "proof-planner" || read.record.role === "proof-draft";
+  if (planRole && read.record.status === "dispatching") {
     return writeJson(response, 200, { status: "planning", callId, diagnostics: [] });
   }
-  if (read.record.role !== "proof-planner" || read.record.status !== "completed") {
+  if (!planRole || read.record.status !== "completed") {
     return reply(
       response,
       diagnostics(409, "plan-not-available", "The call is not a proof plan of this session.", {

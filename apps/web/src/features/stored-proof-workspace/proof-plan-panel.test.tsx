@@ -49,7 +49,8 @@ function node(id = "node:one"): ProofNode {
   });
 }
 
-type Route = (body: Record<string, unknown> | undefined) => readonly [number, unknown];
+type RouteAnswer = readonly [number, unknown];
+type Route = (body: Record<string, unknown> | undefined) => RouteAnswer | Promise<RouteAnswer>;
 
 /** Answer each same-origin endpoint from its own queue; record every request. */
 function stubRoutes(routes: Record<string, Route[]>) {
@@ -63,7 +64,7 @@ function stubRoutes(routes: Record<string, Route[]>) {
     requests.push({ path, body });
     const key = Object.keys(routes).find((suffix) => path.endsWith(suffix));
     const next = key === undefined ? undefined : routes[key]!.shift();
-    const [status, json] = next?.(body) ?? [
+    const [status, json] = (await next?.(body)) ?? [
       500,
       { ok: false, error: { code: "x", message: "unexpected" } },
     ];
@@ -81,12 +82,31 @@ const ok =
   () =>
     [status, { ok: true, data }] as const;
 
+const DRAFT_VIEW = {
+  status: "drafted",
+  callId: "llm-call:draft-fixed",
+  prompt: "Write from the problem statement.",
+  draft: {
+    sketch: "Read the hypothesis in reverse order.",
+    steps: [
+      {
+        title: "Take the conjuncts",
+        motivation: "The goal asks for both.",
+        reasoning: "The hypothesis gives each conjunct.",
+      },
+    ],
+  },
+};
+
 function renderPanel(overrides: Partial<Parameters<typeof ProofPlanPanel>[0]> = {}) {
-  const onApplied = vi.fn();
+  const onApplied = vi.fn(() => true);
   const props = {
     sessionId: "session:test",
     node: node(),
-    enabled: true,
+    draftEnabled: true,
+    blueprintEnabled: true,
+    translatorEnabled: true,
+    hasStatement: true,
     readOnly: false,
     busy: false,
     onApplyStart: () => true,
@@ -105,20 +125,37 @@ async function click(name: string | RegExp) {
   });
 }
 
+async function buildBlueprint() {
+  await click("Write independent proof");
+  await click("Build blueprint");
+}
+
 describe("the proof-plan panel", () => {
-  it("explains itself and says why it is unavailable", () => {
-    renderPanel({ enabled: false });
-    expect(screen.getByText(/writes the whole proof as numbered steps/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Write a proof plan" })).toBeDisabled();
+  it("shows what the independent model is told and works without Jev", async () => {
+    const requests = stubRoutes({ "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)] });
+    renderPanel({ translatorEnabled: false, draftPrompt: DRAFT_VIEW.prompt });
     expect(
-      screen.getByText(/planner or the step translator is not configured/),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: /What the model is told.*Independent proof/ }),
+    ).toHaveAccessibleDescription(`Independent proof ${DRAFT_VIEW.prompt}`);
+    expect(screen.getByRole("button", { name: "Build blueprint" })).toBeDisabled();
+    await buildBlueprint();
+    expect(requests.map(({ body }) => body)).toEqual([
+      { id: "llm-call:draft-fixed", stage: "draft" },
+      {
+        id: "llm-call:blueprint-fixed",
+        draftCallId: "llm-call:draft-fixed",
+        expectedCurrentNodeId: "node:one",
+      },
+    ]);
+    expect(screen.getByText("Take the conjuncts")).toBeInTheDocument();
+    expect(screen.getByText("Jev is unavailable.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next move" })).toBeDisabled();
   });
 
   it("shows the plan as numbered steps with their forms, motivation and justification", async () => {
-    stubRoutes({ "/ai-proof-plan": [ok(PLAN_VIEW)] });
+    stubRoutes({ "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)] });
     renderPanel();
-    await click("Write a proof plan");
+    await buildBlueprint();
     const tree = screen.getByRole("list", { name: "Steps of the plan" });
     const steps = within(tree).getAllByRole("listitem");
     expect(steps.map((item) => item.getAttribute("data-step"))).toEqual([
@@ -136,7 +173,7 @@ describe("the proof-plan panel", () => {
 
   it("proposes Jev's move, applies it as the plan's move, and records the realized step", async () => {
     const requests = stubRoutes({
-      "/ai-proof-plan": [ok(PLAN_VIEW)],
+      "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)],
       "/ai-proof-plan-translate": [
         ok({
           status: "proposed",
@@ -164,7 +201,7 @@ describe("the proof-plan panel", () => {
       "/ai-proof-plan-apply": [ok({ status: "applied", nodeId: "node:two" }, 201)],
     });
     const { onApplied, rerender, props } = renderPanel();
-    await click("Write a proof plan");
+    await buildBlueprint();
     await click("Next move");
     const card = screen.getByTestId("proof-plan-proposal");
     expect(within(card).getByText(CANDIDATE.label)).toBeInTheDocument();
@@ -174,6 +211,11 @@ describe("the proof-plan panel", () => {
       fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
     });
     expect(onApplied).toHaveBeenCalledWith({ nodeId: "node:two", name: CANDIDATE.label });
+    const appliedMoves = screen.getByRole("list", { name: "Applied proof moves" });
+    expect(appliedMoves).toHaveTextContent(CANDIDATE.label);
+    expect(appliedMoves).toHaveTextContent("equivalence");
+    expect(appliedMoves).toHaveTextContent("The hypothesis is a conjunction");
+    expect(screen.getByText("Take the conjuncts")).toBeInTheDocument();
     expect(requests.find(({ path }) => path.endsWith("/ai-proof-plan-apply"))?.body).toEqual({
       callId: "llm-call:translate-fixed",
       candidateId: CANDIDATE.id,
@@ -198,9 +240,44 @@ describe("the proof-plan panel", () => {
     ).toHaveAttribute("aria-current", "step");
   });
 
+  it("shows Jev choosing a move and pauses before applying an in-flight choice", async () => {
+    let finishTranslation: (answer: RouteAnswer) => void = () => undefined;
+    const translation = new Promise<RouteAnswer>((resolve) => {
+      finishTranslation = resolve;
+    });
+    const requests = stubRoutes({
+      "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)],
+      "/ai-proof-plan-translate": [() => translation],
+    });
+    renderPanel();
+    await buildBlueprint();
+    await click("Run to the end");
+    expect(screen.getByRole("status")).toHaveTextContent("Jev is choosing a move for step ⟨1⟩1.");
+    await click("Stop");
+    await act(async () => {
+      finishTranslation(
+        ok({
+          status: "proposed",
+          callId: "llm-call:translate-fixed",
+          confidence: 0.9,
+          actor: { kind: "agent" },
+          choice: CANDIDATE,
+          alternatives: [],
+          menuChoices: {},
+          preview: { nodeId: "node:one", transitionClass: "equivalence" },
+        })(),
+      );
+    });
+    expect(requests.some(({ path }) => path.endsWith("/ai-proof-plan-apply"))).toBe(false);
+    expect(
+      within(screen.getByTestId("proof-plan-proposal")).getByRole("button", { name: "Apply" }),
+    ).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+  });
+
   it("reports a missing move, offers the alternatives and lists it in the report", async () => {
     stubRoutes({
-      "/ai-proof-plan": [ok(PLAN_VIEW)],
+      "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)],
       "/ai-proof-plan-translate": [
         ok({
           status: "no-move",
@@ -212,7 +289,7 @@ describe("the proof-plan panel", () => {
       ],
     });
     renderPanel();
-    await click("Write a proof plan");
+    await buildBlueprint();
     await click("Next move");
     const stopped = screen.getByTestId("proof-plan-stopped");
     expect(
@@ -229,9 +306,9 @@ describe("the proof-plan panel", () => {
   });
 
   it("keeps the walk across a reload and offers to continue when the proof moved on", async () => {
-    stubRoutes({ "/ai-proof-plan": [ok(PLAN_VIEW)] });
+    stubRoutes({ "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)] });
     const { unmount } = renderPanel();
-    await click("Write a proof plan");
+    await buildBlueprint();
     unmount();
     renderPanel({ node: node("node:elsewhere") });
     expect(screen.getByText(/The proof changed outside the plan/)).toBeInTheDocument();
@@ -250,7 +327,8 @@ describe("the proof-plan panel", () => {
       ],
     });
     renderPanel();
-    await click("Write a proof plan");
-    expect(screen.getByRole("status")).toHaveTextContent("The planner declined: Not a theorem.");
+    await click("Write independent proof");
+    expect(screen.getByRole("status")).toHaveTextContent("The model declined: Not a theorem.");
+    expect(screen.getByRole("button", { name: "Build blueprint" })).toBeDisabled();
   });
 });

@@ -87,8 +87,11 @@ export type StoredProofWorkspaceProps = Readonly<{
   aiLibrarian?: boolean | undefined;
   /** Whether the proof service can propose a general move from an applied step with a model. */
   aiMoveAuthor?: boolean | undefined;
-  /** Whether the proof service can write a proof plan and translate its steps with models. */
+  aiDraft?: boolean | undefined;
   aiPlanner?: boolean | undefined;
+  aiTranslator?: boolean | undefined;
+  draftPrompt?: string | undefined;
+  blueprintPrompt?: string | undefined;
 }>;
 type Notice = Readonly<{ state: "committed" | "rejected"; message: string }>;
 type SuggestionId = string;
@@ -110,7 +113,11 @@ function StatefulStoredWorkspace({
   aiExecutor = false,
   aiLibrarian = false,
   aiMoveAuthor = false,
+  aiDraft = false,
   aiPlanner = false,
+  aiTranslator = false,
+  draftPrompt,
+  blueprintPrompt,
 }: StoredProofWorkspaceProps) {
   const [session, setSession] = useState(initialSession);
   const [node, setNode] = useState(initialNode);
@@ -744,7 +751,7 @@ function StatefulStoredWorkspace({
             "The move was applied, but the new current node could not be loaded; reload the page.",
         });
         void loadHistory();
-        return;
+        return false;
       }
       rejectShownPreview("superseded");
       setSession(current.value.session);
@@ -755,6 +762,7 @@ function StatefulStoredWorkspace({
         message: `Applied “${name}” from the proof plan; now at ${nodeId}.`,
       });
       void loadHistory();
+      return true;
     },
     [loadHistory, rejectShownPreview, resetTransientState, session.id],
   );
@@ -822,8 +830,9 @@ function StatefulStoredWorkspace({
               ? "No suggestions fit this selection"
               : `${suggestionCount} suggestion${suggestionCount === 1 ? "" : "s"}`,
         };
+  const showProofPlan = aiDraft || aiPlanner || aiTranslator;
   const moveInstructions =
-    !aiExecutor && !aiPlanner ? null : (
+    !aiExecutor && !showProofPlan ? null : (
       <div key="move-instructions" className={styles.movesArea}>
         {aiExecutor ? (
           <MoveInstructions
@@ -843,11 +852,16 @@ function StatefulStoredWorkspace({
             onApplied={adoptExecutorResult}
           />
         ) : null}
-        {aiPlanner ? (
+        {showProofPlan ? (
           <ProofPlanPanel
             sessionId={session.id}
             node={node}
-            enabled={aiPlanner}
+            draftEnabled={aiDraft}
+            blueprintEnabled={aiPlanner}
+            translatorEnabled={aiTranslator}
+            hasStatement={session.statement !== undefined}
+            draftPrompt={draftPrompt}
+            blueprintPrompt={blueprintPrompt}
             readOnly={readOnly}
             busy={mutationPending}
             onApplyStart={beginExecutorApply}

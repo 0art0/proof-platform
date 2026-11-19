@@ -31,6 +31,61 @@ const latexSchema = z.string().min(1).max(2_000);
 const methodSchema = z.string().min(1).max(200);
 const labelPattern = /^[A-Za-z][A-Za-z0-9._-]{0,47}$/;
 const hypothesisLabelPattern = /^H[1-9][0-9]*$/;
+
+export const PROOF_DRAFT_SYSTEM_MESSAGE =
+  "Solve the mathematical problem in context.statement. Write the solution as a structured, motivated proof in natural language, using your own judgment about what makes a proof structured and motivated. Give a short overview of the idea and organize the argument into meaningful steps with descriptive headings. In each step, say why a reader might think of it at that point and give the mathematical reasoning that justifies it. Explain key choices when they arise and make dependencies, case splits, and the conclusion clear. Choose the presentation and level of detail that suit the mathematics. For a complete proof, fill sketch and steps and set obstacle to null. When the statement is false, essential information is missing, or you cannot find a complete proof after trying, set sketch to null, leave steps empty, and describe the specific mathematical obstacle.";
+
+export const proofDraftContextSchema = z
+  .object({ statement: z.string().min(1).max(20_000) })
+  .strict();
+
+const draftSketchSchema = z.string().min(1).max(4_000);
+const draftStepsSchema = z
+  .array(
+    z
+      .object({
+        title: z.string().min(1).max(200),
+        motivation: proseSchema,
+        reasoning: proseSchema,
+      })
+      .strict(),
+  )
+  .max(MAX_PROOF_PLAN_STEPS);
+const draftObstacleSchema = z.string().min(1).max(500);
+
+const proofDraftSchema = z
+  .object({
+    kind: z.literal("proof-draft"),
+    sketch: draftSketchSchema,
+    steps: draftStepsSchema.min(1),
+  })
+  .strict();
+
+export const proofDraftOutputSchema = z.union([
+  proofDraftSchema,
+  z.object({ kind: z.literal("declined"), reason: draftObstacleSchema }).strict(),
+]);
+
+export const proofDraftWireResultSchema = z
+  .object({
+    sketch: draftSketchSchema.nullable(),
+    steps: draftStepsSchema,
+    obstacle: draftObstacleSchema.nullable(),
+  })
+  .strict();
+
+export function normalizeProofDraftWireResult(
+  wire: z.infer<typeof proofDraftWireResultSchema>,
+): z.infer<typeof proofDraftOutputSchema> | undefined {
+  if (wire.obstacle === null && wire.sketch !== null && wire.steps.length > 0) {
+    return { kind: "proof-draft", sketch: wire.sketch, steps: wire.steps };
+  }
+  if (wire.obstacle !== null && wire.sketch === null && wire.steps.length === 0) {
+    return { kind: "declined", reason: wire.obstacle };
+  }
+  return undefined;
+}
+
 /** A step label the model chooses. Hypothesis labels (`H1`, ...) and `goal` are reserved. */
 const stepLabelSchema = z
   .string()
@@ -155,6 +210,25 @@ export const proofPlannerContextSchema = z
     problem: z
       .object({ title: z.string().min(1).max(500), statement: z.string().min(1).max(20_000) })
       .strict(),
+    blueprint: z
+      .object({
+        draftCallId: stableIdentifierSchema,
+        draft: proofDraftSchema,
+        moves: z.array(
+          z
+            .object({
+              id: stableIdentifierSchema,
+              name: z.string().min(1),
+              description: z.string().min(1),
+              selectionKinds: z.array(z.string()),
+              sideConditions: z.array(z.string()),
+              transitionClass: z.enum(["equivalence", "strengthening", "weakening"]),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .optional(),
     background: backgroundProfileSchema,
     constants: z.array(operatorDeclarationSchema).max(128),
     library: z.array(plannerLibraryResultSchema).max(MAX_PROOF_PLAN_LIBRARY_RESULTS),

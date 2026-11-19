@@ -41,6 +41,7 @@ describe("createAiRuntime", () => {
       "move-author",
       "move-executor",
       "move-shortlister",
+      "proof-draft",
       "proof-planner",
       "proof-state-formalizer",
       "step-translator",
@@ -90,12 +91,19 @@ describe("createAiRuntime", () => {
       reasoningEffort: DEFAULT_MOVE_AUTHOR_REASONING_EFFORT,
     });
     expect(typeof runtime["move-author"]?.transport).toBe("function");
+    expect(runtime["proof-draft"]?.dispatch).toEqual({
+      provider: "vercel-ai-gateway",
+      model: "openai/gpt-6.2-sol",
+      promptVersion: "proof-draft-v1",
+      maxOutputTokens: 16_000,
+      reasoningEffort: "medium",
+    });
     expect(runtime["proof-planner"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway",
-      model: "openai/gpt-6-luna",
-      promptVersion: "proof-planner-v1",
+      model: "openai/gpt-6.2-sol",
+      promptVersion: "proof-planner-v2",
       maxOutputTokens: 32_000,
-      reasoningEffort: "xhigh",
+      reasoningEffort: "medium",
     });
     expect(runtime["step-translator"]?.dispatch).toEqual({
       provider: "vercel-ai-gateway-evaluation",

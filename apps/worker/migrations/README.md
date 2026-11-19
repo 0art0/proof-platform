@@ -55,8 +55,11 @@ seven roles). A move author's proposal is call evidence only; a draft that came 
 two call IDs in the move artifact's provenance, so no table is added.
 
 `0020_llm_proof_plan_roles.sql` widens the `llm_calls` role constraint to include the proof planner
-and the step translator (the last widening lists all nine roles). A plan and its translations are call
+and the step translator. A plan and its translations are call
 evidence only; the moves they lead to are ordinary commands, so no table is added.
+
+`0022_llm_proof_draft_role.sql` adds the independent proof writer to the `llm_calls` role
+constraint. The validated draft is saved as call evidence and the blueprint call references it.
 
 `0003_proof_event_provenance.sql` closes the nullable composite-foreign-key gap between proof
 events and proof edges. It stores each row's suggestion, chosen-suggestion, and preview identity

@@ -827,6 +827,7 @@ describe("background-proposer capability", () => {
       "move-shortlister": false,
       "move-executor": false,
       "move-author": false,
+      "proof-draft": false,
       "proof-planner": false,
       "step-translator": false,
     });

@@ -145,9 +145,10 @@ configured disables its UI controls, and each disabled control explains why.
 
 ## Proof plans
 
-Two further roles, the proof planner (`proof-planner`, a stateful proof agent) and the step
-translator (`step-translator`, Jev), write a structured motivated proof and walk it with the
-platform's own moves. `docs/motivated-proof-plans.md` is their design.
+The proof writer (`proof-draft`, Sol) writes a motivated proof from the problem statement.
+The planner (`proof-planner`, Sol) adapts it to the current proof state and move catalogue.
+The step translator (`step-translator`, Jev) walks the resulting blueprint with the platform's
+moves. See `docs/motivated-proof-plans.md`.
 
 ## Migrations
 
