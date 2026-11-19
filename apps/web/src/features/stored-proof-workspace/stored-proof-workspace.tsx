@@ -50,7 +50,7 @@ import { useLibraryTopUp } from "./library-top-up";
 import { useSessionConstants } from "./use-session-constants";
 import { useWideLayout } from "./use-wide-layout";
 import { MoveInstructions } from "./move-instructions";
-import { ProofPlanPanel } from "./proof-plan-panel";
+import { PROOF_PLAN_ID, ProofPlanPanel } from "./proof-plan-panel";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
@@ -759,7 +759,7 @@ function StatefulStoredWorkspace({
       resetTransientState();
       setNotice({
         state: "committed",
-        message: `Applied “${name}” from the proof plan; now at ${nodeId}.`,
+        message: `Proof plan applied “${name}”.`,
       });
       void loadHistory();
       return true;
@@ -834,6 +834,23 @@ function StatefulStoredWorkspace({
   const moveInstructions =
     !aiExecutor && !showProofPlan ? null : (
       <div key="move-instructions" className={styles.movesArea}>
+        {showProofPlan ? (
+          <ProofPlanPanel
+            sessionId={session.id}
+            node={node}
+            draftEnabled={aiDraft}
+            blueprintEnabled={aiPlanner}
+            translatorEnabled={aiTranslator}
+            hasStatement={session.statement !== undefined}
+            draftPrompt={draftPrompt}
+            blueprintPrompt={blueprintPrompt}
+            readOnly={readOnly}
+            busy={mutationPending}
+            onApplyStart={beginExecutorApply}
+            onApplyEnd={endExecutorApply}
+            onApplied={adoptPlanMove}
+          />
+        ) : null}
         {aiExecutor ? (
           <MoveInstructions
             sessionId={session.id}
@@ -850,23 +867,6 @@ function StatefulStoredWorkspace({
             onApplyStart={beginExecutorApply}
             onApplyEnd={endExecutorApply}
             onApplied={adoptExecutorResult}
-          />
-        ) : null}
-        {showProofPlan ? (
-          <ProofPlanPanel
-            sessionId={session.id}
-            node={node}
-            draftEnabled={aiDraft}
-            blueprintEnabled={aiPlanner}
-            translatorEnabled={aiTranslator}
-            hasStatement={session.statement !== undefined}
-            draftPrompt={draftPrompt}
-            blueprintPrompt={blueprintPrompt}
-            readOnly={readOnly}
-            busy={mutationPending}
-            onApplyStart={beginExecutorApply}
-            onApplyEnd={endExecutorApply}
-            onApplied={adoptPlanMove}
           />
         ) : null}
       </div>
@@ -932,6 +932,11 @@ function StatefulStoredWorkspace({
         node={node}
         readOnly={readOnly}
       >
+        {showProofPlan ? (
+          <a className={styles.toolbarButton} href={`#${PROOF_PLAN_ID}`}>
+            Proof plan
+          </a>
+        ) : null}
         <details className={styles.proofActions}>
           <summary className={styles.disclosure}>More proof actions</summary>
           <ToolbarActionBar

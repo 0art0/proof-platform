@@ -33,7 +33,7 @@ export default async function NewProblemPage({
   const initialStatement = typeof statement === "string" ? statement : "";
   const initialTitle = typeof title === "string" ? title : "";
   return (
-    <main className={styles.page}>
+    <main className={`${styles.page} ${styles.entryPage}`}>
       <header className={styles.pageHeader}>
         <Link className={styles.back} href="/">
           ← Home

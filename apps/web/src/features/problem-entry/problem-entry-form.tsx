@@ -2,7 +2,6 @@
 
 import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { createLatexRenderer, createPresentation } from "@proof/language";
-import { canonicalJsonEquals } from "@proof/mathjson-model";
 import {
   BACKGROUND_LEVELS,
   createProofNodeSchema,
@@ -30,6 +29,7 @@ import {
 } from "./draft-form";
 import { recordRecentSession } from "./recent-sessions";
 import { StatementField, StatementPreview, cachedStatementFeedback } from "./statement-field";
+import { Rendered, SetupStatements } from "./setup-statements";
 import { Formula } from "./typeset";
 import styles from "./problem-entry.module.css";
 
@@ -597,8 +597,6 @@ function ReviewPanel({
     () => createPresentation({ operators: reviewed.operators }),
     [reviewed.operators],
   );
-  const [goal] = reviewed.node.state.goals;
-  const context = goal?.sequent.context;
   const library = reviewed.review.initialLibrary;
   return (
     <section className={styles.review} aria-label="Review">
@@ -695,46 +693,7 @@ function ReviewPanel({
             </dd>
           </>
         )}
-        <dt>Variables and objects</dt>
-        <dd>
-          {context === undefined || context.declarations.length === 0
-            ? "None"
-            : context.declarations.map((declaration) => (
-                <code key={declaration.id} className={styles.token}>
-                  {declaration.symbol}: {sortLabel(sorts, declaration.sort)}
-                </code>
-              ))}
-        </dd>
-        <dt>Hypotheses</dt>
-        <dd>
-          {context === undefined || context.hypotheses.length === 0 ? (
-            "None"
-          ) : (
-            <ol>
-              {context.hypotheses.map((hypothesis) => (
-                <li key={hypothesis.id}>
-                  <Rendered
-                    presentation={presentation}
-                    expression={hypothesis.statement.expression}
-                  />
-                </li>
-              ))}
-            </ol>
-          )}
-        </dd>
-        <dt>Goals</dt>
-        <dd>
-          <ol>
-            {reviewed.node.state.goals.map((target) => (
-              <li key={target.id}>
-                <Rendered
-                  presentation={presentation}
-                  expression={target.sequent.conclusion.expression}
-                />
-              </li>
-            ))}
-          </ol>
-        </dd>
+        <SetupStatements node={reviewed.node} presentation={presentation} sorts={sorts} />
       </dl>
       <div className={styles.reviewFooter}>
         {approvable ? null : (
@@ -752,21 +711,6 @@ function ReviewPanel({
         </button>
       </div>
     </section>
-  );
-}
-
-function Rendered({
-  presentation,
-  expression,
-}: Readonly<{
-  presentation: ReturnType<typeof createPresentation>;
-  expression: Parameters<ReturnType<typeof createPresentation>["latex"]>[0];
-}>) {
-  return (
-    <span className={styles.rendered}>
-      <Formula latex={presentation.latex(expression)} />
-      <span className={styles.prose}>{presentation.naturalLanguage(expression)}</span>
-    </span>
   );
 }
 
@@ -928,12 +872,6 @@ function operatorsByPack(
 function parseOperators(input: readonly unknown[]): readonly OperatorDeclaration[] | undefined {
   const parsed = z.array(operatorDeclarationSchema).safeParse(input);
   return parsed.success ? parsed.data : undefined;
-}
-
-function sortLabel(sorts: ProblemSetupOptions["sorts"], sort: unknown): string {
-  return (
-    sorts.find((choice) => canonicalJsonEquals(choice.sort, sort))?.label ?? JSON.stringify(sort)
-  );
 }
 
 function toggle(values: readonly string[], value: string, checked: boolean): string[] {

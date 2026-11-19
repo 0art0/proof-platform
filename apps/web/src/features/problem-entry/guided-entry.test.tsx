@@ -199,6 +199,7 @@ function renderEntry(props: Partial<Parameters<typeof GuidedProblemEntry>[0]> = 
 
 async function ready() {
   await screen.findByDisplayValue("school");
+  fireEvent.click(await screen.findByText("Review suggested results"));
   await screen.findByText("Symmetry");
 }
 
@@ -220,7 +221,7 @@ describe("GuidedProblemEntry", () => {
     expect(screen.getByDisplayValue("Integers.")).toBeVisible();
     expect(screen.getByDisplayValue("Divisibility")).toBeVisible();
     expect(screen.getByLabelText("LaTeX of Coprime")).toHaveValue("#1 \\perp #2");
-    expect(screen.getByText("2 of 2")).toBeVisible();
+    expect(screen.getByText("2 of 2 selected")).toBeVisible();
   });
 
   it("asks once more, quietly, when an answer did not pass validation", async () => {
@@ -253,7 +254,7 @@ describe("GuidedProblemEntry", () => {
       target: { value: "\\Cop(#1, #2)" },
     });
     expect(await screen.findByText(/\\Cop is not standard LaTeX/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Start proof" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Review setup" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("LaTeX of Coprime"), {
       target: { value: "\\operatorname{cop}(#1)" },
     });
@@ -270,9 +271,14 @@ describe("GuidedProblemEntry", () => {
       target: { value: "\\operatorname{cop}\\left(#1, #2\\right)" },
     });
     fireEvent.click(screen.getByRole("checkbox", { name: /Reflexivity/ }));
-    expect(screen.getByText("1 of 2")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Start proof" }));
+    expect(screen.getByText("1 of 2 selected")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
 
+    const review = await screen.findByRole("region", { name: "Review the formal setup" });
+    expect(within(review).getByText(STATEMENT)).toBeVisible();
+    expect(within(review).getByText("Goals")).toBeVisible();
+    expect(callsTo("/api/proof-sessions")).toHaveLength(0);
+    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/sessions/session%3Atest-1"));
     const [decision] = callsTo("/api/ai/background/decisions");
     expect(decision?.body).toMatchObject({
@@ -322,7 +328,8 @@ describe("GuidedProblemEntry", () => {
   it("approves without edits when nothing changed", async () => {
     renderEntry();
     await ready();
-    fireEvent.click(screen.getByRole("button", { name: "Start proof" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
     await waitFor(() => expect(callsTo("/api/proof-sessions")).toHaveLength(1));
     expect(callsTo("/api/ai/background/decisions")[0]?.body).not.toHaveProperty("amendment");
   });
@@ -335,8 +342,9 @@ describe("GuidedProblemEntry", () => {
     expect(symmetry).toBeDisabled();
     expect(symmetry).not.toBeChecked();
     expect(screen.getByText("Uses removed notation")).toBeVisible();
-    expect(screen.getByText("1 of 2")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Start proof" }));
+    expect(screen.getByText("1 of 2 selected")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
     await waitFor(() => expect(callsTo("/api/proof-sessions")).toHaveLength(1));
     expect(callsTo("/api/ai/background/decisions")[0]?.body).toMatchObject({
       amendment: { constants: [] },
@@ -363,7 +371,8 @@ describe("GuidedProblemEntry", () => {
       await screen.findByText(/No library this time: The constants are too thin/),
     ).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Start proof" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open workspace" }));
     await waitFor(() => expect(navigate).toHaveBeenCalled());
     expect(callsTo("/api/ai/library/decisions")).toHaveLength(0);
     expect(callsTo("/api/ai/formalize")[0]?.body).not.toHaveProperty("approvedLibrary");
@@ -376,7 +385,7 @@ describe("GuidedProblemEntry", () => {
       target: { value: "\\operatorname{D}\\left(#1, #2\\right)" },
     });
     expect(screen.getByText(/would read as something else/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Start proof" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Review setup" })).toBeDisabled();
   });
 
   it("hands a drafted setup that needs a fix to the hand-entry form, approvals kept", async () => {
@@ -398,7 +407,7 @@ describe("GuidedProblemEntry", () => {
     ]);
     const navigate = renderEntry();
     await ready();
-    fireEvent.click(screen.getByRole("button", { name: "Start proof" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
     expect(await screen.findByText(/needs a look: m is not declared/)).toBeVisible();
     expect(navigate).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Assumed level")).toHaveValue("school");
@@ -417,14 +426,14 @@ describe("GuidedProblemEntry", () => {
   it("waits for the statement to be decided when it opens without one", async () => {
     renderEntry({ initialStatement: "" });
     expect(calls).toHaveLength(0);
-    const next = screen.getByRole("button", { name: "Continue" });
+    const next = screen.getByRole("button", { name: "Suggest a background" });
     expect(next).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Problem statement"), {
       target: { value: STATEMENT },
     });
     fireEvent.click(screen.getByRole("button", { name: "+ Add title" }));
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Neighbours" } });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Suggest a background" }));
     await ready();
     expect(callsTo("/api/ai/background")[0]?.body).toMatchObject({
       problem: { title: "Neighbours", statement: STATEMENT },
@@ -433,8 +442,8 @@ describe("GuidedProblemEntry", () => {
     fireEvent.change(screen.getByLabelText("Problem statement"), {
       target: { value: `${STATEMENT} Prove it.` },
     });
-    expect(screen.getByRole("button", { name: "Suggest again" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Start proof" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh setup" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review setup" })).toBeDisabled();
   });
 
   it("shows what each model is told behind an ⓘ", async () => {

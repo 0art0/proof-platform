@@ -3,12 +3,15 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { createPresentation, notationRoundTrips, type Presentation } from "@proof/language";
 import {
+  createProofNodeSchema,
   operatorDeclarationSchema,
   type BackgroundProfile,
   type OperatorDeclaration,
   type PlainMathJson,
   type ProblemDraft,
   type ProblemSetupOptions,
+  type ProblemSetupReview,
+  type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
 import {
@@ -44,6 +47,7 @@ import {
 import { ProblemEntryForm, type ProblemEntryFormProps } from "./problem-entry-form";
 import { PromptTip } from "./prompt-tip";
 import { recordRecentSession } from "./recent-sessions";
+import { SetupStatements } from "./setup-statements";
 import { Formula } from "./typeset";
 import styles from "./problem-entry.module.css";
 
@@ -72,15 +76,17 @@ type ProfileEdit = Readonly<{ level: string; summary: string; assumptions: strin
 type StartState = Readonly<{ kind: "idle" }> | Readonly<{ kind: "running"; step: string }> | Failed;
 type Handover = NonNullable<ProblemEntryFormProps["handover"]>;
 
-/**
- * New problem with AI (design plan §4.1 to §4.4), as few steps as possible: the person types the
- * statement; a background is proposed at once and shown ready to edit; a library is built from it
- * at the same time (the librarian never sees the problem); and "Start proof" approves the
- * background (with the person's edits) and the kept results, drafts and checks the setup, and
- * opens the session. Every model answer stays a recorded proposal: nothing reaches a session
- * until the person starts it, and a drafted setup that does not pass the check is handed to the
- * hand-entry form for the person to fix.
- */
+type CheckedSetup = Readonly<{
+  sessionId: string;
+  draft: ProblemDraft;
+  review: ProblemSetupReview;
+  references: ApprovalReferences;
+  node: ProofNode;
+  presentation: Presentation;
+  edit: Handover;
+}>;
+
+/** Propose the background and library, then let the person review the checked formal setup. */
 export function GuidedProblemEntry({
   options,
   capabilities,
@@ -104,6 +110,11 @@ export function GuidedProblemEntry({
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const [start, setStart] = useState<StartState>({ kind: "idle" });
   const [handover, setHandover] = useState<Handover>();
+  const [checkedSetup, setCheckedSetup] = useState<CheckedSetup>();
+  const reviewHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (checkedSetup !== undefined) reviewHeading.current?.focus();
+  }, [checkedSetup]);
   const unknownCommands = useUnknownCommands();
   // Only the latest request of each kind may update the page.
   const generation = useRef(0);
@@ -242,7 +253,7 @@ export function GuidedProblemEntry({
     profileValue === undefined || profileValue.level === "" || profileValue.summary === "";
   const running = start.kind === "running";
   const libraryBusy = library.kind === "loading";
-  const canStart =
+  const canPrepare =
     background.kind === "ready" &&
     !statementChanged &&
     issues.length === 0 &&
@@ -250,8 +261,8 @@ export function GuidedProblemEntry({
     !running &&
     !libraryBusy;
 
-  const startProof = async () => {
-    if (!canStart || proposal === undefined || profileValue === undefined) return;
+  const prepareSetup = async () => {
+    if (!canPrepare || proposal === undefined || profileValue === undefined) return;
     const edited = kept.map(({ edited: operator }) => operator);
     const amended =
       !jsonEqual(profileValue, proposal.background) ||
@@ -261,7 +272,7 @@ export function GuidedProblemEntry({
       ? { background: profileValue, constants: edited }
       : undefined;
 
-    setStart({ kind: "running", step: "Approving…" });
+    setStart({ kind: "running", step: "Saving background…" });
     const backgroundDecisionId = createId("background-decision");
     const approved = await approveBackground({
       constructionId,
@@ -303,7 +314,10 @@ export function GuidedProblemEntry({
       };
     }
 
-    const handTo = (reason: string, draft?: Readonly<{ callId: string; draft: ProblemDraft }>) => {
+    const buildHandover = (
+      reason: string,
+      draft?: Readonly<{ callId: string; draft: ProblemDraft }>,
+    ): Handover => {
       let key = 1000;
       const form: Partial<ProblemForm> = {
         title,
@@ -312,20 +326,22 @@ export function GuidedProblemEntry({
         layerIds: [...layerIds(options)],
         ...(draft === undefined ? {} : draftStatementRows(draft.draft, () => (key += 1))),
       };
-      setHandover({
+      return {
         form,
         constructionId,
         accepted,
         approvedLibrary,
         draftCallId: draft?.callId,
         reason,
-      });
+      };
     };
+    const handTo = (...args: Parameters<typeof buildHandover>) =>
+      setHandover(buildHandover(...args));
     if (!capabilities.formalizer) {
       return handTo("Background approved. Now enter what to prove, then check the setup.");
     }
 
-    setStart({ kind: "running", step: "Drafting the setup…" });
+    setStart({ kind: "running", step: "Formalizing the problem…" });
     const drafted = await draftSetup({
       constructionId,
       createId,
@@ -344,7 +360,7 @@ export function GuidedProblemEntry({
         : handTo(`The setup could not be drafted (${drafted.message}). Enter it here.`);
     }
 
-    setStart({ kind: "running", step: "Checking…" });
+    setStart({ kind: "running", step: "Checking the formal setup…" });
     const references: ApprovalReferences = {
       approvedBackground: { constructionId, decisionId: backgroundDecisionId },
       ...(approvedLibrary === undefined
@@ -356,17 +372,35 @@ export function GuidedProblemEntry({
       return handTo(`The drafted setup needs a look: ${checked.message}`, drafted);
     }
 
-    setStart({ kind: "running", step: "Starting…" });
-    const sessionId = createSessionId();
-    const started = await startSession({
-      sessionId,
+    const operators = z.array(operatorDeclarationSchema).safeParse(checked.review.operators);
+    if (!operators.success)
+      return handTo("The setup could not be displayed. Check it here.", drafted);
+    const node = createProofNodeSchema({ operators: operators.data }).safeParse(
+      checked.review.rootNode,
+    );
+    if (!node.success) return handTo("The setup could not be displayed. Check it here.", drafted);
+
+    setCheckedSetup({
+      sessionId: createSessionId(),
       draft: drafted.draft,
       review: checked.review,
       references,
+      node: node.data,
+      presentation: createPresentation({ operators: operators.data }),
+      edit: buildHandover(
+        "Edit the variables, hypotheses or goals, then check the setup.",
+        drafted,
+      ),
     });
+    setStart({ kind: "idle" });
+  };
+
+  const openWorkspace = async (setup: CheckedSetup) => {
+    setStart({ kind: "running", step: "Opening workspace…" });
+    const started = await startSession(setup);
     if (!started.ok) return setStart({ kind: "failed", message: started.message });
-    recordRecentSession({ id: sessionId, title: checked.review.metadata.problem.title });
-    navigate(`/sessions/${encodeURIComponent(sessionId)}`);
+    recordRecentSession({ id: setup.sessionId, title: setup.review.metadata.problem.title });
+    navigate(`/sessions/${encodeURIComponent(setup.sessionId)}`);
   };
 
   if (handover !== undefined) {
@@ -380,26 +414,76 @@ export function GuidedProblemEntry({
     );
   }
 
+  if (checkedSetup !== undefined) {
+    return (
+      <section className={styles.review} aria-labelledby="formal-setup-heading">
+        <h2 id="formal-setup-heading" ref={reviewHeading} tabIndex={-1}>
+          Review the formal setup
+        </h2>
+        <p className={styles.originalStatement}>{problem.statement}</p>
+        <dl className={styles.reviewList}>
+          <SetupStatements
+            node={checkedSetup.node}
+            presentation={checkedSetup.presentation}
+            sorts={options.sorts}
+          />
+        </dl>
+        <div className={styles.reviewFooter}>
+          {start.kind === "failed" ? (
+            <p role="alert" className={styles.inlineError}>
+              {start.message}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className={styles.secondary}
+            disabled={running}
+            onClick={() => setHandover(checkedSetup.edit)}
+          >
+            Edit setup
+          </button>
+          <button
+            type="button"
+            className={styles.primary}
+            disabled={running}
+            onClick={() => void openWorkspace(checkedSetup)}
+          >
+            {start.kind === "running" ? start.step : "Open workspace"}
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   const statementFilled = problem.statement.length > 0;
   return (
-    <div className={styles.guided}>
+    <fieldset aria-label="Prepare problem" className={styles.guided} disabled={running}>
       <form
         className={styles.statementCard}
         aria-label="Problem"
         onSubmit={(event) => {
           event.preventDefault();
-          if (statementFilled) void propose(problem);
+          if (statementFilled && !running && background.kind !== "loading") void propose(problem);
         }}
       >
+        <label htmlFor="guided-statement" className={styles.label}>
+          Problem statement
+        </label>
         <textarea
+          id="guided-statement"
           className={styles.statementInput}
-          aria-label="Problem statement"
           placeholder="Show that any two consecutive integers are coprime."
           rows={3}
           value={statement}
           onChange={(event) => setStatement(event.currentTarget.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && statementFilled) {
+            if (
+              event.key === "Enter" &&
+              (event.metaKey || event.ctrlKey) &&
+              statementFilled &&
+              !running &&
+              background.kind !== "loading"
+            ) {
               event.preventDefault();
               void propose(problem);
             }
@@ -419,13 +503,13 @@ export function GuidedProblemEntry({
               + Add title
             </button>
           )}
-          {background.kind === "idle" || background.kind === "failed" || statementChanged ? (
+          {background.kind === "idle" || statementChanged ? (
             <button
               type="submit"
               className={statementChanged ? styles.secondary : styles.primary}
               disabled={!statementFilled}
             >
-              {statementChanged ? "Suggest again" : "Continue"}
+              {statementChanged ? "Refresh setup" : "Suggest a background"}
             </button>
           ) : null}
         </div>
@@ -442,7 +526,9 @@ export function GuidedProblemEntry({
             <PromptTip label="Background proposer" prompt={prompts.background} />
           </header>
           {background.kind === "loading" ? (
-            <p className={styles.pending}>Finding the background…</p>
+            <p role="status" className={styles.pending}>
+              Suggesting a background…
+            </p>
           ) : null}
           {background.kind === "failed" ? (
             <div role="alert" className={styles.inlineError}>
@@ -472,6 +558,7 @@ export function GuidedProblemEntry({
                 <label className={styles.compactField}>
                   <span>Summary</span>
                   <textarea
+                    aria-label="Background summary"
                     rows={2}
                     value={profile.summary}
                     onChange={(event) => {
@@ -481,8 +568,9 @@ export function GuidedProblemEntry({
                   />
                 </label>
                 <label className={styles.compactField}>
-                  <span>Assumes</span>
+                  <span>Assumptions</span>
                   <textarea
+                    aria-label="Background assumptions"
                     rows={Math.max(2, lines(profile.assumptions).length)}
                     placeholder="One per line"
                     value={profile.assumptions}
@@ -550,14 +638,11 @@ export function GuidedProblemEntry({
           <header className={styles.stepHeader}>
             <h2>Library</h2>
             <PromptTip label="Librarian" prompt={prompts.library} />
-            {built === undefined ? null : (
-              <span className={styles.count}>
-                {keptResults.length} of {built.results.length}
-              </span>
-            )}
           </header>
           {library.kind === "loading" ? (
-            <p className={styles.pending}>Building the library…</p>
+            <p role="status" className={styles.pending}>
+              Finding library results…
+            </p>
           ) : null}
           {library.kind === "failed" ? (
             <div role="alert" className={styles.inlineError}>
@@ -578,18 +663,28 @@ export function GuidedProblemEntry({
             </p>
           ) : null}
           {built === undefined || built.results.length === 0 ? null : (
-            <ul className={styles.resultList}>
-              {results.map(({ result, blocked, kept: isKept }) => (
-                <ResultRow
-                  key={result.artifact.id}
-                  result={result}
-                  presentation={presentation}
-                  kept={isKept}
-                  blocked={blocked}
-                  onToggle={() => setUnticked((previous) => toggled(previous, result.artifact.id))}
-                />
-              ))}
-            </ul>
+            <details className={styles.libraryResults}>
+              <summary>
+                Review suggested results{" "}
+                <span className={styles.count}>
+                  {keptResults.length} of {built.results.length} selected
+                </span>
+              </summary>
+              <ul className={styles.resultList}>
+                {results.map(({ result, blocked, kept: isKept }) => (
+                  <ResultRow
+                    key={result.artifact.id}
+                    result={result}
+                    presentation={presentation}
+                    kept={isKept}
+                    blocked={blocked}
+                    onToggle={() =>
+                      setUnticked((previous) => toggled(previous, result.artifact.id))
+                    }
+                  />
+                ))}
+              </ul>
+            </details>
           )}
         </section>
       ) : null}
@@ -605,17 +700,22 @@ export function GuidedProblemEntry({
           {profileMissing ? (
             <p className={styles.startNote}>The background needs a level and a summary.</p>
           ) : null}
+          {start.kind === "running" ? (
+            <p role="status" className={styles.startNote}>
+              {start.step}
+            </p>
+          ) : null}
           <button
             type="button"
             className={styles.primary}
-            disabled={!canStart}
-            onClick={() => void startProof()}
+            disabled={!canPrepare}
+            onClick={() => void prepareSetup()}
           >
-            {start.kind === "running" ? start.step : "Start proof"}
+            {capabilities.formalizer ? "Review setup" : "Enter formal setup"}
           </button>
         </div>
       ) : null}
-    </div>
+    </fieldset>
   );
 }
 

@@ -126,8 +126,10 @@ async function click(name: string | RegExp) {
 }
 
 async function buildBlueprint() {
-  await click("Write independent proof");
-  await click("Build blueprint");
+  await click("Draft proof");
+  await click("Adapt to workspace");
+  fireEvent.click(screen.getByText("Blueprint", { selector: "summary" }));
+  fireEvent.click(screen.getByText("Independent proof", { selector: "summary" }));
 }
 
 describe("the proof-plan panel", () => {
@@ -137,7 +139,7 @@ describe("the proof-plan panel", () => {
     expect(
       screen.getByRole("button", { name: /What the model is told.*Independent proof/ }),
     ).toHaveAccessibleDescription(`Independent proof ${DRAFT_VIEW.prompt}`);
-    expect(screen.getByRole("button", { name: "Build blueprint" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Adapt to workspace" })).toBeNull();
     await buildBlueprint();
     expect(requests.map(({ body }) => body)).toEqual([
       { id: "llm-call:draft-fixed", stage: "draft" },
@@ -149,7 +151,7 @@ describe("the proof-plan panel", () => {
     ]);
     expect(screen.getByText("Take the conjuncts")).toBeInTheDocument();
     expect(screen.getByText("Jev is unavailable.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next move" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Preview next move" })).toBeDisabled();
   });
 
   it("shows the plan as numbered steps with their forms, motivation and justification", async () => {
@@ -202,17 +204,21 @@ describe("the proof-plan panel", () => {
     });
     const { onApplied, rerender, props } = renderPanel();
     await buildBlueprint();
-    await click("Next move");
+    await click("Preview next move");
     const card = screen.getByTestId("proof-plan-proposal");
-    expect(within(card).getByText(CANDIDATE.label)).toBeInTheDocument();
+    expect(within(card).getByText("Expand conjunction hypothesis")).toBeInTheDocument();
     expect(within(card).getByText(/Jev chose this move \(confidence 90%\)/)).toBeInTheDocument();
     expect(within(card).getByText(/Drop hypothesis \(5%\)/)).toBeInTheDocument();
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Apply move" }));
     });
-    expect(onApplied).toHaveBeenCalledWith({ nodeId: "node:two", name: CANDIDATE.label });
+    expect(onApplied).toHaveBeenCalledWith({
+      nodeId: "node:two",
+      name: "Expand conjunction hypothesis",
+    });
+    fireEvent.click(screen.getByText("Applied moves (1)"));
     const appliedMoves = screen.getByRole("list", { name: "Applied proof moves" });
-    expect(appliedMoves).toHaveTextContent(CANDIDATE.label);
+    expect(appliedMoves).toHaveTextContent("Expand conjunction hypothesis");
     expect(appliedMoves).toHaveTextContent("equivalence");
     expect(appliedMoves).toHaveTextContent("The hypothesis is a conjunction");
     expect(screen.getByText("Take the conjuncts")).toBeInTheDocument();
@@ -223,7 +229,7 @@ describe("the proof-plan panel", () => {
     });
 
     rerender(<ProofPlanPanel {...props} node={node("node:two")} />);
-    await click("Next move");
+    await click("Preview next move");
     const translate = requests.filter(({ path }) => path.endsWith("/ai-proof-plan-translate"));
     expect(translate[1]?.body).toMatchObject({
       stepId: "have-q",
@@ -251,9 +257,9 @@ describe("the proof-plan panel", () => {
     });
     renderPanel();
     await buildBlueprint();
-    await click("Run to the end");
-    expect(screen.getByRole("status")).toHaveTextContent("Jev is choosing a move for step ⟨1⟩1.");
-    await click("Stop");
+    await click("Run with Jev");
+    expect(screen.getByRole("status")).toHaveTextContent("Finding a move for this step…");
+    await click("Pause");
     await act(async () => {
       finishTranslation(
         ok({
@@ -270,9 +276,53 @@ describe("the proof-plan panel", () => {
     });
     expect(requests.some(({ path }) => path.endsWith("/ai-proof-plan-apply"))).toBe(false);
     expect(
-      within(screen.getByTestId("proof-plan-proposal")).getByRole("button", { name: "Apply" }),
+      within(screen.getByTestId("proof-plan-proposal")).getByRole("button", { name: "Apply move" }),
     ).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+  });
+
+  it("retains every applied move in an automatic run and reports remaining goals", async () => {
+    const proposed = (callId: string, label: string) =>
+      ok({
+        status: "proposed",
+        callId,
+        confidence: 0.9,
+        actor: { kind: "agent" },
+        choice: { ...CANDIDATE, label },
+        alternatives: [],
+        menuChoices: {},
+        preview: { nodeId: "node:one", transitionClass: "equivalence" },
+      });
+    const realized = ok({
+      status: "realized",
+      outputs: { focusTargetId: "goal:main", produced: [] },
+    });
+    stubRoutes({
+      "/ai-proof-plan": [ok(DRAFT_VIEW), ok(PLAN_VIEW)],
+      "/ai-proof-plan-translate": [
+        proposed("llm-call:first", "Take the first conjunct"),
+        realized,
+        proposed("llm-call:second", "Take the second conjunct"),
+        realized,
+        realized,
+      ],
+      "/ai-proof-plan-apply": [
+        ok({ status: "applied", nodeId: "node:two" }, 201),
+        ok({ status: "applied", nodeId: "node:three" }, 201),
+      ],
+    });
+    const { rerender, props } = renderPanel();
+    await buildBlueprint();
+    await click("Run with Jev");
+    rerender(<ProofPlanPanel {...props} node={node("node:three")} />);
+
+    expect(
+      screen.getByText("Blueprint finished. This proof still has open goals or obligations."),
+    ).toBeVisible();
+    fireEvent.click(screen.getByText("Applied moves (2)"));
+    const applied = screen.getByRole("list", { name: "Applied proof moves" });
+    expect(applied).toHaveTextContent("Take the first conjunct");
+    expect(applied).toHaveTextContent("Take the second conjunct");
   });
 
   it("reports a missing move, offers the alternatives and lists it in the report", async () => {
@@ -290,7 +340,7 @@ describe("the proof-plan panel", () => {
     });
     renderPanel();
     await buildBlueprint();
-    await click("Next move");
+    await click("Preview next move");
     const stopped = screen.getByTestId("proof-plan-stopped");
     expect(
       within(stopped).getByText("This step needs a move the platform does not have."),
@@ -313,7 +363,7 @@ describe("the proof-plan panel", () => {
     renderPanel({ node: node("node:elsewhere") });
     expect(screen.getByText(/The proof changed outside the plan/)).toBeInTheDocument();
     await click("Continue from here");
-    expect(screen.getByRole("button", { name: "Next move" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Preview next move" })).toBeEnabled();
   });
 
   it("says when the planner declines", async () => {
@@ -327,8 +377,8 @@ describe("the proof-plan panel", () => {
       ],
     });
     renderPanel();
-    await click("Write independent proof");
+    await click("Draft proof");
     expect(screen.getByRole("status")).toHaveTextContent("The model declined: Not a theorem.");
-    expect(screen.getByRole("button", { name: "Build blueprint" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Adapt to workspace" })).toBeNull();
   });
 });

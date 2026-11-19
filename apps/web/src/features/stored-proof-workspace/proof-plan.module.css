@@ -52,7 +52,7 @@
   font-size: var(--text-sm);
 }
 
-/* Reported statuses carry a word and a mark, never colour alone. */
+/* Reported statuses carry text as well as colour. */
 .status[data-status="no-move"],
 .status[data-status="missing-construction"],
 .status[data-status="unsupported"],
@@ -91,20 +91,62 @@
   white-space: pre-wrap;
 }
 
-.stage {
-  display: grid;
-  gap: var(--space-2);
-  min-width: 0;
-  padding-block: var(--space-3);
-  border-top: 1px solid var(--border-soft);
+.panel {
+  scroll-margin-top: calc(3.5rem + var(--space-4));
 }
 
-.stage h3 {
+.heading {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
   gap: var(--space-2);
-  margin: 0;
+}
+
+.progress {
+  color: var(--text-muted);
   font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.stage,
+.detailsBody {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.currentStep {
+  display: grid;
+  gap: var(--space-1);
+  border-inline-start: 2px solid var(--focus);
+  background: var(--surface-muted);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.live:empty {
+  position: absolute;
+}
+
+.disclosure {
+  min-width: 0;
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-2);
+}
+
+.disclosure > summary,
+.report > summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.disclosure[open] > summary,
+.report[open] > summary {
+  margin-bottom: var(--space-3);
 }
 
 .draftSteps {

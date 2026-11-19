@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ProofNode } from "@proof/protocol";
+import { useHydrated } from "../hydration/use-hydrated";
 import { PromptTip } from "../problem-entry/prompt-tip";
 import { InlineLatex } from "../proof-workspace/presentation";
 import {
@@ -35,6 +36,8 @@ import { READ_ONLY_REASON } from "./toolbar-actions";
 import styles from "./move-instructions.module.css";
 import planStyles from "./proof-plan.module.css";
 
+export const PROOF_PLAN_ID = "proof-plan";
+
 const POLL_INTERVAL_MS = 3_000;
 /** A plan that is not stored after this long is reported as not arriving. */
 const POLL_LIMIT_MS = 12 * 60_000;
@@ -52,14 +55,14 @@ const FORM_KEYWORDS: Readonly<Record<string, string>> = {
 };
 
 const STATUS_WORDS: Readonly<Record<UnitStatus, string>> = {
-  pending: "to do",
-  realized: "✓ done",
+  pending: "Pending",
+  realized: "Done",
   skipped: "skipped",
-  "no-move": "⚠ missing move",
-  "missing-construction": "⚠ missing value",
-  uncertain: "⚠ unsure",
-  unsupported: "⚠ not supported",
-  stuck: "⚠ stuck",
+  "no-move": "Missing move",
+  "missing-construction": "Missing value",
+  uncertain: "Uncertain",
+  unsupported: "Unsupported",
+  stuck: "Stuck",
 };
 
 export type ProofPlanPanelProps = Readonly<{
@@ -86,6 +89,7 @@ type AppliedMove = Readonly<{
   stepNumber: string;
   label: string;
   motivation: string | null;
+  selections?: readonly string[];
   actor: "agent" | "human";
   transitionClass: Extract<Translation, { status: "proposed" }>["preview"]["transitionClass"];
 }>;
@@ -148,6 +152,7 @@ export function ProofPlanPanel({
   onApplied,
   createId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
 }: ProofPlanPanelProps) {
+  const hydrated = useHydrated();
   const [stored, setStored] = useState<Stored>();
   const [draft, setDraft] = useState<ProofDraftView>();
   const [phase, setPhase] = useState<Phase>(IDLE);
@@ -284,9 +289,9 @@ export function ProofPlanPanel({
   const apply = async (
     current: Stored,
     translation: Extract<Translation, { status: "proposed" }>,
-  ): Promise<Walk | undefined> => {
+  ): Promise<Stored | undefined> => {
     if (busy || !onApplyStart()) return undefined;
-    setPhase({ kind: "applying", label: translation.choice.label });
+    setPhase({ kind: "applying", label: moveTitle(translation.choice.label) });
     try {
       const outcome = await requestPlanApply(sessionId, {
         callId: translation.callId,
@@ -302,7 +307,7 @@ export function ProofPlanPanel({
       const next = afterApplied(current.walk, name, outcome.nodeId);
       const unit = currentUnit(current.walk);
       const step = current.view.plan.steps.find(({ id }) => id === unit?.stepId);
-      update({
+      const applied: Stored = {
         ...current,
         walk: next,
         appliedMoves: [
@@ -312,14 +317,16 @@ export function ProofPlanPanel({
             stepNumber: unit?.number ?? "",
             label: name,
             motivation: step?.motivation ?? null,
+            selections: translation.choice.selections,
             actor: translation.actor.kind,
             transitionClass: translation.preview.transitionClass,
           },
         ],
-      });
-      const adopted = await onApplied({ nodeId: outcome.nodeId, name });
+      };
+      update(applied);
+      const adopted = await onApplied({ nodeId: outcome.nodeId, name: moveTitle(name) });
       setPhase(IDLE);
-      return adopted ? next : undefined;
+      return adopted ? applied : undefined;
     } finally {
       onApplyEnd();
     }
@@ -349,7 +356,7 @@ export function ProofPlanPanel({
           if (!runningRef.current) return;
           const applied = await apply(current, translation);
           if (applied === undefined) return;
-          current = { ...current, walk: applied };
+          current = applied;
         } else if (translation?.status !== "realized") {
           return;
         }
@@ -371,224 +378,290 @@ export function ProofPlanPanel({
     await translate(stored, candidate.id, callId);
   };
 
-  const blocked = busy || working || running;
+  const blocked = !hydrated || busy || working || running;
   const moveBlocked = blocked || walkUnavailable !== undefined || moved;
   const report =
     stored === undefined || walk === undefined ? undefined : missingMoveReport(walk, stored.view);
 
-  return (
-    <section className={styles.panel} aria-label="Proof plan" data-testid="proof-plan">
-      <h2>Proof plan</h2>
-      <section className={planStyles.stage} aria-label="Independent proof">
-        <h3>
-          Independent proof{" "}
-          <PromptTip label="Independent proof" prompt={draft?.prompt ?? draftPrompt} />
-        </h3>
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={styles.secondary}
-            disabled={blocked || draftUnavailable !== undefined}
-            onClick={() => void writePlan("draft")}
-          >
-            {phase.kind === "planning" && phase.stage === "draft"
-              ? "Writing the independent proof…"
-              : draft === undefined
-                ? "Write independent proof"
-                : "Write a new independent proof"}
-          </button>
-          {draftUnavailable === undefined ? null : (
-            <span className={styles.reason}>{draftUnavailable}</span>
-          )}
-        </div>
-        {draft === undefined ? null : (
-          <>
-            <p className={planStyles.prose}>{draft.draft.sketch}</p>
-            <ol className={planStyles.draftSteps}>
-              {draft.draft.steps.map(({ title, motivation, reasoning }, index) => (
-                <li key={index}>
-                  <strong>{title}</strong>
-                  <p className={planStyles.prose}>
-                    <em>Motivation</em> {motivation}
-                  </p>
-                  <p className={planStyles.prose}>{reasoning}</p>
-                </li>
-              ))}
-            </ol>
-          </>
-        )}
-      </section>
+  const unit = walk === undefined ? undefined : currentUnit(walk);
+  const step = stored?.view.plan.steps.find(({ id }) => id === unit?.stepId);
+  const canResume = moved && !working;
+  const finished = walk !== undefined && walkFinished(walk);
+  const { goals, obligations } = node.state;
 
-      <section className={planStyles.stage} aria-label="Blueprint">
-        <h3>
-          Blueprint <PromptTip label="Blueprint" prompt={stored?.view.prompt ?? blueprintPrompt} />
-        </h3>
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={styles.secondary}
-            disabled={blocked || draft === undefined || blueprintUnavailable !== undefined}
-            onClick={() => void writePlan("blueprint")}
-          >
-            {phase.kind === "planning" && phase.stage === "blueprint"
-              ? "Adapting the proof…"
-              : stored === undefined
-                ? "Build blueprint"
-                : "Rebuild blueprint"}
-          </button>
-          {stored === undefined ? null : (
+  return (
+    <section
+      id={PROOF_PLAN_ID}
+      tabIndex={-1}
+      className={`${styles.panel} ${planStyles.panel}`}
+      aria-labelledby="proof-plan-heading"
+      data-testid="proof-plan"
+    >
+      <div className={planStyles.heading}>
+        <h2 id="proof-plan-heading">Proof plan</h2>
+        {walk === undefined || finished ? null : (
+          <span className={planStyles.progress}>
+            Step {walk.index + 1} of {walk.units.length}
+          </span>
+        )}
+      </div>
+      {draft === undefined ? (
+        <div className={planStyles.stage}>
+          <p className={styles.hint}>
+            Draft an argument, adapt it to this workspace, then use Jev to turn each step into proof
+            moves.
+          </p>
+          <div className={styles.actions}>
             <button
               type="button"
-              className={styles.ghost}
-              disabled={blocked}
-              onClick={() => {
-                update(undefined);
-                setPhase(IDLE);
-              }}
+              className={styles.primary}
+              disabled={blocked || draftUnavailable !== undefined}
+              onClick={() => void writePlan("draft")}
             >
-              Close blueprint
+              {working ? "Drafting proof…" : "Draft proof"}
             </button>
-          )}
-          {blueprintUnavailable === undefined ? null : (
-            <span className={styles.reason}>{blueprintUnavailable}</span>
+            <PromptTip label="Independent proof" prompt={draftPrompt} />
+          </div>
+          {draftUnavailable === undefined ? null : (
+            <p className={styles.reason}>{draftUnavailable}</p>
           )}
         </div>
-        {stored === undefined || walk === undefined ? null : (
-          <>
-            <p className={planStyles.prose}>
-              <strong>Goal</strong> {stored.view.plan.theorem.prose}
-            </p>
-            <p className={planStyles.prose}>{stored.view.plan.sketch}</p>
-            <PlanTree view={stored.view} walk={walk} />
-          </>
-        )}
-      </section>
+      ) : stored === undefined ? (
+        <div className={planStyles.stage}>
+          <p className={styles.hint}>
+            Adapt the draft to the current goal, available moves and library.
+          </p>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.primary}
+              disabled={blocked || blueprintUnavailable !== undefined}
+              onClick={() => void writePlan("blueprint")}
+            >
+              {working ? "Adapting proof…" : "Adapt to workspace"}
+            </button>
+            <PromptTip label="Blueprint" prompt={blueprintPrompt} />
+          </div>
+          {blueprintUnavailable === undefined ? null : (
+            <p className={styles.reason}>{blueprintUnavailable}</p>
+          )}
+        </div>
+      ) : null}
 
       {phase.kind === "note" ? (
         <p className={styles.note} data-tone={phase.tone} role="status">
           {phase.message}
         </p>
       ) : null}
-      <section className={planStyles.stage} aria-label="Proof on the platform">
-        <h3>Proof on the platform</h3>
-        {walkUnavailable === undefined ? null : <p className={styles.reason}>{walkUnavailable}</p>}
-        {phase.kind === "stopped" ? (
-          <StoppedUnit
-            translation={phase.translation}
-            busy={moveBlocked}
-            onChoose={(candidate, callId) => void chooseInstead(candidate, callId)}
-          />
-        ) : null}
-        {stored === undefined || walk === undefined ? (
-          <p className={styles.hint}>Build a blueprint to start Jev.</p>
-        ) : (
-          <>
-            <div role="status" className={styles.hint}>
-              {phase.kind === "translating"
-                ? `Jev is choosing a move for step ${currentUnit(walk)?.number ?? ""}.`
-                : null}
-              {phase.kind === "applying" ? `Applying ${phase.label}…` : null}
-              {phase.kind === "idle" &&
-              !walkFinished(walk) &&
-              (stored.appliedMoves?.length ?? 0) > 0
-                ? `Applied ${stored.appliedMoves?.at(-1)?.label}.`
-                : null}
-            </div>
-            {moved && !working ? (
-              <div className={styles.note} data-tone="warning" role="status">
-                <p>
-                  The proof changed outside the plan. Continue the plan from the current state, or
-                  close it.
+      {stored === undefined || walk === undefined ? null : (
+        <section className={planStyles.stage} aria-label="Translate the blueprint">
+          {step === undefined ? null : (
+            <div className={planStyles.currentStep}>
+              {step.assumptions.length === 0 ? null : (
+                <p className={planStyles.detail}>
+                  Assume{" "}
+                  {step.assumptions.map((assumption, index) => {
+                    const latex = stored.view.rendered.steps[step.id]?.assumptions[index];
+                    return (
+                      <span key={index}>
+                        {index === 0 ? "" : ", "}
+                        {latex == null ? assumption.prose : <InlineLatex latex={latex} />}
+                      </span>
+                    );
+                  })}
                 </p>
-                <div className={styles.actions}>
-                  <button
-                    type="button"
-                    className={styles.secondary}
-                    onClick={() => update({ ...stored, walk: continueFrom(walk, node.id) })}
-                    disabled={blocked || walkUnavailable !== undefined}
-                  >
-                    Continue from here
-                  </button>
-                </div>
-              </div>
-            ) : walkFinished(walk) ? (
-              <p className={styles.note} role="status">
-                Jev reached the end of the blueprint.
-              </p>
-            ) : (
+              )}
+              <strong>
+                {step.form === "qed"
+                  ? "Close the goal"
+                  : (step.claim?.prose ?? FORM_KEYWORDS[step.form])}
+              </strong>
+              {step.motivation === null ? null : (
+                <p className={planStyles.detail}>{step.motivation}</p>
+              )}
+            </div>
+          )}
+          {walkUnavailable === undefined ? null : (
+            <p className={styles.reason}>{walkUnavailable}</p>
+          )}
+          {phase.kind === "stopped" && !canResume ? (
+            <StoppedUnit
+              translation={phase.translation}
+              busy={moveBlocked}
+              onChoose={(candidate, callId) => void chooseInstead(candidate, callId)}
+            />
+          ) : null}
+          <div role="status" className={`${styles.hint} ${planStyles.live}`}>
+            {phase.kind === "translating" ? "Finding a move for this step…" : null}
+            {phase.kind === "applying" ? `Applying ${phase.label}…` : null}
+            {phase.kind === "idle" && !walkFinished(walk) && (stored.appliedMoves?.length ?? 0) > 0
+              ? `Applied ${moveTitle(stored.appliedMoves?.at(-1)?.label ?? "")}.`
+              : null}
+          </div>
+          {canResume ? (
+            <div className={styles.note} data-tone="warning" role="status">
+              <p>The proof changed outside the plan.</p>
               <div className={styles.actions}>
                 <button
                   type="button"
-                  className={styles.primary}
-                  disabled={moveBlocked || phase.kind === "proposed"}
-                  onClick={() => void nextMove()}
+                  className={styles.secondary}
+                  onClick={() => {
+                    update({ ...stored, walk: continueFrom(walk, node.id) });
+                    setPhase(IDLE);
+                  }}
+                  disabled={blocked || walkUnavailable !== undefined}
                 >
-                  {phase.kind === "translating" ? "Translating…" : "Next move"}
-                </button>
-                {running ? (
-                  <button
-                    type="button"
-                    className={styles.secondary}
-                    onClick={() => {
-                      runningRef.current = false;
-                    }}
-                  >
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className={styles.secondary}
-                    disabled={moveBlocked || phase.kind === "proposed"}
-                    onClick={() => void runToEnd()}
-                  >
-                    Run to the end
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={styles.ghost}
-                  disabled={moveBlocked}
-                  onClick={skip}
-                >
-                  Skip step
+                  Continue from here
                 </button>
               </div>
-            )}
+            </div>
+          ) : finished ? (
+            <p className={styles.note} role="status">
+              {goals.length === 0 && obligations.length === 0
+                ? "Blueprint finished. No open goals or obligations."
+                : "Blueprint finished. This proof still has open goals or obligations."}
+            </p>
+          ) : phase.kind === "proposed" && !running ? null : (
+            <div className={styles.actions}>
+              {running ? (
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  onClick={() => {
+                    runningRef.current = false;
+                  }}
+                >
+                  Pause
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className={styles.primary}
+                    disabled={moveBlocked}
+                    onClick={() => void nextMove()}
+                  >
+                    Preview next move
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.secondary}
+                    disabled={moveBlocked}
+                    onClick={() => void runToEnd()}
+                  >
+                    Run with Jev
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.ghost}
+                    disabled={moveBlocked}
+                    onClick={skip}
+                  >
+                    Skip step
+                  </button>
+                </>
+              )}
+            </div>
+          )}
 
-            {phase.kind === "proposed" ? (
-              <ProposedMove
-                translation={phase.translation}
-                busy={moveBlocked}
-                onApply={() => void apply(stored, phase.translation)}
-                onChoose={(candidate) => void chooseInstead(candidate, phase.translation.callId)}
-              />
-            ) : null}
+          {phase.kind === "proposed" && !canResume && !running ? (
+            <ProposedMove
+              translation={phase.translation}
+              busy={moveBlocked}
+              onApply={() => void apply(stored, phase.translation)}
+              onDismiss={() => setPhase(IDLE)}
+              onChoose={(candidate) => void chooseInstead(candidate, phase.translation.callId)}
+            />
+          ) : null}
 
-            {stored.appliedMoves === undefined || stored.appliedMoves.length === 0 ? null : (
+          {stored.appliedMoves === undefined || stored.appliedMoves.length === 0 ? null : (
+            <details className={planStyles.disclosure}>
+              <summary>Applied moves ({stored.appliedMoves.length})</summary>
               <ol className={planStyles.draftSteps} aria-label="Applied proof moves">
                 {stored.appliedMoves.map((move) => (
                   <li key={move.callId}>
                     <strong>
-                      {move.stepNumber} {move.label}
+                      {move.stepNumber}{" "}
+                      {move.selections === undefined ? move.label : moveTitle(move.label)}
                     </strong>{" "}
                     <TransitionClassBadge transitionClass={move.transitionClass} />
                     {move.actor === "human" ? (
                       <span className={styles.hint}> Chosen manually</span>
                     ) : null}
+                    <CandidateSelections selections={move.selections ?? []} />
                     {move.motivation === null ? null : (
                       <p className={planStyles.prose}>{move.motivation}</p>
                     )}
                   </li>
                 ))}
               </ol>
-            )}
-            {report === undefined || report.entries.length === 0 ? null : (
-              <MissingMoves report={report} />
-            )}
-          </>
-        )}
-      </section>
+            </details>
+          )}
+          {report === undefined || report.entries.length === 0 ? null : (
+            <MissingMoves report={report} />
+          )}
+        </section>
+      )}
+
+      {stored === undefined || walk === undefined ? null : (
+        <details className={planStyles.disclosure}>
+          <summary>Blueprint</summary>
+          <div className={planStyles.detailsBody}>
+            <p className={planStyles.prose}>{stored.view.plan.sketch}</p>
+            <PlanTree view={stored.view} walk={walk} />
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={blocked || blueprintUnavailable !== undefined || draft === undefined}
+                onClick={() => void writePlan("blueprint")}
+              >
+                Rebuild blueprint
+              </button>
+              <PromptTip label="Blueprint" prompt={stored.view.prompt ?? blueprintPrompt} />
+              <button
+                type="button"
+                className={styles.ghost}
+                disabled={blocked}
+                onClick={() => {
+                  update(undefined);
+                  setPhase(IDLE);
+                }}
+              >
+                Close blueprint
+              </button>
+            </div>
+          </div>
+        </details>
+      )}
+      {draft === undefined ? null : (
+        <details className={planStyles.disclosure}>
+          <summary>Independent proof</summary>
+          <div className={planStyles.detailsBody}>
+            <p className={planStyles.prose}>{draft.draft.sketch}</p>
+            <ol className={planStyles.draftSteps}>
+              {draft.draft.steps.map(({ title, motivation, reasoning }, index) => (
+                <li key={index}>
+                  <strong>{title}</strong>
+                  <p className={planStyles.prose}>{reasoning}</p>
+                  <p className={planStyles.detail}>{motivation}</p>
+                </li>
+              ))}
+            </ol>
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={styles.secondary}
+                disabled={blocked || draftUnavailable !== undefined}
+                onClick={() => void writePlan("draft")}
+              >
+                Draft again
+              </button>
+              <PromptTip label="Independent proof" prompt={draft.prompt ?? draftPrompt} />
+            </div>
+          </div>
+        </details>
+      )}
     </section>
   );
 }
@@ -606,7 +679,7 @@ function PlanTree({ view, walk }: Readonly<{ view: PlanView; walk: Walk }>) {
           <li
             key={step.id}
             className={planStyles.step}
-            style={{ marginLeft: `${((numbered?.level ?? 1) - 1) * 1.25}rem` }}
+            style={{ marginInlineStart: `min(${((numbered?.level ?? 1) - 1) * 0.75}rem, 10%)` }}
             aria-current={step.id === current ? "step" : undefined}
             data-step={step.id}
             data-status={status}
@@ -615,7 +688,7 @@ function PlanTree({ view, walk }: Readonly<{ view: PlanView; walk: Walk }>) {
               <span className={planStyles.number}>{numbered?.number}</span>
               <span className={planStyles.keyword}>{FORM_KEYWORDS[step.form] ?? step.form}</span>
               <StepStatement step={step} rendered={view.rendered.steps[step.id]} />
-              {step.form === "case" ? null : (
+              {step.form === "case" || status === "pending" ? null : (
                 <span className={planStyles.status} data-status={status}>
                   {STATUS_WORDS[status]}
                   {record?.skipped === true ? ", skipped" : ""}
@@ -624,11 +697,11 @@ function PlanTree({ view, walk }: Readonly<{ view: PlanView; walk: Walk }>) {
             </div>
             {step.motivation === null ? null : (
               <p className={planStyles.detail}>
-                <em>Why:</em> {step.motivation}
+                <strong>Motivation</strong> {step.motivation}
               </p>
             )}
             <p className={planStyles.detail}>
-              <em>By:</em> {justificationText(step)}
+              <strong>Justification</strong> {justificationText(step)}
             </p>
             {record?.reason === undefined ? null : (
               <p className={planStyles.detail}>{record.reason}</p>
@@ -685,15 +758,35 @@ function justificationText(step: PlanStep): string {
   return parts.length === 0 ? "the steps above" : parts.join("; ");
 }
 
+function moveTitle(label: string): string {
+  return label.split(" — on ", 1)[0] ?? label;
+}
+
+function CandidateSelections({ selections }: Readonly<{ selections: readonly string[] }>) {
+  if (selections.length === 0) return null;
+  return (
+    <p className={planStyles.detail}>
+      {selections.map((latex, index) => (
+        <span key={index}>
+          {index === 0 ? "" : ", "}
+          <InlineLatex latex={latex} />
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function ProposedMove({
   translation,
   busy,
   onApply,
+  onDismiss,
   onChoose,
 }: Readonly<{
   translation: Extract<Translation, { status: "proposed" }>;
   busy: boolean;
   onApply: () => void;
+  onDismiss: () => void;
   onChoose: (candidate: PlanCandidate) => void;
 }>) {
   const { choice } = translation;
@@ -704,38 +797,30 @@ function ProposedMove({
       data-testid="proof-plan-proposal"
     >
       <div className={planStyles.stepHead}>
-        <strong>{choice.label}</strong>
+        <strong>{moveTitle(choice.label)}</strong>
         <TransitionClassBadge transitionClass={translation.preview.transitionClass} />
       </div>
-      <p className={planStyles.detail}>
-        On:{" "}
-        {choice.selections.map((latex, index) => (
-          <span key={index}>
-            {index === 0 ? "" : "; "}
-            <InlineLatex latex={latex} />
-          </span>
-        ))}
-      </p>
+      <CandidateSelections selections={choice.selections} />
       <p className={planStyles.detail}>
         {translation.actor.kind === "agent"
           ? `Jev chose this move (confidence ${Math.round(translation.confidence * 100)}%).`
-          : "You chose this move."}{" "}
-        {Object.keys(translation.menuChoices).length === 0
-          ? ""
-          : "Its menu values were chosen from the displayed items."}
+          : "You chose this move."}
       </p>
       <div className={styles.actions}>
         <button type="button" className={styles.primary} disabled={busy} onClick={onApply}>
-          Apply
+          Apply move
+        </button>
+        <button type="button" className={styles.ghost} disabled={busy} onClick={onDismiss}>
+          Dismiss preview
         </button>
       </div>
       {translation.alternatives.length === 0 ? null : (
-        <div>
-          <p className={planStyles.detail}>Other moves Jev considered:</p>
+        <details className={planStyles.disclosure}>
+          <summary>Other moves</summary>
           <ul className={planStyles.alternatives}>
             {translation.alternatives.map((candidate) => (
               <li key={candidate.id}>
-                {candidate.label}
+                {moveTitle(candidate.label)}
                 {candidate.probability === undefined
                   ? ""
                   : ` (${Math.round(candidate.probability * 100)}%)`}{" "}
@@ -747,10 +832,11 @@ function ProposedMove({
                 >
                   Choose this instead
                 </button>
+                <CandidateSelections selections={candidate.selections} />
               </li>
             ))}
           </ul>
-        </div>
+        </details>
       )}
     </section>
   );
@@ -787,15 +873,16 @@ function StoppedUnit({
       </p>
       {translation.status === "unsupported" ? null : (
         <p>
-          You can choose one of the moves below, describe the step in the move-instructions box, or
-          skip it.
+          {alternatives.length > 0
+            ? "Choose another move below or skip this step."
+            : "Skip this step or make a move in the workspace."}
         </p>
       )}
       {callId === undefined || alternatives.length === 0 ? null : (
         <ul className={planStyles.alternatives}>
           {alternatives.map((candidate) => (
             <li key={candidate.id}>
-              {candidate.label}
+              {moveTitle(candidate.label)}
               {candidate.probability === undefined
                 ? ""
                 : ` (${Math.round(candidate.probability * 100)}%)`}{" "}
@@ -807,6 +894,7 @@ function StoppedUnit({
               >
                 Choose this instead
               </button>
+              <CandidateSelections selections={candidate.selections} />
             </li>
           ))}
         </ul>

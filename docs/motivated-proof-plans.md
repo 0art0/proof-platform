@@ -313,25 +313,20 @@ probabilities and the confidence. The confidence threshold is
 
 ## 5. Interface
 
-The workspace gains a **Proof plan** panel beside the move-instructions panel.
+Open **Proof plan** from the workspace toolbar. The panel puts the current step and available
+actions first.
 
-- **Write independent proof** generates the prose proof. **Build blueprint** adapts it to the
-  first open goal. The prompt information icons open on hover, focus or click.
-- The blueprint displays its sketch and Lamport's numbered steps with the prose claim,
-  parsed LaTeX where available, motivation, and justification.
-- The current unit is highlighted. **Next move** translates it and shows the proposed move: the
-  selected statements, the suggestion's name, the menu choices, Jev's confidence, the transition
-  class (equivalence, strengthening or weakening) and the ordinary before/after preview, with the
-  next best candidates beneath. **Apply** commits it; **Choose this instead** on an alternative
-  previews that one as the person's own choice; **Skip step** moves on.
-- **Run to the end** repeats Next move and Apply until the blueprint finishes, a move cannot be
-  completed, or the user selects Stop. The platform proof updates after each committed move.
-  The applied-move log shows the motivation from the blueprint and the transition class.
-- Every unit shows its status as a mark in the tree. "Missing moves" lists the report (§3.4) and can
-  be copied as JSON.
-- The walk's progress is kept in the tab's session storage, anchored to the plan's call ID and to
-  the proof node it reached. A walk whose node is no longer the session's current node stops and
-  says so; the person can restart it from the current state.
+- **Draft proof** generates the independent argument. **Adapt to workspace** builds a blueprint
+  for the current goal using the available moves and library.
+- **Preview next move** shows the proposed action, its selected statements, its transition class
+  and Jev's confidence. **Apply move** commits it. Open **Other moves** to preview an alternative.
+- **Run with Jev** applies moves automatically until it needs help or reaches the end. **Pause**
+  stops the run before the next apply request. When the blueprint finishes, the panel reports
+  whether goals or obligations remain.
+- Expand **Independent proof**, **Blueprint** and **Applied moves** for the argument, numbered steps
+  and the moves taken. **Missing moves** shows unfinished steps and provides a JSON report.
+- The tab's session storage keeps the walk anchored to its blueprint call and proof node.
+  **Continue from here** resumes the walk after a change elsewhere in the workspace.
 
 ## 6. Configuration
 

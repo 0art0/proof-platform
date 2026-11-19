@@ -1072,25 +1072,18 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
 `/api/proof-sessions` also pass the optional `approvedBackground` and `approvedLibrary` references
 (and refuse any other field in them). The topic routes are no longer relayed.
 
-- **New problem.** With a background proposer configured, the page is guided and the statement is
-  all a person types (an optional title sits behind "+ Add title"). A statement typed on the
-  landing page is taken as decided: the background is asked for at once; otherwise "Continue" asks
-  for it. The background appears ready to edit: its level, summary and assumptions, and each
-  constant with its typeset notation, its display name and its LaTeX (checked as typed with
-  MathLive and the operand rule; a constant that names a pack operator shows "standard notation"
-  and is not editable), with a × to remove it. "Ask for a change…" revises the proposal with
-  feedback. As soon as the proposal arrives, the library is built from it (`backgroundProposal`)
-  and listed with a checkbox per result, rendered in the current, edited notation; a result that
-  applies a removed constant is unticked and disabled. An ⓘ beside each step shows the role's
-  system message (`GET /ai/prompts`). "Start proof" approves the background (with an `amendment`
-  only when something was edited), keeps the ticked results, drafts the setup with the formalizer,
-  checks it and creates the session, showing each step on the button. A drafted setup that does
-  not pass the check, or no draft at all, opens the hand-entry form with the background, the draft
-  and both approvals carried over, and a line saying why. Changing the statement after the
-  background arrived offers "Suggest again" and holds "Start proof" until then. Every call from
-  one page shares a construction ID. Without a background proposer the page is the hand-entry
-  form: background, notation and layers, variables, hypotheses and goals, "Check setup" and
-  "Start exploring".
+- **New problem.** With a background proposer configured, a statement entered on the landing page
+  starts the request automatically. **Suggest a background** starts it on a blank setup page.
+  Edit the proposed level, summary, assumptions and notation, or ask for a revision. The library is
+  generated from the background proposal and shows a selection count. **Review suggested results**
+  opens the list of results and their checkboxes. Removing notation clears results that use it.
+  **Review setup** records the approvals, asks the formalizer for a draft and checks it. The review
+  shows the original statement alongside the formal variables, hypotheses and goals. **Open
+  workspace** creates the session from that checked draft. **Edit setup** opens the manual form with
+  the draft and its approvals. A failed formalization also opens that form with an explanation.
+  Changing the original statement requires **Refresh setup** before review. Calls from the page
+  share a construction ID. Without a background proposer, the page opens directly in the manual
+  form.
 - **Workspace.** When a displayed suggestion list has two or more entries, the workspace ranks its
   first 32 candidates automatically (trigger `automatic`) once the list has stayed displayed for
   about half a second, so quickly changing the selection costs nothing. The ranked picks appear
@@ -1146,20 +1139,15 @@ The web application relays these routes through same-origin proxies (`/api/ai/ba
   notation. A preview that would add a constant says so in the preview card. Top-ups appear in the library drawer as ordinary
   additions (origin `service`), with no AI badge.
 - A role that is not configured shows its control disabled with an explanation.
-- **Proof plan.** A panel under the move instructions, relayed through
-  `/api/proof-sessions/:sessionId/ai-proof-plan` (and `…/ai-proof-plan/:callId` to read a plan back),
-  `…/ai-proof-plan-translate` and `…/ai-proof-plan-apply`. It is enabled when both the planner and the
-  step translator are configured, and says why otherwise. "Write a proof plan" asks for a plan and
-  polls every three seconds while it is being written. The plan is shown as Lamport's tree: number,
-  form keyword, statement (typeset from `rendered`, prose otherwise), "Why:" (the motivation) and
-  "By:" (the justification), with the current step marked and every step's status in words.
-  "Next move" translates one move and shows it with Jev's confidence, the transition class and the
-  alternatives; "Apply" commits it, "Choose this instead" previews an alternative as the person's
-  own choice, "Skip step" moves on, and "Run to the end" repeats until a step stops. A stopped step
-  says why ("This step needs a move the platform does not have.", …) and still offers its
-  alternatives. "Missing moves" lists the reported steps and copies them as JSON. The walk is kept in
-  the tab's session storage; when the proof changed outside the plan, the panel says so and offers
-  "Continue from here".
+- **Proof plan.** The workspace toolbar links to the panel. **Draft proof** calls
+  `/api/proof-sessions/:sessionId/ai-proof-plan` for an independent proof, and **Adapt to workspace**
+  builds the blueprint through the same route. The panel polls `…/ai-proof-plan/:callId` while the
+  response is pending. **Preview next move** calls `…/ai-proof-plan-translate` and shows the proposal
+  with its selected statements, transition class and Jev's confidence. **Apply move** calls
+  `…/ai-proof-plan-apply`. **Run with Jev** applies moves automatically until the run pauses or the
+  blueprint finishes. Expand the draft, blueprint, applied moves and missing-move report for
+  details. The walk is kept in the tab's session storage. When the proof changes outside the plan,
+  **Continue from here** resumes from the current proof node.
 
 - **Save as reusable move.** After a described step is applied, the move-instructions panel offers
   "Save as reusable move" inline (with the hint "Turn this step into a general move you can reuse.
