@@ -225,6 +225,7 @@ type ResultSpec = Readonly<{
   patterns: readonly PatternSpec[];
   variants?: readonly VariantTransformation[];
   congruenceSymbols?: readonly string[];
+  priority?: number;
 }>;
 
 type PackSpec = Readonly<{
@@ -296,15 +297,18 @@ type CongruenceSpec = Omit<ResultSpec, "congruenceSymbols" | "directions" | "pat
 
 function congruenceRule({ head, statement, ...rule }: CongruenceSpec): ResultSpec {
   const implication = Array.isArray(statement) && statement[0] === "Implies";
+  const patterns = rulePatterns(
+    rule.premises[0],
+    implication ? (statement[2] as PlainMathJson) : statement,
+  );
   return {
     ...rule,
     statement,
     congruenceSymbols: [head],
+    // Generic order premises would list many unrelated predicate transports in isolation.
+    priority: 40,
     directions: ["forward", "backward"],
-    patterns: rulePatterns(
-      rule.premises[0],
-      implication ? (statement[2] as PlainMathJson) : statement,
-    ),
+    patterns: implication ? patterns.filter(({ direction }) => direction === "backward") : patterns,
   };
 }
 
@@ -547,7 +551,9 @@ function orderOperations(relation: OrderRelation, position: OperandPosition): Re
     ["Multiply", ...args("x")],
   ];
   return [
-    !other && relation.ascending ? { ...addRule, variants: ["contrapositive"] } : addRule,
+    !other && relation.ascending
+      ? { ...addRule, priority: 100, variants: ["contrapositive"] }
+      : addRule,
     congruenceRule({
       slug: `${slug}-multiply-positive-${position}`,
       name: `Monotonicity of multiplication by a positive number for ${phrase} (${position} operand)`,
@@ -1176,7 +1182,7 @@ function resultInput(pack: PackSpec, spec: ResultSpec): unknown {
     approval: { status: "approved", reviewerId: OPERATOR_REVIEWER },
     layer: "global",
     related: [],
-    priority: 100,
+    priority: spec.priority ?? 100,
     parameters: spec.parameters.map(([symbol, sort]) => ({
       id: `declaration:${pack.id.slice("pack:".length)}-${spec.slug}-${symbol}`,
       symbol,

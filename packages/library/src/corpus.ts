@@ -835,6 +835,7 @@ export const EXTENDED_CORPUS: readonly CorpusProblem[] = [
         selections: [goal(["Congruent", ["Add", "a", "c"], ["Add", "b", "c"], "m"])],
         suggestion: result("congruent-add-left", "backward"),
       },
+      closeByHypothesis(["Congruent", "a", "b", "m"]),
     ],
   },
   {

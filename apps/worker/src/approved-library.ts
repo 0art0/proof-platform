@@ -120,8 +120,9 @@ export async function loadApprovedLibrary(
  * initial library's results and their variants. The formalizer's context holds at most
  * `MAX_FORMALIZER_LIBRARY_RESULTS` of them. Within the cap all are shown in that order. Beyond it
  * originals come before variants (a variant only reshapes a result already shown), and among
- * originals the person's approved results come before the packs' generic ones; each group keeps
- * its order, and the rest are left out.
+ * originals the person's approved results come before the packs' generic ones. Pack originals
+ * are ordered by curated priority so that supplemental congruence rules leave room for primary
+ * results across domains.
  */
 export function formalizerLibraryResults(
   packs: readonly LibraryPack[],
@@ -140,7 +141,9 @@ export function formalizerLibraryResults(
       ? all
       : [
           ...(library?.results ?? []),
-          ...fromPacks.filter((result) => !isVariant(result)),
+          ...fromPacks
+            .filter((result) => !isVariant(result))
+            .sort((a, b) => b.priority - a.priority),
           ...(library?.variants ?? []),
           ...fromPacks.filter(isVariant),
         ].slice(0, MAX_FORMALIZER_LIBRARY_RESULTS);
