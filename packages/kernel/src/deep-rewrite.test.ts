@@ -914,3 +914,78 @@ describe("deep rewrite operation schema", () => {
     }
   });
 });
+
+describe("specializing local relations at a bound occurrence", () => {
+  const real = { kind: "named", id: "sort:real" } as const;
+  const realSet = { kind: "named", id: "sort:set", arguments: [real] } as const;
+  const declarations = [
+    ...["x", "y"].map((symbol) => ({ symbol, sort: real })),
+    ...["P", "Q"].map((symbol) => ({
+      symbol,
+      sort: { kind: "function", signature: { parameters: [real], result: PROPOSITION_SORT } },
+    })),
+    ...["S", "T"].map((symbol) => ({ symbol, sort: realSet })),
+  ].map((entry) => ({ ...entry, id: `declaration:${entry.symbol}`, role: "universal-parameter" }));
+  const operation = {
+    ...base,
+    kind: "generalized-rewrite",
+    source: hypothesisSource,
+    direction: "backward",
+    path: [1],
+    statement: { kind: "conclusion" },
+    congruenceResultIds: [],
+    obligationIds: [],
+  };
+  const source = (expression: PlainMathJson) => [{ id: hypothesisSource.hypothesisId, expression }];
+
+  it("matches a universally quantified local implication at the variable bound in the goal", () => {
+    const before = state(
+      ["ForAll", "y", ["Q", "y"]],
+      source(["ForAll", "x", ["Implies", ["P", "x"], ["Q", "x"]]]),
+      declarations,
+    );
+    const after = applyTransition(before, operation);
+    expect(after).toMatchObject({
+      ok: true,
+      state: {
+        goals: [{ sequent: { conclusion: { expression: ["ForAll", "y", ["P", "y"]] } } }],
+        obligations: [],
+      },
+    });
+  });
+
+  it("closes membership conditions over exactly the enclosing restricted binder", () => {
+    const before = state(
+      ["ForAll", ["Element", "y", "T"], ["Q", "y"]],
+      source(["ForAll", ["Element", "x", "S"], ["Implies", ["P", "x"], ["Q", "x"]]]),
+      declarations,
+    );
+    expect(applyTransition(before, operation).ok).toBe(false);
+    const after = applyTransition(before, {
+      ...operation,
+      obligationIds: ["obligation:membership"],
+    });
+    expect(after).toMatchObject({
+      ok: true,
+      state: {
+        obligations: [
+          {
+            provenance: { kind: "binder-membership", hypothesisId: hypothesisSource.hypothesisId },
+            sequent: {
+              conclusion: { expression: ["ForAll", ["Element", "y", "T"], ["Element", "y", "S"]] },
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  it("refuses to capture a free parameter of the source while specializing its quantified variable", () => {
+    const before = state(
+      ["ForAll", "y", ["Q", "y"]],
+      source(["ForAll", "x", ["Implies", ["P", "y"], ["Q", "x"]]]),
+      declarations,
+    );
+    expect(applyTransition(before, operation)).toMatchObject({ ok: false, state: before });
+  });
+});

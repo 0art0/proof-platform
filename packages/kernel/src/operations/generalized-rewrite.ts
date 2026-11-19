@@ -1,5 +1,6 @@
 import {
   createStatementViewSchema,
+  canonicalJsonEquals,
   type ContextualSequent,
   type Obligation,
   type OperatorDeclaration,
@@ -14,6 +15,7 @@ import {
   rewriteCaptures,
   type RewriteAncestor,
 } from "../deep-rewrite";
+import { specializeRewriteHypothesis } from "../specialize-rewrite-hypothesis";
 import { functionParts } from "../expression";
 import type { GeneralizedRewriteSelection, KernelDiagnosticCode, TransitionClass } from "../index";
 import {
@@ -54,7 +56,10 @@ export function rewriteRelationOf(expression: PlainMathJson): Relation | undefin
     : { operator: parts.operator, left, right, parameters };
 }
 
-type Condition = Readonly<{ expression: PlainMathJson; resultId: KernelResultId }>;
+type Condition = Readonly<{
+  expression: PlainMathJson;
+  provenance: NonNullable<Obligation["provenance"]>;
+}>;
 
 type Failure = Readonly<{ ok: false; code: KernelDiagnosticCode; message: string }>;
 
@@ -103,6 +108,16 @@ function sourceInstance(
       return fail(
         "invalid-instantiation",
         "The rewrite hypothesis refers to a symbol shadowed at the selected occurrence.",
+      );
+    }
+    if (functionParts(selected.statement.expression)?.operator === "ForAll") {
+      return specializeRewriteHypothesis(
+        selected.statement.expression,
+        occurrence.fragment,
+        operation.direction,
+        sequent.context.declarations,
+        occurrence.declarations,
+        operators,
       );
     }
     return { ok: true as const, conclusion: selected.statement.expression, premises: [] };
@@ -307,7 +322,7 @@ function* theoremLifts(
           if (proven === undefined) continue;
           const conditions = collectConditions(
             instance.premises.filter((_premise, premiseIndex) => premiseIndex !== index),
-            candidate.id,
+            { kind: "premise-of-result", resultId: candidate.id },
             step.scope,
             search,
           );
@@ -329,7 +344,7 @@ function* theoremLifts(
 
 function collectConditions(
   premises: readonly PlainMathJson[],
-  resultId: KernelResultId,
+  provenance: Condition["provenance"],
   scope: RewriteAncestor["scope"],
   search: Pick<Search, "sequent" | "operators" | "same" | "statement">,
 ): readonly Condition[] | undefined {
@@ -346,7 +361,7 @@ function collectConditions(
       )
     )
       continue;
-    conditions.push({ expression: closed, resultId });
+    conditions.push({ expression: closed, provenance });
   }
   return conditions;
 }
@@ -484,10 +499,14 @@ export function planGeneralizedRewrite(
     statement: operation.statement,
     pinned: operation.congruenceResultIds,
   };
-  const conditions =
-    sourceId === undefined
-      ? []
-      : collectConditions(instance.premises, sourceId, occurrence.scope, search);
+  const conditions = collectConditions(
+    instance.premises,
+    operation.source.kind === "result"
+      ? { kind: "premise-of-result", resultId: operation.source.resultId }
+      : { kind: "binder-membership", hypothesisId: operation.source.hypothesisId },
+    occurrence.scope,
+    search,
+  );
   if (conditions === undefined)
     return fail(
       "invalid-instantiation",
@@ -511,7 +530,7 @@ export function planGeneralizedRewrite(
         .slice(0, index)
         .some(
           (previous) =>
-            previous.resultId === condition.resultId &&
+            canonicalJsonEquals(previous.provenance, condition.provenance) &&
             same(previous.expression, condition.expression),
         ),
   );
@@ -562,9 +581,9 @@ export function applyGeneralizedRewrite(
       : replaceHypothesis(target.entry, plan.hypothesisIndex, [
           hypothesis(operation.statement.id, plan.rewritten),
         ]);
-  const obligations = plan.conditions.map(({ expression, resultId }, index): Obligation => ({
+  const obligations = plan.conditions.map(({ expression, provenance }, index): Obligation => ({
     id: operation.obligationIds[index] as StatementId,
-    provenance: { kind: "premise-of-result", resultId },
+    provenance,
     sequent: {
       context: target.entry.sequent.context,
       conclusion: { expression },
