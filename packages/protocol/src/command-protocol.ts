@@ -590,6 +590,9 @@ const commandSchemas = [
     .object({
       kind: z.literal("request-suggestions"),
       selections: z.array(selectionReferenceSchema).min(1).max(16),
+      rewritesOnly: z.boolean().optional(),
+      rewriteResultId: stableIdentifierSchema.optional(),
+      rewriteRelation: z.string().min(1).optional(),
     })
     .strict(),
   z.object({ kind: z.literal("preview"), ...moveChoiceShape }).strict(),

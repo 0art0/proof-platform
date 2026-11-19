@@ -152,6 +152,9 @@ export const proofHttpSuggestionRequestSchema = z
   .object({
     id: suggestionSetIdSchema,
     selections: z.array(proofHttpSelectionDescriptorSchema).min(1).max(16),
+    rewritesOnly: z.boolean().optional(),
+    rewriteResultId: stableIdentifierSchema.optional(),
+    rewriteRelation: z.string().min(1).optional(),
   })
   .strict();
 
@@ -443,6 +446,7 @@ async function handleRequest(
       route.sessionId,
       parsedRequest.data.id,
       parsedRequest.data.selections,
+      parsedRequest.data,
     );
     if (recorded.status === "invalid-catalog") {
       writeJson(response, 500, {

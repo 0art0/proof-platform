@@ -52,6 +52,7 @@ import { runMovePlan, type AuthoredMoveTemplate } from "@proof/moves/authoring";
 import {
   commandIdGenerator,
   materializeMoveOperation,
+  materializeGeneralizedRewrite,
   materializeResultApplication,
   type MaterializationResult,
   type MoveDefinition,
@@ -612,6 +613,28 @@ function derive(input: SemanticStepDerivationInput): SemanticStepDerivationResul
     selections.push(selection);
   }
   if (selections.length === 0) return deriveFailure("The step has no matched selection.");
+  if (
+    edge.operation.kind === "generalized-rewrite" &&
+    edge.operation.source.kind === "hypothesis" &&
+    !selections.some(({ slotId }) => slotId === "source")
+  ) {
+    const { hypothesisId } = edge.operation.source;
+    const located = selections[0];
+    const entry = located === undefined ? undefined : findEntry(parent, located.target.id);
+    const expression = entry?.sequent.context.hypotheses.find(({ id }) => id === hypothesisId)
+      ?.statement.expression;
+    if (located === undefined || entry === undefined || expression === undefined) {
+      return deriveFailure("The checked rewrite's source is absent.");
+    }
+    selections.push({
+      slotId: "source",
+      target: located.target,
+      statement: { role: "hypothesis", id: hypothesisId },
+      occurrence: { kind: "exact", path: [] },
+      fragment: expression,
+      variables: fragmentVariables(expression, entry, operators),
+    });
+  }
 
   const parameters: SemanticParameter[] = [];
   const menuSelection = edge.menuSelection;
@@ -665,7 +688,7 @@ function resultEvidence(
       ? "backward"
       : operation.kind === "apply-result-forward"
         ? "forward"
-        : operation.kind === "rewrite-with-equivalence"
+        : operation.kind === "rewrite-with-equivalence" || operation.kind === "generalized-rewrite"
           ? operation.direction
           : undefined;
   return direction === undefined
@@ -748,6 +771,7 @@ const REWRITE_OPERATIONS = new Set([
   "rewrite-with-equality",
   "rewrite-with-equivalence",
   "rewrite-with-implication",
+  "generalized-rewrite",
 ]);
 
 /** Keys whose values are mathematics, mapped through the symbol correspondence. */
@@ -1338,7 +1362,8 @@ function replayStep(
     const found = slotCandidates(node, selection, correspondence, operators);
     // An operation plan addresses whole statements: never a subterm of one.
     const wholeStatement =
-      step.source === "operation" &&
+      (step.source === "operation" ||
+        (step.operation.kind === "generalized-rewrite" && selection.slotId === "source")) &&
       selection.occurrence.kind === "exact" &&
       selection.occurrence.path.length === 0;
     perSlot.set(
@@ -1673,42 +1698,86 @@ function attemptAssignment(
   const choices: Record<string, string> = {};
   const parameters: Extract<Attempt, { ok: true }>["parameters"][number][] = [];
   let materialized: MaterializationResult | undefined;
-  for (let round = 0; round <= step.parameters.length + 1; round += 1) {
-    materialized =
-      step.source === "result" && step.result !== undefined
-        ? materializeResultApplication(
-            {
-              state: node.state,
-              resultId: step.result.resultId,
-              direction: step.result.direction,
-              target,
-              substitutions: mappedSubstitutions,
-              ...(selections.occurrence === undefined ? {} : { occurrence: selections.occurrence }),
-              menuChoices: choices,
-            },
-            environment,
-            generator,
-          )
-        : materializeMoveOperation({
-            state: node.state,
-            move: move as MoveDefinition,
-            selections,
-            menuChoices: choices,
-            idGenerator: generator,
-            env: environment,
-          });
-    if (materialized.ok || materialized.diagnostics[0].code !== "requires-input") break;
-    const unavailable = chooseParameters(
-      step,
-      materialized.missingParameters,
-      materialized.menus,
-      view,
-      merged,
-      choices,
-      parameters,
-      operators,
+  if (step.operation.kind === "generalized-rewrite") {
+    const occurrence = selections.occurrence;
+    const hypothesis = selections.source?.anchor.statement;
+    const originalSource = step.operation.source;
+    const source =
+      originalSource.kind === "result"
+        ? {
+            ...originalSource,
+            instantiation: Object.fromEntries(
+              mappedSubstitutions.map(({ symbol, expression }) => [symbol, expression]),
+            ),
+          }
+        : hypothesis?.kind === "hypothesis"
+          ? { kind: "hypothesis" as const, hypothesisId: hypothesis.id }
+          : undefined;
+    if (occurrence === undefined || source === undefined) {
+      return {
+        ok: false,
+        code: "no-matching-selection",
+        message: "The rewrite source or occurrence has no match.",
+      };
+    }
+    materialized = materializeGeneralizedRewrite(
+      node.state,
+      {
+        target,
+        statement: occurrence.anchor.statement,
+        path: occurrence.kind === "exact" ? occurrence.path : occurrence.containerPath,
+        ...(occurrence.kind === "associative"
+          ? {
+              lens: { startOperand: occurrence.startOperand, endOperand: occurrence.endOperand },
+            }
+          : {}),
+        direction: step.operation.direction,
+        source,
+        congruenceResultIds: step.operation.congruenceResultIds,
+      },
+      environment,
+      generator,
     );
-    if (unavailable !== undefined) return unavailable;
+  } else {
+    for (let round = 0; round <= step.parameters.length + 1; round += 1) {
+      materialized =
+        step.source === "result" && step.result !== undefined
+          ? materializeResultApplication(
+              {
+                state: node.state,
+                resultId: step.result.resultId,
+                direction: step.result.direction,
+                target,
+                substitutions: mappedSubstitutions,
+                ...(selections.occurrence === undefined
+                  ? {}
+                  : { occurrence: selections.occurrence }),
+                menuChoices: choices,
+              },
+              environment,
+              generator,
+            )
+          : materializeMoveOperation({
+              state: node.state,
+              move: move as MoveDefinition,
+              selections,
+              menuChoices: choices,
+              idGenerator: generator,
+              env: environment,
+            });
+      if (materialized.ok || materialized.diagnostics[0].code !== "requires-input") break;
+      const unavailable = chooseParameters(
+        step,
+        materialized.missingParameters,
+        materialized.menus,
+        view,
+        merged,
+        choices,
+        parameters,
+        operators,
+      );
+      if (unavailable !== undefined) return unavailable;
+    }
   }
   if (materialized === undefined || !materialized.ok) {
     return {
@@ -2049,10 +2118,44 @@ function attemptOperation(
           endOperand: anchor.occurrence.endOperand,
         };
       }
-    } else rebuilt[key] = walk(value, key);
+    } else if (key === "congruenceResultIds") rebuilt[key] = value;
+    else rebuilt[key] = walk(value, key);
   }
   if (problem !== undefined) {
     return { ok: false, code: "materialization-failed", message: problem };
+  }
+  if (step.operation.kind === "generalized-rewrite") {
+    const scoped = {
+      operators: input.operators ?? [],
+      ...(input.results === undefined ? {} : { results: input.results }),
+    };
+    const { target, statement, path, lens, source, direction, congruenceResultIds } =
+      step.operation;
+    const mappedSource = rebuilt.source as typeof source;
+    const materialized = materializeGeneralizedRewrite(
+      node.state,
+      {
+        target: rebuilt.target as typeof target,
+        statement: rebuilt.statement as typeof statement,
+        path: rebuilt.path as typeof path,
+        ...(rebuilt.lens === undefined ? {} : { lens: rebuilt.lens as NonNullable<typeof lens> }),
+        source: mappedSource,
+        direction,
+        congruenceResultIds,
+      },
+      scoped,
+      generator,
+    );
+    if (!materialized.ok) {
+      return {
+        ok: false,
+        code: "materialization-failed",
+        message: materialized.diagnostics[0].message,
+      };
+    }
+    if (materialized.operation.kind === "generalized-rewrite") {
+      rebuilt.obligationIds = materialized.operation.obligationIds;
+    }
   }
   const parsed = kernelOperationSchema.safeParse(rebuilt);
   if (!parsed.success) {

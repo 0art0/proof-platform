@@ -31,6 +31,7 @@ import {
   matchResultConclusion,
   operatorOperands,
   parseKernelResultCatalog,
+  previewGeneralizedRewrite,
   symbolValue,
   type KernelEnvironment,
   type KernelOperation,
@@ -373,6 +374,47 @@ export function materializeMoveOperation(request: MaterializeMoveRequest): Mater
     detached ??
     materializationFailure("invalid-operation", "The operation could not be detached safely.")
   );
+}
+
+export type GeneralizedRewriteSeed = Omit<
+  Extract<KernelOperation, { kind: "generalized-rewrite" }>,
+  "kind" | "expectedStateId" | "resultStateId" | "obligationIds"
+>;
+
+export function materializeGeneralizedRewrite(
+  state: ExecutableProofState,
+  seed: GeneralizedRewriteSeed,
+  environment: KernelEnvironment,
+  ids: MoveIdGenerator,
+  expected?: Readonly<{
+    replacement: PlainMathJson;
+    obligations: readonly PlainMathJson[];
+    transitionClass: import("@proof/kernel").TransitionClass;
+  }>,
+): MaterializationResult {
+  const preview = previewGeneralizedRewrite(state, seed, environment);
+  if (!preview.ok) return materializationFailure("not-applicable", preview.message);
+  if (
+    expected !== undefined &&
+    (expected.transitionClass !== preview.transitionClass ||
+      canonicalJson(expected.replacement) !== canonicalJson(preview.replacement) ||
+      canonicalJson(expected.obligations) !== canonicalJson(preview.obligations))
+  ) {
+    return materializationFailure(
+      "not-applicable",
+      "The checked rewrite has changed. Request new suggestions.",
+    );
+  }
+  const parsed = kernelOperationSchema.safeParse({
+    ...seed,
+    kind: "generalized-rewrite",
+    expectedStateId: state.id,
+    resultStateId: ids.resultStateId,
+    obligationIds: preview.obligations.map((_, index) => ids.statementId("rewrite", index + 1)),
+  });
+  return parsed.success
+    ? { ok: true, operation: parsed.data, menus: [], diagnostics: [] }
+    : materializationFailure("invalid-operation", "The checked rewrite operation is invalid.");
 }
 
 export type ResultApplicationRequest = Readonly<{
@@ -820,6 +862,12 @@ function walkMove(context: Context, walk: Walk): Readonly<Record<string, unknown
       return chooseExistentialWitnessFields(context, walk);
     case "rewrite-with-equality":
       return rewriteWithEquality(context, walk);
+    case "generalized-rewrite":
+      walk.errors.push({
+        code: "not-applicable",
+        message: "Choose a specific checked rewrite from the displayed suggestions.",
+      });
+      return undefined;
     case "rewrite-with-equivalence":
     case "rewrite-with-implication":
       return deepRewrite(context, walk, context.kind);

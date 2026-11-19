@@ -110,6 +110,13 @@ export function appliedResultIds(operation: ProofEdge["operation"]): readonly st
     case "rewrite-with-equivalence":
     case "rewrite-with-implication":
       return operation.source.kind === "result" ? [operation.source.resultId] : [];
+    case "generalized-rewrite":
+      return [
+        ...new Set([
+          ...(operation.source.kind === "result" ? [operation.source.resultId] : []),
+          ...(operation.congruenceResultIds ?? []),
+        ]),
+      ];
     default:
       return [];
   }

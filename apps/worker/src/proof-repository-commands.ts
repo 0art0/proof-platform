@@ -298,7 +298,7 @@ export async function recordActivations(
         commandId: prepared.prepared.command.commandId,
         edgeId: prepared.prepared.edge.id,
         nodeId: prepared.prepared.node.id,
-        resultId: step.resultId,
+        resultId: step.resultIdsBySymbol?.get(declaration.symbol) ?? step.resultId,
         transitionSequence,
         activatedAt,
       });

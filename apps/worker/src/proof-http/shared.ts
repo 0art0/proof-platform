@@ -218,8 +218,9 @@ export function transitionClassesFor(
     ),
   ]);
   return suggestionSet.suggestions.flatMap((suggestion) => {
-    if (suggestion.source !== "move") return [];
-    const transitionClass = classes.get(suggestion.artifactId);
+    const transitionClass =
+      suggestion.rewrite?.transitionClass ??
+      (suggestion.source === "move" ? classes.get(suggestion.artifactId) : undefined);
     const suggestionId = suggestionIdSchema.safeParse(suggestion.id);
     return transitionClass === undefined || !suggestionId.success
       ? []
@@ -238,6 +239,11 @@ export async function recordSuggestions(
   sessionId: string,
   suggestionSetId: z.infer<typeof suggestionSetIdSchema>,
   selections: readonly ProofHttpSelectionDescriptor[],
+  rewriteOptions: Readonly<{
+    rewritesOnly?: boolean | undefined;
+    rewriteResultId?: string | undefined;
+    rewriteRelation?: string | undefined;
+  }> = {},
 ): Promise<RecordSuggestionsResult> {
   const loaded = await loadCurrentProofSession(store, sessionId);
   if (loaded.status !== "loaded") return { status: "failed", failure: loaded };
@@ -267,6 +273,17 @@ export async function recordSuggestions(
   const recorded = await recordDisplayedSuggestionSet(store, index.index, sessionId, {
     id: suggestionSetId,
     selection: requestSelection,
+    options: {
+      ...(rewriteOptions.rewritesOnly === undefined
+        ? {}
+        : { rewritesOnly: rewriteOptions.rewritesOnly }),
+      ...(rewriteOptions.rewriteResultId === undefined
+        ? {}
+        : { rewriteResultId: rewriteOptions.rewriteResultId }),
+      ...(rewriteOptions.rewriteRelation === undefined
+        ? {}
+        : { rewriteRelation: rewriteOptions.rewriteRelation }),
+    },
   });
   if (recorded.status !== "committed") return { status: "failed", failure: recorded };
   return { status: "recorded", suggestionSet: recorded.suggestionSet, replayed: recorded.replayed };

@@ -33,6 +33,7 @@ import {
   type MoveId,
 } from "@proof/moves";
 import {
+  type CheckedRewrite,
   type RetrievalIndex,
   type ResolvedRetrievalSelection,
   type RetrievalSuggestion,
@@ -229,6 +230,51 @@ const resolvedRetrievalSelectionSchema: z.ZodType<ResolvedRetrievalSelection> = 
   resolvedProofSelectionQuerySchema,
 ]);
 
+const checkedRewriteSchema: z.ZodType<CheckedRewrite> = z
+  .object({
+    target: z.unknown(),
+    statement: z.unknown(),
+    path: z.unknown(),
+    lens: z.unknown().optional(),
+    source: z.unknown(),
+    direction: z.unknown(),
+    congruenceResultIds: z.unknown(),
+    replacement: plainMathJsonSchema,
+    obligations: z.array(plainMathJsonSchema),
+    transitionClass: z.enum(["equivalence", "strengthening", "weakening"]),
+  })
+  .strict()
+  .transform(({ replacement, obligations, transitionClass, ...fields }, context) => {
+    const parsed = kernelOperationSchema.safeParse({
+      ...fields,
+      kind: "generalized-rewrite",
+      expectedStateId: "suggestion:before",
+      resultStateId: "suggestion:after",
+      obligationIds: [],
+    });
+    if (!parsed.success || parsed.data.kind !== "generalized-rewrite") {
+      addLinkIssue(context, "Invalid generalized rewrite evidence.");
+      return z.NEVER;
+    }
+    const { target, statement, path, lens, source, direction, congruenceResultIds } = parsed.data;
+    if (congruenceResultIds === undefined) {
+      addLinkIssue(context, "A displayed rewrite must identify its checked congruence rules.");
+      return z.NEVER;
+    }
+    return {
+      target,
+      statement,
+      path,
+      ...(lens === undefined ? {} : { lens }),
+      source,
+      direction,
+      congruenceResultIds,
+      replacement,
+      obligations,
+      transitionClass,
+    };
+  });
+
 const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
   .object({
     id: suggestionIdSchema,
@@ -258,6 +304,8 @@ const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
     applicability: z.enum(["applicable", "requires-input"]),
     abstractionFit: z.enum(["not-used", "compatible", "unknown"]),
     variantFamilyId: stableIdentifierSchema.optional(),
+    rewriteRelation: z.string().min(1).optional(),
+    rewrite: checkedRewriteSchema.optional(),
     predictedObligations: z
       .array(
         z
@@ -274,6 +322,19 @@ const retrievalSuggestionSchema: z.ZodType<RetrievalSuggestion> = z
   })
   .strict()
   .superRefine((suggestion, context) => {
+    if ((suggestion.rewrite === undefined) !== (suggestion.rewriteRelation === undefined)) {
+      addLinkIssue(context, "A displayed rewrite must identify its checked relation.");
+    }
+    const rewrite = suggestion.rewrite;
+    if (rewrite !== undefined) {
+      const sourceMatches =
+        rewrite.source.kind === "hypothesis"
+          ? suggestion.source === "move" && suggestion.artifactId === "move:generalized-rewrite"
+          : suggestion.source === "result" && suggestion.artifactId === rewrite.source.resultId;
+      if (!sourceMatches || suggestion.applicability !== "applicable") {
+        addLinkIssue(context, "A displayed rewrite must match its checked source.");
+      }
+    }
     if (suggestion.predictedObligations !== undefined) {
       const keys = suggestion.predictedObligations.map(({ kind, index }) => `${kind}:${index}`);
       if (suggestion.source !== "result" || new Set(keys).size !== keys.length) {
@@ -361,6 +422,9 @@ export const displayedSuggestionSetSchema: z.ZodType<DisplayedSuggestionSet> = z
       suggestionSet.selection.kind === "selection-query" &&
       suggestionSet.selection.selections.some(({ abstraction }) => abstraction !== undefined);
     suggestionSet.suggestions.forEach((suggestion) => {
+      if (!rewriteMatchesSelection(suggestion, suggestionSet.selection)) {
+        addLinkIssue(context, "A displayed rewrite must match its selected occurrence and source.");
+      }
       const matchedSelectionIds = suggestion.selectionMatches.map(({ selectionId }) => selectionId);
       if (
         new Set(matchedSelectionIds).size !== matchedSelectionIds.length ||
@@ -470,6 +534,50 @@ export const displayedSuggestionSetSchema: z.ZodType<DisplayedSuggestionSet> = z
       }
     });
   });
+
+/** Check the stored address against the stored occurrence, without rerunning discovery. */
+function rewriteMatchesSelection(
+  suggestion: RetrievalSuggestion,
+  selection: ResolvedRetrievalSelection,
+): boolean {
+  const rewrite = suggestion.rewrite;
+  if (rewrite === undefined) return true;
+  const selectionFor = (id: string | undefined): ResolvedProofSelection | undefined =>
+    selection.kind === "selection-query"
+      ? selection.selections.find((subject) => subject.id === id)?.selection
+      : id === "selection:primary"
+        ? selection
+        : undefined;
+  const occurrenceMatch = suggestion.selectionMatches.find(
+    ({ selectionSlotId }) => selectionSlotId === "occurrence" || selectionSlotId === undefined,
+  );
+  const occurrence = selectionFor(occurrenceMatch?.selectionId);
+  if (occurrence === undefined) return false;
+  const sourceMatch = suggestion.selectionMatches.find(
+    ({ selectionSlotId }) => selectionSlotId === "source",
+  );
+  if (sourceMatch !== undefined) {
+    const source = selectionFor(sourceMatch.selectionId);
+    if (
+      source?.kind !== "exact" ||
+      source.path.length > 0 ||
+      source.anchor.statement.kind !== "hypothesis" ||
+      !jsonValueEquals(source.anchor.target, rewrite.target) ||
+      rewrite.source.kind !== "hypothesis" ||
+      source.anchor.statement.id !== rewrite.source.hypothesisId
+    )
+      return false;
+  }
+  return (
+    jsonValueEquals(occurrence.anchor.target, rewrite.target) &&
+    jsonValueEquals(occurrence.anchor.statement, rewrite.statement) &&
+    (occurrence.kind === "exact"
+      ? rewrite.lens === undefined && jsonValueEquals(occurrence.path, rewrite.path)
+      : jsonValueEquals(occurrence.containerPath, rewrite.path) &&
+        occurrence.startOperand === rewrite.lens?.startOperand &&
+        occurrence.endOperand === rewrite.lens.endOperand)
+  );
+}
 
 export type PrepareDisplayedSuggestionSetResult =
   | Readonly<{ ok: true; suggestionSet: DisplayedSuggestionSet; diagnostics: readonly [] }>
@@ -1823,6 +1931,7 @@ export const RESULT_APPLICATION_MOVE_IDS: readonly string[] = Object.freeze([
   "move:apply-result-backward",
   "move:apply-result-forward",
   "move:rewrite-with-equivalence",
+  "move:generalized-rewrite",
 ]);
 
 /**
@@ -1831,11 +1940,28 @@ export const RESULT_APPLICATION_MOVE_IDS: readonly string[] = Object.freeze([
  * instantiates exactly that result.
  */
 export function suggestionAuthorizesMove(
-  suggestion: Pick<RetrievalSuggestion, "source" | "artifactId">,
+  suggestion: Pick<RetrievalSuggestion, "source" | "artifactId" | "rewrite">,
   moveId: string | undefined,
   operation: KernelOperation,
 ): boolean {
   if (moveId === undefined) return false;
+  if (operation.kind === "generalized-rewrite" || suggestion.rewrite !== undefined) {
+    if (operation.kind !== "generalized-rewrite" || moveId !== "move:generalized-rewrite") {
+      return false;
+    }
+    const rewrite = suggestion.rewrite;
+    return (
+      rewrite !== undefined &&
+      rewrite.direction === operation.direction &&
+      rewrite.obligations.length === operation.obligationIds.length &&
+      jsonValueEquals(rewrite.target, operation.target) &&
+      jsonValueEquals(rewrite.statement, operation.statement) &&
+      jsonValueEquals(rewrite.path, operation.path) &&
+      jsonValueEquals(rewrite.lens, operation.lens) &&
+      jsonValueEquals(rewrite.source, operation.source) &&
+      jsonValueEquals(rewrite.congruenceResultIds, operation.congruenceResultIds)
+    );
+  }
   if (suggestion.source === "move") return suggestion.artifactId === moveId;
   if (!RESULT_APPLICATION_MOVE_IDS.includes(moveId)) return false;
   const resultId =

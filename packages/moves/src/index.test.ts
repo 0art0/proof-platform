@@ -234,6 +234,7 @@ describe("deterministic move planning", () => {
       "close-by-accepted-inference",
       "rewrite-with-equivalence",
       "rewrite-with-implication",
+      "generalized-rewrite",
       "apply-result-backward",
       "apply-result-forward",
       "mark-sorry",

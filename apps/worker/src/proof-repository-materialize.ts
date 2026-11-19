@@ -24,6 +24,7 @@ import {
 import {
   commandIdGenerator,
   materializeMoveOperation,
+  materializeGeneralizedRewrite,
   materializeResultApplication,
   type MaterializationResult,
   type MoveMenuChoices,
@@ -255,6 +256,16 @@ function displayedResultIds(
   suggestion: DisplayedSuggestionSet["suggestions"][number],
   definitions: DefinitionCatalog,
 ): readonly string[] {
+  if (suggestion.rewrite !== undefined) {
+    return [
+      ...new Set([
+        ...(suggestion.rewrite.source.kind === "result"
+          ? [suggestion.rewrite.source.resultId]
+          : []),
+        ...(suggestion.rewrite.congruenceResultIds ?? []),
+      ]),
+    ];
+  }
   if (suggestion.source !== "move") return [suggestion.artifactId];
   const macro = definitions.macros?.find(({ move }) => move.id === suggestion.artifactId);
   return (macro?.template.requiredArtifacts ?? [])
@@ -310,7 +321,31 @@ function materializeSuggestion(
   let moveId: string | undefined;
   let result: MaterializationResult;
   const references: DefinitionReference[] = [];
-  if (suggestion.source === "move") {
+  if (suggestion.rewrite !== undefined) {
+    const move = definitions.moves.find(
+      ({ id, approval }) => id === "move:generalized-rewrite" && approval.status === "approved",
+    );
+    if (move === undefined || Object.keys(menuChoices).length > 0) {
+      return rejected("Choose an approved checked rewrite without extra menu parameters.");
+    }
+    moveId = move.id;
+    references.push({ kind: "move", id: move.id, hash: definitionHash(move) });
+    const catalog = definitions.catalog(environment.operators ?? []);
+    for (const id of displayedResultIds(suggestion, definitions)) {
+      const definition = catalog.results.find(
+        (item) => item.id === id && item.approval.status === "approved",
+      );
+      if (definition === undefined)
+        return rejected("A displayed rewrite rule is no longer approved.");
+      references.push({ kind: "library-result", id, hash: definitionHash(definition) });
+    }
+    const { replacement, obligations, transitionClass, ...seed } = suggestion.rewrite;
+    result = materializeGeneralizedRewrite(node.state, seed, environment, idGenerator, {
+      replacement,
+      obligations,
+      transitionClass,
+    });
+  } else if (suggestion.source === "move") {
     const macro = definitions.macros?.find(({ move }) => move.id === suggestion.artifactId);
     const move =
       definitions.moves.find((definition) => definition.id === suggestion.artifactId) ??

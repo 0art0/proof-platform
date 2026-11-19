@@ -3,9 +3,11 @@ import {
   RESERVED_BUILTIN_SYMBOLS,
   binderShape,
   constructionPlaceholderOperators,
+  createExecutableProofStateSchema,
   createProofStateSchema,
   mathJsonEquals,
   operatorDeclarationsSchema,
+  stableIdentifierSchema,
   type OperatorDeclaration,
   type PlainMathJson,
   type ProofState,
@@ -34,6 +36,7 @@ import {
   type ResolvedProofSelectionQuerySubject,
 } from "@proof/selections";
 import { DiscriminationTree } from "./discrimination-tree";
+import { GeneralizedRewriteIndex, type CheckedRewrite } from "./generalized-rewrite";
 import {
   bindingsTypeFit,
   evaluateResultPremises,
@@ -58,6 +61,7 @@ export {
   type TypeFit,
 } from "./filtering";
 export { matchPattern, type PatternMatchOptions } from "./matching";
+export type { CheckedRewrite } from "./generalized-rewrite";
 
 export interface RankedCandidate {
   readonly id: string;
@@ -106,6 +110,8 @@ export type RetrievalSuggestion = RankedCandidate &
     applicability: "applicable" | "requires-input";
     abstractionFit: "not-used" | "compatible" | "unknown";
     variantFamilyId?: string | undefined;
+    rewriteRelation?: string | undefined;
+    rewrite?: CheckedRewrite | undefined;
     /**
      * For a result suggestion, the premises and side conditions the match found unavailable as
      * hypotheses (the near-miss "applies if …" conditions), in premise then side-condition order.
@@ -177,6 +183,10 @@ type IndexedPattern = IndexedResultPattern | IndexedMovePattern;
 type QueryOptions = Readonly<{
   availableArtifacts: readonly LibraryArtifactReference[];
   limit: number;
+  limitIsDefault: boolean;
+  rewritesOnly: boolean;
+  rewriteResultId?: string;
+  rewriteRelation?: string;
 }>;
 
 type RetrievalSubject = Readonly<{
@@ -211,6 +221,7 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
   readonly #tree: DiscriminationTree<IndexedPattern>;
   readonly #familiesById: ReadonlyMap<string, VariantFamily>;
   readonly #approvedResultIds: ReadonlySet<string>;
+  readonly #rewrites: GeneralizedRewriteIndex | undefined;
 
   constructor(
     catalog: RetrievalCatalog,
@@ -228,6 +239,13 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
         .filter((result) => result.approval.status === "approved")
         .map((result) => result.id),
     );
+    if (
+      catalog.moves.some(
+        ({ id, approval }) => id === "move:generalized-rewrite" && approval.status === "approved",
+      )
+    ) {
+      this.#rewrites = new GeneralizedRewriteIndex(catalog.results, operators);
+    }
     Object.freeze(this);
   }
 
@@ -272,12 +290,38 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
       return retrievalFailure("selection-rejected", resolved.message);
     }
 
-    const candidateMatches = resolved.subjects.flatMap((subject) =>
-      candidateEntriesForSubject(subject, this.#tree).map((candidate) => ({
-        candidate,
-        subject,
-      })),
-    );
+    const candidateMatches = options.rewritesOnly
+      ? []
+      : resolved.subjects.flatMap((subject) =>
+          candidateEntriesForSubject(subject, this.#tree).map((candidate) => ({
+            candidate,
+            subject,
+          })),
+        );
+    const rewriteSnapshot =
+      this.#rewrites !== undefined &&
+      resolved.subjects.every(({ abstraction }) => abstraction === undefined)
+        ? createExecutableProofStateSchema({ operators: this.#operators }).safeParse(
+            stateResult.data,
+          )
+        : undefined;
+    const rewrites =
+      rewriteSnapshot?.success === true && this.#rewrites !== undefined
+        ? [
+            ...this.#rewrites.query(
+              rewriteSnapshot.data,
+              resolved.subjects,
+              this.#operators,
+              options.rewriteResultId,
+            ),
+          ]
+            .filter(
+              ({ rewriteRelation }) =>
+                options.rewriteRelation === undefined ||
+                rewriteRelation === options.rewriteRelation,
+            )
+            .sort(compareSuggestions)
+        : [];
     const sortCache = new Map<string, TypeFit>();
     const available = new Set<string>(
       options.availableArtifacts.map((reference) => artifactReferenceKey(reference)),
@@ -300,7 +344,17 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
         ),
       ),
     ].sort(compareSuggestions);
-    const suggestions = selectWithCategoryDiversity(ranked, options.limit);
+    const suggestions = options.rewritesOnly
+      ? selectWithCategoryDiversity(rewrites, options.limit)
+      : options.limitIsDefault
+        ? [
+            ...selectWithCategoryDiversity(ranked, options.limit),
+            ...selectWithCategoryDiversity(rewrites, 2),
+          ]
+        : selectWithCategoryDiversity(
+            [...ranked, ...rewrites].sort(compareSuggestions),
+            options.limit,
+          );
 
     return freezeDetached({
       ok: true as const,
@@ -1121,6 +1175,8 @@ function buildDiscriminationTree(
     });
   });
   catalog.moves.forEach((move) => {
+    // This move is offered only after a specific source and direction pass kernel preview.
+    if (move.id === "move:generalized-rewrite") return;
     const slotSpecificity = new Map<string, number>();
     move.patterns.forEach((pattern) => {
       const specificity = patternSpecificity(
@@ -1614,7 +1670,13 @@ function walkExpression(
 
 function parseQueryOptions(value: unknown): QueryOptions | undefined {
   if (!isStrictRecord(value)) return undefined;
-  const allowedKeys = ["availableArtifacts", "limit"];
+  const allowedKeys = [
+    "availableArtifacts",
+    "limit",
+    "rewritesOnly",
+    "rewriteResultId",
+    "rewriteRelation",
+  ];
   if (Reflect.ownKeys(value).some((key) => typeof key !== "string" || !allowedKeys.includes(key))) {
     return undefined;
   }
@@ -1627,13 +1689,28 @@ function parseQueryOptions(value: unknown): QueryOptions | undefined {
     return parsed.success ? parsed.data : undefined;
   });
   if (availableArtifacts.some((reference) => reference === undefined)) return undefined;
-  const limit = value.limit ?? 8;
+  const rewritesOnly = value.rewritesOnly ?? false;
+  if (typeof rewritesOnly !== "boolean") return undefined;
+  const limit = value.limit ?? (rewritesOnly ? 64 : 8);
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100) {
     return undefined;
   }
+  const rewriteResultId = value.rewriteResultId;
+  if (rewriteResultId !== undefined && !stableIdentifierSchema.safeParse(rewriteResultId).success)
+    return undefined;
+  const rewriteRelation = value.rewriteRelation;
+  if (
+    rewriteRelation !== undefined &&
+    (typeof rewriteRelation !== "string" || rewriteRelation.length === 0)
+  )
+    return undefined;
   return {
     availableArtifacts: availableArtifacts as LibraryArtifactReference[],
     limit,
+    limitIsDefault: value.limit === undefined,
+    rewritesOnly,
+    ...(typeof rewriteResultId === "string" ? { rewriteResultId } : {}),
+    ...(typeof rewriteRelation === "string" ? { rewriteRelation } : {}),
   };
 }
 

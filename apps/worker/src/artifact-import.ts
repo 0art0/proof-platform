@@ -792,7 +792,8 @@ class ArtifactValidator {
         (activation, position) =>
           activation.symbol === expected[position]?.symbol &&
           sameJson(activation.declaration, expected[position]) &&
-          activation.resultId === step?.resultId &&
+          activation.resultId ===
+            (step?.resultIdsBySymbol?.get(activation.symbol) ?? step?.resultId) &&
           activation.edgeId === edge.id &&
           activation.nodeId === edge.childNodeId &&
           activation.transitionSequence === edge.sequence,
