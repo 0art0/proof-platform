@@ -2,6 +2,7 @@ import { alphaEquivalent } from "@proof/kernel";
 import {
   RESERVED_BUILTIN_SYMBOLS,
   binderShape,
+  canonicalJson,
   constructionPlaceholderOperators,
   createExecutableProofStateSchema,
   createProofStateSchema,
@@ -1054,6 +1055,17 @@ function compareSelectionMatches(
     compareStrings(left.selectionId, right.selectionId) ||
     compareStrings(left.patternId ?? "", right.patternId ?? "")
   );
+}
+
+/** Content key for reusing a validated index in exactly the same operator environment. */
+export function retrievalOperatorEnvironmentKey(
+  operators: readonly OperatorDeclaration[],
+): string | undefined {
+  try {
+    return isJsonData(operators) ? canonicalJson(operators) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Build an immutable structural index over each result variant and move pattern. */

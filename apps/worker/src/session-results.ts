@@ -25,6 +25,7 @@ import {
   type VariantFamily,
 } from "@proof/library";
 import { approvedKernelResults } from "@proof/moves";
+import { deepFreeze } from "@proof/mathjson-model";
 import {
   adaptApprovedCatalog,
   type ApprovedCatalog,
@@ -34,6 +35,7 @@ import { extendOperators, libraryConstantsOf } from "./session-constants";
 
 /** Layers whose admitted results are part of a session's catalog (besides approved lemmas). */
 export const SESSION_RESULT_LAYERS = ["initial-problem", "proof-time-background"] as const;
+const MAX_OPERATOR_CATALOGS = 8;
 
 /**
  * The approved results among a session's stored library artifacts that its `initial-problem` and
@@ -93,6 +95,7 @@ export function withSessionResults(
         // The session's own results never make the catalog unusable.
         if (adapted.kernelResults !== undefined) catalog = adapted;
       }
+      if (cache.size >= MAX_OPERATOR_CATALOGS) cache.delete(cache.keys().next().value!);
       cache.set(key, catalog);
       return catalog;
     },
@@ -118,7 +121,7 @@ function withFamilies(
       name: `${(source ?? members[0])?.name ?? id} variants`,
       memberIds: members.map((member) => member.id),
     });
-    if (parsed.success) families.push(parsed.data);
+    if (parsed.success) families.push(deepFreeze(parsed.data));
   }
   const kept = new Set(families.map(({ id }) => id as string));
   return {
@@ -132,7 +135,7 @@ function withFamilies(
 }
 
 function withoutFamily(result: LibraryResult): LibraryResult {
-  return Object.fromEntries(
-    Object.entries(result).filter(([key]) => key !== "variantFamilyId"),
+  return Object.freeze(
+    Object.fromEntries(Object.entries(result).filter(([key]) => key !== "variantFamilyId")),
   ) as LibraryResult;
 }

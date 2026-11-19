@@ -17,10 +17,14 @@ import {
   type ProofNode,
   type ProtocolEnvironment,
 } from "@proof/protocol";
-import { createRetrievalIndex, type RetrievalIndex } from "@proof/retrieval";
+import {
+  createRetrievalIndex,
+  retrievalOperatorEnvironmentKey,
+  type RetrievalIndex,
+} from "@proof/retrieval";
 import { resolveProofSelection } from "@proof/selections";
 import { z } from "zod";
-import type { DefinitionCatalog } from "../approved-catalog";
+import { canReuseRetrievalIndex, type DefinitionCatalog } from "../approved-catalog";
 import type { AiRuntime } from "../ai-runtime";
 import type { AiLimiter } from "./ai-rate-limit";
 import { executeTryResultCommand } from "../inquiry-methods";
@@ -184,13 +188,25 @@ export function repositoryFailureStatus(
 // Suggestions
 // ---------------------------------------------------------------------------------------------
 
+type CatalogOperators = NonNullable<ProtocolEnvironment["operators"]>;
+const MAX_RETRIEVAL_INDEXES = 8;
+const retrievalIndexes = new WeakMap<DefinitionCatalog, Map<string, RetrievalIndex>>();
+
 export function approvedRetrievalIndex(
   definitions: DefinitionCatalog,
-  operators: NonNullable<ProtocolEnvironment["operators"]>,
+  operators: CatalogOperators,
 ): Readonly<{ ok: true; index: RetrievalIndex }> | Readonly<{ ok: false; message: string }> {
   // Retrieval also offers the results that would activate an available library constant, so it
   // works in the effective operators extended with those constants.
   const offered = catalogOperators(operators, definitions);
+  // Injected definitions may change their contents in place while keeping the same catalog ID.
+  // Only reuse indexes for production snapshots, keyed by the full offered operator declarations.
+  const cacheKey = canReuseRetrievalIndex(definitions)
+    ? retrievalOperatorEnvironmentKey(offered)
+    : undefined;
+  const indexes = retrievalIndexes.get(definitions);
+  const cached = cacheKey === undefined ? undefined : indexes?.get(cacheKey);
+  if (cached !== undefined) return { ok: true, index: cached };
   const catalog = definitions.catalog(offered);
   const result = createRetrievalIndex(
     {
@@ -201,9 +217,21 @@ export function approvedRetrievalIndex(
     },
     { operators: offered },
   );
-  return result.ok
-    ? { ok: true, index: result.index }
-    : { ok: false, message: result.diagnostics[0]?.message ?? "The approved catalog is invalid." };
+  if (!result.ok) {
+    return {
+      ok: false,
+      message: result.diagnostics[0]?.message ?? "The approved catalog is invalid.",
+    };
+  }
+  if (cacheKey !== undefined) {
+    const cache = indexes ?? new Map<string, RetrievalIndex>();
+    if (!cache.has(cacheKey) && cache.size >= MAX_RETRIEVAL_INDEXES) {
+      cache.delete(cache.keys().next().value!);
+    }
+    cache.set(cacheKey, result.index);
+    if (indexes === undefined) retrievalIndexes.set(definitions, cache);
+  }
+  return { ok: true, index: result.index };
 }
 
 export function transitionClassesFor(
