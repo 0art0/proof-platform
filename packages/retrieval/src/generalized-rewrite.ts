@@ -11,6 +11,7 @@ import type { LibraryResult } from "@proof/library";
 import {
   binderShape,
   canonicalJson,
+  readBinderDeclaration,
   type OperatorDeclaration,
   type PlainMathJson,
   type ExecutableProofState,
@@ -38,6 +39,7 @@ type IndexedRule = Readonly<{
   pattern: PlainMathJson;
   premises: readonly { expression: PlainMathJson }[];
   direction: Direction;
+  relation?: string;
   premiseIndex?: number;
 }>;
 
@@ -63,6 +65,7 @@ export class GeneralizedRewriteIndex {
         left: PlainMathJson,
         right: PlainMathJson,
         premises: IndexedRule["premises"],
+        head: string,
         premiseIndex?: number,
       ): void => {
         for (const direction of DIRECTIONS) {
@@ -73,6 +76,7 @@ export class GeneralizedRewriteIndex {
             pattern,
             premises,
             direction,
+            ...(premiseIndex === undefined && wildcards.has(head) ? {} : { relation: head }),
             ...(premiseIndex === undefined ? {} : { premiseIndex }),
           };
           // A fixed binder variable may be alpha-renamed at the occurrence.
@@ -83,12 +87,15 @@ export class GeneralizedRewriteIndex {
           }
         }
       };
-      if (relation !== undefined) insert(relation.left, relation.right, original.premises);
+      if (relation !== undefined) {
+        insert(relation.left, relation.right, original.premises, relation.operator);
+      }
       for (const [index, premise] of result.premises.entries()) {
         insert(
           premise.expression,
           result.conclusion.expression,
           result.premises.filter((_, position) => index !== position),
+          "Implies",
           index,
         );
       }
@@ -100,6 +107,7 @@ export class GeneralizedRewriteIndex {
     subjects: readonly RewriteSubject[],
     operators: readonly OperatorDeclaration[],
     resultId: string | undefined,
+    relation: string | undefined,
   ): readonly RetrievalSuggestion[] {
     const result = new Map<string, RetrievalSuggestion>();
     const pairs = rewriteSubjects(subjects);
@@ -125,7 +133,7 @@ export class GeneralizedRewriteIndex {
         hypothesisIndex?: number,
       ): void => {
         const checked = previewGeneralizedRewrite(state, seed, environment);
-        if (!checked.ok) return;
+        if (!checked.ok || (relation !== undefined && checked.relation !== relation)) return;
         const key = canonicalJson([
           seed.source.kind,
           seed.source.kind === "result" ? seed.source.resultId : seed.source.hypothesisId,
@@ -146,7 +154,10 @@ export class GeneralizedRewriteIndex {
         const selected = source?.selection.anchor.statement;
         if (selected?.kind === "hypothesis" && hypothesis.id !== selected.id) continue;
         if (statement.kind === "hypothesis" && statement.id === hypothesis.id) continue;
-        if (!canSupplyRelation(hypothesis.statement.expression)) continue;
+        const head = hypothesisRelation(hypothesis.statement.expression);
+        if (head === undefined || (relation !== undefined && head !== null && head !== relation)) {
+          continue;
+        }
         for (const direction of DIRECTIONS) {
           record(
             { ...address, direction, source: { kind: "hypothesis", hypothesisId: hypothesis.id } },
@@ -163,10 +174,12 @@ export class GeneralizedRewriteIndex {
         pattern,
         premises,
         direction,
+        relation: head,
         premiseIndex,
       } of this.#rules.retrieve(selection.fragment)) {
         if (
           (resultId !== undefined && rule.id !== resultId) ||
+          (relation !== undefined && head !== undefined && head !== relation) ||
           !rule.directions.includes(statement.kind === "conclusion" ? "backward" : "forward")
         )
           continue;
@@ -216,10 +229,21 @@ function containsBinder(
   );
 }
 
-function canSupplyRelation(expression: PlainMathJson): boolean {
-  const parts = functionParts(expression);
-  if (parts?.operator !== "ForAll") return rewriteRelationOf(expression) !== undefined;
-  return parts.operands[1] !== undefined && canSupplyRelation(parts.operands[1]);
+/** A quantified function parameter can supply the relation head when specialized. */
+function hypothesisRelation(expression: PlainMathJson): string | null | undefined {
+  let bound: Set<string> | undefined;
+  let body = expression;
+  for (;;) {
+    const relation = rewriteRelationOf(body);
+    if (relation === undefined) return undefined;
+    const { operator, left, right } = relation;
+    if (bound?.has(operator) === true) return null;
+    if (operator !== "ForAll") return operator;
+    const declaration = readBinderDeclaration(left, ["symbol", "element"]);
+    if (declaration === undefined) return null;
+    (bound ??= new Set()).add(declaration.name);
+    body = right;
+  }
 }
 
 function rewriteSubjects(
@@ -237,7 +261,7 @@ function rewriteSubjects(
     selection.kind === "exact" &&
     selection.path.length === 0 &&
     selection.anchor.statement.kind === "hypothesis" &&
-    canSupplyRelation(selection.fragment);
+    hypothesisRelation(selection.fragment) !== undefined;
   if (wholeHypothesis(first)) return [{ source: first, occurrence: second }];
   return wholeHypothesis(second) ? [{ source: second, occurrence: first }] : [];
 }
