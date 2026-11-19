@@ -263,7 +263,7 @@
         {
           "suggestion": "result:modus-tollens",
           "pattern": "pattern:modus-tollens-forward",
-          "rank": "2/4",
+          "rank": "2/6",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -293,7 +293,7 @@
         {
           "suggestion": "result:disjunctive-syllogism",
           "pattern": "pattern:disjunctive-syllogism-forward",
-          "rank": "1/4",
+          "rank": "1/6",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -323,7 +323,7 @@
         {
           "suggestion": "result:de-morgan-disjunction",
           "pattern": "pattern:de-morgan-disjunction-forward",
-          "rank": "1/3",
+          "rank": "1/5",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
@@ -353,14 +353,14 @@
         {
           "suggestion": "result:double-negation",
           "pattern": "pattern:double-negation-forward",
-          "rank": "1/3",
+          "rank": "1/5",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:disjunction-commutativity",
           "pattern": "pattern:disjunction-commutativity-forward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
@@ -390,14 +390,14 @@
         {
           "suggestion": "result:equality-symmetry",
           "pattern": "pattern:equality-symmetry-forward",
-          "rank": "1/7",
+          "rank": "1/9",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:equality-transitivity",
           "pattern": "pattern:equality-transitivity-forward",
-          "rank": "6/7",
+          "rank": "6/9",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -427,7 +427,7 @@
         {
           "suggestion": "result:less-transitivity",
           "pattern": "pattern:less-transitivity-backward",
-          "rank": "7/8",
+          "rank": "7/10",
           "operation": "apply-result-backward",
           "transition": "strengthening",
           "menuChoices": 1
@@ -464,7 +464,7 @@
         {
           "suggestion": "result:less-equal-antisymmetry",
           "pattern": "pattern:less-equal-antisymmetry-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -500,14 +500,14 @@
         {
           "suggestion": "result:less-equal-transitivity",
           "pattern": "pattern:less-equal-transitivity-forward",
-          "rank": "6/8",
+          "rank": "6/10",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:less-equal-add-monotonicity",
           "pattern": "pattern:less-equal-add-monotonicity-forward",
-          "rank": "3/8",
+          "rank": "3/10",
           "operation": "apply-result-forward",
           "transition": "equivalence",
           "menuChoices": 1
@@ -538,7 +538,7 @@
         {
           "suggestion": "result:less-add-monotonicity",
           "pattern": "pattern:less-add-monotonicity-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -568,13 +568,13 @@
         {
           "suggestion": "result:left-distributivity",
           "pattern": "pattern:left-distributivity-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -582,13 +582,13 @@
         {
           "suggestion": "result:add-commutativity",
           "pattern": "pattern:add-commutativity-forward",
-          "rank": "2/2",
+          "rank": "2/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -596,20 +596,20 @@
         {
           "suggestion": "result:multiply-commutativity",
           "pattern": "pattern:multiply-commutativity-forward",
-          "rank": "1/1",
+          "rank": "1/3",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
         },
         {
           "suggestion": "move:close-reflexive-equality",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "close-reflexive-equality",
           "transition": "equivalence"
         }
@@ -633,13 +633,13 @@
         {
           "suggestion": "result:multiply-one",
           "pattern": "pattern:multiply-one-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -647,7 +647,7 @@
         {
           "suggestion": "result:add-zero",
           "pattern": "pattern:add-zero-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         }
@@ -671,7 +671,7 @@
         {
           "suggestion": "result:subset-transitivity",
           "pattern": "pattern:subset-transitivity-backward",
-          "rank": "7/8",
+          "rank": "7/10",
           "operation": "apply-result-backward",
           "transition": "strengthening",
           "menuChoices": 1
@@ -708,7 +708,7 @@
         {
           "suggestion": "result:intersection-membership",
           "pattern": "pattern:intersection-membership-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
@@ -721,13 +721,13 @@
         {
           "suggestion": "result:union-membership",
           "pattern": "pattern:union-membership-forward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:choose-goal-disjunct",
-          "rank": "4/8",
+          "rank": "4/10",
           "operation": "choose-goal-disjunct",
           "transition": "strengthening",
           "menuChoices": 1
@@ -758,13 +758,13 @@
         {
           "suggestion": "result:union-membership",
           "pattern": "pattern:union-membership-forward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:choose-goal-disjunct",
-          "rank": "4/8",
+          "rank": "4/10",
           "operation": "choose-goal-disjunct",
           "transition": "strengthening",
           "menuChoices": 1
@@ -772,7 +772,7 @@
         {
           "suggestion": "result:subset-membership",
           "pattern": "pattern:subset-membership-forward",
-          "rank": "2/3",
+          "rank": "2/5",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -802,14 +802,14 @@
         {
           "suggestion": "result:modus-ponens",
           "pattern": "pattern:modus-ponens",
-          "rank": "1/5",
+          "rank": "1/7",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:modus-ponens",
           "pattern": "pattern:modus-ponens",
-          "rank": "1/5",
+          "rank": "1/7",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -838,14 +838,14 @@
       "steps": [
         {
           "suggestion": "move:introduce-implication",
-          "rank": "1/8",
+          "rank": "1/9",
           "operation": "introduce-implication",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:modus-tollens",
           "pattern": "pattern:modus-tollens-forward",
-          "rank": "2/4",
+          "rank": "2/6",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -880,7 +880,7 @@
         },
         {
           "suggestion": "move:split-goal-conjunction",
-          "rank": "3/8",
+          "rank": "3/10",
           "operation": "split-goal-conjunction",
           "transition": "equivalence"
         },
@@ -922,7 +922,7 @@
         {
           "suggestion": "result:modus-ponens",
           "pattern": "pattern:modus-ponens",
-          "rank": "1/5",
+          "rank": "1/7",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -935,7 +935,7 @@
         {
           "suggestion": "result:modus-ponens",
           "pattern": "pattern:modus-ponens",
-          "rank": "1/5",
+          "rank": "1/7",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -965,7 +965,7 @@
         {
           "suggestion": "result:de-morgan-conjunction",
           "pattern": "pattern:de-morgan-conjunction-forward",
-          "rank": "1/3",
+          "rank": "1/5",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
@@ -1007,13 +1007,13 @@
         {
           "suggestion": "result:add-associativity",
           "pattern": "pattern:add-associativity-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1021,20 +1021,20 @@
         {
           "suggestion": "result:add-commutativity",
           "pattern": "pattern:add-commutativity-forward",
-          "rank": "1/1",
+          "rank": "1/3",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
         },
         {
           "suggestion": "move:close-reflexive-equality",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "close-reflexive-equality",
           "transition": "equivalence"
         }
@@ -1058,13 +1058,13 @@
         {
           "suggestion": "result:multiply-zero",
           "pattern": "pattern:multiply-zero-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1072,13 +1072,13 @@
         {
           "suggestion": "result:add-commutativity",
           "pattern": "pattern:add-commutativity-forward",
-          "rank": "1/1",
+          "rank": "1/3",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1086,7 +1086,7 @@
         {
           "suggestion": "result:add-zero",
           "pattern": "pattern:add-zero-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         }
@@ -1109,14 +1109,14 @@
       "steps": [
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
         },
         {
           "suggestion": "move:close-reflexive-equality",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "close-reflexive-equality",
           "transition": "equivalence"
         }
@@ -1139,14 +1139,14 @@
       "steps": [
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1154,13 +1154,13 @@
         {
           "suggestion": "result:multiply-commutativity",
           "pattern": "pattern:multiply-commutativity-forward",
-          "rank": "1/1",
+          "rank": "1/3",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1168,7 +1168,7 @@
         {
           "suggestion": "result:multiply-zero",
           "pattern": "pattern:multiply-zero-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         }
@@ -1192,7 +1192,7 @@
         {
           "suggestion": "result:congruent-add-left",
           "pattern": "pattern:congruent-add-left-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -1222,7 +1222,7 @@
         {
           "suggestion": "result:divides-transitivity",
           "pattern": "pattern:divides-transitivity-backward",
-          "rank": "7/8",
+          "rank": "7/10",
           "operation": "apply-result-backward",
           "transition": "strengthening",
           "menuChoices": 1
@@ -1259,7 +1259,7 @@
         {
           "suggestion": "result:divides-sum",
           "pattern": "pattern:divides-sum-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -1295,14 +1295,14 @@
         {
           "suggestion": "result:divides-sum",
           "pattern": "pattern:divides-sum-backward",
-          "rank": "6/8",
+          "rank": "6/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
         {
           "suggestion": "result:divides-multiple",
           "pattern": "pattern:divides-multiple-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -1338,28 +1338,28 @@
         {
           "suggestion": "result:divides-sum",
           "pattern": "pattern:divides-sum-backward",
-          "rank": "6/8",
+          "rank": "6/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
         {
           "suggestion": "result:divides-reflexivity",
           "pattern": "pattern:divides-reflexivity-backward",
-          "rank": "1/8",
+          "rank": "1/9",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
         {
           "suggestion": "result:divides-multiple",
           "pattern": "pattern:divides-multiple-backward",
-          "rank": "6/8",
+          "rank": "6/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
         {
           "suggestion": "result:divides-reflexivity",
           "pattern": "pattern:divides-reflexivity-backward",
-          "rank": "1/8",
+          "rank": "1/9",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         }
@@ -1383,14 +1383,14 @@
         {
           "suggestion": "result:divides-multiple",
           "pattern": "pattern:divides-multiple-backward",
-          "rank": "6/8",
+          "rank": "6/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
         {
           "suggestion": "result:divides-transitivity",
           "pattern": "pattern:divides-transitivity-forward",
-          "rank": "4/4",
+          "rank": "4/6",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -1420,14 +1420,14 @@
         {
           "suggestion": "result:subset-membership",
           "pattern": "pattern:subset-membership-forward",
-          "rank": "2/3",
+          "rank": "2/5",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:subset-membership",
           "pattern": "pattern:subset-membership-forward",
-          "rank": "2/3",
+          "rank": "2/5",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -1457,13 +1457,13 @@
         {
           "suggestion": "result:intersection-membership",
           "pattern": "pattern:intersection-membership-forward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:split-goal-conjunction",
-          "rank": "4/8",
+          "rank": "4/10",
           "operation": "split-goal-conjunction",
           "transition": "equivalence"
         },
@@ -1499,13 +1499,13 @@
         {
           "suggestion": "result:union-membership",
           "pattern": "pattern:union-membership-forward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "rewrite-with-equivalence",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:choose-goal-disjunct",
-          "rank": "4/8",
+          "rank": "4/10",
           "operation": "choose-goal-disjunct",
           "transition": "strengthening",
           "menuChoices": 1
@@ -1536,14 +1536,14 @@
         {
           "suggestion": "result:less-transitivity",
           "pattern": "pattern:less-transitivity-forward",
-          "rank": "5/8",
+          "rank": "5/10",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:less-transitivity",
           "pattern": "pattern:less-transitivity-forward",
-          "rank": "5/8",
+          "rank": "5/10",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -1573,7 +1573,7 @@
         {
           "suggestion": "result:less-equal-add-monotonicity",
           "pattern": "pattern:less-equal-add-monotonicity-backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -1603,7 +1603,7 @@
         {
           "suggestion": "result:less-equal-antisymmetry",
           "pattern": "pattern:less-equal-antisymmetry-backward",
-          "rank": "6/8",
+          "rank": "6/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -1616,7 +1616,7 @@
         {
           "suggestion": "result:less-equal-transitivity",
           "pattern": "pattern:less-equal-transitivity-backward",
-          "rank": "7/8",
+          "rank": "7/10",
           "operation": "apply-result-backward",
           "transition": "strengthening",
           "menuChoices": 1
@@ -1653,7 +1653,7 @@
         {
           "suggestion": "result:add-zero/symmetric-equality",
           "pattern": "pattern:result:add-zero/symmetric-equality/backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         }
@@ -1677,7 +1677,7 @@
         {
           "suggestion": "result:less-transitivity/contrapositive",
           "pattern": "pattern:result:less-transitivity/contrapositive/backward",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         },
@@ -1707,14 +1707,14 @@
         {
           "suggestion": "result:closure-extensive",
           "pattern": "pattern:closure-extensive-forward",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:subset-transitivity",
           "pattern": "pattern:subset-transitivity-forward",
-          "rank": "4/4",
+          "rank": "4/6",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
@@ -1744,20 +1744,20 @@
         {
           "suggestion": "result:closure-monotone",
           "pattern": "pattern:closure-monotone-forward",
-          "rank": "1/4",
+          "rank": "1/6",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "result:closure-idempotent",
           "pattern": "pattern:closure-idempotent-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1788,13 +1788,13 @@
         {
           "suggestion": "result:closure-idempotent",
           "pattern": "pattern:closure-idempotent-forward",
-          "rank": "1/2",
+          "rank": "1/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/1",
+          "rank": "1/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1802,7 +1802,7 @@
         {
           "suggestion": "result:closure-extensive",
           "pattern": "pattern:closure-extensive-backward",
-          "rank": "1/8",
+          "rank": "1/9",
           "operation": "apply-result-backward",
           "transition": "strengthening"
         }
@@ -1825,13 +1825,13 @@
       "steps": [
         {
           "suggestion": "move:introduce-universal",
-          "rank": "1/8",
+          "rank": "1/9",
           "operation": "introduce-universal",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:close-reflexive-equality",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "close-reflexive-equality",
           "transition": "equivalence"
         }
@@ -1854,14 +1854,14 @@
       "steps": [
         {
           "suggestion": "move:choose-existential-witness",
-          "rank": "2/8",
+          "rank": "2/9",
           "operation": "choose-existential-witness",
           "transition": "strengthening",
           "menuChoices": 1
         },
         {
           "suggestion": "move:split-goal-conjunction",
-          "rank": "3/8",
+          "rank": "3/10",
           "operation": "split-goal-conjunction",
           "transition": "equivalence"
         },
@@ -1873,7 +1873,7 @@
         },
         {
           "suggestion": "move:close-reflexive-equality",
-          "rank": "1/8",
+          "rank": "1/10",
           "operation": "close-reflexive-equality",
           "transition": "equivalence"
         }

@@ -432,14 +432,15 @@ describe("materializeMoveOperation round trip", () => {
 
   it("materializes a checked rewrite without requesting arbitrary parameters", () => {
     const input = state(["Lt", "a", ["S", "b"]], [{ id: "h:eq", expression: ["Equal", "b", "a"] }]);
+    const goal = input.goals[0]!;
     const seed = {
-      target: { kind: "goal", id: "goal:main" },
+      target: { kind: "goal", id: goal.id },
       statement: { kind: "conclusion" },
       path: [1, 0],
-      source: { kind: "hypothesis", hypothesisId: "h:eq" },
+      source: { kind: "hypothesis", hypothesisId: goal.sequent.context.hypotheses[0]!.id },
       direction: "forward",
       congruenceResultIds: [],
-    } as Parameters<typeof materializeGeneralizedRewrite>[1];
+    } satisfies Parameters<typeof materializeGeneralizedRewrite>[1];
     const materialized = materializeGeneralizedRewrite(input, seed, { operators }, ids);
     expect(materialized).toMatchObject({
       ok: true,
