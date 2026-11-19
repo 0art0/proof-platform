@@ -521,12 +521,41 @@ type OperandPosition = "left" | "right";
 
 const OPERAND_POSITIONS: readonly OperandPosition[] = ["left", "right"];
 
+type MultiplierSign = Readonly<{
+  adjective: "positive" | "negative" | "nonnegative" | "nonpositive";
+  guard: PlainMathJson;
+  latex: string;
+  reverses: boolean;
+}>;
+
+const STRICT_MULTIPLIER_SIGNS: readonly MultiplierSign[] = [
+  { adjective: "positive", guard: ["Greater", "z", 0], latex: "z>0", reverses: false },
+  { adjective: "negative", guard: ["Less", "z", 0], latex: "z<0", reverses: true },
+];
+
+// The planner tries these first on a weak inequality, then looks for a witnessed strict
+// sign if it would avoid an obligation.
+const WEAK_MULTIPLIER_SIGNS: readonly MultiplierSign[] = [
+  {
+    adjective: "nonnegative",
+    guard: ["LessEqual", 0, "z"],
+    latex: String.raw`0\le z`,
+    reverses: false,
+  },
+  {
+    adjective: "nonpositive",
+    guard: ["LessEqual", "z", 0],
+    latex: String.raw`z\le 0`,
+    reverses: true,
+  },
+  ...STRICT_MULTIPLIER_SIGNS,
+];
+
 function orderOperations(relation: OrderRelation, position: OperandPosition): ResultSpec[] {
   const { head, slug, latex, phrase } = relation;
   const other = position === "right";
   const args = (variable: string) => (other ? ["z", variable] : [variable, "z"]);
   const addition: PlainMathJson = [head, ["Add", ...args("x")], ["Add", ...args("y")]];
-  const product: PlainMathJson = [head, ["Multiply", ...args("x")], ["Multiply", ...args("y")]];
   const sum = (variable: string) => (other ? `z+${variable}` : `${variable}+z`);
   const multiple = (variable: string) => (other ? `z ${variable}` : `${variable} z`);
   const parameters = [real("x"), real("y"), real("z")];
@@ -545,36 +574,29 @@ function orderOperations(relation: OrderRelation, position: OperandPosition): Re
     latex: `x${latex} y\\vdash ${sum("x")}${latex} ${sum("y")}`,
     naturalLanguage: `If x is ${phrase} y, then ${sum("x")} is ${phrase} ${sum("y")}.`,
   });
-  const reverseProduct: PlainMathJson = [
-    head,
-    ["Multiply", ...args("y")],
-    ["Multiply", ...args("x")],
-  ];
+  const signs =
+    head === "LessEqual" || head === "GreaterEqual"
+      ? WEAK_MULTIPLIER_SIGNS
+      : STRICT_MULTIPLIER_SIGNS;
   return [
     !other && relation.ascending
       ? { ...addRule, priority: 100, variants: ["contrapositive"] }
       : addRule,
-    congruenceRule({
-      slug: `${slug}-multiply-positive-${position}`,
-      name: `Monotonicity of multiplication by a positive number for ${phrase} (${position} operand)`,
-      description: `Multiplying both sides by a positive number preserves "${phrase}".`,
-      head: "Multiply",
-      parameters,
-      premises: [premise, ["Greater", "z", 0]],
-      statement: product,
-      latex: `x${latex} y,\\ z>0\\vdash ${multiple("x")}${latex} ${multiple("y")}`,
-      naturalLanguage: `If x is ${phrase} y and z is positive, then ${multiple("x")} is ${phrase} ${multiple("y")}.`,
-    }),
-    congruenceRule({
-      slug: `${slug}-multiply-negative-${position}`,
-      name: `Antitonicity of multiplication by a negative number for ${phrase} (${position} operand)`,
-      description: `Multiplying both sides by a negative number reverses "${phrase}".`,
-      head: "Multiply",
-      parameters,
-      premises: [premise, ["Less", "z", 0]],
-      statement: reverseProduct,
-      latex: `x${latex} y,\\ z<0\\vdash ${multiple("y")}${latex} ${multiple("x")}`,
-      naturalLanguage: `If x is ${phrase} y and z is negative, then ${multiple("y")} is ${phrase} ${multiple("x")}.`,
+    ...signs.map(({ adjective, guard, latex: guardLatex, reverses }) => {
+      const [left, right] = reverses ? ["y", "x"] : ["x", "y"];
+      const property = reverses ? "Antitonicity" : "Monotonicity";
+      const effect = reverses ? "reverses" : "preserves";
+      return congruenceRule({
+        slug: `${slug}-multiply-${adjective}-${position}`,
+        name: `${property} of multiplication by a ${adjective} number for ${phrase} (${position} operand)`,
+        description: `Multiplying both sides by a ${adjective} number ${effect} "${phrase}".`,
+        head: "Multiply",
+        parameters,
+        premises: [premise, guard],
+        statement: [head, ["Multiply", ...args(left)], ["Multiply", ...args(right)]],
+        latex: `x${latex} y,\\ ${guardLatex}\\vdash ${multiple(left)}${latex} ${multiple(right)}`,
+        naturalLanguage: `If x is ${phrase} y and z is ${adjective}, then ${multiple(left)} is ${phrase} ${multiple(right)}.`,
+      });
     }),
   ];
 }

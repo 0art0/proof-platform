@@ -38,7 +38,7 @@ describe("starter domain packs", () => {
     ).toEqual({
       "pack:elementary-logic": { results: 8, variants: 1, families: 1 },
       "pack:equality": { results: 4, variants: 1, families: 1 },
-      "pack:order": { results: 70, variants: 7, families: 5 },
+      "pack:order": { results: 78, variants: 7, families: 5 },
       "pack:arithmetic": { results: 13, variants: 5, families: 5 },
       "pack:sets": { results: 5, variants: 1, families: 1 },
       "pack:divisibility": { results: 5, variants: 1, families: 1 },
