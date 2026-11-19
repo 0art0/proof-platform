@@ -560,30 +560,53 @@ test("the workspace omits AI tools when the service has no provider", async ({ p
   await expect(page.getByRole("region", { name: "Available suggestions" })).toBeVisible();
 });
 
+const ORDER_DRAFT: IsolatedDraft = {
+  problem: { title: "Bound a product", statement: "Use x ≤ y to bound x times c." },
+  background: { level: "real arithmetic", summary: "Order on the reals.", assumptions: [] },
+  libraryLayerIds: ["layer:global"],
+  packs: ["pack:order", "pack:arithmetic"],
+  declarations: ["x", "y", "c", "z"].map((symbol) => ({ symbol, sort: "real" })),
+  hypotheses: [{ format: "mathjson", expression: ["LessEqual", "x", "y"] }],
+  goals: [{ format: "mathjson", expression: ["LessEqual", ["Multiply", "x", "c"], "z"] }],
+};
+
 test("inspect and apply an order rewrite with a sign obligation", async ({ page }) => {
-  const draft: IsolatedDraft = {
-    problem: { title: "Bound a product", statement: "Use x ≤ y to bound x times c." },
-    background: { level: "real arithmetic", summary: "Order on the reals.", assumptions: [] },
-    libraryLayerIds: ["layer:global"],
-    packs: ["pack:order", "pack:arithmetic"],
-    declarations: ["x", "y", "c", "z"].map((symbol) => ({ symbol, sort: "real" })),
-    hypotheses: [{ format: "mathjson", expression: ["LessEqual", "x", "y"] }],
-    goals: [{ format: "mathjson", expression: ["LessEqual", ["Multiply", "x", "c"], "z"] }],
-  };
-  const sessionId = await createIsolatedSession(page, draft);
+  const sessionId = await createIsolatedSession(page, ORDER_DRAFT);
   await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
   const goal = page.getByLabel("Goal 1 conclusion");
   await expect(goal).toBeVisible();
   const point = await hoverGlyph(page, goal, "x");
   await expect(page.getByRole("tooltip")).toContainText("Context ·");
   await page.mouse.click(point.x, point.y);
+  await expect(page.locator("li[data-suggestion-id]").first()).toHaveAttribute(
+    "data-artifact-id",
+    "move:generalized-rewrite",
+  );
   await page.getByLabel("Relation focus").selectOption("LessEqual");
   const rewrite = page.locator('li[data-rewrite-relation="LessEqual"][data-source="move"]').first();
   await rewrite.getByRole("button", { name: "Preview changes" }).click();
-  await expect(
-    rewrite.getByRole("list", { name: "New obligations" }).getByRole("listitem"),
-  ).toHaveCount(1);
+  const obligations = rewrite.getByRole("list", { name: "New obligations" }).locator(":scope > li");
+  await expect(obligations).toHaveCount(1);
+  await expect(obligations).toContainText("0≤c");
   await expect(page.getByLabel("Obligation 1 conclusion")).toHaveCount(0);
   await rewrite.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByLabel("Obligation 1 conclusion")).toBeVisible();
+});
+
+test("drag a local inequality onto a factor to preview its checked rewrite", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 2400 });
+  const sessionId = await createIsolatedSession(page, ORDER_DRAFT);
+  await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
+  const goal = page.getByLabel("Goal 1 conclusion");
+  await expect(goal).toBeVisible();
+  const point = await hoverGlyph(page, goal, "x");
+  const box = await goal.boundingBox();
+  if (!box) throw new Error("The goal is outside the viewport");
+  await page.getByRole("button", { name: "hypothesis 1 of goal 1" }).dragTo(goal, {
+    targetPosition: { x: point.x - box.x, y: point.y - box.y },
+  });
+  const preview = page.getByLabel("Move preview");
+  await expect(preview.getByRole("list", { name: "New obligations" })).toContainText("0≤c");
+  await expect(page.getByTestId("drag-outcome")).toContainText("hypothesis onto expression");
+  await expect(page.getByLabel("Obligation 1 conclusion")).toHaveCount(0);
 });

@@ -345,7 +345,8 @@ function rewriteSuggestion(
             .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
             .map(([symbol, expression]) => ({ symbol, expression })),
     rank: [
-      -1,
+      // A local fact directly editing the selected subexpression is the primary move there.
+      library === undefined && (seed.lens !== undefined || seed.path.length > 0) ? 2 : -1,
       obligations.length === 0 ? 1 : 0,
       1,
       1,

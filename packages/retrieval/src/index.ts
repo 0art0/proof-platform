@@ -348,7 +348,7 @@ class DeterministicRetrievalIndex implements RetrievalIndex {
             ...(options.rewriteRelation === undefined && options.rewriteResultId === undefined
               ? selectDefaultRewrites(rewrites)
               : selectWithCategoryDiversity(rewrites, 2)),
-          ]
+          ].sort(compareSuggestions)
         : selectWithCategoryDiversity(
             [...ranked, ...rewrites].sort(compareSuggestions),
             options.limit,

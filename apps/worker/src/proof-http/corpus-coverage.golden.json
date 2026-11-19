@@ -8,7 +8,7 @@
     "previewRequests": 162,
     "menuChoices": 23,
     "applies": 139,
-    "chosenBelowFirst": 31
+    "chosenBelowFirst": 45
   },
   "domains": {
     "logic": {
@@ -49,7 +49,7 @@
       "previewRequests": 14,
       "menuChoices": 4,
       "applies": 10,
-      "chosenBelowFirst": 1
+      "chosenBelowFirst": 5
     },
     "sets": {
       "problems": 6,
@@ -69,7 +69,7 @@
       "previewRequests": 26,
       "menuChoices": 8,
       "applies": 18,
-      "chosenBelowFirst": 0
+      "chosenBelowFirst": 8
     },
     "number-theory": {
       "problems": 6,
@@ -89,7 +89,7 @@
       "previewRequests": 12,
       "menuChoices": 2,
       "applies": 10,
-      "chosenBelowFirst": 1
+      "chosenBelowFirst": 3
     }
   },
   "results": {
@@ -148,6 +148,10 @@
       "result:greater-equal-add-monotonicity-right",
       "result:greater-equal-multiply-negative-left",
       "result:greater-equal-multiply-negative-right",
+      "result:greater-equal-multiply-nonnegative-left",
+      "result:greater-equal-multiply-nonnegative-right",
+      "result:greater-equal-multiply-nonpositive-left",
+      "result:greater-equal-multiply-nonpositive-right",
       "result:greater-equal-multiply-positive-left",
       "result:greater-equal-multiply-positive-right",
       "result:greater-equal-negation-antitonicity",
@@ -180,6 +184,10 @@
       "result:less-equal-antisymmetry/bundle-premises",
       "result:less-equal-multiply-negative-left",
       "result:less-equal-multiply-negative-right",
+      "result:less-equal-multiply-nonnegative-left",
+      "result:less-equal-multiply-nonnegative-right",
+      "result:less-equal-multiply-nonpositive-left",
+      "result:less-equal-multiply-nonpositive-right",
       "result:less-equal-multiply-positive-left",
       "result:less-equal-multiply-positive-right",
       "result:less-equal-negation-antitonicity",
@@ -562,7 +570,7 @@
         "previewRequests": 10,
         "menuChoices": 3,
         "applies": 7,
-        "chosenBelowFirst": 1
+        "chosenBelowFirst": 4
       },
       "steps": [
         {
@@ -574,7 +582,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -582,13 +590,13 @@
         {
           "suggestion": "result:add-commutativity",
           "pattern": "pattern:add-commutativity-forward",
-          "rank": "2/4",
+          "rank": "3/4",
           "operation": "apply-result-forward",
           "transition": "equivalence"
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -602,7 +610,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -627,7 +635,7 @@
         "previewRequests": 4,
         "menuChoices": 1,
         "applies": 3,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 1
       },
       "steps": [
         {
@@ -639,7 +647,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1001,7 +1009,7 @@
         "previewRequests": 7,
         "menuChoices": 2,
         "applies": 5,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 2
       },
       "steps": [
         {
@@ -1013,7 +1021,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1027,7 +1035,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1052,7 +1060,7 @@
         "previewRequests": 7,
         "menuChoices": 2,
         "applies": 5,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 2
       },
       "steps": [
         {
@@ -1064,7 +1072,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1078,7 +1086,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1104,12 +1112,12 @@
         "previewRequests": 3,
         "menuChoices": 1,
         "applies": 2,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 1
       },
       "steps": [
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1134,19 +1142,19 @@
         "previewRequests": 8,
         "menuChoices": 3,
         "applies": 5,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 3
       },
       "steps": [
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1160,7 +1168,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1738,7 +1746,7 @@
         "previewRequests": 5,
         "menuChoices": 1,
         "applies": 4,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 1
       },
       "steps": [
         {
@@ -1757,7 +1765,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1
@@ -1782,7 +1790,7 @@
         "previewRequests": 4,
         "menuChoices": 1,
         "applies": 3,
-        "chosenBelowFirst": 0
+        "chosenBelowFirst": 1
       },
       "steps": [
         {
@@ -1794,7 +1802,7 @@
         },
         {
           "suggestion": "move:rewrite-with-equality",
-          "rank": "1/2",
+          "rank": "2/2",
           "operation": "rewrite-with-equality",
           "transition": "equivalence",
           "menuChoices": 1

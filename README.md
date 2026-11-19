@@ -13,8 +13,11 @@ For example, given `x ≤ y` and the goal `x · c ≤ z`, select `x` and choose 
 Replacing `x` with `y` strengthens the goal to `y · c ≤ z`. The multiplication lemma requires
 `0 ≤ c`, which becomes an obligation unless the context supplies it. For implication, rewriting
 a goal using `P ⇒ Q` works back from `Q` to `P`. In a hypothesis it can move from `P` to `Q`.
-Negation and implication antecedents reverse this direction. Quantified rules specialize at
-the selected occurrence, with dependent conditions closed over the variables in scope.
+Negation and implication antecedents reverse this direction. A result `A, B ⊢ C` can replace
+`C` by `A` inside a positive goal position, leaving `B` to prove. The same step inside a
+universal or existential body closes any variable-dependent side goal over its enclosing
+binders. A universally quantified hypothesis specializes when the selected occurrence
+determines its variables.
 
 The modular arithmetic pack uses `["Congruent", a, b, m]` for integer congruence modulo `m`.
 An approved library result can declare `congruenceSymbols`, for example `["Multiply"]` on
