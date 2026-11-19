@@ -1,3 +1,4 @@
+import { parseKernelResultCatalog } from "@proof/kernel";
 import { describe, expect, it } from "vitest";
 import {
   CORE_LOGIC_RESULTS,
@@ -129,5 +130,23 @@ describe("libraryResultToKernelResult", () => {
       "result:conjunction-commutativity",
       "result:excluded-middle",
     ]);
+  });
+});
+
+describe("approvedKernelResults", () => {
+  it("returns a catalog the kernel can reuse", () => {
+    const adapted = approvedKernelResults(CORE_LOGIC_RESULTS);
+    if (!adapted.ok) throw new Error(adapted.diagnostics[0].message);
+    const parsed = parseKernelResultCatalog(adapted.results, []);
+    expect(parsed.ok && parsed.results).toBe(adapted.results);
+  });
+
+  it("reports the original index of an invalid catalog row after skipping drafts", () => {
+    const draft = libraryResult({ id: "result:draft", approval: { status: "draft" } });
+    const duplicate = coreResult("result:modus-ponens");
+    expect(approvedKernelResults([draft, duplicate, duplicate])).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "invalid-result", path: [2, "id"] }],
+    });
   });
 });

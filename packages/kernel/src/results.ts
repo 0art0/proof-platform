@@ -5,6 +5,7 @@ import {
   deepFreeze,
   freeSymbolNames,
   freshSymbolName,
+  jsonValueEquals,
   mathJsonEquals,
   operatorDeclarationsSchema,
   plainMathJsonSchema,
@@ -81,25 +82,41 @@ export type ResultCatalogParseResult =
   | Readonly<{ ok: false; issue: ResultCatalogIssue }>;
 
 const RESULT_KEYS = ["id", "parameters", "premises", "conclusion", "directions"] as const;
+const validatedCatalogs = new WeakMap<
+  readonly unknown[],
+  Readonly<{ results: readonly KernelResult[]; operators: readonly OperatorDeclaration[] }>
+>();
 
 /**
  * Validate a result catalog against an already validated operator environment
- * and return a detached copy. IDs must be unique; parameter symbols must be
- * unique, non-reserved, and distinct from operators; premises and the
- * conclusion must be propositions over the parameters; directions must be a
- * non-empty set of `forward`/`backward`.
+ * and return an immutable, detached catalog. Reuse is limited to this parser's
+ * own results under the same validated operator declarations. Result IDs and
+ * parameter symbols must be unique. Parameter symbols must be non-reserved and
+ * distinct from operators. Premises and the conclusion must be propositions over
+ * the parameters. Directions must be a non-empty set of `forward`/`backward`.
  */
 export function parseKernelResultCatalog(
   value: unknown,
   operators: readonly OperatorDeclaration[],
 ): ResultCatalogParseResult {
   try {
+    if (!Array.isArray(value)) return catalogIssue("The result catalog must be a dense array.", []);
+    const checkedOperators = operatorDeclarationsSchema.safeParse(operators);
+    const snapshot = checkedOperators.success ? checkedOperators.data : undefined;
+    const known = validatedCatalogs.get(value);
+    if (
+      known !== undefined &&
+      snapshot !== undefined &&
+      jsonValueEquals(known.operators, snapshot)
+    ) {
+      return { ok: true, results: known.results };
+    }
     const entries = denseArrayValues(value);
     if (entries === undefined) return catalogIssue("The result catalog must be a dense array.", []);
     const ids = new Set<string>();
     const results: KernelResult[] = [];
     for (const [index, entry] of entries.entries()) {
-      const parsed = parseKernelResult(entry, operators);
+      const parsed = parseKernelResult(entry, snapshot ?? operators);
       if (!parsed.ok) {
         return catalogIssue(parsed.issue.message, [index, ...parsed.issue.path]);
       }
@@ -109,7 +126,11 @@ export function parseKernelResultCatalog(
       ids.add(parsed.result.id);
       results.push(parsed.result);
     }
-    return { ok: true, results };
+    const detached = deepFreeze(results);
+    if (snapshot !== undefined) {
+      validatedCatalogs.set(detached, { results: detached, operators: deepFreeze(snapshot) });
+    }
+    return { ok: true, results: detached };
   } catch {
     return catalogIssue("The result catalog could not be inspected safely.", []);
   }
