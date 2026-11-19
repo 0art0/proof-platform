@@ -34,7 +34,13 @@ import {
   type MoveTemplateValidationOptions,
 } from "@proof/moves/authoring";
 import type { MoveDefinition } from "@proof/moves";
-import { definitionHash, type DefinitionCatalog, type MacroDefinition } from "./approved-catalog";
+import {
+  APPROVED_DEFINITIONS,
+  definitionHash,
+  freezeSessionDefinitionCatalog,
+  type DefinitionCatalog,
+  type MacroDefinition,
+} from "./approved-catalog";
 import { approvedDerivedResults } from "./conditional-lemmas";
 import {
   addLibraryArtifact,
@@ -225,6 +231,19 @@ export function approvedAuthoredMacros(
   });
 }
 
+type CachedSessionDefinitions = Readonly<{
+  artifactsKey: string;
+  definitions: DefinitionCatalog;
+}>;
+const MAX_CACHED_SESSIONS = 32;
+const sessionDefinitionCaches = new WeakMap<LibraryStore, Map<string, CachedSessionDefinitions>>();
+
+function sessionDefinitionCache(library: LibraryStore): Map<string, CachedSessionDefinitions> {
+  let cache = sessionDefinitionCaches.get(library);
+  if (cache === undefined) sessionDefinitionCaches.set(library, (cache = new Map()));
+  return cache;
+}
+
 /**
  * The definitions a session retrieves and applies with: the base catalog plus the session's
  * approved authored moves, approved conditional lemmas, and the admitted results of its
@@ -242,6 +261,12 @@ export async function sessionDefinitions(
     layers: ["move-discovery-draft", "derived", ...SESSION_RESULT_LAYERS],
   });
   if (listed.status !== "found") return base;
+  // Re-read the library on every request. Whole artifact contents catch newly admitted results
+  // and revised move definitions even when the same catalog IDs are used.
+  const cache = base === APPROVED_DEFINITIONS ? sessionDefinitionCache(library) : undefined;
+  const artifactsKey = cache === undefined ? undefined : JSON.stringify(listed.artifacts);
+  const cached = cache?.get(sessionId);
+  if (cached !== undefined && cached.artifactsKey === artifactsKey) return cached.definitions;
   const taken = (id: string) => base.moves.some((move) => move.id === id);
   const authored = approvedAuthoredMoves(listed.artifacts).filter((move) => !taken(move.id));
   const macros = approvedAuthoredMacros(listed.artifacts).filter(({ move }) => !taken(move.id));
@@ -251,12 +276,21 @@ export async function sessionDefinitions(
     ...approvedDerivedResults(listed.artifacts),
     ...sessionLibraryResults(listed.artifacts),
   ]);
-  if (authored.length === 0 && macros.length === 0) return withLemmas;
-  return Object.freeze({
-    ...withLemmas,
-    moves: [...base.moves, ...authored],
-    ...(macros.length === 0 ? {} : { macros: [...(base.macros ?? []), ...macros] }),
-  });
+  const definitions =
+    authored.length === 0 && macros.length === 0
+      ? withLemmas
+      : Object.freeze({
+          ...withLemmas,
+          moves: [...base.moves, ...authored],
+          ...(macros.length === 0 ? {} : { macros: [...(base.macros ?? []), ...macros] }),
+        });
+  if (cache === undefined || artifactsKey === undefined) return definitions;
+  if (!cache.has(sessionId) && cache.size >= MAX_CACHED_SESSIONS) {
+    cache.delete(cache.keys().next().value!);
+  }
+  const frozen = definitions === base ? base : freezeSessionDefinitionCatalog(definitions);
+  cache.set(sessionId, { artifactsKey, definitions: frozen });
+  return frozen;
 }
 
 export type SessionAuthoredMoves = Readonly<{

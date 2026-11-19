@@ -5,7 +5,7 @@ import {
   type VariantFamily,
 } from "@proof/library";
 import { createHash } from "node:crypto";
-import { canonicalJson } from "@proof/mathjson-model";
+import { canonicalJson, deepFreeze } from "@proof/mathjson-model";
 import { HAND_AUTHORED_MOVES, approvedKernelResults, type MoveDefinition } from "@proof/moves";
 import type { AuthoredMoveTemplate } from "@proof/moves/authoring";
 import type { DefinitionHash, ProtocolEnvironment } from "@proof/protocol";
@@ -86,6 +86,19 @@ export const APPROVED_DEFINITIONS: DefinitionCatalog = Object.freeze({
   moves: HAND_AUTHORED_MOVES,
   catalog: approvedCatalog,
 });
+
+const immutableDefinitionCatalogs = new WeakSet([APPROVED_DEFINITIONS]);
+
+/** A production snapshot whose catalog closes over immutable library artifacts. */
+export function freezeSessionDefinitionCatalog(definitions: DefinitionCatalog): DefinitionCatalog {
+  const frozen = deepFreeze(definitions);
+  immutableDefinitionCatalogs.add(frozen);
+  return frozen;
+}
+
+export function canReuseRetrievalIndex(definitions: DefinitionCatalog): boolean {
+  return immutableDefinitionCatalogs.has(definitions);
+}
 
 /** Adapt a definition catalog to an approved catalog with kernel results. */
 export function adaptApprovedCatalog(

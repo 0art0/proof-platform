@@ -7,7 +7,10 @@ import {
   type LibraryResult,
 } from "@proof/library";
 import { problemSetupSort } from "@proof/protocol";
-import { APPROVED_DEFINITIONS } from "./approved-catalog";
+import { APPROVED_DEFINITIONS, type DefinitionCatalog } from "./approved-catalog";
+import { DIVIDES, SESSION, libraryResult, rootNode, scenario } from "./constant-activation.testing";
+import { addLibraryArtifact } from "./library-repository";
+import { sessionDefinitions } from "./move-authoring";
 import { approvedRetrievalIndex } from "./proof-http/shared";
 import { sessionLibraryResults, withSessionResults } from "./session-results";
 
@@ -157,5 +160,88 @@ describe("session results in the catalog", () => {
         ({ id }) => id,
       ),
     ).toEqual(["result:l-initial", "result:l-proof"]);
+  });
+});
+
+describe("approved retrieval index reuse", () => {
+  function index(definitions: DefinitionCatalog, operators: typeof OPERATORS = [DIVIDES]) {
+    const built = approvedRetrievalIndex(definitions, operators);
+    if (!built.ok) throw new Error(built.message);
+    return built.index;
+  }
+
+  it("reuses the starter index for equivalent declarations and changes when their content changes", () => {
+    const operators = structuredClone([DIVIDES]);
+    const first = index(APPROVED_DEFINITIONS, operators);
+    expect(index(APPROVED_DEFINITIONS, [DIVIDES])).toBe(first);
+    operators[0]!.presentation!.displayName = "another display name";
+    const renamed = index(APPROVED_DEFINITIONS, operators);
+    expect(renamed).not.toBe(first);
+    expect(renamed.resultCount).toBeLessThan(first.resultCount);
+    expect(index(APPROVED_DEFINITIONS, [DIVIDES])).toBe(first);
+  });
+
+  it("does not let an index hit bypass operator-environment validation", () => {
+    const malformed = structuredClone([DIVIDES]);
+    index(APPROVED_DEFINITIONS, malformed);
+    Object.defineProperty(malformed[0], "non-data", { value: 1 });
+    expect(approvedRetrievalIndex(APPROVED_DEFINITIONS, malformed)).toMatchObject({ ok: false });
+  });
+
+  it("refreshes an injected catalog even when its result keeps the same ID", () => {
+    const artifact = structuredClone(libraryResult("plain"));
+    const definitions: DefinitionCatalog = Object.freeze({
+      moves: [],
+      catalog: () => ({ results: [artifact], variantFamilies: [], kernelResults: undefined }),
+    });
+    const first = index(definitions);
+    Object.assign(artifact, { name: "Updated result name" });
+    const updated = index(definitions);
+    const state = rootNode(1).state;
+    const selection = {
+      kind: "exact",
+      anchor: {
+        stateId: state.id,
+        target: { kind: "goal", id: "goal:1" },
+        statement: { kind: "conclusion" },
+      },
+      path: [],
+    };
+    expect(updated.query(state, selection)).toMatchObject({
+      ok: true,
+      suggestions: [{ artifactId: artifact.id, name: "Updated result name" }],
+    });
+    expect(first.query(state, selection)).toMatchObject({
+      ok: true,
+      suggestions: [{ artifactId: artifact.id, name: "Multiples (plain)" }],
+    });
+  });
+
+  it("reuses stored session definitions and refreshes after an admission, scoped by session and store", async () => {
+    const { store, definitions } = await scenario(1, ["plain"]);
+    const first = index(definitions);
+    const read = () => sessionDefinitions(APPROVED_DEFINITIONS, store, SESSION);
+    expect(await read()).toBe(definitions);
+    expect(index(await read())).toBe(first);
+
+    const differentStore = await scenario(1, ["gcd"]);
+    const differentSession = await scenario(1, ["gcd"], "session:other", store);
+    expect(index(differentStore.definitions)).not.toBe(first);
+    expect(index(differentSession.definitions)).not.toBe(first);
+
+    const addition = await addLibraryArtifact(store, {
+      id: "library-addition:cache-test",
+      sessionId: SESSION,
+      occurredAt: "2026-10-19T09:00:00.000Z",
+      layer: "initial-problem",
+      origin: { kind: "setup", actorId: "actor:web" },
+      artifact: libraryResult("gcd"),
+    });
+    expect(addition).toMatchObject({ status: "recorded", admitted: true });
+    const extended = await read();
+    const updated = index(extended);
+    expect(updated).not.toBe(first);
+    expect(updated.resultCount).toBe(first.resultCount + 1);
+    expect(index(await read())).toBe(updated);
   });
 });
