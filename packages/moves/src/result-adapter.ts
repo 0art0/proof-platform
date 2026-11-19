@@ -1,4 +1,5 @@
 import {
+  functionParts,
   parseKernelResultCatalog,
   type KernelResult,
   type KernelResultId,
@@ -7,6 +8,7 @@ import {
 import type { LibraryResult } from "@proof/library";
 import {
   deepFreeze,
+  mathJsonEquals,
   type OperatorDeclaration,
   type PlainMathJson,
   type StatementView,
@@ -46,8 +48,8 @@ export type ResultAdapterResult =
  * a goal `B` to goals `A`. The cost is that an implication result is no longer a
  * premise-free `Implies`. The original rule is also retained for generalized rewriting,
  * which uses it to transport directional relations through predicates.
- * Equivalences, equalities and other statements are never split, so they remain
- * premise-free rewrite sources when they have no premises.
+ * A tagged predicate transport can also expose an implication from its final
+ * premise to its conclusion while keeping both in their ordinary positions.
  */
 export function libraryResultToKernelResult(
   result: LibraryResult,
@@ -76,7 +78,7 @@ function resultCandidate(result: LibraryResult): KernelResult {
   const implication = binaryOperands(conclusion, "Implies");
   const congruenceRule =
     implication === undefined
-      ? undefined
+      ? predicateTransportRule(result.congruenceSymbols, premises, conclusion)
       : { premises: [...premises], conclusion: { expression: conclusion } };
   if (implication !== undefined) {
     const [antecedent, consequent] = implication;
@@ -97,6 +99,38 @@ function resultCandidate(result: LibraryResult): KernelResult {
     conclusion: { expression: conclusion },
     directions: result.applicationDirections,
   };
+}
+
+/** Curry the final premise of a tagged predicate transport for congruence search. */
+function predicateTransportRule(
+  symbols: readonly string[] | undefined,
+  premises: readonly StatementView[],
+  conclusion: PlainMathJson,
+): KernelResult["congruenceRule"] {
+  if (symbols?.length !== 1 || premises.length < 2) return undefined;
+  const output = functionParts(conclusion);
+  // An And antecedent would split into multiple ordinary premises.
+  if (output === undefined || output.operator === "And" || output.operator !== symbols[0]) {
+    return undefined;
+  }
+  const antecedent = premises.at(-1)?.expression;
+  const input = antecedent === undefined ? undefined : functionParts(antecedent);
+  if (
+    antecedent === undefined ||
+    input?.operator !== output.operator ||
+    input.operands.length !== output.operands.length
+  ) {
+    return undefined;
+  }
+  const changes = input.operands.filter(
+    (operand, index) => !mathJsonEquals(operand, output.operands[index] as PlainMathJson),
+  );
+  return changes.length === 1
+    ? {
+        premises: premises.slice(0, -1),
+        conclusion: { expression: ["Implies", antecedent, conclusion] },
+      }
+    : undefined;
 }
 
 function invalidResult(

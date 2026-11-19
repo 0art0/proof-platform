@@ -834,6 +834,7 @@ const SET_PACK: PackSpec = {
     },
     {
       slug: "subset-membership",
+      congruenceSymbols: ["Element"],
       name: "Membership in a superset",
       description: "An element of a set belongs to every superset of it.",
       parameters: [set("A"), set("B"), element("x")],
@@ -992,6 +993,7 @@ const CLOSURE_PACK: PackSpec = {
     },
     {
       slug: "closure-monotone",
+      congruenceSymbols: ["Closure"],
       name: "Monotonicity of closure",
       description: "Closure preserves inclusion.",
       parameters: [set("A"), set("B")],

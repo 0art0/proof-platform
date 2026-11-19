@@ -120,6 +120,28 @@ describe("libraryResultToKernelResult", () => {
     });
   });
 
+  it("curries a tagged predicate transport while preserving its ordinary premises", () => {
+    const pack = starterLibraryPack("pack:sets");
+    const result = pack.results.find(({ id }) => id === "result:subset-membership");
+    if (result === undefined) throw new Error("Missing the subset membership rule.");
+    expect(libraryResultToKernelResult(result, { operators: pack.operators })).toMatchObject({
+      ok: true,
+      result: {
+        id: "result:subset-membership",
+        congruenceSymbols: ["Element"],
+        premises: [
+          { expression: ["SubsetEqual", "A", "B"] },
+          { expression: ["Element", "x", "A"] },
+        ],
+        conclusion: { expression: ["Element", "x", "B"] },
+        congruenceRule: {
+          premises: [{ expression: ["SubsetEqual", "A", "B"] }],
+          conclusion: { expression: ["Implies", ["Element", "x", "A"], ["Element", "x", "B"]] },
+        },
+      },
+    });
+  });
+
   it("returns frozen, detached output and adapts only approved results", () => {
     const adapted = libraryResultToKernelResult(coreResult("result:modus-ponens"));
     expect(Object.isFrozen(adapted)).toBe(true);
