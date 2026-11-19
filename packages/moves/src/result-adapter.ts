@@ -2,7 +2,7 @@ import {
   parseKernelResultCatalog,
   type KernelResult,
   type KernelResultId,
-  type ResultApplicationDirection,
+  type ResultCatalogIssue,
 } from "@proof/kernel";
 import type { LibraryResult } from "@proof/library";
 import {
@@ -54,63 +54,56 @@ export function libraryResultToKernelResult(
   environment: Readonly<{ operators?: readonly OperatorDeclaration[] }> = {},
 ): ResultAdapterResult {
   try {
-    const premises: StatementView[] = [
-      ...result.premises.map((premise) => ({ expression: structuredClone(premise.expression) })),
-      ...result.sideConditions.flatMap((condition) =>
-        condition.statement === undefined
-          ? []
-          : [{ expression: structuredClone(condition.statement.expression) }],
-      ),
-    ];
-    let conclusion: PlainMathJson = structuredClone(result.statement.expression);
-    const implication = binaryOperands(conclusion, "Implies");
-    const congruence = result.congruenceSymbols;
-    const congruenceRule =
-      implication !== undefined
-        ? { premises: [...premises], conclusion: { expression: conclusion } }
-        : undefined;
-    if (implication !== undefined) {
-      const [antecedent, consequent] = implication;
-      const conjuncts = operands(antecedent, "And");
-      (conjuncts !== undefined && conjuncts.length > 0 ? conjuncts : [antecedent]).forEach(
-        (expression) => premises.push({ expression }),
-      );
-      conclusion = consequent;
-    }
-    const candidate = {
-      id: result.id as string as KernelResultId,
-      parameters: result.parameters.map(({ symbol, sort }) => ({
-        symbol,
-        sort: structuredClone(sort),
-      })),
-      premises,
-      ...(congruence === undefined ? {} : { congruenceSymbols: [...congruence] }),
-      ...(congruenceRule === undefined ? {} : { congruenceRule }),
-      conclusion: { expression: conclusion },
-      directions: [...result.applicationDirections] as ResultApplicationDirection[],
-    };
+    const candidate = resultCandidate(result);
     const parsed = parseKernelResultCatalog([candidate], environment.operators ?? []);
     if (!parsed.ok) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            code: "invalid-result",
-            message: parsed.issue.message,
-            path: parsed.issue.path.slice(1),
-          },
-        ],
-      };
+      return invalidResult(parsed.issue.message, parsed.issue.path.slice(1));
     }
     return deepFreeze({ ok: true, result: parsed.results[0] as KernelResult, diagnostics: [] });
   } catch {
-    return {
-      ok: false,
-      diagnostics: [
-        { code: "invalid-result", message: "The library result could not be adapted.", path: [] },
-      ],
-    };
+    return invalidResult("The library result could not be adapted.", []);
   }
+}
+
+function resultCandidate(result: LibraryResult): KernelResult {
+  const premises: StatementView[] = [
+    ...result.premises.map(({ expression }) => ({ expression })),
+    ...result.sideConditions.flatMap(({ statement }) =>
+      statement === undefined ? [] : [{ expression: statement.expression }],
+    ),
+  ];
+  let conclusion = result.statement.expression;
+  const implication = binaryOperands(conclusion, "Implies");
+  const congruenceRule =
+    implication === undefined
+      ? undefined
+      : { premises: [...premises], conclusion: { expression: conclusion } };
+  if (implication !== undefined) {
+    const [antecedent, consequent] = implication;
+    const conjuncts = operands(antecedent, "And");
+    (conjuncts !== undefined && conjuncts.length > 0 ? conjuncts : [antecedent]).forEach(
+      (expression) => premises.push({ expression }),
+    );
+    conclusion = consequent;
+  }
+  return {
+    id: result.id as string as KernelResultId,
+    parameters: result.parameters.map(({ symbol, sort }) => ({ symbol, sort })),
+    premises,
+    ...(result.congruenceSymbols === undefined
+      ? {}
+      : { congruenceSymbols: result.congruenceSymbols }),
+    ...(congruenceRule === undefined ? {} : { congruenceRule }),
+    conclusion: { expression: conclusion },
+    directions: result.applicationDirections,
+  };
+}
+
+function invalidResult(
+  message: string,
+  path: ResultCatalogIssue["path"],
+): Extract<ResultAdapterResult, { ok: false }> {
+  return { ok: false, diagnostics: [{ code: "invalid-result", message, path }] };
 }
 
 /**
@@ -124,20 +117,25 @@ export function approvedKernelResults(
 ):
   | Readonly<{ ok: true; results: readonly KernelResult[]; diagnostics: readonly [] }>
   | Readonly<{ ok: false; diagnostics: readonly [ResultAdapterDiagnostic] }> {
-  const adapted: KernelResult[] = [];
+  const candidates: KernelResult[] = [];
+  const sourceIndexes: number[] = [];
   for (const [index, result] of results.entries()) {
     if (result.approval.status !== "approved") continue;
-    const converted = libraryResultToKernelResult(result, environment);
-    if (!converted.ok) {
-      const diagnostic = converted.diagnostics[0];
-      return {
-        ok: false,
-        diagnostics: [{ ...diagnostic, path: [index, ...diagnostic.path] }],
-      };
+    try {
+      candidates.push(resultCandidate(result));
+      sourceIndexes.push(index);
+    } catch {
+      return invalidResult("The library result could not be adapted.", [index]);
     }
-    adapted.push(converted.result);
   }
-  return deepFreeze({ ok: true, results: adapted, diagnostics: [] });
+  const parsed = parseKernelResultCatalog(candidates, environment.operators ?? []);
+  if (!parsed.ok) {
+    const [index, ...issuePath] = parsed.issue.path;
+    const path =
+      typeof index === "number" ? [sourceIndexes[index] ?? index, ...issuePath] : parsed.issue.path;
+    return invalidResult(parsed.issue.message, path);
+  }
+  return deepFreeze({ ok: true, results: parsed.results, diagnostics: [] });
 }
 
 function operands(expression: PlainMathJson, operator: string): PlainMathJson[] | undefined {

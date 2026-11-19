@@ -180,6 +180,40 @@ describe("result catalog validation", () => {
     }
   });
 
+  it("reuses only its own deeply frozen catalog for an unchanged operator environment", () => {
+    const input = {
+      ...lessEqualReflexive,
+      conclusion: { expression: ["LessEqual", "a", "a"] as PlainMathJson },
+    };
+    const callerCatalog = Object.freeze([input]);
+    const parsed = parseKernelResultCatalog(callerCatalog, operators);
+    if (!parsed.ok) throw new Error(parsed.issue.message);
+    expect(Object.isFrozen(parsed.results)).toBe(true);
+    expect(Object.isFrozen(parsed.results[0]?.conclusion.expression)).toBe(true);
+
+    input.conclusion.expression = ["Add", "a", 1];
+    expect(parseKernelResultCatalog(callerCatalog, operators)).toMatchObject({
+      ok: false,
+      issue: { path: [0, "conclusion"] },
+    });
+    const again = parseKernelResultCatalog(parsed.results, structuredClone(operators));
+    expect(again.ok && again.results).toBe(parsed.results);
+    expect(parsed.results[0]?.conclusion.expression).toEqual(["LessEqual", "a", "a"]);
+  });
+
+  it("checks a kernel-produced catalog again when the operator signature changes", () => {
+    const supplied = structuredClone(operators);
+    const parsed = parseKernelResultCatalog([boundedPremise], supplied);
+    if (!parsed.ok) throw new Error(parsed.issue.message);
+    Object.assign(supplied[0]!.signature, { parameters: [PROPOSITION_SORT, PROPOSITION_SORT] });
+    expect(parseKernelResultCatalog(parsed.results, supplied)).toMatchObject({
+      ok: false,
+      issue: { path: [0, "premises", 0] },
+    });
+    const again = parseKernelResultCatalog(parsed.results, operators);
+    expect(again.ok && again.results).toBe(parsed.results);
+  });
+
   it.each<[string, unknown]>([
     ["duplicate IDs", [lessTransitive, lessTransitive]],
     [
