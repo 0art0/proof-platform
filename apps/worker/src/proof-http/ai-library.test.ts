@@ -1125,13 +1125,16 @@ describe("problem setup with an approved library", () => {
       "result:library-coprime-symmetry",
       "result:library-coprime-symmetry/converse",
       "result:library-coprime-symmetry/converse",
+      "result:double-negation",
+      "result:library-coprime-symmetry",
     ]);
+    const applications = results.filter(({ patternId }) => !patternId.startsWith("rewrite:"));
     // The generated variants form one family with their source, as for the packs' results.
     expect(set.variantGroups).toEqual([
       {
         familyId: "variant-family:result:library-coprime-symmetry",
         name: "Result coprime-symmetry variants",
-        suggestionIds: results.map(({ id }) => id),
+        suggestionIds: applications.map(({ id }) => id),
       },
     ]);
     // The same catalog serves the library view, once per result.
