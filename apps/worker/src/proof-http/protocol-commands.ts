@@ -591,7 +591,13 @@ async function dispatch(
         );
       }
       const suggestionSetId = `suggestion-set:${commandId}` as never;
-      const recorded = await recordSuggestions(context, sessionId, suggestionSetId, selections);
+      const recorded = await recordSuggestions(
+        context,
+        sessionId,
+        suggestionSetId,
+        selections,
+        command,
+      );
       if (recorded.status === "invalid-catalog") {
         return diagnostics(500, "invalid-catalog", recorded.message);
       }

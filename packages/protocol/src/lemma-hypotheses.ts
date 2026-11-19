@@ -104,6 +104,8 @@ function stepUse(operation: OperationRecord): StepUse | string {
           ...statementHypothesis(operation["statement"]),
         ],
       };
+    case "generalized-rewrite":
+      return "a rewrite premise may have been discharged by a hypothesis the operation does not name";
     case "expand-hypothesis-conjunction":
       return {
         direct: [],

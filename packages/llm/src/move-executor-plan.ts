@@ -199,6 +199,19 @@ const wireOperations = [
     source: rewriteSourceSchema,
   }),
   operation(
+    "generalized-rewrite",
+    {
+      statement: statementSchema,
+      path: pathSchema,
+      lens: lensSchema,
+      source: rewriteSourceSchema,
+      direction: directionSchema,
+      obligationIds: freshIds(0),
+      congruenceResultIds: z.array(referenceSchema).max(64),
+    },
+    ["obligationIds"],
+  ),
+  operation(
     "apply-result-backward",
     {
       resultId: referenceSchema,

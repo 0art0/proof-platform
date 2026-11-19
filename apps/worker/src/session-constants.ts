@@ -99,6 +99,7 @@ export function missingConstants(
 export type StepConstants = Readonly<{
   resultId: string;
   constants: readonly OperatorDeclaration[];
+  resultIdsBySymbol?: ReadonlyMap<string, string>;
 }>;
 
 /**
@@ -113,11 +114,24 @@ export function stepConstants(
   operation: unknown,
 ): StepConstants | undefined {
   const resultIds = untrustedResultIds(operation);
+  let current = operators;
+  const constants: OperatorDeclaration[] = [];
+  const resultIdsBySymbol = new Map<string, string>();
   for (const resultId of resultIds) {
-    const constants = missingConstants(definitions, operators, [resultId]);
-    if (constants.length > 0) return { resultId, constants };
+    const next = missingConstants(definitions, current, [resultId]);
+    current = extendOperators(current, next);
+    for (const declaration of next) {
+      constants.push(declaration);
+      resultIdsBySymbol.set(declaration.symbol, resultId);
+    }
   }
-  return undefined;
+  const first = resultIdsBySymbol.values().next().value;
+  if (first === undefined) return undefined;
+  return {
+    resultId: first,
+    constants,
+    ...(new Set(resultIdsBySymbol.values()).size === 1 ? {} : { resultIdsBySymbol }),
+  };
 }
 
 /**
@@ -158,14 +172,28 @@ export function untrustedResultIds(operation: unknown): readonly string[] {
   const record = operation as Readonly<Record<string, unknown>>;
   const source = record["source"];
   if (
-    (record["kind"] === "rewrite-with-equivalence" ||
-      record["kind"] === "rewrite-with-implication") &&
-    typeof source === "object" &&
-    source !== null &&
-    (source as Readonly<Record<string, unknown>>)["kind"] === "result" &&
-    typeof (source as Readonly<Record<string, unknown>>)["resultId"] === "string"
+    record["kind"] === "rewrite-with-equivalence" ||
+    record["kind"] === "rewrite-with-implication" ||
+    record["kind"] === "generalized-rewrite"
   ) {
-    return [(source as { resultId: string }).resultId];
+    const sourceResult =
+      typeof source === "object" &&
+      source !== null &&
+      "kind" in source &&
+      source.kind === "result" &&
+      "resultId" in source &&
+      typeof source.resultId === "string"
+        ? [source.resultId]
+        : [];
+    const lifts = record["congruenceResultIds"];
+    return record["kind"] === "generalized-rewrite" && Array.isArray(lifts)
+      ? [
+          ...new Set([
+            ...sourceResult,
+            ...lifts.filter((item): item is string => typeof item === "string"),
+          ]),
+        ]
+      : sourceResult;
   }
   if (
     (record["kind"] === "apply-result-backward" || record["kind"] === "apply-result-forward") &&

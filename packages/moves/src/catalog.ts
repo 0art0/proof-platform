@@ -408,6 +408,22 @@ export const catalogInputs: readonly MoveCatalogInput[] = [
     "The occurrence is an operand of an equivalence, where polarity is mixed.",
   ),
   catalogEntry(
+    "generalized-rewrite",
+    "Rewrite expression",
+    "Rewrite a selected occurrence using a relation from the local context or approved library.",
+    [
+      slot("occurrence", "rewrite-occurrence", "any"),
+      slot("source", "hypothesis", "proposition", false),
+    ],
+    "x",
+    [],
+    [
+      "Replace one side of an equality in a selected expression.",
+      "Strengthen an inequality by rewriting in an order-preserving position.",
+    ],
+    "The selected occurrence has no rewrite supported by the source relation.",
+  ),
+  catalogEntry(
     "apply-result-backward",
     "Apply result backward",
     "Reduce a target matching an approved result's conclusion to that result's instantiated premises.",

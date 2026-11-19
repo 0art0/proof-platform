@@ -20,6 +20,7 @@ import {
   commandIdGenerator,
   generateParameterMenus,
   materializeMoveOperation,
+  materializeGeneralizedRewrite,
   materializeResultApplication,
   type MoveDefinition,
   type MoveMenuChoices,
@@ -424,7 +425,32 @@ const roundTrips: readonly RoundTrip[] = [
 
 describe("materializeMoveOperation round trip", () => {
   it("covers every primitive kind", () => {
-    expect(roundTrips.map(({ kind }) => kind).sort()).toEqual([...KERNEL_OPERATION_KINDS].sort());
+    expect([...roundTrips.map(({ kind }) => kind), "generalized-rewrite"].sort()).toEqual(
+      [...KERNEL_OPERATION_KINDS].sort(),
+    );
+  });
+
+  it("materializes a checked rewrite without requesting arbitrary parameters", () => {
+    const input = state(["Lt", "a", ["S", "b"]], [{ id: "h:eq", expression: ["Equal", "b", "a"] }]);
+    const seed = {
+      target: { kind: "goal", id: "goal:main" },
+      statement: { kind: "conclusion" },
+      path: [1, 0],
+      source: { kind: "hypothesis", hypothesisId: "h:eq" },
+      direction: "forward",
+      congruenceResultIds: [],
+    } as Parameters<typeof materializeGeneralizedRewrite>[1];
+    const materialized = materializeGeneralizedRewrite(input, seed, { operators }, ids);
+    expect(materialized).toMatchObject({
+      ok: true,
+      operation: { kind: "generalized-rewrite", obligationIds: [], ...seed },
+      menus: [],
+    });
+    if (!materialized.ok) return;
+    expect(applyTransition(input, materialized.operation, { operators })).toMatchObject({
+      ok: true,
+      transitionClass: "equivalence",
+    });
   });
 
   it.each(roundTrips)("materializes $kind into an operation the kernel accepts", (entry) => {

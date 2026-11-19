@@ -277,6 +277,7 @@ export const PRIMITIVE_PATTERN_SLOTS: Readonly<Record<MoveOperationKind, string>
   "rewrite-with-equality": "equality",
   "rewrite-with-equivalence": "equivalence",
   "rewrite-with-implication": "implication",
+  "generalized-rewrite": "occurrence",
   "apply-result-backward": "target",
   "apply-result-forward": "target",
   "mark-sorry": "target",
@@ -332,6 +333,7 @@ export const PRIMITIVE_TRANSITION_EVIDENCE: Readonly<
   "rewrite-with-implication": ["structural", "library-result"],
   "apply-result-backward": ["library-result"],
   "apply-result-forward": ["library-result"],
+  "generalized-rewrite": ["structural", "library-result"],
   "mark-sorry": ["sorry"],
   "close-by-assumption": ["structural"],
 });
