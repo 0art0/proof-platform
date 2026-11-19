@@ -87,6 +87,13 @@ const validatedCatalogs = new WeakMap<
   Readonly<{ results: readonly KernelResult[]; operators: readonly OperatorDeclaration[] }>
 >();
 
+/** Detach a catalog without discarding an existing immutable parser snapshot. */
+export function snapshotKernelResultCatalog(
+  results: readonly KernelResult[],
+): readonly KernelResult[] {
+  return validatedCatalogs.has(results) ? results : deepFreeze(structuredClone(results));
+}
+
 /**
  * Validate a result catalog against an already validated operator environment
  * and return an immutable, detached catalog. Reuse is limited to this parser's

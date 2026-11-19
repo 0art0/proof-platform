@@ -1,3 +1,4 @@
+import { parseKernelResultCatalog } from "@proof/kernel";
 import { describe, expect, it } from "vitest";
 import {
   DIVISIBILITY_OPERATOR_DECLARATIONS,
@@ -12,6 +13,7 @@ import { DIVIDES, SESSION, libraryResult, rootNode, scenario } from "./constant-
 import { addLibraryArtifact } from "./library-repository";
 import { sessionDefinitions } from "./move-authoring";
 import { approvedRetrievalIndex } from "./proof-http/shared";
+import { frozenEnvironment } from "./proof-repository-records";
 import { sessionLibraryResults, withSessionResults } from "./session-results";
 
 const INTEGER = problemSetupSort("integer");
@@ -243,5 +245,30 @@ describe("approved retrieval index reuse", () => {
     expect(updated).not.toBe(first);
     expect(updated.resultCount).toBe(first.resultCount + 1);
     expect(index(await read())).toBe(updated);
+  });
+});
+
+describe("repository result catalog snapshots", () => {
+  it("retains the kernel-approved result catalog for preview and apply", () => {
+    const catalog = APPROVED_DEFINITIONS.catalog(OPERATORS);
+    const environment = frozenEnvironment(OPERATORS);
+    expect(environment?.results).toBe(catalog.kernelResults);
+    expect(environment?.results).toBeDefined();
+    const parsed = parseKernelResultCatalog(environment?.results, OPERATORS);
+    expect(parsed.ok && parsed.results).toBe(catalog.kernelResults);
+  });
+
+  it("detaches a caller-frozen catalog that can still change", () => {
+    const base = APPROVED_DEFINITIONS.catalog(OPERATORS);
+    const supplied = Object.freeze(structuredClone(base.kernelResults ?? []));
+    const definitions = {
+      ...APPROVED_DEFINITIONS,
+      catalog: () => ({ ...base, kernelResults: supplied }),
+    };
+    const environment = frozenEnvironment(OPERATORS, definitions);
+    expect(environment?.results).not.toBe(supplied);
+    expect(environment?.results).toEqual(supplied);
+    Object.assign(supplied[0]!.conclusion, { expression: "False" });
+    expect(environment?.results?.[0]?.conclusion.expression).not.toBe("False");
   });
 });

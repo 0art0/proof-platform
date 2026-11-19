@@ -44,6 +44,7 @@ export {
   matchExpressionPattern,
   matchResultConclusion,
   parseKernelResultCatalog,
+  snapshotKernelResultCatalog,
   type KernelResult,
   type KernelResultId,
   type KernelResultParameter,

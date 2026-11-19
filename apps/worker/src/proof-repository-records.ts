@@ -2,6 +2,7 @@
 // the record-level helpers the writing modules share: tombstone checks, transition sequencing and
 // command-derived record IDs.
 
+import { snapshotKernelResultCatalog } from "@proof/kernel";
 import {
   constantActivationSchema,
   effectiveOperators,
@@ -345,10 +346,10 @@ export function frozenEnvironment(
     const results = definitions.catalog(operators).kernelResults;
     if (results === undefined) return undefined;
     const authored = definitions.moves.filter(({ id }) => id.startsWith("authored:"));
-    return deepFreeze({
-      operators: structuredClone(operators),
-      results: structuredClone(results),
-      ...(authored.length === 0 ? {} : { moves: structuredClone(authored) }),
+    return Object.freeze({
+      operators: deepFreeze(structuredClone(operators)),
+      results: snapshotKernelResultCatalog(results),
+      ...(authored.length === 0 ? {} : { moves: deepFreeze(structuredClone(authored)) }),
     });
   } catch {
     return undefined;
