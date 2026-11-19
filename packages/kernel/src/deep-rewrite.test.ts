@@ -954,6 +954,25 @@ describe("specializing local relations at a bound occurrence", () => {
     });
   });
 
+  it("uses membership supplied by the goal's own restricted quantifier", () => {
+    const before = state(
+      ["ForAll", ["Element", "y", "S"], ["Q", "y"]],
+      source(["ForAll", ["Element", "x", "S"], ["Implies", ["P", "x"], ["Q", "x"]]]),
+      declarations,
+    );
+    expect(applyTransition(before, operation)).toMatchObject({
+      ok: true,
+      state: {
+        goals: [
+          {
+            sequent: { conclusion: { expression: ["ForAll", ["Element", "y", "S"], ["P", "y"]] } },
+          },
+        ],
+        obligations: [],
+      },
+    });
+  });
+
   it("closes membership conditions over exactly the enclosing restricted binder", () => {
     const before = state(
       ["ForAll", ["Element", "y", "T"], ["Q", "y"]],

@@ -2,6 +2,28 @@
 
 This repository implements the [interactive mathematical discovery platform](./platform-design-plan.md). It is a TypeScript monorepo using npm workspaces: shared packages live in `packages/`, the proof worker in `apps/worker`, and the Next.js web app in `apps/web`.
 
+## Generalized rewriting
+
+In the formal proof workspace, hover over an expression to inspect rewrites or click to see their
+previews. **Work with** focuses suggestions on a relation. You can also drag a hypothesis or a
+library result onto an occurrence in the goal or in another hypothesis. The preview shows the
+replacement, transition class, and new obligations. **Apply this step** commits the change.
+
+For example, given `x ≤ y` and the goal `x · c ≤ z`, select `x` and choose **Order (≤)**.
+Replacing `x` with `y` strengthens the goal to `y · c ≤ z`. The multiplication lemma requires
+`0 ≤ c`, which becomes an obligation unless the context supplies it. For implication, rewriting
+a goal using `P ⇒ Q` works back from `Q` to `P`. In a hypothesis it can move from `P` to `Q`.
+Negation and implication antecedents reverse this direction. Quantified rules specialize at
+the selected occurrence, with dependent conditions closed over the variables in scope.
+
+The modular arithmetic pack uses `["Congruent", a, b, m]` for integer congruence modulo `m`.
+An approved library result can declare `congruenceSymbols`, for example `["Multiply"]` on
+`a ≤ b, 0 ≤ c ⊢ a · c ≤ b · c`. The tag indexes the result by the enclosing operator. The kernel
+checks the instantiated theorem, including its other premises, and records which lemmas licensed
+the step. See the [starter library](./packages/library/src/packs.ts),
+[Rocq's morphism signatures](https://docs.rocq-prover.org/master/refman/addendum/generalized-rewriting.html),
+and [Mathlib's generalized congruence rules](https://leanprover-community.github.io/mathlib4_docs/Mathlib/Tactic/GCongr/Core.html).
+
 ## Setup and verification
 
 Requires Node.js 24 and npm 11. `.npmrc` disables npm's update check, audit upload, and funding banner, and the web scripts set `NEXT_TELEMETRY_DISABLED=1`.

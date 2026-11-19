@@ -1,6 +1,7 @@
 import {
   createStatementViewSchema,
   canonicalJsonEquals,
+  freeSymbolNames,
   type ContextualSequent,
   type Obligation,
   type OperatorDeclaration,
@@ -16,7 +17,7 @@ import {
   type RewriteAncestor,
 } from "../deep-rewrite";
 import { specializeRewriteHypothesis } from "../specialize-rewrite-hypothesis";
-import { functionParts } from "../expression";
+import { functionParts, readQuantifier } from "../expression";
 import type { GeneralizedRewriteSelection, KernelDiagnosticCode, TransitionClass } from "../index";
 import {
   instantiateResultRule,
@@ -362,6 +363,26 @@ function* theoremLifts(
   }
 }
 
+/** Every element selected by a restricted quantifier belongs to its domain. The
+ * domain is read outside the binder, so its free symbols must keep their meaning in the body. */
+function isDomainMembership(
+  expression: PlainMathJson,
+  operators: readonly OperatorDeclaration[],
+): boolean {
+  const quantified = readQuantifier(expression, "ForAll");
+  if (
+    !quantified ||
+    quantified.domain === undefined ||
+    freeSymbolNames(quantified.domain, { operators }).includes(quantified.symbol)
+  )
+    return false;
+  return alphaEquivalentWithOperators(
+    quantified.body,
+    ["Element", quantified.symbol, quantified.domain],
+    operators,
+  );
+}
+
 function collectConditions(
   premises: readonly PlainMathJson[],
   provenance: Condition["provenance"],
@@ -374,6 +395,7 @@ function collectConditions(
     if (closed === undefined) return undefined;
     if (
       closed === "True" ||
+      isDomainMembership(closed, search.operators) ||
       search.sequent.context.hypotheses.some(
         ({ id, statement }) =>
           (search.statement.kind !== "hypothesis" || search.statement.id !== id) &&
