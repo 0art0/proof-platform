@@ -19,7 +19,13 @@ import {
   type StatementView,
 } from "@proof/mathjson-model";
 import { alphaEquivalentWithOperators, sameNodeMetadata } from "./alpha-equivalence";
-import { binderFor, boundDeclaration, functionParts, symbolValue } from "./expression";
+import {
+  binderFor,
+  boundDeclaration,
+  functionParts,
+  operatorOperands,
+  symbolValue,
+} from "./expression";
 import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 
 /**
@@ -54,6 +60,15 @@ export type KernelResult = Readonly<{
   premises: readonly StatementView[];
   conclusion: StatementView;
   directions: readonly ResultApplicationDirection[];
+  /** Heads whose congruence or monotonicity this theorem can establish. */
+  congruenceSymbols?: readonly string[];
+  /** Equivalent implication view when ordinary application has moved its antecedent to premises. */
+  congruenceRule?: ResultRule;
+}>;
+
+export type ResultRule = Readonly<{
+  premises: readonly StatementView[];
+  conclusion: StatementView;
 }>;
 
 /** Terms for the result's free parameters, keyed by parameter symbol. */
@@ -104,7 +119,13 @@ type ResultParse =
   Readonly<{ ok: true; result: KernelResult }> | Readonly<{ ok: false; issue: ResultCatalogIssue }>;
 
 function parseKernelResult(value: unknown, operators: readonly OperatorDeclaration[]): ResultParse {
-  if (!isStrictRecord(value) || !hasExactKeys(value, RESULT_KEYS)) {
+  if (
+    !isStrictRecord(value) ||
+    !hasExactKeys(value, [
+      ...RESULT_KEYS,
+      ...["congruenceSymbols", "congruenceRule"].filter((key) => Object.hasOwn(value, key)),
+    ])
+  ) {
     return resultIssue(
       "A kernel result must contain exactly id, parameters, premises, conclusion, and directions.",
       [],
@@ -184,6 +205,31 @@ function parseKernelResult(value: unknown, operators: readonly OperatorDeclarati
     ]);
   }
 
+  const congruenceSymbols = Object.hasOwn(value, "congruenceSymbols")
+    ? denseArrayValues(value.congruenceSymbols)
+    : [];
+  if (
+    congruenceSymbols === undefined ||
+    new Set(congruenceSymbols).size !== congruenceSymbols.length ||
+    congruenceSymbols.some((symbol) => typeof symbol !== "string" || symbol.trim().length === 0)
+  ) {
+    return resultIssue("Congruence symbols must be unique nonempty operator names.", [
+      "congruenceSymbols",
+    ]);
+  }
+  const congruenceRule = Object.hasOwn(value, "congruenceRule")
+    ? parseCongruenceRule(value.congruenceRule, statementSchema, {
+        premises,
+        conclusion: conclusion.data,
+      })
+    : undefined;
+  if (Object.hasOwn(value, "congruenceRule") && congruenceRule === undefined) {
+    return resultIssue(
+      "The congruence rule must present the same theorem as the ordinary result.",
+      ["congruenceRule"],
+    );
+  }
+
   return {
     ok: true,
     result: structuredClone({
@@ -192,8 +238,53 @@ function parseKernelResult(value: unknown, operators: readonly OperatorDeclarati
       premises,
       conclusion: conclusion.data,
       directions: directionEntries as ResultApplicationDirection[],
+      ...(Object.hasOwn(value, "congruenceSymbols")
+        ? { congruenceSymbols: congruenceSymbols as string[] }
+        : {}),
+      ...(congruenceRule === undefined ? {} : { congruenceRule }),
     }),
   };
+}
+
+function parseCongruenceRule(
+  input: unknown,
+  statementSchema: ReturnType<typeof createStatementViewSchema>,
+  ordinary: ResultRule,
+): ResultRule | undefined {
+  if (!isStrictRecord(input) || !hasExactKeys(input, ["premises", "conclusion"])) return undefined;
+  const premises = denseArrayValues(input.premises)?.map((statement) =>
+    statementSchema.safeParse(statement),
+  );
+  const conclusion = statementSchema.safeParse(input.conclusion);
+  if (
+    premises === undefined ||
+    premises.some((premise) => !premise.success) ||
+    !conclusion.success
+  ) {
+    return undefined;
+  }
+  const rule = {
+    premises: premises.map((premise) => premise.data as StatementView),
+    conclusion: conclusion.data,
+  };
+  const sameRule = (candidate: ResultRule): boolean =>
+    mathJsonEquals(candidate.conclusion.expression, ordinary.conclusion.expression) &&
+    candidate.premises.length === ordinary.premises.length &&
+    candidate.premises.every(({ expression }, index) =>
+      mathJsonEquals(expression, ordinary.premises[index]?.expression as PlainMathJson),
+    );
+  if (sameRule(rule)) return rule;
+  const [antecedent, consequent] = operatorOperands(rule.conclusion.expression, "Implies") ?? [];
+  if (antecedent === undefined || consequent === undefined) return undefined;
+  const conjuncts = operatorOperands(antecedent, "And");
+  const normalized = {
+    premises: [
+      ...rule.premises,
+      ...(conjuncts?.length ? conjuncts : [antecedent]).map((expression) => ({ expression })),
+    ],
+    conclusion: { expression: consequent },
+  };
+  return sameRule(normalized) ? rule : undefined;
 }
 
 function parameterDeclarations(
@@ -262,6 +353,16 @@ export function instantiateResultInContext(
     );
   }
 
+  return instantiateResultRule(result, instantiation, sequent.context.declarations, operators);
+}
+
+/** Instantiate an already selected, validated theorem view in the given lexical scope. */
+export function instantiateResultRule(
+  result: KernelResult,
+  instantiation: ResultInstantiation,
+  declarations: readonly Declaration[],
+  operators: readonly OperatorDeclaration[],
+): ResultInstance {
   const required = freeResultParameters(result, operators);
   const requiredSymbols = new Set(required.map((parameter) => parameter.symbol));
   const missing = required.find((parameter) => !Object.hasOwn(instantiation, parameter.symbol));
@@ -285,7 +386,7 @@ export function instantiateResultInContext(
   }));
   for (const [index, parameter] of required.entries()) {
     const term = substitutions[index]?.replacement as PlainMathJson;
-    if (!termHasSortInContext(term, parameter.sort, sequent.context.declarations, operators)) {
+    if (!termHasSortInContext(term, parameter.sort, declarations, operators)) {
       return instanceFailure(
         "invalid-instantiation",
         `The term for parameter ${parameter.symbol} is not well-sorted and in scope in the target's local context.`,
@@ -481,6 +582,20 @@ export function matchExpressionPattern(
   } catch {
     return undefined;
   }
+}
+
+/** Match multiple pairs with one shared set of parameter bindings. */
+export function matchResultExpressions(
+  pairs: readonly (readonly [PlainMathJson, PlainMathJson])[],
+  parameters: readonly string[],
+  operators: readonly OperatorDeclaration[],
+): ResultInstantiation | undefined {
+  const parameterNames = new Set(parameters);
+  const bindings = new Map<string, PlainMathJson>();
+  const matched = pairs.every(([pattern, subject]) =>
+    matchPattern(pattern, subject, new Map(), new Map(), 0, parameterNames, bindings, operators),
+  );
+  return matched ? Object.fromEntries(bindings) : undefined;
 }
 
 /** Bound symbols map to the binder depth that introduced them. */

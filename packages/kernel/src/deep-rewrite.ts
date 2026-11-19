@@ -1,9 +1,12 @@
 import {
+  builtinBinderSorts,
+  declarationIdSchema,
   freeSymbolNames,
   statementIdSchema,
   type Declaration,
   type OperatorDeclaration,
   type PlainMathJson,
+  type Sort,
   type StatementId,
 } from "@proof/mathjson-model";
 import {
@@ -14,7 +17,7 @@ import {
   type LogicalPolarity,
   type SemanticRole,
 } from "@proof/selections";
-import { binderFor, boundDeclaration, functionParts } from "./expression";
+import { binderFor, boundDeclaration, functionParts, type FunctionParts } from "./expression";
 import { kernelResultIdSchema, type KernelResultId, type ResultInstantiation } from "./results";
 import { hasExactKeys, isStrictRecord } from "./runtime";
 
@@ -41,9 +44,22 @@ export type RewriteSource =
 export type RewriteOccurrence = Readonly<{
   fragment: PlainMathJson;
   boundSymbols: ReadonlySet<string>;
+  declarations: readonly Declaration[];
+  scope: readonly RewriteBinding[];
+  ancestors: readonly RewriteAncestor[];
   polarity: LogicalPolarity;
   role: SemanticRole;
   replace: (replacement: PlainMathJson) => PlainMathJson | undefined;
+}>;
+
+type RewriteBinding = Readonly<{ name: string; universalDeclaration?: PlainMathJson }>;
+
+export type RewriteAncestor = Readonly<{
+  parts: FunctionParts;
+  operand: number;
+  declarations: readonly Declaration[];
+  scope: readonly RewriteBinding[];
+  entersBinder: boolean;
 }>;
 
 /**
@@ -58,9 +74,13 @@ export function locateRewriteOccurrence(
   basePolarity: "positive" | "negative",
   declarations: readonly Declaration[],
   operators: readonly OperatorDeclaration[],
+  includeScope = true,
 ): RewriteOccurrence | undefined {
   let current = expression;
   const boundSymbols = new Set<string>();
+  let scopedDeclarations = declarations;
+  let scope: readonly RewriteBinding[] = [];
+  const ancestors: RewriteAncestor[] = [];
   for (const [pathIndex, operandIndex] of path.entries()) {
     const parts = functionParts(current);
     if (parts === undefined) return undefined;
@@ -72,11 +92,72 @@ export function locateRewriteOccurrence(
       if (declaration === undefined || next === undefined) return undefined;
       if (!declaration.outerOperands.includes(next)) return undefined;
     }
-    if (binder?.scopedOperands.includes(operandIndex)) {
-      binder.boundOperands.forEach((boundIndex) => {
-        const name = boundDeclaration(parts, binder, boundIndex)?.name;
-        if (name !== undefined) boundSymbols.add(name);
+    const entersBinder = binder?.scopedOperands.includes(operandIndex) ?? false;
+    if (includeScope)
+      ancestors.push({
+        parts,
+        operand: operandIndex,
+        declarations: scopedDeclarations,
+        scope,
+        entersBinder,
       });
+    if (binder !== undefined && entersBinder) {
+      if (!includeScope) {
+        for (const index of binder.boundOperands) {
+          const name = boundDeclaration(parts, binder, index)?.name;
+          if (name !== undefined) boundSymbols.add(name);
+        }
+      } else {
+        const bindingSorts = builtinBinderSorts(
+          parts.operator,
+          parts.operands,
+          new Map(scopedDeclarations.map(({ symbol, sort }) => [symbol, sort])),
+          operators,
+        );
+        const custom = operators.find((operator) => operator.symbol === parts.operator)?.signature;
+        for (const index of binder.boundOperands) {
+          const binding = boundDeclaration(parts, binder, index);
+          if (binding === undefined) continue;
+          boundSymbols.add(binding.name);
+          const sort = bindingSorts?.get(binding.name) ?? custom?.parameters[index];
+          const currentDeclaration = scopedDeclarations.find(
+            ({ symbol }) => symbol === binding.name,
+          );
+          const standardDomain = sort === undefined ? undefined : standardSortDomain(sort);
+          const universalDeclaration: PlainMathJson | undefined =
+            binding.form === "element"
+              ? parts.operands[index]
+              : binding.form === "symbol" && custom === undefined
+                ? binding.symbol
+                : standardDomain === undefined
+                  ? undefined
+                  : ["Element", binding.symbol, standardDomain];
+          scope = [
+            ...scope,
+            {
+              name: binding.name,
+              ...(universalDeclaration === undefined ? {} : { universalDeclaration }),
+            },
+          ];
+          scopedDeclarations = scopedDeclarations.filter(({ symbol }) => symbol !== binding.name);
+          if (sort !== undefined) {
+            const usedIds = new Set(scopedDeclarations.map(({ id }) => id as string));
+            let syntheticIndex = scopedDeclarations.length;
+            while (usedIds.has(`decl:kernel-rewrite-bound-${syntheticIndex}`)) syntheticIndex += 1;
+            scopedDeclarations = [
+              ...scopedDeclarations,
+              {
+                id:
+                  currentDeclaration?.id ??
+                  declarationIdSchema.parse(`decl:kernel-rewrite-bound-${syntheticIndex}`),
+                role: "universal-parameter",
+                symbol: binding.name,
+                sort,
+              },
+            ];
+          }
+        }
+      }
     }
     const next = parts.operands[operandIndex];
     if (next === undefined) return undefined;
@@ -90,6 +171,9 @@ export function locateRewriteOccurrence(
     return {
       fragment: current,
       boundSymbols,
+      declarations: scopedDeclarations,
+      scope,
+      ancestors,
       polarity: position.polarity,
       role: position.role,
       replace: (replacement) => {
@@ -124,6 +208,9 @@ export function locateRewriteOccurrence(
   return {
     fragment: selection.fragment,
     boundSymbols,
+    declarations: scopedDeclarations,
+    scope,
+    ancestors,
     polarity: position.polarity,
     role: position.role,
     replace: (replacement) => {
@@ -131,6 +218,40 @@ export function locateRewriteOccurrence(
       return replaced.ok ? replaced.expression : undefined;
     },
   };
+}
+
+/** Close a local condition over the lexical binders it references, from inside out. */
+export function closeRewriteCondition(
+  expression: PlainMathJson,
+  scope: readonly RewriteBinding[],
+  operators: readonly OperatorDeclaration[],
+): PlainMathJson | undefined {
+  let closed = expression;
+  for (const binding of [...scope].reverse()) {
+    if (!freeSymbolNames(closed, { operators }).includes(binding.name)) continue;
+    if (binding.universalDeclaration === undefined) return undefined;
+    closed = ["ForAll", binding.universalDeclaration, closed];
+  }
+  return closed;
+}
+
+function standardSortDomain(sort: Sort): string | undefined {
+  if (sort.kind === "proposition") return "Booleans";
+  if (sort.kind !== "named") return undefined;
+  switch (sort.id as string) {
+    case "sort:natural":
+      return "NonNegativeIntegers";
+    case "sort:integer":
+      return "Integers";
+    case "sort:rational":
+      return "RationalNumbers";
+    case "sort:real":
+      return "RealNumbers";
+    case "sort:complex":
+      return "ComplexNumbers";
+    default:
+      return undefined;
+  }
 }
 
 /**

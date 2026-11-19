@@ -44,7 +44,7 @@ import {
 } from "./operation-fields";
 import type { OperationOfKind } from "./operations/shared";
 import { kernelResultIdSchema } from "./results";
-import { hasExactKeys, isStrictRecord } from "./runtime";
+import { denseArrayValues, hasExactKeys, isStrictRecord } from "./runtime";
 import {
   createRuntimeSchema,
   runtimeFailure,
@@ -94,13 +94,17 @@ function parseTransitionStatementTarget(
 }
 
 type RewriteKind =
-  "rewrite-with-equality" | "rewrite-with-equivalence" | "rewrite-with-implication";
+  | "rewrite-with-equality"
+  | "rewrite-with-equivalence"
+  | "rewrite-with-implication"
+  | "generalized-rewrite";
 
 /** Rewrites accept one optional field: an associative lens under `path`. */
 const REWRITE_OPERATION_KINDS: ReadonlySet<string> = new Set<KernelOperationKind>([
   "rewrite-with-equality",
   "rewrite-with-equivalence",
   "rewrite-with-implication",
+  "generalized-rewrite",
 ]);
 
 function isRewriteKind(kind: KernelOperationKind): kind is RewriteKind {
@@ -148,6 +152,14 @@ const OPERATION_FIELDS: Readonly<Record<KernelOperationKind, readonly string[]>>
   "rewrite-with-equality": ["equalityHypothesisId", "statement", "path", "direction"],
   "rewrite-with-equivalence": ["statement", "path", "source", "direction"],
   "rewrite-with-implication": ["statement", "path", "source"],
+  "generalized-rewrite": [
+    "statement",
+    "path",
+    "source",
+    "direction",
+    "obligationIds",
+    "congruenceResultIds",
+  ],
   "apply-result-backward": ["resultId", "instantiation", "premiseTargetIds"],
   "apply-result-forward": [
     "resultId",
@@ -566,7 +578,8 @@ function parseRewriteOperation(
         },
       };
     case "rewrite-with-equivalence":
-    case "rewrite-with-implication": {
+    case "rewrite-with-implication":
+    case "generalized-rewrite": {
       if (statement === undefined || source === undefined) {
         return runtimeFailure("The rewrite statement target or source is invalid.", []);
       }
@@ -577,6 +590,24 @@ function parseRewriteOperation(
         ...lens,
         source,
       };
+      if (kind === "generalized-rewrite") {
+        const ids = denseArrayValues(value.congruenceResultIds);
+        if (ids === undefined || ids.some((id) => !kernelResultIdSchema.safeParse(id).success)) {
+          return runtimeFailure("Congruence witnesses must be a dense list of result IDs.", [
+            "congruenceResultIds",
+          ]);
+        }
+        return {
+          success: true,
+          data: {
+            ...rewrite,
+            kind,
+            direction: value.direction as "forward" | "backward",
+            obligationIds: copyStatementIds(value.obligationIds),
+            congruenceResultIds: ids.map((id) => kernelResultIdSchema.parse(id)),
+          },
+        };
+      }
       return kind === "rewrite-with-implication"
         ? { success: true, data: { ...rewrite, kind } }
         : {

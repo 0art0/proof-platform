@@ -23,13 +23,15 @@ import {
 } from "./results";
 import { kernelOperationSchema } from "./operation-parsing";
 import { applyValidatedOperation } from "./operations/apply";
+import { planGeneralizedRewrite } from "./operations/generalized-rewrite";
 import type { LocatedTarget } from "./operations/shared";
 
 export { alphaEquivalent, type AlphaEquivalenceEnvironment } from "./alpha-equivalence";
 export { functionParts, operatorOperands, symbolValue, type FunctionParts } from "./expression";
 export { hasExactKeys, isStrictRecord } from "./runtime";
 export { sorryClosure, type SorryClosure, type SorryClosureResult } from "./obligations";
-export type { RewriteLens, RewriteSource } from "./deep-rewrite";
+export { locateRewriteOccurrence, type RewriteLens, type RewriteSource } from "./deep-rewrite";
+export { rewriteRelationOf } from "./operations/generalized-rewrite";
 export {
   RESULT_APPLICATION_DIRECTIONS,
   freeResultParameters,
@@ -192,6 +194,7 @@ export const KERNEL_OPERATION_KINDS = [
   "rewrite-with-equality",
   "rewrite-with-equivalence",
   "rewrite-with-implication",
+  "generalized-rewrite",
   "apply-result-backward",
   "apply-result-forward",
   "mark-sorry",
@@ -238,6 +241,7 @@ export const KERNEL_TRANSITION_CLASSES: Readonly<
   "rewrite-with-equality": classes("equivalence"),
   "rewrite-with-equivalence": classes("equivalence"),
   "rewrite-with-implication": classes("strengthening"),
+  "generalized-rewrite": classes("equivalence", "strengthening"),
   "apply-result-backward": classes("strengthening"),
   "apply-result-forward": classes("equivalence", "strengthening"),
   "mark-sorry": classes("equivalence"),
@@ -289,6 +293,18 @@ export type OperationBase = Readonly<{
   expectedStateId: ProofStateId;
   resultStateId: ProofStateId;
   target: TransitionTarget;
+}>;
+
+export type GeneralizedRewriteSelection = Readonly<{
+  target: TransitionTarget;
+  statement: TransitionStatementTarget;
+  path: readonly number[];
+  lens?: RewriteLens;
+  source: RewriteSource;
+  /** Select the left-hand or right-hand side of the source as the occurrence to replace. */
+  direction: "forward" | "backward";
+  /** Ordered lifting witnesses pinned on a recorded rewrite. */
+  congruenceResultIds?: readonly KernelResultId[];
 }>;
 
 export type KernelOperation =
@@ -401,6 +417,13 @@ export type KernelOperation =
         source: RewriteSource;
       }>)
   | (OperationBase &
+      GeneralizedRewriteSelection &
+      Readonly<{
+        kind: "generalized-rewrite";
+        congruenceResultIds: readonly KernelResultId[];
+        obligationIds: readonly StatementId[];
+      }>)
+  | (OperationBase &
       Readonly<{
         kind: "apply-result-backward";
         resultId: KernelResultId;
@@ -504,6 +527,50 @@ export type KernelTransitionResult =
       state: ExecutableProofState;
       diagnostics: readonly KernelDiagnostic[];
     }>;
+
+export type GeneralizedRewritePreview =
+  | Readonly<{
+      ok: true;
+      relation: string;
+      replacement: PlainMathJson;
+      obligations: readonly PlainMathJson[];
+      transitionClass: TransitionClass;
+      congruenceResultIds: readonly KernelResultId[];
+      resultId?: KernelResultId;
+    }>
+  | Readonly<{ ok: false; code: KernelDiagnosticCode; message: string }>;
+
+/** Plan a candidate on a validated snapshot and approved catalog without allocating IDs. */
+export function previewGeneralizedRewrite(
+  state: ExecutableProofState,
+  selection: GeneralizedRewriteSelection,
+  environment: KernelEnvironment = {},
+): GeneralizedRewritePreview {
+  const target = locateTarget(state, selection.target);
+  if (target === undefined) {
+    return {
+      ok: false,
+      code: "target-not-found",
+      message: "The target does not exist in that collection.",
+    };
+  }
+  const plan = planGeneralizedRewrite(
+    target,
+    selection,
+    [...(environment.operators ?? []), ...constructionPlaceholderOperators(state)],
+    environment.results ?? [],
+  );
+  if (!plan.ok) return plan;
+  return {
+    ok: true,
+    relation: plan.relation,
+    replacement: structuredClone(plan.replacement),
+    obligations: plan.conditions.map(({ expression }) => structuredClone(expression)),
+    transitionClass: plan.transitionClass,
+    congruenceResultIds: plan.congruenceResultIds,
+    ...(plan.resultId === undefined ? {} : { resultId: plan.resultId }),
+  };
+}
 
 /**
  * Apply one trusted primitive atomically. Failures return the exact input state

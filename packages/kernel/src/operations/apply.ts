@@ -36,6 +36,7 @@ import {
   splitHypothesisDisjunction,
   suffices,
 } from "./connectives";
+import { applyGeneralizedRewrite } from "./generalized-rewrite";
 import { applyResultBackward, applyResultForward } from "./library-results";
 import {
   chooseExistentialWitness,
@@ -103,6 +104,8 @@ export function applyValidatedOperation(
     case "rewrite-with-equivalence":
     case "rewrite-with-implication":
       return rewriteStatement(state, target, operation, operators, results);
+    case "generalized-rewrite":
+      return applyGeneralizedRewrite(state, target, operation, operators, results);
     case "apply-result-backward":
       return applyResultBackward(state, target, operation, operators, results);
     case "apply-result-forward":
