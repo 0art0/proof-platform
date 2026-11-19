@@ -87,6 +87,21 @@ const rewriteSourceSchema = z
     { message: "A rewrite source is a hypothesis, or a result with its instantiation." },
   );
 
+const generalizedRewriteSourceSchema = z
+  .object({
+    ...rewriteSourceSchema.shape,
+    premiseIndex: operandIndexSchema.nullable(),
+  })
+  .strict()
+  .refine(({ kind, hypothesisId, resultId, instantiation, premiseIndex }) =>
+    kind === "hypothesis"
+      ? hypothesisId !== null &&
+        resultId === null &&
+        instantiation === null &&
+        premiseIndex === null
+      : hypothesisId === null && resultId !== null && instantiation !== null,
+  );
+
 const FRESH_ID_FIELDS: Record<string, readonly string[]> = {};
 
 function operation<Kind extends string, Shape extends z.ZodRawShape>(
@@ -204,7 +219,7 @@ const wireOperations = [
       statement: statementSchema,
       path: pathSchema,
       lens: lensSchema,
-      source: rewriteSourceSchema,
+      source: generalizedRewriteSourceSchema,
       direction: directionSchema,
       obligationIds: freshIds(0),
       congruenceResultIds: z.array(referenceSchema).max(64),
@@ -297,6 +312,7 @@ export function normalizeWireStep(wire: Readonly<Record<string, unknown>>): Exec
         hypothesisId: string | null;
         resultId: string | null;
         instantiation: { symbol: string; term: unknown }[] | null;
+        premiseIndex?: number | null;
       };
       step[key] =
         source.kind === "hypothesis"
@@ -305,6 +321,9 @@ export function normalizeWireStep(wire: Readonly<Record<string, unknown>>): Exec
               kind: "result",
               resultId: source.resultId,
               instantiation: instantiationRecord(source.instantiation ?? []),
+              ...(typeof source.premiseIndex === "number"
+                ? { premiseIndex: source.premiseIndex }
+                : {}),
             };
     } else if (key === "instantiation") {
       step[key] = instantiationRecord(value as { symbol: string; term: unknown }[]);

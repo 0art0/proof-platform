@@ -380,7 +380,8 @@ describe("move executor output validation", () => {
   it("offers no forbidden or unknown kind in the wire schema", () => {
     expect(EXECUTOR_OPERATION_KINDS).not.toContain("mark-sorry");
     expect(EXECUTOR_OPERATION_KINDS).not.toContain("close-by-accepted-inference");
-    expect(EXECUTOR_OPERATION_KINDS).toHaveLength(27);
+    expect(EXECUTOR_OPERATION_KINDS).toHaveLength(28);
+    expect(EXECUTOR_OPERATION_KINDS).toContain("generalized-rewrite");
     const schema = JSON.stringify(z.toJSONSchema(llmOutputSchemaForRole("move-executor")));
     expect(schema).not.toContain("mark-sorry");
     expect(schema).not.toContain("close-by-accepted-inference");

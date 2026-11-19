@@ -38,6 +38,7 @@ type IndexedRule = Readonly<{
   pattern: PlainMathJson;
   premises: readonly { expression: PlainMathJson }[];
   direction: Direction;
+  premiseIndex?: number;
 }>;
 
 const DIRECTIONS = ["forward", "backward"] as const;
@@ -55,23 +56,41 @@ export class GeneralizedRewriteIndex {
       if (!adapted.ok) continue;
       const { result } = adapted;
       this.#results.push(result);
-      const original = result.congruenceRule ?? {
-        conclusion: result.conclusion,
-        premises: result.premises,
-      };
+      const original = result.congruenceRule ?? result;
       const relation = rewriteRelationOf(original.conclusion.expression);
-      if (relation === undefined) continue;
       const wildcards = new Set(result.parameters.map(({ symbol }) => symbol));
-      for (const direction of DIRECTIONS) {
-        const pattern = direction === "forward" ? relation.left : relation.right;
-        const rule = { result, library, pattern, premises: original.premises, direction };
-        // Fixed binder variables may be alpha-renamed at the selected occurrence. Leave
-        // matching such patterns to the kernel's binder-aware matcher.
-        if (containsBinder(pattern, operators)) {
-          this.#rules.insert("wild", new Set(["wild"]), MATCH_OPTIONS, "", rule);
-        } else {
-          this.#rules.insert(pattern, wildcards, MATCH_OPTIONS, "", rule);
+      const insert = (
+        left: PlainMathJson,
+        right: PlainMathJson,
+        premises: IndexedRule["premises"],
+        premiseIndex?: number,
+      ): void => {
+        for (const direction of DIRECTIONS) {
+          const pattern = direction === "forward" ? left : right;
+          const rule = {
+            result,
+            library,
+            pattern,
+            premises,
+            direction,
+            ...(premiseIndex === undefined ? {} : { premiseIndex }),
+          };
+          // A fixed binder variable may be alpha-renamed at the occurrence.
+          if (containsBinder(pattern, operators)) {
+            this.#rules.insert("wild", new Set(["wild"]), MATCH_OPTIONS, "", rule);
+          } else {
+            this.#rules.insert(pattern, wildcards, MATCH_OPTIONS, "", rule);
+          }
         }
+      };
+      if (relation !== undefined) insert(relation.left, relation.right, original.premises);
+      for (const [index, premise] of result.premises.entries()) {
+        insert(
+          premise.expression,
+          result.conclusion.expression,
+          result.premises.filter((_, position) => index !== position),
+          index,
+        );
       }
     }
   }
@@ -82,7 +101,7 @@ export class GeneralizedRewriteIndex {
     operators: readonly OperatorDeclaration[],
     resultId: string | undefined,
   ): readonly RetrievalSuggestion[] {
-    const result: RetrievalSuggestion[] = [];
+    const result = new Map<string, RetrievalSuggestion>();
     const pairs = rewriteSubjects(subjects);
     const environment = { operators, results: this.#results };
     for (const { occurrence, source } of pairs) {
@@ -107,9 +126,20 @@ export class GeneralizedRewriteIndex {
       ): void => {
         const checked = previewGeneralizedRewrite(state, seed, environment);
         if (!checked.ok) return;
-        result.push(
-          rewriteSuggestion(occurrence, source, seed, checked, library, index, hypothesisIndex),
-        );
+        const key = canonicalJson([
+          seed.source.kind,
+          seed.source.kind === "result" ? seed.source.resultId : seed.source.hypothesisId,
+          occurrence.id,
+          checked.relation,
+          checked.replacement,
+          checked.obligations,
+        ]);
+        if (!result.has(key)) {
+          result.set(
+            key,
+            rewriteSuggestion(occurrence, source, seed, checked, library, index, hypothesisIndex),
+          );
+        }
       };
       for (const [hypothesisIndex, hypothesis] of context.hypotheses.entries()) {
         if (resultId !== undefined) break;
@@ -127,9 +157,14 @@ export class GeneralizedRewriteIndex {
         }
       }
       if (source !== undefined) continue;
-      for (const { result: rule, library, pattern, premises, direction } of this.#rules.retrieve(
-        selection.fragment,
-      )) {
+      for (const {
+        result: rule,
+        library,
+        pattern,
+        premises,
+        direction,
+        premiseIndex,
+      } of this.#rules.retrieve(selection.fragment)) {
         if (
           (resultId !== undefined && rule.id !== resultId) ||
           !rule.directions.includes(statement.kind === "conclusion" ? "backward" : "forward")
@@ -149,14 +184,23 @@ export class GeneralizedRewriteIndex {
         );
         instances.forEach((instantiation, index) =>
           record(
-            { ...address, direction, source: { kind: "result", resultId: rule.id, instantiation } },
+            {
+              ...address,
+              direction,
+              source: {
+                kind: "result",
+                resultId: rule.id,
+                instantiation,
+                ...(premiseIndex === undefined ? {} : { premiseIndex }),
+              },
+            },
             library,
             index,
           ),
         );
       }
     }
-    return result;
+    return [...result.values()];
   }
 }
 
@@ -251,7 +295,16 @@ function rewriteSuggestion(
     library === undefined ? "move-pattern:generalized-rewrite" : `rewrite:${seed.direction}`;
   const sourceId =
     seed.source.kind === "hypothesis" ? seed.source.hypothesisId : seed.source.resultId;
-  const id = ["rewrite", seed.source.kind, sourceId, occurrence.id, seed.direction, String(index)]
+  const premise = seed.source.kind === "result" ? seed.source.premiseIndex : undefined;
+  const id = [
+    "rewrite",
+    seed.source.kind,
+    sourceId,
+    occurrence.id,
+    seed.direction,
+    String(premise ?? "source"),
+    String(index),
+  ]
     .map((part) => `${part.length}:${part}`)
     .join(":");
   return {

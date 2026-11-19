@@ -2129,19 +2129,19 @@ function attemptOperation(
       operators: input.operators ?? [],
       ...(input.results === undefined ? {} : { results: input.results }),
     };
-    const { target, statement, path, lens, source, direction, congruenceResultIds } =
-      step.operation;
-    const mappedSource = rebuilt.source as typeof source;
+    const original = step.operation;
     const materialized = materializeGeneralizedRewrite(
       node.state,
       {
-        target: rebuilt.target as typeof target,
-        statement: rebuilt.statement as typeof statement,
-        path: rebuilt.path as typeof path,
-        ...(rebuilt.lens === undefined ? {} : { lens: rebuilt.lens as NonNullable<typeof lens> }),
-        source: mappedSource,
-        direction,
-        congruenceResultIds,
+        target: rebuilt.target as typeof original.target,
+        statement: rebuilt.statement as typeof original.statement,
+        path: rebuilt.path as typeof original.path,
+        ...(rebuilt.lens === undefined
+          ? {}
+          : { lens: rebuilt.lens as NonNullable<typeof original.lens> }),
+        source: rebuilt.source as typeof original.source,
+        direction: original.direction,
+        congruenceResultIds: original.congruenceResultIds,
       },
       scoped,
       generator,
