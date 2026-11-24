@@ -305,7 +305,6 @@ describe("multi-step macros in the workspace", () => {
 
     // Before any preview the step count comes from the approved template.
     await waitFor(() => expect(within(card).getByText("2-step move")).toBeVisible());
-    expect(card).toHaveTextContent("Applies 2 steps in a row; as a whole it is an equivalence.");
 
     fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
     const steps = await within(card).findByRole("list", { name: "Steps of this move" });
@@ -325,7 +324,7 @@ describe("multi-step macros in the workspace", () => {
     expect(applied).toBe(0);
   });
 
-  it("reports an applied macro by name, step count and composed class, not by a raw ID", async () => {
+  it("reports an applied macro by name and step count", async () => {
     stubFetch((url, init) => {
       if (url.endsWith("/suggestion-sets")) return suggestionResponse();
       const body = JSON.parse(String(init?.body ?? "{}")) as { commandId: string };
@@ -365,9 +364,7 @@ describe("multi-step macros in the workspace", () => {
     await within(card).findByRole("list", { name: "Steps of this move" });
     fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
     expect(
-      await screen.findByText(
-        "Applied “Introduce two implications” (2 steps in a row); advanced to node:last (equivalence).",
-      ),
+      await screen.findByText("Applied “Introduce two implications” (2 steps)."),
     ).toBeVisible();
   });
 
@@ -409,10 +406,11 @@ describe("multi-step macros in the workspace", () => {
   it("groups the steps of an applied macro in the history under one labelled application", async () => {
     stubFetch(undefined, last);
     render(<StoredProofWorkspace session={sessionAt(last)} node={last} />);
+    screen.getByText("Proof history", { exact: true }).closest("details")!.open = true;
     const history = screen.getByRole("region", { name: "Proof-discovery tree" });
     const header = await within(history).findByText("Macro: Introduce two implications");
     expect(header.closest("li")).toHaveAttribute("data-macro-application", "preview:macro");
-    expect(header.closest("li")).toHaveTextContent("2 steps applied as one move");
+    expect(header.closest("li")).toHaveTextContent("2 steps");
     await waitFor(() => {
       const buttons = within(history).getAllByRole("button");
       expect(buttons[1]).toHaveTextContent(
@@ -429,7 +427,7 @@ describe("multi-step macros in the workspace", () => {
         .getAllByRole("listitem")
         .map((item) => item.textContent),
     ).toEqual([
-      "Root",
+      "Start",
       "Introduce implication (step 1 of 2)",
       "Introduce implication (step 2 of 2)",
     ]);

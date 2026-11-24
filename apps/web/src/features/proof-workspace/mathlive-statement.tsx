@@ -144,26 +144,31 @@ export function MathLiveStatement({
       const handlePointerUp = (event: PointerEvent) => {
         if (!field || event.button !== 0) return;
         const repeatable = field.selectionIsCollapsed;
-        const interpreted = readAnchoredMathLiveSelection(
-          field as unknown as MathLiveSelectionPort,
-          expression,
-          anchorRef.current,
-        );
+        const modifier = event.ctrlKey || event.metaKey;
         const hit = repeatable
           ? occurrenceAtPoint(readOccurrenceTable(field.shadowRoot), {
               x: event.clientX,
               y: event.clientY,
             })
           : undefined;
+        if (hit !== undefined) {
+          onGestureRef.current({
+            selection: { kind: "exact", anchor: anchorRef.current, path: hit.path },
+            modifier,
+            repeatable,
+          });
+          return;
+        }
+        const { selection, interpretation } = readAnchoredMathLiveSelection(
+          field as unknown as MathLiveSelectionPort,
+          expression,
+          anchorRef.current,
+        );
         onGestureRef.current({
-          selection: hit
-            ? { kind: "exact", anchor: anchorRef.current, path: hit.path }
-            : interpreted.selection,
-          modifier: event.ctrlKey || event.metaKey,
+          selection,
+          modifier,
           repeatable,
-          ...(interpreted.interpretation.kind === "fallback"
-            ? { fallbackReason: interpreted.interpretation.reason }
-            : {}),
+          ...(interpretation.kind === "fallback" ? { fallbackReason: interpretation.reason } : {}),
         });
       };
 

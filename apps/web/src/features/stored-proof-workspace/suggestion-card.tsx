@@ -2,7 +2,6 @@
 
 import type { Presentation } from "@proof/language";
 import type { DisplayedSuggestionSet, MenuChoices, MovePreview, ProofEdge } from "@proof/protocol";
-import { useId } from "react";
 import type { WorkspaceView } from "../proof-workspace";
 import { InlineLatex, NaturalLanguageText, StatementView } from "../proof-workspace/presentation";
 import type { MacroInfo } from "./macro-info";
@@ -86,7 +85,6 @@ export function SuggestionCard({
   view,
   ...actions
 }: SuggestionCardProps) {
-  const reasonId = useId();
   const active = move.kind !== "idle" && move.suggestionId === suggestion.id;
   const preview = active && move.kind === "previewed" ? move.preview : undefined;
   const menu =
@@ -108,13 +106,6 @@ export function SuggestionCard({
   const busy = active && (move.kind === "previewing" || move.kind === "applying");
   // A sorry is an unproved assumption, whatever transition class is stored beside it.
   const sorry = suggestion.source === "move" && suggestion.artifactId === "move:mark-sorry";
-  const previewReason = previewable
-    ? undefined
-    : suggestion.abstractionFit !== "not-used"
-      ? "Search-only result: select a concrete expression to apply this."
-      : menuResolvable
-        ? "Fill in the missing values first, then preview."
-        : "Select every part this step needs first, then preview.";
   return (
     <li
       className={styles.suggestionCard}
@@ -166,16 +157,12 @@ export function SuggestionCard({
         <p className={styles.transitionMeaning} data-testid="sorry-meaning">
           {SORRY_MEANING}
         </p>
-      ) : transitionClass === undefined ? null : (
-        <p className={styles.transitionMeaning}>
-          {macroStepCount === undefined
-            ? null
-            : `Applies ${macroStepCount} steps in a row; as a whole it is ${transitionClass === "equivalence" ? "an" : "a"} ${transitionClass}. `}
-          {transitionMeaning(transitionClass)}
-        </p>
-      )}
+      ) : null}
       <details className={styles.explanationDetails}>
         <summary>Why this was suggested</summary>
+        {!sorry && transitionClass !== undefined ? (
+          <p className={styles.transitionMeaning}>{transitionMeaning(transitionClass)}</p>
+        ) : null}
         {suggestion.reasons.length === 0 ? null : (
           <ul aria-label={`Reasons for ${suggestion.name}`}>
             {suggestion.reasons.map((reason, index) => (
@@ -241,31 +228,35 @@ export function SuggestionCard({
           <span>Each condition becomes a new obligation when the result is applied.</span>
         </details>
       )}
-      {suggestion.applicability === "requires-input" ? (
-        <div className={styles.missingInput} role="note">
-          <strong>Choose from the current context to continue</strong>
-          <span>{missingInputText(suggestion)}</span>
+      {!previewable && !menuResolvable ? (
+        <p className={styles.previewReason}>
+          {suggestion.abstractionFit !== "not-used"
+            ? "Search-only result. Select a concrete expression to use it."
+            : "Select the other parts this step needs."}
+        </p>
+      ) : null}
+      {menuResolvable &&
+      menu === undefined &&
+      preview === undefined &&
+      !(active && move.kind === "applying") ? (
+        <div className={styles.cardActions}>
+          <button
+            type="button"
+            className={styles.chooseInputs}
+            disabled={mutationPending || busy}
+            onClick={actions.onChooseInputs}
+          >
+            {busy ? "Finding choices…" : "Choose values"}
+          </button>
           <details
+            className={styles.explanationDetails}
             onToggle={(event) => {
               if (event.currentTarget.open) actions.onInputSummaryExpanded();
             }}
           >
             <summary>Why input is needed</summary>
-            <p>
-              The menu offers choices from the current proof state to fill the missing selection or
-              value.
-            </p>
+            <p>Choose the missing value from the current proof.</p>
           </details>
-          {menuResolvable ? (
-            <button
-              type="button"
-              className={styles.chooseInputs}
-              disabled={mutationPending || busy || menu !== undefined}
-              onClick={actions.onChooseInputs}
-            >
-              Fill in missing values
-            </button>
-          ) : null}
         </div>
       ) : null}
       {menu === undefined ? null : (
@@ -282,35 +273,18 @@ export function SuggestionCard({
           view={view}
         />
       )}
-      <div className={styles.cardActions}>
-        <button
-          type="button"
-          className={styles.previewButton}
-          disabled={mutationPending || !previewable || (active && move.kind !== "rejected")}
-          title={previewReason}
-          {...(previewReason === undefined ? {} : { "aria-describedby": reasonId })}
-          onClick={actions.onPreview}
-        >
-          {active && move.kind === "previewing" && menu === undefined
-            ? "Preparing preview…"
-            : "Preview changes"}
-        </button>
-        {preview === undefined && !(active && move.kind === "applying") ? null : (
+      {previewable && !preview && !(active && move.kind === "applying") ? (
+        <div className={styles.cardActions}>
           <button
             type="button"
-            className={styles.applyButton}
-            disabled={mutationPending || preview === undefined}
-            onClick={actions.onApply}
+            className={styles.previewButton}
+            disabled={mutationPending || busy}
+            onClick={actions.onPreview}
           >
-            {active && move.kind === "applying" ? "Applying…" : "Apply this step"}
+            {busy ? "Preparing preview…" : "Preview changes"}
           </button>
-        )}
-      </div>
-      {previewReason === undefined ? null : (
-        <p id={reasonId} className={styles.previewReason}>
-          {previewReason}
-        </p>
-      )}
+        </div>
+      ) : null}
       {active && move.kind === "rejected" ? (
         <p className={styles.status} data-state="rejected" role="alert">
           Move rejected: {move.message}
@@ -319,16 +293,18 @@ export function SuggestionCard({
       {preview ? (
         <PreviewDetails preview={preview} presentation={presentation} view={view} />
       ) : null}
+      {preview || (active && move.kind === "applying") ? (
+        <div className={styles.cardActions}>
+          <button
+            type="button"
+            className={styles.applyButton}
+            disabled={mutationPending || preview === undefined}
+            onClick={actions.onApply}
+          >
+            {active && move.kind === "applying" ? "Applying…" : "Apply this step"}
+          </button>
+        </div>
+      ) : null}
     </li>
   );
-}
-
-function missingInputText(suggestion: DisplayedSuggestion): string {
-  if (suggestion.abstractionFit !== "not-used")
-    return "Choose a concrete statement or expression to replace the pattern.";
-  if (suggestion.unresolvedSelectionSlots.length > 0)
-    return "Select the part of the proof state that supplies the missing piece.";
-  if (suggestion.unresolvedParameters.length > 0)
-    return "Choose the missing value from the options in this context.";
-  return "This suggestion needs more information before it can be applied.";
 }

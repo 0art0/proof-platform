@@ -414,34 +414,6 @@ export function ProblemEntryForm({
               </label>
             ))}
           </fieldset>
-          <fieldset className={styles.choices}>
-            <legend>Notation and concepts</legend>
-            {options.packs.map((pack) => (
-              <label key={pack.id} className={styles.choice}>
-                <input
-                  type="checkbox"
-                  disabled={pack.alwaysActive}
-                  checked={pack.alwaysActive || form.packIds.includes(pack.id)}
-                  onChange={(event) => {
-                    const checked = event.currentTarget.checked;
-                    update((f) => ({ ...f, packIds: toggle(f.packIds, pack.id, checked) }));
-                  }}
-                />
-                <span>
-                  <strong>{pack.name}</strong> — {pack.description}
-                  {pack.alwaysActive ? (
-                    <em className={styles.hint}> Always included.</em>
-                  ) : (
-                    <em className={styles.hint}>
-                      {" "}
-                      Adds{" "}
-                      {(packOperators.get(pack.id) ?? []).map(({ symbol }) => symbol).join(", ")}.
-                    </em>
-                  )}
-                </span>
-              </label>
-            ))}
-          </fieldset>
         </details>
 
         <Section title="What is known and what to prove">
@@ -449,6 +421,37 @@ export function ProblemEntryForm({
             List the symbols used in your problem, then enter the assumptions and the conclusion.
             Use the symbol buttons to write statements like p ∨ q.
           </p>
+          <details className={styles.section}>
+            <summary className={styles.disclosureMain}>Choose notation and results</summary>
+            <fieldset className={styles.choices}>
+              <legend>Notation and concepts</legend>
+              {options.packs.map((pack) => (
+                <label key={pack.id} className={styles.choice}>
+                  <input
+                    type="checkbox"
+                    disabled={pack.alwaysActive}
+                    checked={pack.alwaysActive || form.packIds.includes(pack.id)}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      update((f) => ({ ...f, packIds: toggle(f.packIds, pack.id, checked) }));
+                    }}
+                  />
+                  <span>
+                    <strong>{pack.name}</strong> — {pack.description}
+                    {pack.alwaysActive ? (
+                      <em className={styles.hint}> Always included.</em>
+                    ) : (
+                      <em className={styles.hint}>
+                        {" "}
+                        Adds{" "}
+                        {(packOperators.get(pack.id) ?? []).map(({ symbol }) => symbol).join(", ")}.
+                      </em>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          </details>
           <fieldset className={styles.rows}>
             <legend>Variables and objects</legend>
             {form.declarations.map((row, index) => (

@@ -81,7 +81,7 @@ async function applySplitAtRoot(page: Page) {
   await card.getByRole("button", { name: "Preview changes" }).click();
   await expect(card.getByLabel("Move preview")).toBeVisible();
   await card.getByRole("button", { name: "Apply this step" }).click();
-  await expect(page.getByText(/advanced to node:/)).toBeVisible(COMMAND);
+  await expect(page.getByText(/^Applied “/)).toBeVisible(COMMAND);
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 2 goals/, COMMAND);
 }
 
@@ -112,8 +112,12 @@ test("a move and its descendant are deleted only after confirmation", async ({ p
   await selectExpression(page.getByLabel("Goal 1 conclusion"), "q");
   await page.getByRole("button", { name: "Mark as sorry (assume)" }).click();
   await expect(page.getByText(/Mark sorry committed/)).toBeVisible(COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${splitId}"]`).click();
-  await expect(page.getByText(`Backtracked to ${splitId}.`, { exact: true })).toBeVisible(COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible(COMMAND);
 
   await page.getByRole("button", { name: "Delete previous move…" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete previous move" });
@@ -215,8 +219,12 @@ test("a sibling branch is reviewed and replayed at the current node", async ({ p
   await expect(page.getByRole("button", { name: "Replay a sequence here…" })).toBeDisabled();
   await applySplitAtRoot(page);
   const splitId = await currentNodeId(page);
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${rootId}"]`).click();
-  await expect(page.getByText(`Backtracked to ${rootId}.`, { exact: true })).toBeVisible(COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible(COMMAND);
 
   await page.getByRole("button", { name: "Replay a sequence here…" }).click();
   const dialog = page.getByRole("dialog", { name: "Replay a sequence here" });
@@ -299,8 +307,12 @@ test("a branch made by backtracking with information is replayed as a backtracki
   const splitId = await currentNodeId(page);
 
   // Back at the root, replay the case split the backtracking made: it has no displayed suggestion.
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${rootId}"]`).click();
-  await expect(page.getByText(`Backtracked to ${rootId}.`, { exact: true })).toBeVisible(COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible(COMMAND);
   await page.getByRole("button", { name: "Replay a sequence here…" }).click();
   const dialog = page.getByRole("dialog", { name: "Replay a sequence here" });
   await dialog.getByLabel("Replay the path ending at").selectOption(splitId);

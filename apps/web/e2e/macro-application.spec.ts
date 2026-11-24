@@ -79,7 +79,7 @@ test("an approved two-step macro is offered, previewed step by step, applied and
   await expect(card).toBeVisible(COMMAND);
   await expect(card).toContainText(MACRO_NAME);
   await expect(card.locator('[data-badge="macro"]')).toContainText("2-step move", COMMAND);
-  await expect(card).toContainText("Applies 2 steps in a row; as a whole it is an equivalence.");
+  await expect(card.locator('[data-transition-class="equivalence"]')).toBeVisible();
 
   // Preview: each step's outcome, the first open and the rest collapsed. Nothing is applied yet.
   await card.getByRole("button", { name: "Preview changes" }).click();
@@ -96,11 +96,12 @@ test("an approved two-step macro is offered, previewed step by step, applied and
   // Apply: the history shows one labelled application with both steps.
   await card.getByRole("button", { name: "Apply this step" }).click();
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 1 goal/, COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
   const history = page.getByRole("region", { name: "Proof-discovery tree" });
   const application = history.locator("[data-macro-application]");
   await expect(application).toHaveCount(1, COMMAND);
   await expect(application).toContainText(`Macro: ${MACRO_NAME}`);
-  await expect(application).toContainText("2 steps applied as one move");
+  await expect(application).toContainText("2 steps");
   const stepButtons = history.locator("li[data-macro-step] button");
   await expect(stepButtons).toHaveCount(2);
   await expect(stepButtons.nth(0)).toContainText(`Macro ${MACRO_NAME}, step 1 of 2`);
@@ -115,6 +116,7 @@ test("an approved two-step macro is offered, previewed step by step, applied and
 
   // Deleting the previous move removes the whole application.
   await page.goto(workspace);
+  await page.getByText("Proof history", { exact: true }).click();
   await expect(history.locator("[data-macro-application]")).toHaveCount(1, COMMAND);
   await page.getByText("More proof actions").click();
   await page.getByRole("button", { name: "Delete previous move…" }).click();

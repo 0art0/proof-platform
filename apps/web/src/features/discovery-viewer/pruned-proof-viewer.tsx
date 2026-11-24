@@ -33,7 +33,6 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
   const presentation = usePresentation(artifact.initialState.operators);
   const explain = useInquiryExplanations(artifact);
   const [view, setView] = useState<WorkspaceView>("formal");
-  const recordsById = new Map(artifact.inquiryRecords.map((record) => [record.id, record]));
 
   const stepTarget = (step: PrunedStepView) => {
     const state = index.nodes.get(step.parentNodeId)?.state;
@@ -50,17 +49,11 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
         <>
           <section className={styles.stack} aria-label="Pruned proof steps">
             <h2>Pruned proof</h2>
-            <p className={styles.muted}>
-              {proof.steps.length} {proof.steps.length === 1 ? "step" : "steps"} from{" "}
-              <code className={styles.meta}>{proof.rootNodeId}</code> to{" "}
-              <code className={styles.meta}>{proof.leafNodeId}</code>
-              {proof.removedSteps.length > 0
-                ? `; ${proof.removedSteps.length} hypothesis-only ${
-                    proof.removedSteps.length === 1 ? "step was" : "steps were"
-                  } pruned`
-                : ""}
-              .
-            </p>
+            {proof.removedSteps.length > 0 ? (
+              <p className={styles.muted}>
+                This view omits hypothesis-only steps that the finished proof did not use.
+              </p>
+            ) : null}
             <div className={styles.proofPanel}>
               <ol className={styles.proofSteps} data-testid="proof-steps">
                 {proof.steps.map((step) => {
@@ -86,10 +79,6 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
                             view={view}
                           />
                         )}
-                        <p className={styles.stepMeta}>
-                          acts on {step.target.kind}{" "}
-                          <code className={styles.meta}>{step.target.id}</code>
-                        </p>
                         {step.motivatingRecords.length === 0 ? null : (
                           <p className={styles.stepMeta}>
                             Motivated by:{" "}
@@ -197,11 +186,9 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
           </div>
         </section>
       )}
-      <section className={styles.stack} aria-label="Inquiry records">
-        <h2>Inquiry records</h2>
-        {artifact.inquiryRecords.length === 0 ? (
-          <p className={styles.hint}>No inquiry records were stored for this session.</p>
-        ) : (
+      {artifact.inquiryRecords.length === 0 ? null : (
+        <section className={styles.stack} aria-label="Inquiry records">
+          <h2>Inquiry records</h2>
           <ol className={styles.records}>
             {artifact.inquiryRecords.map((record) => (
               <li key={record.id} id={inquiryAnchor(record.id)}>
@@ -209,15 +196,12 @@ export function PrunedProofViewer({ artifact }: Readonly<{ artifact: ProofArtifa
                   <span className={styles.chip}>{record.kind}</span>
                   <code className={styles.meta}>{record.id}</code>
                 </span>
-                <InquiryRecordExplanation
-                  record={recordsById.get(record.id) ?? record}
-                  explain={explain}
-                />
+                <InquiryRecordExplanation record={record} explain={explain} />
               </li>
             ))}
           </ol>
-        )}
-      </section>
+        </section>
+      )}
     </ViewerShell>
   );
 }

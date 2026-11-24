@@ -9,6 +9,7 @@ export const WORKER_BACKED_SPECS = [
   "inquiry-panel.spec.ts",
   "construction-actions.spec.ts",
   "mouse-only-flows.spec.ts",
+  "mathematician-workflows.spec.ts",
   "gestures.spec.ts",
   "move-authoring.spec.ts",
   "macro-application.spec.ts",

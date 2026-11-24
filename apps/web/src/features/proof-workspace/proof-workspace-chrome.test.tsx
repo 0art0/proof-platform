@@ -105,7 +105,7 @@ describe("ProofWorkspace selection feedback", () => {
   it("ignores secondary-button gestures", async () => {
     render(<ProofWorkspace node={proofNode()} />);
     fireEvent.pointerUp(await screen.findByLabelText("Goal 1 conclusion"), { button: 2 });
-    expect(screen.getByText("Nothing selected yet.")).toBeVisible();
+    expect(selectionCount()).toBe(0);
   });
 
   it("says when stale display metadata was snapped to a subtree", async () => {
@@ -116,7 +116,10 @@ describe("ProofWorkspace selection feedback", () => {
     expect(screen.getByTestId("selection-feedback")).toHaveTextContent(
       /^Stale display metadata was snapped to the statement root\. Selected the occurrence\./,
     );
-    expect(screen.getByText("path root")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Select goal 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });
 
@@ -130,14 +133,16 @@ describe("ProofWorkspace Escape", () => {
     });
     expect(selectionCount()).toBe(2);
 
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(selectionCount()).toBe(0);
-    expect(screen.getByTestId("selection-feedback")).toHaveTextContent("Selections cleared.");
-    await waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith([]));
     expect(screen.getByRole("button", { name: "Clear selections" })).toHaveAttribute(
       "aria-keyshortcuts",
       "Escape",
     );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(selectionCount()).toBe(0);
+    expect(screen.getByTestId("selection-feedback")).toHaveTextContent("Selections cleared.");
+    await waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith([]));
+    expect(screen.queryByRole("button", { name: "Clear selections" })).toBeNull();
   });
 
   it("does not react to other keys", async () => {
@@ -167,12 +172,14 @@ describe("ProofWorkspace visual families", () => {
     const obligation = document.querySelector('[data-target-id="obligation:step"]') as HTMLElement;
     expect(goal).toHaveAttribute("data-family", "goal");
     expect(obligation).toHaveAttribute("data-family", "obligation");
-    expect(within(goal).getByText("Goal", { selector: "p" })).toBeVisible();
+    expect(within(goal).getByRole("button", { name: "Select goal 1" })).toBeVisible();
+    expect(within(obligation).getByRole("button", { name: "Select obligation 1" })).toBeVisible();
     expect(
-      within(obligation).getByText("Obligation (assumption)", { selector: "p" }),
+      within(goal).getByLabelText("Variable x: Real number, universal parameter"),
     ).toBeVisible();
-    expect(within(goal).getByLabelText("Variable x: sort:real, universal parameter")).toBeVisible();
-    expect(within(goal).getByText("Hypothesis 1")).toBeInTheDocument();
+    expect(
+      within(goal).getByRole("button", { name: "Select hypothesis 1 of goal 1" }),
+    ).toBeVisible();
   });
 
   it("marks a selected goal proposition positive and a term neutral", async () => {
@@ -181,7 +188,6 @@ describe("ProofWorkspace visual families", () => {
     const summary = document.querySelector("[data-selection-key]") as HTMLElement;
     expect(summary).toHaveAttribute("data-family", "goal");
     expect(summary).toHaveAttribute("data-polarity", "positive");
-    expect(within(summary).getByText("Positive position (goal-like)")).toBeVisible();
     expect(screen.getByText("Selected · Positive position (goal-like)")).toBeVisible();
 
     // Path 0 of hypothesis `x > 0` is the term `x`, which has no logical polarity.
@@ -198,15 +204,19 @@ describe("ProofWorkspace visual families", () => {
     fireEvent.pointerUp(hypothesis);
     const summary = document.querySelector("[data-selection-key]") as HTMLElement;
     expect(summary).toHaveAttribute("data-polarity", "negative");
-    expect(within(summary).getByText("Negative position (hypothesis-like)")).toBeVisible();
+    expect(screen.getByText("Selected · Negative position (hypothesis-like)")).toBeVisible();
   });
 });
 
 describe("ProofWorkspace natural-language view", () => {
-  it("renders read-only prose with inline mathematics instead of MathLive fields", () => {
+  it("renders prose with inline mathematics and selects whole statements by label", () => {
     render(<ProofWorkspace node={proofNode()} view="natural-language" />);
     expect(document.querySelectorAll("math-field")).toHaveLength(0);
-    expect(screen.getByText(/Natural-language view is read-only/)).toBeVisible();
+    expect(screen.getByText(/Switch to LaTeX to select part of a formula/)).toBeVisible();
+    const select = screen.getByRole("button", { name: "Select goal 1" });
+    expect(select).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(select);
+    expect(select).toHaveAttribute("aria-pressed", "true");
     const conclusion = screen.getByLabelText("Goal 1 conclusion");
     expect(conclusion.tagName).toBe("P");
     expect(conclusion).toHaveTextContent("is equal to");
@@ -215,14 +225,14 @@ describe("ProofWorkspace natural-language view", () => {
 });
 
 describe("ProofWorkspace guidance", () => {
-  it("collapses the colour key and keeps ids in tooltips", () => {
+  it("keeps technical details behind disclosures", () => {
     render(<ProofWorkspace node={proofNode()} />);
-    expect(screen.getByRole("heading", { name: "Goals and obligations" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Goals" })).toBeVisible();
     const key = screen.getByText("Colour and symbol key").closest("details")!;
     expect(key).not.toHaveAttribute("open");
     expect(key).toContainElement(screen.getByRole("list", { name: "Colour key" }));
     const goal = document.querySelector('[data-target-id="goal:sum"]') as HTMLElement;
-    expect(goal).toHaveAttribute("title", "goal:sum");
+    expect(screen.getByText("Snapshot IDs").closest("details")).not.toHaveAttribute("open");
     expect(within(goal).queryByText("goal:sum")).toBeNull();
   });
 

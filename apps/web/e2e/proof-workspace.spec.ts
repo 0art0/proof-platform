@@ -240,7 +240,6 @@ test("hovering names the logical position of each part of a statement", async ({
 test("the stored session and each contextual sequent survive reload", async ({ page }) => {
   await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
-  await expect(page.getByText("session:development", { exact: true })).toBeVisible();
   await page.getByText("Snapshot IDs", { exact: true }).click();
   await expect(page.getByText("state:development-root", { exact: true })).toBeVisible();
 
@@ -267,18 +266,33 @@ test("MathLive gestures retain occurrence identity, expand parents, and form ass
   const goal = page.getByLabel("Goal 1 conclusion");
 
   expect(await clickOccurrence(goal, "0")).toBe(true);
-  await expect(page.getByText("path 0", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-selection-key]")).toHaveAttribute(
+    "data-selection-key",
+    /"path":\[0\]/,
+  );
   expect(await clickOccurrence(goal, "0")).toBe(true);
-  await expect(page.getByText("path root", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-selection-key]")).toHaveAttribute(
+    "data-selection-key",
+    /"path":\[\]/,
+  );
 
   expect(await clickOccurrence(goal, "1")).toBe(true);
-  await expect(page.getByText("path 1", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-selection-key]")).toHaveAttribute(
+    "data-selection-key",
+    /"path":\[1\]/,
+  );
   expect(await clickOccurrence(goal, "0")).toBe(true);
-  await expect(page.getByText("path 0", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-selection-key]")).toHaveAttribute(
+    "data-selection-key",
+    /"path":\[0\]/,
+  );
 
   const range = await selectRange(goal, ["And", "p", "p"]);
   expect(range.selected).toBeDefined();
-  await expect(page.getByText("lens root [0, 2)", { exact: true })).toBeVisible();
+  await expect(page.locator("[data-selection-key]")).toHaveAttribute(
+    "data-selection-key",
+    /"kind":"associative","containerPath":\[\],"startOperand":0,"endOperand":2/,
+  );
 });
 
 test("modifier multiselection controls two-selection applicability", async ({ page }) => {
@@ -429,9 +443,9 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   await splitCard.getByRole("button", { name: "Preview changes" }).click();
   const preview = splitCard.getByLabel("Move preview");
   await expect(preview).toBeVisible();
-  await expect(preview.getByText("Review the changes before applying")).toBeVisible();
-  await expect(preview.getByText("None.", { exact: true })).toBeVisible();
-  await expect(page.getByText(`Current node ${rootNodeId}`, { exact: true })).toBeVisible();
+  await expect(preview.getByText("Preview", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("list", { name: "New obligations" })).toHaveCount(0);
+  await expect(page.locator("header[data-node-id]")).toHaveAttribute("data-node-id", rootNodeId!);
 
   const afterPreview = await page.evaluate(async (apiBase) => {
     const response = await fetch(`${apiBase}/history`, {
@@ -443,17 +457,13 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   expect(afterPreview.data.edges).toHaveLength(initialEdgeCount);
 
   await splitCard.getByRole("button", { name: "Apply this step" }).click();
-  await expect(page.getByText(/advanced to node:/)).toBeVisible();
+  await expect(page.getByText(/^Applied “/)).toBeVisible();
   const firstChildId = await page
     .locator('[data-history-node-id][data-current="true"]')
     .getAttribute("data-history-node-id");
   expect(firstChildId).toBeTruthy();
   expect(firstChildId).not.toBe(rootNodeId);
-  await expect(
-    page.getByText(
-      "Click a goal, an assumption, or part of a formula to see what you can do next.",
-    ),
-  ).toBeVisible();
+  await expect(page.getByText("Select a goal, hypothesis or part of a formula.")).toBeVisible();
 
   const staleApply = await page.evaluate(
     async ({ apiBase, suggestionSetId, suggestionId }) => {
@@ -472,11 +482,15 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   );
   expect(staleApply.status).toBeGreaterThanOrEqual(400);
   expect(staleApply.body).toMatchObject({ ok: false });
-  await expect(page.getByText(`Current node ${firstChildId}`, { exact: true })).toBeVisible();
+  await expect(page.locator("header[data-node-id]")).toHaveAttribute("data-node-id", firstChildId!);
 
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${rootNodeId}"]`).click();
-  await expect(page.getByText(`Backtracked to ${rootNodeId}.`, { exact: true })).toBeVisible();
-  await expect(page.getByText(`Current node ${rootNodeId}`, { exact: true })).toBeVisible();
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("header[data-node-id]")).toHaveAttribute("data-node-id", rootNodeId!);
 
   const restoredGoal = page.getByLabel("Goal 1 conclusion");
   const conjunction = page.getByLabel("Goal 1 hypothesis 1");
@@ -489,7 +503,7 @@ test("preview, apply, rejection, backtracking, and a second child preserve the d
   await expandCard.getByRole("button", { name: "Preview changes" }).click();
   await expect(expandCard.getByLabel("Move preview")).toBeVisible();
   await expandCard.getByRole("button", { name: "Apply this step" }).click();
-  await expect(page.getByText(/advanced to node:/)).toBeVisible();
+  await expect(page.getByText(/^Applied “/)).toBeVisible();
 
   const branched = await page.evaluate(async (apiBase) => {
     const response = await fetch(`${apiBase}/history`, {
@@ -517,16 +531,13 @@ test("workspace chrome: header, branch breadcrumb, Escape, view toggle, and raw 
   await page.goto("/sessions/session%3Adevelopment");
   await waitForWorkspace(page);
 
-  // The header names the problem (the stored title) and keeps the session ID as its eyebrow.
+  // The heading is the stored problem title.
   await expect(
     page.getByRole("heading", { level: 1, name: "Duplicated conjunction" }),
   ).toBeVisible();
-  await expect(page.getByText("session:development", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("snapshot-status")).toHaveText(
-    /Snapshot targets:\s*Open: 1 goal, 1 obligation/,
-  );
+  await expect(page.getByTestId("snapshot-status")).toHaveText("Open: 1 goal, 1 obligation");
   const branch = page.getByRole("navigation", { name: "Current branch" });
-  await expect(branch.getByRole("listitem")).toHaveText(["Root"]);
+  await expect(branch.getByRole("listitem")).toHaveText(["Start"]);
 
   const goal = page.getByLabel("Goal 1 conclusion");
   expect(await clickOccurrence(goal, "0")).toBe(true);
@@ -602,9 +613,11 @@ test("drag a local inequality onto a factor to preview its checked rewrite", asy
   const point = await hoverGlyph(page, goal, "x");
   const box = await goal.boundingBox();
   if (!box) throw new Error("The goal is outside the viewport");
-  await page.getByRole("button", { name: "hypothesis 1 of goal 1" }).dragTo(goal, {
-    targetPosition: { x: point.x - box.x, y: point.y - box.y },
-  });
+  await page
+    .getByRole("button", { name: "Drag hypothesis 1 of goal 1", exact: true })
+    .dragTo(goal, {
+      targetPosition: { x: point.x - box.x, y: point.y - box.y },
+    });
   const preview = page.getByLabel("Move preview");
   await expect(preview.getByRole("list", { name: "New obligations" })).toContainText("0≤c");
   await expect(page.getByTestId("drag-outcome")).toContainText("hypothesis onto expression");

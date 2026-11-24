@@ -20,22 +20,10 @@
   margin-top: 0;
 }
 
-.workspaceHeader {
+.proofDetails {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--space-2) var(--space-5);
-}
-
-.workspaceHeader h2 {
-  margin: 0;
-  font-size: var(--text-xl);
-  line-height: 1.4;
-}
-
-.eyebrow {
-  composes: eyebrow from "../../ui/controls.module.css";
+  gap: var(--space-2) var(--space-4);
 }
 
 .snapshotFacts {
@@ -144,39 +132,23 @@
     -1px -1px 2px var(--bevel-light);
 }
 
-.viewNote {
-  composes: notice from "../../ui/controls.module.css";
-  margin: 0;
-  color: var(--text-muted);
-}
-
-.groupHeading,
-.selectionHeading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.groupHeading h2,
-.selectionHeading h2 {
+.groupHeading h2 {
   margin: 0;
   font-size: var(--text-lg);
   line-height: 1.47;
+}
+
+.groupHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .count {
   composes: chip from "../../ui/controls.module.css";
 }
 
-.groupHeading .count,
-.selectionHeading .count {
-  justify-content: center;
-  min-width: 1.375rem;
-  font-weight: 600;
-}
-
-/* A sequent: 1px family frame with a 3px band on top. Obligations are dashed (assumptions). */
+/* Use a dashed frame for obligations alongside the label. */
 .sequent {
   --family-fg: var(--goal-fg);
   --family-border: var(--goal-border);
@@ -213,18 +185,6 @@
   align-items: center;
   gap: var(--space-1);
   color: var(--family-fg);
-}
-
-.sequentKind {
-  composes: chipGoal from "../../ui/controls.module.css";
-  margin: 0;
-}
-
-.sequent[data-family="obligation"] .sequentKind {
-  border-style: dashed;
-  border-color: var(--obligation-border);
-  background: var(--obligation-bg);
-  color: var(--obligation-fg);
 }
 
 .contextSection,
@@ -295,10 +255,6 @@
   font-size: var(--text-xs);
 }
 
-.declarationList code {
-  font-size: var(--text-xs);
-}
-
 /* Hypothesis rows: a square orange H-tag, then the typeset statement. */
 .statementList {
   margin-inline: calc(-1 * var(--space-2));
@@ -307,7 +263,7 @@
 .statementList li,
 .conclusionRow {
   display: grid;
-  grid-template-columns: 2.25rem minmax(0, 1fr);
+  grid-template-columns: 2.5rem minmax(0, 1fr);
   gap: var(--space-3);
   align-items: center;
 }
@@ -317,26 +273,28 @@
 }
 
 .statementLabel {
-  composes: chipHypothesis from "../../ui/controls.module.css";
+  composes: small from "../../ui/controls.module.css";
+  min-width: 2.5rem;
+  padding: 0 var(--space-1);
+  border-color: var(--family-border);
+  background: var(--surface);
+  color: var(--family-fg);
 }
 
-.statementList .statementLabel {
-  justify-content: center;
-  border-color: transparent;
-  font-family: var(--font-mono);
+.statementLabel[data-family="hypothesis"] {
+  --family-border: var(--hypothesis-border);
+  --family-fg: var(--hypothesis-fg);
+}
+
+.statementLabel[aria-pressed="true"] {
+  border-color: var(--select-ring);
+  background: var(--select-bg);
+  color: var(--text);
 }
 
 .conclusionSection {
   border-top: 1px solid var(--border-soft);
   padding-top: var(--space-3);
-}
-
-.turnstile {
-  color: var(--family-fg);
-  font-family: var(--font-math);
-  font-size: 1.25rem;
-  line-height: 1.5;
-  text-align: center;
 }
 
 .statement {
@@ -484,14 +442,9 @@
   font-size: 1.25rem;
 }
 
-/* A compact card under the goals: heading, the selections side by side, then one actions row. */
 .selectionPanel {
   display: grid;
-  gap: var(--space-3);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-2);
 }
 
 .selectionActions {
@@ -502,7 +455,9 @@
 }
 
 .selectionList li {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   gap: var(--space-2);
   border: 1px solid var(--border-soft);
   border-left: 3px solid var(--border-control);
@@ -524,30 +479,9 @@
   border-left-color: var(--obligation-fg);
 }
 
-.selectionList p {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0 var(--space-2);
-  margin-bottom: 0;
+.selectionList li > :first-child {
+  color: var(--text-muted);
   font-size: var(--text-sm);
-}
-
-.selectionList p span:not(:first-child) {
-  grid-column: 2;
-  color: var(--text-muted);
-}
-
-.selectionPath {
-  composes: meta from "../../ui/controls.module.css";
-}
-
-.selectionList pre {
-  max-width: 100%;
-  margin: 0;
-  overflow: auto;
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  white-space: pre-wrap;
 }
 
 .clearButton {
@@ -563,15 +497,7 @@
   composes: hint from "../../ui/controls.module.css";
 }
 
-.emptySelection {
-  composes: hint from "../../ui/controls.module.css";
-}
-
 .emptyGroup {
-  composes: hint from "../../ui/controls.module.css";
-}
-
-.emptyContext {
   composes: hint from "../../ui/controls.module.css";
 }
 

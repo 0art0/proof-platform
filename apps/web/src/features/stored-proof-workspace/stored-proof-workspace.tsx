@@ -48,9 +48,8 @@ import { createInteractionRecorder } from "./interaction-recorder";
 import { ConstantsPanel } from "./constants-panel";
 import { useLibraryTopUp } from "./library-top-up";
 import { useSessionConstants } from "./use-session-constants";
-import { useWideLayout } from "./use-wide-layout";
 import { MoveInstructions } from "./move-instructions";
-import { PROOF_PLAN_ID, ProofPlanPanel } from "./proof-plan-panel";
+import { ProofPlanPanel } from "./proof-plan-panel";
 import { ToolbarActionBar, type RunToolbarCommand } from "./toolbar-action-bar";
 import { READ_ONLY_REASON } from "./toolbar-actions";
 import {
@@ -143,6 +142,7 @@ function StatefulStoredWorkspace({
   const commandIds = useRef(new Map<string, MoveChoiceRequest["commandId"]>());
   const mutationPendingRef = useRef(false);
   const instructionsRef = useRef<HTMLTextAreaElement | null>(null);
+  const instructionsPanel = useRef<HTMLDetailsElement>(null);
   // Whether the last reported selection was empty. A snapshot starts with no selection.
   const selectionEmpty = useRef(true);
   const recordInteraction = useMemo(() => createInteractionRecorder(session.id), [session.id]);
@@ -521,13 +521,24 @@ function StatefulStoredWorkspace({
     resetDrag.current = drag.reset;
   }, [drag.notifySelectionChange, drag.reset]);
 
+  /** All cursor changes share one lock, including the proof assistants. */
+  const beginMutation = useCallback(() => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    actionGeneration.current += 1;
+    return true;
+  }, []);
+  const endMutation = useCallback(() => {
+    mutationPendingRef.current = false;
+    setMutationPending(false);
+  }, []);
+
   const applySuggestion = useCallback(
     async (set: DisplayedSuggestionSet, suggestionId: SuggestionId) => {
       if (moveState.kind !== "previewed" || moveState.suggestionId !== suggestionId) return;
-      if (mutationPendingRef.current) return;
-      mutationPendingRef.current = true;
-      setMutationPending(true);
-      const generation = ++actionGeneration.current;
+      if (!beginMutation()) return;
+      const generation = actionGeneration.current;
       const retryState = moveState;
       const choice = withChoices(
         {
@@ -539,8 +550,7 @@ function StatefulStoredWorkspace({
       );
       setMoveState({ kind: "applying", suggestionId });
       const result = await requestApply(session.id, choice);
-      mutationPendingRef.current = false;
-      setMutationPending(false);
+      endMutation();
       if (actionGeneration.current !== generation) return;
       if (!result.ok && result.code === "preview-regenerated") {
         // The approved definitions changed since the preview: show the regenerated preview,
@@ -568,26 +578,31 @@ function StatefulStoredWorkspace({
         state: "committed",
         message:
           macroSteps === undefined
-            ? `Applied “${appliedName}”; advanced to ${result.node.id} (${result.receipt.transitionClass}).`
-            : `Applied “${appliedName}” (${macroSteps} steps in a row); advanced to ${result.node.id} (${retryState.preview.transitionClass}).`,
+            ? `Applied “${appliedName}”.`
+            : `Applied “${appliedName}” (${macroSteps} steps).`,
       });
       void loadHistory();
     },
-    [loadHistory, moveState, previewSuggestion, resetTransientState, session.id],
+    [
+      beginMutation,
+      endMutation,
+      loadHistory,
+      moveState,
+      previewSuggestion,
+      resetTransientState,
+      session.id,
+    ],
   );
 
   const backtrackTo = useCallback(
     async (targetNodeId: string) => {
-      if (targetNodeId === node.id || mutationPendingRef.current) return;
-      mutationPendingRef.current = true;
-      setMutationPending(true);
-      const generation = ++actionGeneration.current;
+      if (targetNodeId === node.id || !beginMutation()) return;
+      const generation = actionGeneration.current;
       const result = await requestBacktrack(session.id, {
         expectedCurrentNodeId: node.id,
         targetNodeId,
       });
-      mutationPendingRef.current = false;
-      setMutationPending(false);
+      endMutation();
       if (actionGeneration.current !== generation) return;
       if (!result.ok) {
         setNotice({ state: "rejected", message: `Backtrack rejected: ${result.message}` });
@@ -596,16 +611,16 @@ function StatefulStoredWorkspace({
       setSession(result.session);
       setNode(result.node);
       resetTransientState();
-      setNotice({ state: "committed", message: `Backtracked to ${result.node.id}.` });
+      setNotice({ state: "committed", message: "Returned to the selected proof state." });
       void loadHistory();
     },
-    [loadHistory, node.id, resetTransientState, session.id],
+    [beginMutation, endMutation, loadHistory, node.id, resetTransientState, session.id],
   );
 
   /** Toolbar actions (N31): one command envelope, then the new current node and history. */
   const runToolbarCommand = useCallback<RunToolbarCommand>(
     async (action, envelope, summarize) => {
-      if (mutationPendingRef.current) {
+      if (!beginMutation()) {
         return {
           ok: false,
           status: 0,
@@ -613,20 +628,15 @@ function StatefulStoredWorkspace({
           message: "Another proof command is still running.",
         };
       }
-      mutationPendingRef.current = true;
-      setMutationPending(true);
-      actionGeneration.current += 1;
       const outcome = await postProtocolCommand(session.id, envelope);
       if (!outcome.ok) {
-        mutationPendingRef.current = false;
-        setMutationPending(false);
+        endMutation();
         setNotice({ state: "rejected", message: describeCommandFailure(action, outcome) });
         void loadHistory();
         return outcome;
       }
       const current = await readCurrentSession(session.id);
-      mutationPendingRef.current = false;
-      setMutationPending(false);
+      endMutation();
       if (!current.ok || current.value.node.id !== outcome.response.cursor.nodeId) {
         setNotice({
           state: "rejected",
@@ -648,7 +658,7 @@ function StatefulStoredWorkspace({
       void loadHistory();
       return outcome;
     },
-    [loadHistory, rejectShownPreview, resetTransientState, session.id],
+    [beginMutation, endMutation, loadHistory, rejectShownPreview, resetTransientState, session.id],
   );
 
   // Library top-ups (architecture §2): "Find more results" for the current selections, and the
@@ -690,32 +700,15 @@ function StatefulStoredWorkspace({
   const findMoreResults = useCallback(() => {
     void topUp.findMoreResults(selections);
   }, [selections, topUp]);
-  const findMoreDisabledReason = readOnly
-    ? "This session is read-only, so its library cannot grow."
-    : aiLibrarian
-      ? undefined
-      : "The library assistant is not set up for this service, so it cannot look for more results.";
-
   /** "Describe a move" on the shortlist's none-relevant notice: go to the description box. */
   const focusInstructions = useCallback(() => {
     const box = instructionsRef.current;
     if (box === null) return;
+    if (instructionsPanel.current !== null) instructionsPanel.current.open = true;
     box.scrollIntoView?.({ block: "center" });
     box.focus();
   }, []);
 
-  /** The move-instruction box commits a plan like any other proof command: one at a time. */
-  const beginExecutorApply = useCallback(() => {
-    if (mutationPendingRef.current) return false;
-    mutationPendingRef.current = true;
-    setMutationPending(true);
-    actionGeneration.current += 1;
-    return true;
-  }, []);
-  const endExecutorApply = useCallback(() => {
-    mutationPendingRef.current = false;
-    setMutationPending(false);
-  }, []);
   const adoptExecutorResult = useCallback(
     async ({ nodeId, stepCount }: Readonly<{ nodeId: string; stepCount: number }>) => {
       const current = await readCurrentSession(session.id);
@@ -815,7 +808,6 @@ function StatefulStoredWorkspace({
       : false) ||
     (history.kind === "ready" && history.edges.some(({ edge }) => edge.macro !== undefined));
   const macros = useMacroInfo(session.id, macrosWanted);
-  const wideLayout = useWideLayout();
   const suggestionCount =
     suggestions.kind === "ready" || suggestions.kind === "empty"
       ? suggestions.suggestionSet.suggestions.length
@@ -833,49 +825,52 @@ function StatefulStoredWorkspace({
   const showProofPlan = aiDraft || aiPlanner || aiTranslator;
   const moveInstructions =
     !aiExecutor && !showProofPlan ? null : (
-      <div key="move-instructions" className={styles.movesArea}>
+      <div className={styles.movesArea}>
         {showProofPlan ? (
-          <ProofPlanPanel
-            sessionId={session.id}
-            node={node}
-            draftEnabled={aiDraft}
-            blueprintEnabled={aiPlanner}
-            translatorEnabled={aiTranslator}
-            hasStatement={session.statement !== undefined}
-            draftPrompt={draftPrompt}
-            blueprintPrompt={blueprintPrompt}
-            readOnly={readOnly}
-            busy={mutationPending}
-            onApplyStart={beginExecutorApply}
-            onApplyEnd={endExecutorApply}
-            onApplied={adoptPlanMove}
-          />
+          <details className={styles.secondaryPanel}>
+            <summary>Proof plan</summary>
+            <ProofPlanPanel
+              sessionId={session.id}
+              node={node}
+              draftEnabled={aiDraft}
+              blueprintEnabled={aiPlanner}
+              translatorEnabled={aiTranslator}
+              hasStatement={initialSession.statement !== undefined}
+              draftPrompt={draftPrompt}
+              blueprintPrompt={blueprintPrompt}
+              readOnly={readOnly}
+              busy={mutationPending}
+              onApplyStart={beginMutation}
+              onApplyEnd={endMutation}
+              onApplied={adoptPlanMove}
+            />
+          </details>
         ) : null}
         {aiExecutor ? (
-          <MoveInstructions
-            sessionId={session.id}
-            node={node}
-            operators={session.operators}
-            selections={selections}
-            presentation={presentation}
-            view={view}
-            enabled={aiExecutor}
-            moveAuthorEnabled={aiMoveAuthor}
-            readOnly={readOnly}
-            busy={mutationPending}
-            textareaRef={instructionsRef}
-            onApplyStart={beginExecutorApply}
-            onApplyEnd={endExecutorApply}
-            onApplied={adoptExecutorResult}
-          />
+          <details ref={instructionsPanel} className={styles.secondaryPanel}>
+            <summary>Describe a step</summary>
+            <MoveInstructions
+              sessionId={session.id}
+              node={node}
+              operators={session.operators}
+              selections={selections}
+              presentation={presentation}
+              view={view}
+              enabled={aiExecutor}
+              moveAuthorEnabled={aiMoveAuthor}
+              readOnly={readOnly}
+              busy={mutationPending}
+              textareaRef={instructionsRef}
+              onApplyStart={beginMutation}
+              onApplyEnd={endMutation}
+              onApplied={adoptExecutorResult}
+            />
+          </details>
         ) : null}
       </div>
     );
-  // "Find more results" is a library top-up (docs/ai-agents-architecture.md §2); where it is
-  // unavailable the button is disabled and says why. "Describe a move" is offered only when the
-  // move-instruction box can take a description.
   const suggestionsColumn = (
-    <div key="suggestions" className={styles.suggestionsArea}>
+    <div className={styles.suggestionsArea}>
       {readOnly ? (
         <p className={styles.readOnlyReason} role="note" data-testid="read-only-reason">
           {READ_ONLY_REASON}: suggestions can be viewed but not applied.
@@ -904,8 +899,7 @@ function StatefulStoredWorkspace({
           aiShortlist && !readOnly ? { sessionId: session.id, nodeId: node.id } : undefined
         }
         onDescribeMove={aiExecutor && !readOnly ? focusInstructions : undefined}
-        onFindMoreResults={findMoreResults}
-        findMoreDisabledReason={findMoreDisabledReason}
+        onFindMoreResults={aiLibrarian && !readOnly ? findMoreResults : undefined}
         findMoreStatus={topUp.status}
         onAskAgain={() => handleSelectionChange(selections)}
         {...panelActions}
@@ -917,9 +911,9 @@ function StatefulStoredWorkspace({
       <WorkspaceHeader
         sessionId={session.id}
         title={title}
-        onRename={rename}
-        statement={session.statement}
-        background={session.background}
+        onRename={readOnly ? undefined : rename}
+        statement={initialSession.statement}
+        background={initialSession.background}
         currentNodeId={node.id}
         counts={{ goals: node.state.goals.length, obligations: node.state.obligations.length }}
         readOnly={readOnly}
@@ -932,11 +926,6 @@ function StatefulStoredWorkspace({
         node={node}
         readOnly={readOnly}
       >
-        {showProofPlan ? (
-          <a className={styles.toolbarButton} href={`#${PROOF_PLAN_ID}`}>
-            Proof plan
-          </a>
-        ) : null}
         <details className={styles.proofActions}>
           <summary className={styles.disclosure}>More proof actions</summary>
           <ToolbarActionBar
@@ -967,16 +956,11 @@ function StatefulStoredWorkspace({
           {notice.message}
         </p>
       ) : null}
-      <GestureTray
-        bindings={drag.bindings}
-        selections={selections}
-        view={view}
-        abstraction={abstraction}
-      />
       <div className={styles.workArea}>
         <div
           className={`${styles.interactionShell} ${styles.proofArea}`}
           data-busy={mutationPending}
+          inert={mutationPending}
           aria-busy={mutationPending}
         >
           <RewriteInspectionContext.Provider value={inspectRewrites}>
@@ -992,12 +976,15 @@ function StatefulStoredWorkspace({
             />
           </RewriteInspectionContext.Provider>
         </div>
-        {/* Stacked, the suggestions follow the proof directly; in two columns the move
-            instructions sit under the proof and the suggestions beside it. The document order
-            follows the visual order in both (CSS places the columns), so Tab does too; the keys
-            keep the panels mounted when the window crosses the breakpoint. */}
-        {wideLayout ? [moveInstructions, suggestionsColumn] : [suggestionsColumn, moveInstructions]}
+        {suggestionsColumn}
       </div>
+      <GestureTray
+        bindings={drag.bindings}
+        selections={selections}
+        view={view}
+        abstraction={abstraction}
+      />
+      {moveInstructions}
 
       <InquiryPanel
         sessionId={session.id}
@@ -1019,15 +1006,18 @@ function StatefulStoredWorkspace({
         busy={mutationPending}
         refreshKey={history}
       />
-      <HistoryView
-        history={history}
-        currentNodeId={node.id}
-        macros={macros}
-        mutationPending={mutationPending || readOnly}
-        presentation={presentation}
-        view={view}
-        onBacktrack={backtrackTo}
-      />
+      <details className={styles.secondaryPanel}>
+        <summary>Proof history</summary>
+        <HistoryView
+          history={history}
+          currentNodeId={node.id}
+          macros={macros}
+          mutationPending={mutationPending || readOnly}
+          presentation={presentation}
+          view={view}
+          onBacktrack={backtrackTo}
+        />
+      </details>
     </section>
   );
 }

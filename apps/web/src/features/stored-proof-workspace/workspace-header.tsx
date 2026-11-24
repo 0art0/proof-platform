@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ProofNode } from "@proof/protocol";
 import { humanizeMoveId } from "../macro-labels";
@@ -38,7 +39,7 @@ export function branchBreadcrumb(
       nodeId,
       label:
         record === undefined
-          ? "Root"
+          ? "Start"
           : record.edge.macro === undefined
             ? record.name
             : `${humanizeMoveId(record.name)} (step ${record.edge.macro.stepIndex} of ${record.edge.macro.stepCount})`,
@@ -71,7 +72,6 @@ export function snapshotStatusText({ goals, obligations }: SnapshotCounts): stri
 
 export type WorkspaceHeaderProps = Readonly<{
   sessionId: string;
-  /** Problem metadata is not stored yet (N05/N26); the session id is the fallback title. */
   title?: string | undefined;
   /** The problem statement as entered, shown in a collapsed section. */
   statement?: string | undefined;
@@ -166,12 +166,7 @@ function SessionTitle({
   }
   return (
     <div className={styles.titleRow}>
-      <h1
-        className={title === undefined ? styles.idTitle : undefined}
-        title={title === undefined ? undefined : sessionId}
-      >
-        {title ?? sessionId}
-      </h1>
+      <h1 title={sessionId}>{title ?? "Untitled proof"}</h1>
       <button
         type="button"
         className={styles.renameButton}
@@ -201,20 +196,10 @@ export function WorkspaceHeader({
 }: WorkspaceHeaderProps) {
   const closed = counts.goals === 0 && counts.obligations === 0;
   return (
-    <header className={styles.sessionHeader} aria-label="Problem">
+    <header className={styles.sessionHeader} aria-label="Problem" data-node-id={currentNodeId}>
       <div className={styles.headerTitle}>
-        {/* With no title the id is the heading, so the eyebrow says what the page is; with a
-            title the id drops to metadata. */}
-        <p className={title === undefined ? styles.headerEyebrow : styles.headerId}>
-          {title === undefined ? "Proof session" : sessionId}
-        </p>
         {onRename === undefined ? (
-          <h1
-            className={title === undefined ? styles.idTitle : undefined}
-            title={title === undefined ? undefined : sessionId}
-          >
-            {title ?? sessionId}
-          </h1>
+          <h1 title={sessionId}>{title ?? "Untitled proof"}</h1>
         ) : (
           <SessionTitle sessionId={sessionId} title={title} onRename={onRename} />
         )}
@@ -229,14 +214,8 @@ export function WorkspaceHeader({
         )}
       </div>
       <div className={styles.headerFacts}>
-        <p
-          className={styles.snapshotStatus}
-          data-closed={closed}
-          data-testid="snapshot-status"
-          title="Counts the open targets of the displayed snapshot. It is not a provability check."
-        >
-          <span aria-hidden="true">{closed ? "✓" : "○"}</span> <span>Snapshot targets:</span>{" "}
-          <strong>{snapshotStatusText(counts)}</strong>
+        <p className={styles.snapshotStatus} data-closed={closed} data-testid="snapshot-status">
+          {snapshotStatusText(counts)}
         </p>
         {readOnly ? (
           <span
@@ -247,7 +226,14 @@ export function WorkspaceHeader({
             Read-only · imported artifact
           </span>
         ) : null}
-        <span className={styles.headerNode}>Current node {currentNodeId}</span>
+        {closed ? (
+          <Link
+            className={styles.toolbarButton}
+            href={`/sessions/${encodeURIComponent(sessionId)}/proof`}
+          >
+            View proof
+          </Link>
+        ) : null}
       </div>
       <nav className={styles.breadcrumb} aria-label="Current branch">
         {breadcrumb.kind === "loading" ? <span>Loading branch…</span> : null}

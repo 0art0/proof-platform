@@ -168,9 +168,7 @@ describe("the move-instruction box", () => {
       "Describe a step, e.g. 'split into cases on whether n is even'",
     );
     expect(box()).toHaveAttribute("placeholder", MOVE_INSTRUCTIONS_PLACEHOLDER);
-    expect(
-      screen.getByText(/you see exactly what they change before anything is applied/),
-    ).toBeVisible();
+    expect(screen.getByText(/AI proposes changes for you to review/)).toBeVisible();
   });
 
   it("explains why it is disabled when the role is not configured", () => {

@@ -17,7 +17,7 @@ import {
   type ExecutorPreview,
   type MoveInstructionOutcome,
 } from "./move-instructions-contract";
-import { PreviewConstantsNote, StateChangeSections, deltaText } from "./preview-details";
+import { PreviewConstantsNote, StateChangeSections } from "./preview-details";
 import { previewDiff } from "./preview-diff";
 import { toDescriptor } from "./selection-descriptor";
 import { EvidenceBadge, TransitionClassBadge, transitionMeaning } from "./suggestion-badges";
@@ -325,9 +325,7 @@ export function MoveInstructions({
     >
       <h2>Move instructions</h2>
       <p id={hintId} className={styles.hint}>
-        Say in your own words what to do next. A model proposes kernel steps from your description
-        and your selection; you see exactly what they change before anything is applied, and the
-        kernel checks every step.
+        Describe the next mathematical step. AI proposes changes for you to review.
       </p>
       <label htmlFor={textId} className={styles.label}>
         Describe a step
@@ -478,16 +476,6 @@ function PreviewCard({
         {preview.provenance === "user-proposal" ? "your description" : "a suggested technique"}; the
         kernel has checked each step.
       </p>
-      <dl className={previewStyles.previewCounts}>
-        <div>
-          <dt>Goals</dt>
-          <dd>{deltaText(preview.delta.goals)}</dd>
-        </div>
-        <div>
-          <dt>Obligations</dt>
-          <dd>{deltaText(preview.delta.obligations)}</dd>
-        </div>
-      </dl>
       <div>
         <strong>The steps ({preview.steps.length})</strong>
         <ol className={styles.steps} aria-label="Steps of this plan">

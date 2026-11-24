@@ -77,8 +77,12 @@ test("a corpus problem is solved, repaired, exported, reimported and viewed with
     COMMAND,
   );
   expect(await currentNodeId(page)).not.toBe(splitId);
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${splitId}"]`).click();
-  await expect(page.getByText(`Backtracked to ${splitId}.`, { exact: true })).toBeVisible(COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible(COMMAND);
   expect(expandedId).not.toBe(rootId);
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 2 goals/, COMMAND);
 

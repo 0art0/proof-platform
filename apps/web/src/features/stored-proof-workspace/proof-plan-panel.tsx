@@ -36,8 +36,6 @@ import { READ_ONLY_REASON } from "./toolbar-actions";
 import styles from "./move-instructions.module.css";
 import planStyles from "./proof-plan.module.css";
 
-export const PROOF_PLAN_ID = "proof-plan";
-
 const POLL_INTERVAL_MS = 3_000;
 /** A plan that is not stored after this long is reported as not arriving. */
 const POLL_LIMIT_MS = 12 * 60_000;
@@ -391,7 +389,6 @@ export function ProofPlanPanel({
 
   return (
     <section
-      id={PROOF_PLAN_ID}
       tabIndex={-1}
       className={`${styles.panel} ${planStyles.panel}`}
       aria-labelledby="proof-plan-heading"

@@ -3,15 +3,6 @@
   gap: var(--space-4);
 }
 
-/*
- * The work area. On a wide screen it is two columns: the proof state with the move instructions
- * under it on the left, and the suggestions on the right, sticky just below the app bar and
- * scrolling on their own so they stay beside the statement being worked on while the proof
- * scrolls. Below the breakpoint everything stacks: the proof, its suggestions, then the move
- * instructions. The document order follows the visual order in both layouts (the component
- * swaps the last two to match); the columns themselves are placed here.
- * Keep the breakpoint equal to WIDE_LAYOUT_QUERY in use-wide-layout.ts.
- */
 .workArea {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -34,25 +25,10 @@
   .workArea {
     /* The proof takes what is left; the suggestions get a card-friendly 24 to 28rem. */
     grid-template-columns: minmax(0, 1fr) minmax(24rem, 28rem);
-    /* The second row absorbs a tall suggestions column, so the move instructions stay snug
-       under the proof instead of being pushed down by it. */
-    grid-template-rows: auto 1fr;
     column-gap: var(--space-5);
   }
 
-  .proofArea {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .movesArea {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
   .suggestionsArea {
-    grid-column: 2;
-    grid-row: 1 / span 2;
     position: sticky;
     /* Clear the sticky 3.5rem app bar, and keep the same gap below the column. */
     top: calc(3.5rem + var(--space-4));
@@ -132,11 +108,6 @@
   overflow-wrap: anywhere;
 }
 
-/* A session id standing in for a missing title is metadata, so it keeps the meta style. */
-.idTitle {
-  composes: meta from "../../ui/controls.module.css";
-}
-
 /* The title renames in place: a quiet pencil appears beside it on hover or focus. */
 .titleRow {
   display: flex;
@@ -155,13 +126,6 @@
   color: var(--text-muted);
   font-size: var(--text-md);
   cursor: pointer;
-  opacity: 0.35;
-  transition: opacity 120ms ease;
-}
-
-.titleRow:hover .renameButton,
-.renameButton:focus-visible {
-  opacity: 1;
 }
 
 .titleForm {
@@ -193,20 +157,6 @@
   font-size: var(--text-sm);
 }
 
-.sessionHeader h1.idTitle {
-  font-size: var(--text-md);
-  line-height: 1.57;
-}
-
-.headerEyebrow {
-  composes: eyebrow from "../../ui/controls.module.css";
-}
-
-.headerId {
-  composes: meta from "../../ui/controls.module.css";
-  overflow-wrap: anywhere;
-}
-
 .headerBackground {
   max-width: 60ch;
   margin-top: var(--space-1);
@@ -222,12 +172,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-}
-
-.headerNode {
-  composes: meta from "../../ui/controls.module.css";
-  /* Node IDs of applied steps are long and unbroken: wrap them instead of widening the page. */
-  overflow-wrap: anywhere;
 }
 
 .snapshotStatus {
@@ -474,6 +418,24 @@ details[open] > .disclosure::after {
 
 .readOnlyReason {
   composes: hint from "../../ui/controls.module.css";
+}
+
+.secondaryPanel {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: var(--space-2) var(--space-4);
+}
+
+.secondaryPanel > summary {
+  width: fit-content;
+  padding-block: var(--space-1);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondaryPanel[open] > :not(summary) {
+  margin-block: var(--space-2);
 }
 
 /* History */

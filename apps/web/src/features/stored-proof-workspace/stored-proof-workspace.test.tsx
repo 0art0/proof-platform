@@ -447,7 +447,7 @@ describe("StoredProofWorkspace", () => {
       <StoredProofWorkspace session={{ ...session, currentNodeId: nextNode.id }} node={nextNode} />,
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Click a goal, an assumption, or part of a formula",
+      "Select a goal, hypothesis or part of a formula",
     );
 
     await act(async () => {
@@ -516,9 +516,8 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    expect(within(card).getByText("Choose from the current context to continue")).toBeVisible();
-    expect(within(card).getByText(/Choose the missing value from the options/)).toBeVisible();
-    expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Choose values" })).toBeEnabled();
+    expect(within(card).queryByRole("button", { name: "Preview changes" })).toBeNull();
     expect(within(card).queryByRole("button", { name: "Apply this step" })).not.toBeInTheDocument();
   });
 
@@ -573,11 +572,14 @@ describe("StoredProofWorkspace", () => {
 
     fireEvent.click(within(card).getByRole("button", { name: "Preview changes" }));
     await within(card).findByLabelText("Move preview");
-    expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
-    expect(within(card).getByText("Goals").nextSibling).toHaveTextContent("+0 −1 ~0");
+    expect(screen.getByLabelText("Problem", { selector: "header" })).toHaveAttribute(
+      "data-node-id",
+      node.id,
+    );
+    expect(within(card).getByText("Goal closed")).toBeVisible();
 
     fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
-    await screen.findByText(/advanced to node:command:web/);
+    await screen.findByText(/^Applied “/);
     expect(screen.queryByTestId("suggestion-list")).not.toBeInTheDocument();
     const previewRequest = fetchMock.mock.calls.find((call) =>
       String(call[0]).endsWith("/move-previews"),
@@ -633,7 +635,10 @@ describe("StoredProofWorkspace", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
 
     await screen.findByText("Apply rejected: The parent is stale.");
-    expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
+    expect(screen.getByLabelText("Problem", { selector: "header" })).toHaveAttribute(
+      "data-node-id",
+      node.id,
+    );
     expect(within(card).getByLabelText("Move preview")).toBeVisible();
     expect(within(card).getByRole("button", { name: "Apply this step" })).toBeEnabled();
 
@@ -693,21 +698,25 @@ describe("StoredProofWorkspace", () => {
         within(branch)
           .getAllByRole("listitem")
           .map((item) => item.textContent),
-      ).toEqual(["Root", "Split goal conjunction"]),
+      ).toEqual(["Start", "Split goal conjunction"]),
     );
-    expect(screen.getByRole("heading", { level: 1, name: "session:test" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Untitled proof" })).toBeVisible();
     expect(screen.getByTestId("snapshot-status")).toHaveTextContent("Open: 1 goal, 0 obligations");
 
-    const rootButton = await screen.findByRole("button", { name: /Root.*node:test/ });
+    screen.getByText("Proof history", { exact: true }).closest("details")!.open = true;
+    const rootButton = await screen.findByRole("button", { name: /Start/ });
     fireEvent.click(rootButton);
 
-    await screen.findByText("Backtracked to node:test.");
-    expect(screen.getByText("Current node node:test")).toBeVisible();
+    await screen.findByText("Returned to the selected proof state.");
+    expect(screen.getByLabelText("Problem", { selector: "header" })).toHaveAttribute(
+      "data-node-id",
+      "node:test",
+    );
 
     // The new snapshot's workspace reports its empty selection when it mounts; that must not
     // discard the backtrack notice.
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    expect(screen.getByText("Backtracked to node:test.")).toBeVisible();
+    expect(screen.getByText("Returned to the selected proof state.")).toBeVisible();
   });
 
   it("passes the selected statement view to the workspace and read-only history", async () => {
@@ -826,7 +835,7 @@ describe("StoredProofWorkspace", () => {
       }),
     );
     expect(
-      within(details as HTMLElement).getByText(/menu offers choices from the current proof state/),
+      within(details as HTMLElement).getByText(/Choose the missing value from the current proof/),
     ).toBeVisible();
   });
 
@@ -902,11 +911,14 @@ describe("StoredProofWorkspace", () => {
 
     await screen.findByText(/Apply paused: The approved definitions behind the preview changed/);
     expect(previews).toBe(2);
-    expect(screen.getByText(`Current node ${node.id}`)).toBeVisible();
+    expect(screen.getByLabelText("Problem", { selector: "header" })).toHaveAttribute(
+      "data-node-id",
+      node.id,
+    );
     expect(within(card).getByLabelText("Move preview")).toBeVisible();
 
     fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
-    await screen.findByText(/advanced to node:command:web/);
+    await screen.findByText(/^Applied “/);
     expect(applies).toBe(2);
   });
 
@@ -1019,9 +1031,9 @@ describe("StoredProofWorkspace", () => {
     render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
     const card = (await screen.findByText("Split goal conjunction")).closest("li")!;
-    expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
+    expect(within(card).queryByRole("button", { name: "Preview changes" })).toBeNull();
 
-    fireEvent.click(within(card).getByRole("button", { name: "Fill in missing values" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Choose values" }));
     const form = await within(card).findByRole("form", {
       name: "Parameter menus for Split goal conjunction",
     });
@@ -1053,7 +1065,7 @@ describe("StoredProofWorkspace", () => {
     expect(within(card).queryByRole("form")).not.toBeInTheDocument();
 
     fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
-    await screen.findByText(/advanced to node:command:web/);
+    await screen.findByText(/^Applied “/);
     expect(commandBodies).toEqual([
       {
         commandId: previewBodies[1]?.commandId,
@@ -1305,6 +1317,7 @@ describe("StoredProofWorkspace move instructions", () => {
       ),
     );
     render(<StoredProofWorkspace session={session} node={node} />);
+    screen.getByText("Proof history", { exact: true }).closest("details")!.open = true;
     expect(await screen.findByText(/AI step 1 of 2 from your description/)).toBeVisible();
   });
 
@@ -1319,6 +1332,7 @@ describe("StoredProofWorkspace move instructions", () => {
     render(
       <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiExecutor />,
     );
+    screen.getByText("Describe a step", { selector: "summary" }).closest("details")!.open = true;
     const panel = screen.getByRole("region", { name: "Move instructions" });
     expect(within(panel).getByRole("button", { name: "Preview" })).toHaveAccessibleDescription(
       /read-only/,
@@ -1348,6 +1362,7 @@ describe("StoredProofWorkspace move instructions", () => {
     );
     render(<StoredProofWorkspace session={session} node={node} aiExecutor />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
+    screen.getByText("Describe a step", { selector: "summary" }).closest("details")!.open = true;
     const panel = screen.getByRole("region", { name: "Move instructions" });
     fireEvent.change(within(panel).getByRole("textbox", { name: "Describe a step" }), {
       target: { value: "close it" },
@@ -1411,10 +1426,7 @@ describe("StoredProofWorkspace move instructions", () => {
     const describe = await screen.findByRole("button", { name: "Describe a move" });
     fireEvent.click(describe);
     expect(screen.getByRole("textbox", { name: "Describe a step" })).toHaveFocus();
-    // Without a configured librarian the button is there, disabled, and says why.
-    const findMore = screen.getByRole("button", { name: "Find more results" });
-    expect(findMore).toBeDisabled();
-    expect(findMore).toHaveAccessibleDescription(/library assistant is not set up/);
+    expect(screen.queryByRole("button", { name: "Find more results" })).toBeNull();
   });
 
   it("offers 'Describe a move' only when the box can take a description", async () => {
@@ -1592,23 +1604,20 @@ describe("StoredProofWorkspace library top-ups", () => {
     expect(topUps(calls)[0]?.body).toMatchObject({ kind: "no-relevant-results" });
   });
 
-  it("explains why the button is disabled, and sends nothing, without a librarian or when read-only", async () => {
+  it("omits library top-up without a librarian or when read-only", async () => {
     const calls = topUpFetch({ sets: () => emptySet("suggestion-set:disabled") });
     const unconfigured = render(<StoredProofWorkspace session={session} node={node} />);
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
-    const find = await screen.findByRole("button", { name: "Find more results" });
-    expect(find).toBeDisabled();
-    expect(find).toHaveAccessibleDescription(/library assistant is not set up/);
-    fireEvent.click(find);
+    await screen.findByText(/No matching suggestions/);
+    expect(screen.queryByRole("button", { name: "Find more results" })).toBeNull();
     unconfigured.unmount();
 
     render(
       <StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} aiLibrarian />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Select first" }));
-    const readOnly = await screen.findByRole("button", { name: "Find more results" });
-    expect(readOnly).toBeDisabled();
-    expect(readOnly).toHaveAccessibleDescription(/read-only/);
+    await screen.findByText(/No matching suggestions/);
+    expect(screen.queryByRole("button", { name: "Find more results" })).toBeNull();
     await settle();
     expect(topUps(calls)).toHaveLength(0);
     // The constants are still listed: reading them needs no assistant and changes nothing.
@@ -1818,7 +1827,7 @@ describe("StoredProofWorkspace constants", () => {
 
     // After the step: the constant is in use, marked as added by that result, and announced.
     fireEvent.click(within(card).getByRole("button", { name: "Apply this step" }));
-    await screen.findByText(/advanced to node:command:web/);
+    await screen.findByText(/^Applied “/);
     const added = await screen.findByTestId("constants-added");
     expect(added).toHaveTextContent(
       "A constant was added to this proof: ‘greatest common divisor’",
@@ -1858,24 +1867,6 @@ describe("StoredProofWorkspace constants", () => {
 });
 
 describe("StoredProofWorkspace layout", () => {
-  /** A matchMedia stand-in whose answer the test can change; returns the setter. */
-  function stubWideLayout(initial: boolean) {
-    let matches = initial;
-    const listeners = new Set<() => void>();
-    vi.stubGlobal("matchMedia", (media: string) => ({
-      media,
-      get matches() {
-        return matches;
-      },
-      addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
-      removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
-    }));
-    return (next: boolean) => {
-      matches = next;
-      act(() => listeners.forEach((listener) => listener()));
-    };
-  }
-
   /** The proof, suggestions and move-instruction panels, in the order they appear in the page. */
   function panelOrder(): string[] {
     const panels: Array<[string, HTMLElement]> = [
@@ -1899,20 +1890,21 @@ describe("StoredProofWorkspace layout", () => {
     expect(panelOrder()).toEqual(["proof", "suggestions", "moves"]);
   });
 
-  it("puts the move instructions before the suggestions in two columns, keeping their state", () => {
-    const setWide = stubWideLayout(true);
+  it("keeps draft instructions when their disclosure is closed and reopened", () => {
     vi.stubGlobal(
       "fetch",
       mockWithHistory(() => Promise.reject(new Error("Unexpected request"))),
     );
     render(<StoredProofWorkspace session={session} node={node} aiExecutor />);
-    expect(panelOrder()).toEqual(["proof", "moves", "suggestions"]);
-
+    const disclosure = screen
+      .getByText("Describe a step", { selector: "summary" })
+      .closest("details")!;
+    expect(disclosure).not.toHaveAttribute("open");
+    disclosure.open = true;
     const box = screen.getByRole("textbox", { name: "Describe a step" });
     fireEvent.change(box, { target: { value: "split into cases" } });
-    setWide(false);
-    expect(panelOrder()).toEqual(["proof", "suggestions", "moves"]);
-    // The same textarea, still holding what was typed: the panels moved, they did not remount.
+    disclosure.open = false;
+    disclosure.open = true;
     expect(screen.getByRole("textbox", { name: "Describe a step" })).toBe(box);
     expect(box).toHaveValue("split into cases");
   });

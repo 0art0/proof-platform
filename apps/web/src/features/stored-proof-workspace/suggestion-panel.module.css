@@ -6,7 +6,7 @@
  * classification, a disclosure for match details, and actions for the current stage.
  * Colour appears only where it carries meaning: strengthening (goal blue), weakening and sorry
  * (warning), and the +/- markers of a preview. The previewPanel/previewHeading/previewMeaning/
- * previewCounts/badgeRow classes are also used by the move executor's preview card.
+ * badgeRow class are also used by the move executor's preview card.
  */
 
 .suggestionPanel {
@@ -209,20 +209,11 @@
   text-transform: uppercase;
 }
 
-/* The reason a step needs input is a plain line; the status pill and the tag say the rest. */
-.missingInput {
-  display: grid;
-  gap: var(--space-1);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
 .chooseInputs {
   composes: secondary small from "../../ui/controls.module.css";
   width: fit-content;
 }
 
-/* Preview and Apply are short enough to share one row at the narrowest rail width. */
 .cardActions {
   display: flex;
   flex-wrap: wrap;
@@ -328,12 +319,6 @@
   cursor: pointer;
 }
 
-.menuAlias {
-  color: var(--text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
 .menuOrigin {
   color: var(--text-subtle);
   font-size: var(--text-xs);
@@ -414,34 +399,6 @@
 
 .previewMeaning {
   composes: hint from "../../ui/controls.module.css";
-}
-
-.previewCounts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-4);
-  margin: 0;
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.previewCounts > div {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-}
-
-.previewCounts dt {
-  color: var(--text-muted);
-}
-
-.previewCounts dd {
-  margin: 0;
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
 }
 
 .previewPanel .changeList {

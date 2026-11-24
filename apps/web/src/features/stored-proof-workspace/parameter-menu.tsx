@@ -72,28 +72,25 @@ export function ParameterMenu({
   const [choices, setChoices] = useState<MenuChoices>(() => ({ ...submitted }));
   const groupId = useId();
   const missing = new Set(missingParameters);
-  const complete = missingParameters.every((parameterId) => choices[parameterId] !== undefined);
-  const submit = () => {
-    // Keep only choices that name an item of a displayed menu.
-    const valid: MenuChoices = {};
-    for (const menu of menus) {
-      const itemId = choices[menu.parameterId];
-      if (itemId !== undefined && menu.items.some(({ id }) => id === itemId)) {
-        valid[menu.parameterId] = itemId;
-      }
+  const validChoices: MenuChoices = {};
+  for (const menu of menus) {
+    const itemId = choices[menu.parameterId];
+    if (itemId !== undefined && menu.items.some(({ id }) => id === itemId)) {
+      validChoices[menu.parameterId] = itemId;
     }
-    onSubmit(valid);
-  };
+  }
+  const complete = missingParameters.every(
+    (parameterId) => validChoices[parameterId] !== undefined,
+  );
   return (
     <form
       className={styles.parameterMenu}
       aria-label={`Parameter menus for ${suggestionName}`}
       onSubmit={(event) => {
         event.preventDefault();
-        if (complete && !pending) submit();
+        if (complete && !pending) onSubmit(validChoices);
       }}
     >
-      <strong>Choose inputs from the menus</strong>
       {menus.map((menu, menuIndex) => {
         const legendId = `${groupId}-${menuIndex}`;
         if (menu.automatic && !missing.has(menu.parameterId)) {
@@ -141,9 +138,6 @@ export function ParameterMenu({
                       setChoices((current) => ({ ...current, [menu.parameterId]: item.id }))
                     }
                   />
-                  <span className={styles.menuAlias} aria-hidden="true">
-                    {item.alias}
-                  </span>
                   <MenuItemLabel item={item} presentation={presentation} view={view} />
                   <small className={styles.menuOrigin}>{ORIGINS[item.origin.kind]}</small>
                 </label>

@@ -91,8 +91,12 @@ test("a finished step is saved as a lemma keeping only used hypotheses, approved
   await drawer.getByRole("button", { name: /Close/ }).click();
 
   // On another branch (the root) the approved lemma is offered for the goal.
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${rootId}"]`).click();
-  await expect(page.getByText(`Backtracked to ${rootId}.`, { exact: true })).toBeVisible(COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible(COMMAND);
   await selectInAnyField(goalField, Q_AND_P);
   const card = page.locator('[data-artifact-id^="result:lemma."]');
   await expect(card).toBeVisible(COMMAND);

@@ -290,9 +290,9 @@ export function SuggestionPanel({
           findMoreDisabledReason={findMoreDisabledReason}
         />
       ) : null}
-      {onRelationChange ? (
+      {onRelationChange && (displayedSet !== undefined || relation !== "") ? (
         <label className={styles.relationFilter}>
-          Work with
+          Rewrites
           <select
             aria-label="Relation focus"
             value={relation}
@@ -436,12 +436,11 @@ function bindActions(
 }
 
 function suggestionStatusText(state: SuggestionState): string {
-  if (state.kind === "idle")
-    return "Click a goal, an assumption, or part of a formula to see what you can do next.";
+  if (state.kind === "idle") return "Select a goal, hypothesis or part of a formula.";
   if (state.kind === "loading") return "Finding suggestions for the current selection…";
   if (state.kind === "empty") return "No matching suggestions for this selection.";
   if (state.kind === "stale") return `This selection is out of date: ${state.message}`;
   if (state.kind === "rejected") return `Could not find suggestions: ${state.message}`;
   const count = state.suggestionSet.suggestions.length;
-  return `${count} suggestion${count === 1 ? "" : "s"} available. Preview a step before applying it.`;
+  return `${count} suggestion${count === 1 ? "" : "s"}`;
 }

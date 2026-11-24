@@ -297,10 +297,10 @@ describe("abstract selections in the stored workspace", () => {
     await selectGoal();
     fireEvent.click(screen.getByRole("button", { name: "Abstract this selection" }));
     await waitFor(() => expect(callsTo("/suggestion-sets")).toHaveLength(2));
-    const card = (await screen.findByText("Choose from the current context to continue")).closest(
-      "li",
-    )!;
-    expect(within(card).getByRole("button", { name: "Preview changes" })).toBeDisabled();
+    const card = (
+      await screen.findByText("Search-only result. Select a concrete expression to use it.")
+    ).closest("li")!;
+    expect(within(card).queryByRole("button", { name: "Preview changes" })).toBeNull();
     expect(within(card).queryByRole("button", { name: "Apply this step" })).not.toBeInTheDocument();
     expect(callsTo("/move-previews")).toHaveLength(0);
     expect(callsTo("/commands")).toHaveLength(0);
@@ -310,7 +310,9 @@ describe("abstract selections in the stored workspace", () => {
     await waitFor(() => expect(callsTo("/suggestion-sets")).toHaveLength(3));
     expect(suggestionBodies()[2]).toEqual([{ kind: "exact", anchor: goalAnchor, path: [] }]);
     await waitFor(() =>
-      expect(screen.queryByText("Choose from the current context to continue")).toBeNull(),
+      expect(
+        screen.queryByText("Search-only result. Select a concrete expression to use it."),
+      ).toBeNull(),
     );
     fireEvent.click(await screen.findByRole("button", { name: "Preview changes" }));
     await screen.findByLabelText("Move preview");

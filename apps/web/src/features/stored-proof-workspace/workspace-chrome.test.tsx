@@ -49,12 +49,12 @@ describe("branchBreadcrumb", () => {
       edge("node:a", "node:c", "Close"),
     ];
     expect(branchBreadcrumb(nodes, edges, "node:c")).toEqual([
-      { nodeId: "node:root", label: "Root" },
+      { nodeId: "node:root", label: "Start" },
       { nodeId: "node:a", label: "Split" },
       { nodeId: "node:c", label: "Close" },
     ]);
     expect(branchBreadcrumb(nodes, edges, "node:root")).toEqual([
-      { nodeId: "node:root", label: "Root" },
+      { nodeId: "node:root", label: "Start" },
     ]);
   });
 
@@ -85,12 +85,10 @@ describe("WorkspaceHeader", () => {
     counts: { goals: 1, obligations: 1 },
   } as const;
 
-  it("falls back to the session id as title and hides an absent background", () => {
+  it("gives an untitled proof a readable title and hides an absent background", () => {
     render(<WorkspaceHeader {...baseProps} breadcrumb={{ kind: "loading" }} />);
-    expect(screen.getByRole("heading", { level: 1, name: "session:test" })).toBeVisible();
-    expect(screen.getAllByText("session:test")).toHaveLength(1);
-    expect(screen.getByText("Proof session")).toBeVisible();
-    expect(screen.getByText("Current node node:c")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Untitled proof" })).toBeVisible();
+    expect(screen.getByLabelText("Problem")).toHaveAttribute("data-node-id", "node:c");
     expect(screen.getByText("Loading branch…")).toBeVisible();
     expect(document.querySelector("header p:nth-of-type(3)")).toBeNull();
   });
@@ -173,8 +171,8 @@ describe("WorkspaceHeader", () => {
       <WorkspaceHeader {...baseProps} breadcrumb={{ kind: "loading" }} />,
     );
     const status = screen.getByTestId("snapshot-status");
-    expect(status).toHaveTextContent("Snapshot targets: Open: 1 goal, 1 obligation");
-    expect(status).toHaveAttribute("title", expect.stringContaining("not a provability check"));
+    expect(status).toHaveTextContent("Open: 1 goal, 1 obligation");
+    expect(screen.queryByRole("link", { name: "View proof" })).toBeNull();
     expect(status).toHaveAttribute("data-closed", "false");
 
     rerender(
@@ -195,7 +193,7 @@ describe("WorkspaceHeader", () => {
         breadcrumb={{
           kind: "ready",
           crumbs: [
-            { nodeId: "node:root", label: "Root" },
+            { nodeId: "node:root", label: "Start" },
             { nodeId: "node:a", label: "Split" },
             { nodeId: "node:c", label: "Close" },
           ],
@@ -204,7 +202,7 @@ describe("WorkspaceHeader", () => {
     );
     const nav = screen.getByRole("navigation", { name: "Current branch" });
     const items = within(nav).getAllByRole("listitem");
-    expect(items.map((item) => item.textContent)).toEqual(["Root", "Split", "Close"]);
+    expect(items.map((item) => item.textContent)).toEqual(["Start", "Split", "Close"]);
     expect(items[2]).toHaveAttribute("aria-current", "step");
     expect(items[0]).not.toHaveAttribute("aria-current");
   });
@@ -332,7 +330,7 @@ describe("WorkspaceToolbar", () => {
 });
 
 describe("WorkspaceHeader problem statement", () => {
-  it("shows the title as the heading, the session id as the eyebrow, and the statement collapsed", () => {
+  it("shows the title and keeps the problem statement collapsed", () => {
     render(
       <WorkspaceHeader
         sessionId="session:test"
@@ -346,7 +344,6 @@ describe("WorkspaceHeader problem statement", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "Commute a conjunction" }),
     ).toHaveAttribute("title", "session:test");
-    expect(screen.getByText("session:test")).toBeVisible();
     const details = screen.getByText("Problem statement").closest("details")!;
     expect(details).not.toHaveAttribute("open");
     expect(details).toHaveTextContent("Show that p and q implies q and p.");

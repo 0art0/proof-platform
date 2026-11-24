@@ -232,20 +232,12 @@ export function GestureTray({ bindings, selections, view, abstraction }: Gesture
   const showActions = only !== undefined;
   return (
     <section className={styles.tray} aria-label="Drag gestures" data-gesture-tray>
-      <p className={styles.help} data-testid="gesture-help">
-        {bindings.disabledReason !== undefined
-          ? `Drag gestures are unavailable: ${bindings.disabledReason}.`
-          : view === "formal"
-            ? "Tip: drag a hypothesis, a term or a library result onto an expression to preview a move."
-            : "Switch to the formal view to drag and drop."}
-      </p>
       {bindings.disabledReason === undefined && view === "formal" ? (
         <details className={styles.trayDetails}>
           <summary>Dragging and keyboard help</summary>
-          <p className={styles.help}>
-            Drag a hypothesis onto a goal or another hypothesis, a term onto another occurrence, or
-            a library result onto an expression. Every drop shows a preview first. Keyboard: pick
-            something up, select the target, then choose Drop on selection.
+          <p className={styles.help} data-testid="gesture-help">
+            Drag a hypothesis, a term or a library result onto an expression to preview a move. With
+            the keyboard, pick it up, select the target, then choose Drop on selection.
           </p>
         </details>
       ) : null}
@@ -261,7 +253,7 @@ export function GestureTray({ bindings, selections, view, abstraction }: Gesture
               <span className={styles.help}>{SOURCE_NAMES[selectionSource.kind]} selected</span>
             </>
           )}
-          {dropButtons}
+          {carrying === undefined ? null : dropButtons}
         </div>
       ) : null}
       {abstraction === undefined ? null : (

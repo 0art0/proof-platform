@@ -37,7 +37,7 @@ export function PreviewDetails({
   return (
     <section className={styles.previewPanel} aria-label="Move preview">
       <div className={styles.previewHeading}>
-        <strong>Review the changes before applying</strong>
+        <strong>Preview</strong>
         <span className={styles.badgeRow}>
           {evidence === "sorry" ? null : (
             <TransitionClassBadge transitionClass={preview.transitionClass} />
@@ -62,16 +62,6 @@ export function PreviewDetails({
         </details>
       ) : null}
       <PreviewConstantsNote constants={preview.constants} />
-      <dl className={styles.previewCounts}>
-        <div>
-          <dt>Goals</dt>
-          <dd>{deltaText(preview.delta.goals)}</dd>
-        </div>
-        <div>
-          <dt>Obligations</dt>
-          <dd>{deltaText(preview.delta.obligations)}</dd>
-        </div>
-      </dl>
       {preview.macro === undefined ? null : <MacroSteps steps={preview.macro.steps} />}
       {chosen.length > 0 ? (
         <div>
@@ -107,11 +97,9 @@ export function StateChangeSections({
   const otherChanges = diff.changes.filter((change) => !isNewObligation(change));
   return (
     <>
-      <div>
-        <strong>State changes</strong>
-        {otherChanges.length === 0 ? (
-          <p>No goal or obligation changes besides new obligations.</p>
-        ) : (
+      {otherChanges.length > 0 ? (
+        <div>
+          <strong>Changes</strong>
           <ul className={styles.changeList} aria-label="State changes">
             {otherChanges.map((change) => (
               <ChangeItem
@@ -122,13 +110,11 @@ export function StateChangeSections({
               />
             ))}
           </ul>
-        )}
-      </div>
-      <div>
-        <strong>New obligations</strong>
-        {newObligations.length === 0 ? (
-          <p>None.</p>
-        ) : (
+        </div>
+      ) : null}
+      {newObligations.length > 0 ? (
+        <div>
+          <strong>New obligations</strong>
           <ul className={styles.changeList} aria-label="New obligations">
             {newObligations.map((change) => (
               <ChangeItem
@@ -139,8 +125,8 @@ export function StateChangeSections({
               />
             ))}
           </ul>
-        )}
-      </div>
+        </div>
+      ) : null}
       {diff.assumptionsAdded.length > 0 ? (
         <div>
           <strong>New additional assumptions</strong>
@@ -186,11 +172,6 @@ function constantNames(constants: readonly PreviewConstant[]): string {
   return names.length <= 1
     ? (names[0] ?? "")
     : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
-/** The goal/obligation delta line, `+1 −1 ~0`, exactly as the preview panel writes it. */
-export function deltaText(delta: MovePreview["delta"]["goals"]): string {
-  return `+${delta.added.length} −${delta.removed.length} ~${delta.updated.length}`;
 }
 
 /** What one macro step changed, in words: counts only, since the final state is shown below. */

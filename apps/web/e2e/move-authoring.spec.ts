@@ -135,10 +135,12 @@ test("a move authored from a recorded step is validated, approved, then offered 
   // after the first split, where "q and p" is still an open goal.
   await page.goto(workspace);
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 4 goals/, COMMAND);
+  await page.getByText("Proof history", { exact: true }).click();
   await page.locator(`[data-history-node-id="${firstSplit}"]`).click();
-  await expect(page.getByText(`Backtracked to ${firstSplit}.`, { exact: true })).toBeVisible(
-    COMMAND,
-  );
+  await page.getByText("Proof history", { exact: true }).click();
+  await expect(
+    page.getByText("Returned to the selected proof state.", { exact: true }),
+  ).toBeVisible(COMMAND);
   await expect(page.getByTestId("snapshot-status")).toHaveText(/Open: 3 goals/, COMMAND);
   await expect(page.getByLabel("Goal 3 conclusion")).toBeVisible();
   await selectInAnyField(page.locator('[aria-label$="conclusion"]'), Q_AND_P);

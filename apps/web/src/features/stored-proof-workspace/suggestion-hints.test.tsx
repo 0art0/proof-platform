@@ -99,20 +99,19 @@ const abstractionResult = (id: string, name: string) =>
   });
 
 describe("suggestion card guidance", () => {
-  it("explains a disabled Preview on a search-only result", () => {
+  it("explains why a search-only result requires a concrete selection", () => {
     renderPanel({
       kind: "ready",
       suggestionSet: setOf([abstractionResult("suggestion:search-a", "Search only A")]),
       transitionClasses: [],
     });
-    const preview = screen.getByRole("button", { name: "Preview changes" });
-    expect(preview).toBeDisabled();
-    expect(preview).toHaveAccessibleDescription(
-      "Search-only result: select a concrete expression to apply this.",
-    );
+    expect(screen.queryByRole("button", { name: "Preview changes" })).toBeNull();
+    expect(
+      screen.getByText("Search-only result. Select a concrete expression to use it."),
+    ).toBeVisible();
   });
 
-  it("explains a disabled Preview that waits for missing values, with no raw identifiers", () => {
+  it("offers to choose missing values before previewing", () => {
     renderPanel({
       kind: "ready",
       suggestionSet: setOf([
@@ -123,10 +122,8 @@ describe("suggestion card guidance", () => {
       ]),
       transitionClasses: [],
     });
-    expect(screen.getByRole("button", { name: "Preview changes" })).toHaveAccessibleDescription(
-      "Fill in the missing values first, then preview.",
-    );
-    expect(screen.getByRole("button", { name: "Fill in missing values" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Preview changes" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose values" })).toBeEnabled();
     expect(document.body).not.toHaveTextContent("arithmetic-left-distributivity");
   });
 

@@ -65,10 +65,7 @@ export function HistoryView({
                     style={{ paddingLeft: `${depth * 1.1}rem` }}
                   >
                     <strong>Macro: {macroDisplayName(link.moveId, macroNames(macros))}</strong>{" "}
-                    <span>
-                      {link.stepCount} steps applied as one move. Deleting the previous move removes
-                      them all.
-                    </span>
+                    <span>{link.stepCount} steps</span>
                   </li>
                 )}
                 <li
@@ -90,10 +87,10 @@ export function HistoryView({
                     </span>
                     <small>
                       {incoming === undefined
-                        ? `Root · ${node.id}`
+                        ? "Start"
                         : link === undefined
-                          ? `${incoming.name} · ${incoming.edge.transitionClass}${proposalNote(incoming.edge)} · ${node.id}`
-                          : `${macroStepLabel(link, macroNames(macros))} · ${humanizeMoveId(incoming.name)} · ${incoming.edge.transitionClass} · ${node.id}`}
+                          ? `${incoming.name} · ${incoming.edge.transitionClass}${proposalNote(incoming.edge)}`
+                          : `${macroStepLabel(link, macroNames(macros))} · ${humanizeMoveId(incoming.name)} · ${incoming.edge.transitionClass}`}
                     </small>
                   </button>
                 </li>

@@ -329,7 +329,7 @@ describe("drag gestures in the stored workspace", () => {
     fireEvent.click(
       within(preview.closest("li")!).getByRole("button", { name: "Apply this step" }),
     );
-    await screen.findByText(/advanced to node:command:web/);
+    await screen.findByText(/^Applied “/);
     expect(callsTo("/commands")).toHaveLength(1);
   });
 
@@ -428,11 +428,11 @@ describe("drag gestures in the stored workspace", () => {
     });
     render(<StoredProofWorkspace session={session} node={node} />);
     const tray = document.querySelector("[data-gesture-tray]") as HTMLElement;
-    expect(within(tray).getByTestId("gesture-help")).toHaveTextContent("Tip: drag a hypothesis");
+    expect(within(tray).getByTestId("gesture-help")).toHaveTextContent("Drag a hypothesis");
     expect(within(tray).queryAllByRole("button")).toHaveLength(0);
     const help = within(tray).getByText("Dragging and keyboard help").closest("details")!;
     expect(help).not.toHaveAttribute("open");
-    expect(help).toHaveTextContent("Keyboard: pick something up");
+    expect(help).toHaveTextContent("With the keyboard, pick it up");
     click("Pick up hypothesis");
     expect(within(tray).getByRole("button", { name: "Cancel drag" })).toBeEnabled();
   });
@@ -479,13 +479,13 @@ describe("drag gestures in the stored workspace", () => {
     });
     render(<StoredProofWorkspace session={{ ...session, readOnly: true }} node={node} />);
     expect(screen.getByTestId("gestures-enabled")).toHaveTextContent("false");
-    expect(screen.getByTestId("gesture-help")).toHaveTextContent(
+    expect(screen.getByTestId("read-only-reason")).toHaveTextContent(
       "This session is read-only (imported artifact)",
     );
     click("Pick up hypothesis");
     click("Select goal");
     expect(screen.queryByTestId("carrying")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Drop on selection" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Drop on selection" })).toBeNull();
     click("Drop on goal");
     expect(screen.queryByTestId("drag-outcome")).not.toBeInTheDocument();
   });

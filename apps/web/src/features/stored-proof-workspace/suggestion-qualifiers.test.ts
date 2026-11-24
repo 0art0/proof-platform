@@ -29,6 +29,14 @@ describe("suggestionQualifiers", () => {
     expect([...qualifiers.values()]).toEqual(["forward direction", "backward direction"]);
   });
 
+  it("distinguishes applying a result from rewriting with it", () => {
+    const qualifiers = suggestionQualifiers([
+      make("a", "Same", { patternId: "pattern:sum-backward" }),
+      make("b", "Same", { patternId: "rewrite:backward", rewrite: { replacement: "p" } }),
+    ]);
+    expect([...qualifiers.values()]).toEqual(["apply result", "rewrite"]);
+  });
+
   it("falls back to the result, then the instantiation, then a number", () => {
     const byResult = suggestionQualifiers([
       make("a", "Same", { patternId: "pattern:x", artifactId: "result:left" }),

@@ -49,6 +49,7 @@ export function suggestionQualifiers(
       continue;
     }
     const candidates: (readonly string[])[] = [
+      members.map(({ rewrite }) => (rewrite === undefined ? "apply result" : "rewrite")),
       distinguishingTails(members.map(({ patternId }) => patternId)).map(wording),
       distinguishingTails(members.map(({ artifactId }) => artifactId)),
       members.map(({ substitutions }) =>

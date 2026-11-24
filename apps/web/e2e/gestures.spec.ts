@@ -38,7 +38,7 @@ test("dragging a hypothesis onto a goal previews a move and only Apply commits i
 }) => {
   await openFreshSession(page);
   const rootId = await currentNodeId(page);
-  const handle = page.getByRole("button", { name: "hypothesis 1 of goal 1" });
+  const handle = page.getByRole("button", { name: "Drag hypothesis 1 of goal 1", exact: true });
   const goal = page.getByLabel("Goal 1 conclusion");
 
   await handle.dragTo(goal);
@@ -52,7 +52,7 @@ test("dragging a hypothesis onto a goal previews a move and only Apply commits i
   await expect(page.getByLabel("Goal 1 hypothesis 2")).toHaveCount(0);
 
   await card.getByRole("button", { name: "Apply this step" }).click();
-  await expect(page.getByText(/advanced to node:/)).toBeVisible(COMMAND);
+  await expect(page.getByText(/^Applied “/)).toBeVisible(COMMAND);
   expect(await currentNodeId(page)).not.toBe(rootId);
   // The hypothesis conjunction was expanded into its two conjuncts.
   await expect(page.getByLabel("Goal 1 hypothesis 2")).toBeVisible(COMMAND);
@@ -61,7 +61,7 @@ test("dragging a hypothesis onto a goal previews a move and only Apply commits i
 test("the keyboard can pick up a hypothesis and drop it on the selected goal", async ({ page }) => {
   await openFreshSession(page);
   const rootId = await currentNodeId(page);
-  const handle = page.getByRole("button", { name: "hypothesis 1 of goal 1" });
+  const handle = page.getByRole("button", { name: "Drag hypothesis 1 of goal 1", exact: true });
 
   await handle.focus();
   await page.keyboard.press("Enter");
@@ -107,7 +107,7 @@ test("abstracting a selection asks retrieval for abstraction matches without tou
   await expect(card.getByText("Why this was suggested")).toBeVisible(COMMAND);
   await expect(badge).toContainText("Abstraction");
   // An abstraction-backed suggestion needs concrete input: it cannot be previewed or applied.
-  await expect(card.getByRole("button", { name: "Preview changes" })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "Preview changes" })).toHaveCount(0);
   expect(await currentNodeId(page)).toBe(rootId);
 
   // Turning it off restores the concrete suggestions.

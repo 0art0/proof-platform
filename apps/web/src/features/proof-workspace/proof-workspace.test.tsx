@@ -136,9 +136,7 @@ describe("ProofWorkspace", () => {
     expect(obligation).not.toBeNull();
 
     expect(within(goal as HTMLElement).getByRole("heading", { name: "Goal 1" })).toBeVisible();
-    expect(
-      within(goal as HTMLElement).getByRole("heading", { name: "Declarations for goal 1" }),
-    ).toBeVisible();
+    expect(within(goal as HTMLElement).getByRole("heading", { name: "Variables" })).toBeVisible();
     expect(within(goal as HTMLElement).getByText("x")).toBeVisible();
     expect(within(goal as HTMLElement).getByText("c")).toBeVisible();
     expect(within(goal as HTMLElement).queryByText("n")).not.toBeInTheDocument();
@@ -166,45 +164,53 @@ describe("ProofWorkspace", () => {
     });
     expect(goal?.querySelectorAll("math-field")).toHaveLength(3);
     expect(obligation?.querySelectorAll("math-field")).toHaveLength(4);
-    expect(goal?.querySelectorAll("button")).toHaveLength(0);
-    expect(obligation?.querySelectorAll("button")).toHaveLength(0);
+    expect(goal?.querySelectorAll("button")).toHaveLength(3);
+    expect(obligation?.querySelectorAll("button")).toHaveLength(4);
   });
 
   it("replaces, expands, and modifier-toggles occurrence selections", async () => {
-    render(<ProofWorkspace node={proofNode()} />);
+    const onSelectionChange = vi.fn();
+    render(<ProofWorkspace node={proofNode()} onSelectionChange={onSelectionChange} />);
     const goalConclusion = await screen.findByLabelText("Goal 1 conclusion");
     const obligationConclusion = await screen.findByLabelText("Obligation 1 conclusion");
+    const goal = { anchor: expect.objectContaining({ target: { kind: "goal", id: "goal:sum" } }) };
+    const obligation = {
+      anchor: expect.objectContaining({
+        target: { kind: "obligation", id: "obligation:natural-step" },
+      }),
+    };
+    const goalTerm = expect.objectContaining({ ...goal, path: [0] });
+    const wholeGoal = expect.objectContaining({ ...goal, path: [] });
+    const obligationSelection = expect.objectContaining(obligation);
 
     fireEvent.pointerUp(goalConclusion);
-    expect(screen.getByText("goal goal:sum")).toBeVisible();
-    expect(screen.getByText("path 0")).toBeVisible();
-
+    expect(onSelectionChange).toHaveBeenLastCalledWith([goalTerm]);
     fireEvent.pointerUp(goalConclusion);
-    expect(screen.getByText("path root")).toBeVisible();
-
+    expect(onSelectionChange).toHaveBeenLastCalledWith([wholeGoal]);
     fireEvent.pointerUp(obligationConclusion);
-    expect(screen.queryByText("goal goal:sum")).not.toBeInTheDocument();
-    expect(screen.getByText("obligation obligation:natural-step")).toBeVisible();
-    expect(document.querySelectorAll("[data-selection-key]")).toHaveLength(1);
-
+    expect(onSelectionChange).toHaveBeenLastCalledWith([obligationSelection]);
     fireEvent.pointerUp(goalConclusion, { ctrlKey: true });
-    expect(screen.getByText("goal goal:sum")).toBeVisible();
-    expect(screen.getByText("obligation obligation:natural-step")).toBeVisible();
-    expect(document.querySelectorAll("[data-selection-key]")).toHaveLength(2);
-
+    expect(onSelectionChange).toHaveBeenLastCalledWith([obligationSelection, goalTerm]);
     fireEvent.pointerUp(goalConclusion, { ctrlKey: true });
-    expect(screen.queryByText("goal goal:sum")).not.toBeInTheDocument();
-    expect(screen.getByText("obligation obligation:natural-step")).toBeVisible();
+    expect(onSelectionChange).toHaveBeenLastCalledWith([obligationSelection]);
   });
 
   it("clears the active set when any ProofNode snapshot content changes", async () => {
-    const { rerender } = render(<ProofWorkspace node={proofNode()} />);
+    const onSelectionChange = vi.fn();
+    const { rerender } = render(
+      <ProofWorkspace node={proofNode()} onSelectionChange={onSelectionChange} />,
+    );
     fireEvent.pointerUp(await screen.findByLabelText("Goal 1 conclusion"));
-    expect(screen.getByText("goal goal:sum")).toBeVisible();
+    expect(onSelectionChange).toHaveBeenLastCalledWith([expect.any(Object)]);
 
-    rerender(<ProofWorkspace node={proofNode(["Equal", ["Add", "x", "y"], 5])} />);
-    expect(screen.getByText("Nothing selected yet.")).toBeVisible();
-    expect(screen.queryByText("goal goal:sum")).not.toBeInTheDocument();
+    rerender(
+      <ProofWorkspace
+        node={proofNode(["Equal", ["Add", "x", "y"], 5])}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+    expect(onSelectionChange).toHaveBeenLastCalledWith([]);
+    expect(document.querySelectorAll("[data-selection-key]")).toHaveLength(0);
   });
 
   it("notifies controlled selection state when a valid snapshot becomes invalid", async () => {

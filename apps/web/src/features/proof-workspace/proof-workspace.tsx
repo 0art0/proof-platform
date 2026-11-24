@@ -1,16 +1,20 @@
 "use client";
 
 import { useEffect, useId, useMemo, useReducer, useRef } from "react";
-import { createProofNodeSchema, type OperatorDeclaration, type ProofNode } from "@proof/protocol";
 import {
-  formatOperandPath,
+  createProofNodeSchema,
+  PROBLEM_SETUP_SORT_CHOICES,
+  type OperatorDeclaration,
+  type ProofNode,
+} from "@proof/protocol";
+import {
   governingProposition,
   resolveProofSelection,
   type AnchoredProofSelection,
   type ResolveProofSelectionResult,
   type StatementAnchor,
 } from "@proof/selections";
-import { canonicalJson, type PlainMathJson } from "@proof/mathjson-model";
+import { canonicalJson, canonicalJsonEquals, type PlainMathJson } from "@proof/mathjson-model";
 import type { Presentation } from "@proof/language";
 import {
   MathLiveStatement,
@@ -18,7 +22,12 @@ import {
   type MathLiveStatementGesture,
   type SelectionPolarity,
 } from "./mathlive-statement";
-import { NaturalLanguageText, usePresentation, type WorkspaceView } from "./presentation";
+import {
+  NaturalLanguageText,
+  StatementView as PresentedStatement,
+  usePresentation,
+  type WorkspaceView,
+} from "./presentation";
 import {
   EMPTY_SELECTION_GESTURE_STATE,
   describeSelectionFeedback,
@@ -118,7 +127,7 @@ type ValidatedProofWorkspaceProps = Readonly<{
 }>;
 
 const INITIAL_SELECTION_NOTICE =
-  "Click a goal or hypothesis to see relevant results and methods. Ctrl/Cmd-click adds another selection; Escape clears.";
+  "Select a statement by its label or click part of a formula. Ctrl/Cmd-click adds another selection.";
 
 function ValidatedProofWorkspace({
   node,
@@ -133,9 +142,10 @@ function ValidatedProofWorkspace({
     selectionGestureReducer,
     EMPTY_SELECTION_GESTURE_STATE,
   );
-  const presentation = usePresentation(operators);
+  const presentation = usePresentation(operators, node.state);
   const selectionHeadingId = useId();
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const workspaceRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange;
@@ -157,7 +167,12 @@ function ValidatedProofWorkspace({
   useEffect(() => {
     if (!hasSelection) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        workspaceRef.current?.closest("[inert]")
+      )
+        return;
       dispatch({ type: "clear" });
     };
     document.addEventListener("keydown", handleKeyDown);
@@ -179,8 +194,10 @@ function ValidatedProofWorkspace({
     resolved: resolveProofSelection(node.state, selection, { operators }),
   }));
   const selectedAnchors = new Map<string, SelectionPolarity | undefined>();
+  const selectedStatements = new Set<string>();
   for (const { selection, resolved } of resolvedSelections) {
     const key = canonicalJson(selection.anchor);
+    if (selection.kind === "exact" && selection.path.length === 0) selectedStatements.add(key);
     const polarity = resolved.ok ? resolved.selection.position.polarity : undefined;
     const existing = selectedAnchors.get(key);
     // Several selections in one statement with different polarities read as mixed.
@@ -193,24 +210,88 @@ function ValidatedProofWorkspace({
     selectionState.feedback === undefined
       ? view === "formal"
         ? INITIAL_SELECTION_NOTICE
-        : "Switch to the formal view to select goals and hypotheses."
+        : "Select a statement by its label. Switch to LaTeX to select part of a formula."
       : describeSelectionFeedback(selectionState.feedback);
   const statementEnvironment: StatementEnvironment = {
     view,
     presentation,
     operators,
     selectedAnchors,
+    selectedStatements,
     onGesture: handleGesture,
     gestures: view === "formal" ? gestures : undefined,
   };
 
   return (
-    <section className={styles.workspace} aria-label="Proof workspace">
-      <header className={styles.workspaceHeader}>
-        <div>
-          <p className={styles.eyebrow}>Proof snapshot</p>
-          <h2>Goals and obligations</h2>
+    <section ref={workspaceRef} className={styles.workspace} aria-label="Proof workspace">
+      <div className={styles.workspaceBody}>
+        <div className={styles.sequentColumn}>
+          <TargetGroup
+            kind="goal"
+            targets={node.state.goals}
+            stateId={node.state.id}
+            environment={statementEnvironment}
+          />
+          {node.state.obligations.length > 0 ? (
+            <TargetGroup
+              kind="obligation"
+              targets={node.state.obligations}
+              stateId={node.state.id}
+              environment={statementEnvironment}
+            />
+          ) : null}
         </div>
+
+        <aside className={styles.selectionPanel} aria-labelledby={selectionHeadingId}>
+          <h2 className="visually-hidden" id={selectionHeadingId}>
+            Active selections
+          </h2>
+          {hasSelection ? (
+            <>
+              <ol className={styles.selectionList}>
+                {resolvedSelections.map(({ selection, resolved }) => (
+                  <SelectionSummary
+                    key={proofSelectionKey(selection)}
+                    resolved={resolved}
+                    selection={selection}
+                    presentation={presentation}
+                    view={view}
+                  />
+                ))}
+              </ol>
+              <div className={styles.selectionActions}>
+                {suggestionsLink === undefined ? null : (
+                  <a className={styles.suggestionsLink} href={suggestionsLink.href}>
+                    {suggestionsLink.text}
+                  </a>
+                )}
+                <button
+                  className={styles.clearButton}
+                  type="button"
+                  aria-keyshortcuts="Escape"
+                  onClick={() => dispatch({ type: "clear" })}
+                >
+                  Clear selections <kbd aria-hidden="true">Esc</kbd>
+                </button>
+              </div>
+            </>
+          ) : null}
+          <p
+            className={styles.selectionNotice}
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="selection-feedback"
+            data-outcome={selectionState.feedback?.outcome}
+          >
+            {selectionNotice}
+          </p>
+        </aside>
+      </div>
+      <div className={styles.proofDetails}>
+        <details className={styles.legendDetails}>
+          <summary>Colour and symbol key</summary>
+          <FamilyLegend />
+        </details>
         <details className={styles.legendDetails}>
           <summary>Snapshot IDs</summary>
           <dl className={styles.snapshotFacts}>
@@ -224,82 +305,6 @@ function ValidatedProofWorkspace({
             </div>
           </dl>
         </details>
-      </header>
-
-      <div className={styles.workspaceBody}>
-        <div className={styles.sequentColumn}>
-          <details className={styles.legendDetails}>
-            <summary>Colour and symbol key</summary>
-            <FamilyLegend />
-          </details>
-          {view === "natural-language" ? (
-            <p className={styles.viewNote}>
-              Natural-language view is read-only. Switch to the formal view to select occurrences.
-            </p>
-          ) : null}
-          <TargetGroup
-            kind="goal"
-            targets={node.state.goals}
-            stateId={node.state.id}
-            environment={statementEnvironment}
-          />
-          <TargetGroup
-            kind="obligation"
-            targets={node.state.obligations}
-            stateId={node.state.id}
-            environment={statementEnvironment}
-          />
-        </div>
-
-        <aside className={styles.selectionPanel} aria-labelledby={selectionHeadingId}>
-          <div className={styles.selectionHeading}>
-            <div>
-              <p className={styles.eyebrow}>Gesture state</p>
-              <h2 id={selectionHeadingId}>Active selections</h2>
-            </div>
-            <span className={styles.count}>{selectionState.active.length}</span>
-          </div>
-
-          {selectionState.active.length === 0 ? (
-            <p className={styles.emptySelection}>Nothing selected yet.</p>
-          ) : (
-            <ol className={styles.selectionList}>
-              {resolvedSelections.map(({ selection, resolved }) => (
-                <SelectionSummary
-                  key={proofSelectionKey(selection)}
-                  resolved={resolved}
-                  selection={selection}
-                />
-              ))}
-            </ol>
-          )}
-
-          <div className={styles.selectionActions}>
-            {suggestionsLink === undefined || selectionState.active.length === 0 ? null : (
-              <a className={styles.suggestionsLink} href={suggestionsLink.href}>
-                {suggestionsLink.text}
-              </a>
-            )}
-            <button
-              className={styles.clearButton}
-              type="button"
-              disabled={selectionState.active.length === 0}
-              aria-keyshortcuts="Escape"
-              onClick={() => dispatch({ type: "clear" })}
-            >
-              Clear selections <kbd aria-hidden="true">Esc</kbd>
-            </button>
-          </div>
-          <p
-            className={styles.selectionNotice}
-            aria-live="polite"
-            aria-atomic="true"
-            data-testid="selection-feedback"
-            data-outcome={selectionState.feedback?.outcome}
-          >
-            {selectionNotice}
-          </p>
-        </aside>
       </div>
     </section>
   );
@@ -314,6 +319,7 @@ type StatementEnvironment = Readonly<{
   operators: readonly OperatorDeclaration[];
   /** Selected statement anchors, keyed by serialized anchor, with their selection polarity. */
   selectedAnchors: ReadonlyMap<string, SelectionPolarity | undefined>;
+  selectedStatements: ReadonlySet<string>;
   onGesture: (gesture: MathLiveStatementGesture) => void;
   gestures?: GestureBindings | undefined;
 }>;
@@ -382,7 +388,7 @@ function TargetGroup({ kind, targets, stateId, environment }: TargetGroupProps) 
         </span>
       </div>
       {targets.length === 0 ? (
-        <p className={styles.emptyGroup}>No {label.toLowerCase()} in this snapshot.</p>
+        <p className={styles.emptyGroup}>No open {label.toLowerCase()}.</p>
       ) : (
         targets.map((target, index) => (
           <ContextualSequentView
@@ -433,27 +439,23 @@ function ContextualSequentView({
       data-family={kind}
       data-target-id={target.id}
       aria-labelledby={titleId}
-      title={target.id}
     >
       <header className={styles.sequentHeader}>
         <h3 id={titleId} className={styles.sequentTitle}>
           <FamilyGlyph family={kind} />
           {targetLabel} {ordinal}
         </h3>
-        <p className={styles.sequentKind}>{kind === "goal" ? "Goal" : "Obligation (assumption)"}</p>
       </header>
 
-      <section
-        className={`${styles.contextSection} ${styles.declarations}`}
-        data-family="variable"
-        aria-labelledby={declarationsId}
-      >
-        <h4 id={declarationsId} className={styles.declarationsLabel}>
-          Declarations for {targetLabel.toLowerCase()} {ordinal}
-        </h4>
-        {declarations.length === 0 ? (
-          <p className={styles.emptyContext}>No declarations in this sequent.</p>
-        ) : (
+      {declarations.length > 0 ? (
+        <section
+          className={`${styles.contextSection} ${styles.declarations}`}
+          data-family="variable"
+          aria-labelledby={declarationsId}
+        >
+          <h4 id={declarationsId} className={styles.declarationsLabel}>
+            Variables
+          </h4>
           <ul className={styles.declarationList}>
             {declarations.map((declaration) => (
               <li
@@ -461,30 +463,26 @@ function ContextualSequentView({
                 data-family="variable"
                 aria-label={`Variable ${declaration.symbol}: ${sortLabel(declaration.sort)}, ${declarationRoleLabel(declaration.role).toLowerCase()}`}
               >
-                <FamilyGlyph family="variable" />
-                <span>
-                  <strong>{declaration.symbol}</strong>
+                <strong>{declaration.symbol}</strong>
+                <span>{sortLabel(declaration.sort)}</span>
+                {declaration.role === "universal-parameter" ? null : (
                   <small>{declarationRoleLabel(declaration.role)}</small>
-                </span>
-                <code>{sortLabel(declaration.sort)}</code>
+                )}
               </li>
             ))}
           </ul>
-        )}
-      </section>
+        </section>
+      ) : null}
 
-      <section
-        className={styles.contextSection}
-        data-family="hypothesis"
-        aria-labelledby={hypothesesId}
-      >
-        {/* The H1/H2 tags name the rows for sighted readers; the heading stays for assistive tech. */}
-        <h4 id={hypothesesId} className="visually-hidden">
-          Hypotheses for {targetLabel.toLowerCase()} {ordinal}
-        </h4>
-        {target.sequent.context.hypotheses.length === 0 ? (
-          <p className={styles.emptyContext}>No hypotheses in this sequent.</p>
-        ) : (
+      {target.sequent.context.hypotheses.length > 0 ? (
+        <section
+          className={styles.contextSection}
+          data-family="hypothesis"
+          aria-labelledby={hypothesesId}
+        >
+          <h4 id={hypothesesId} className="visually-hidden">
+            Hypotheses for {targetLabel.toLowerCase()} {ordinal}
+          </h4>
           <ol className={styles.statementList}>
             {target.sequent.context.hypotheses.map((hypothesis, index) => {
               const anchor: StatementAnchor = {
@@ -494,14 +492,13 @@ function ContextualSequentView({
               };
               return (
                 <li key={hypothesis.id} data-family="hypothesis" data-polarity="negative">
-                  <span
-                    className={styles.statementLabel}
-                    data-family="hypothesis"
-                    title={`Hypothesis ${index + 1}`}
+                  <StatementSelector
+                    anchor={anchor}
+                    environment={environment}
+                    label={`Select hypothesis ${index + 1} of ${targetLabel.toLowerCase()} ${ordinal}`}
                   >
-                    <span aria-hidden="true">H{index + 1}</span>
-                    <span className="visually-hidden">Hypothesis {index + 1}</span>
-                  </span>
+                    H{index + 1}
+                  </StatementSelector>
                   <StatementView
                     anchor={anchor}
                     declarations={declarations}
@@ -514,8 +511,8 @@ function ContextualSequentView({
               );
             })}
           </ol>
-        )}
-      </section>
+        </section>
+      ) : null}
 
       <section
         className={styles.conclusionSection}
@@ -527,9 +524,13 @@ function ContextualSequentView({
           Conclusion for {targetLabel.toLowerCase()} {ordinal}
         </h4>
         <div className={styles.conclusionRow}>
-          <span className={styles.turnstile} aria-hidden="true">
-            ⊢
-          </span>
+          <StatementSelector
+            anchor={conclusionAnchor}
+            environment={environment}
+            label={`Select ${targetLabel.toLowerCase()} ${ordinal}`}
+          >
+            {kind === "goal" ? "Goal" : "Prove"}
+          </StatementSelector>
           <StatementView
             anchor={conclusionAnchor}
             declarations={declarations}
@@ -540,6 +541,38 @@ function ContextualSequentView({
         </div>
       </section>
     </article>
+  );
+}
+
+function StatementSelector({
+  anchor,
+  environment,
+  label,
+  children,
+}: Readonly<{
+  anchor: StatementAnchor;
+  environment: StatementEnvironment;
+  label: string;
+  children: React.ReactNode;
+}>) {
+  return (
+    <button
+      type="button"
+      className={styles.statementLabel}
+      data-family={anchor.statement.kind === "hypothesis" ? "hypothesis" : anchor.target.kind}
+      aria-label={label}
+      aria-pressed={environment.selectedStatements.has(canonicalJson(anchor))}
+      title={label}
+      onClick={(event) =>
+        environment.onGesture({
+          selection: { kind: "exact", anchor, path: [] },
+          modifier: event.ctrlKey || event.metaKey,
+          repeatable: false,
+        })
+      }
+    >
+      {children}
+    </button>
   );
 }
 
@@ -637,34 +670,33 @@ function declarationRoleLabel(
 }
 
 function sortLabel(sort: Target["sequent"]["context"]["declarations"][number]["sort"]): string {
+  const known = PROBLEM_SETUP_SORT_CHOICES.find((choice) => canonicalJsonEquals(choice.sort, sort));
+  if (known !== undefined) return known.label;
   if (sort.kind === "proposition") return "proposition";
   if (sort.kind === "named") {
     const sortArguments = sort.arguments?.map(sortLabel).join(", ");
-    return sortArguments ? `${sort.id}<${sortArguments}>` : sort.id;
+    const name = sort.id.replace(/^sort:/, "");
+    return sortArguments ? `${name} (${sortArguments})` : name;
   }
   return `(${sort.signature.parameters.map(sortLabel).join(", ")}) → ${sortLabel(
     sort.signature.result,
   )}`;
 }
 
-type SelectionSummaryProps = Readonly<{
+function SelectionSummary({
+  selection,
+  resolved,
+  presentation,
+  view,
+}: Readonly<{
   selection: AnchoredProofSelection;
   resolved: ResolveProofSelectionResult;
-}>;
-
-function SelectionSummary({ selection, resolved }: SelectionSummaryProps) {
-  const path =
-    selection.kind === "exact"
-      ? formatOperandPath(selection.path)
-      : `${formatOperandPath(selection.containerPath)} [${selection.startOperand}, ${
-          selection.endOperand
-        })`;
-  const statement = selection.anchor.statement;
-  const statementLabel =
-    statement.kind === "conclusion" ? "conclusion" : `hypothesis ${statement.id}`;
+  presentation: Presentation;
+  view: WorkspaceView;
+}>) {
+  const family =
+    selection.anchor.statement.kind === "hypothesis" ? "hypothesis" : selection.anchor.target.kind;
   const polarity = resolved.ok ? resolved.selection.position.polarity : undefined;
-  const family: Family =
-    statement.kind === "hypothesis" ? "hypothesis" : selection.anchor.target.kind;
 
   return (
     <li
@@ -672,20 +704,16 @@ function SelectionSummary({ selection, resolved }: SelectionSummaryProps) {
       data-family={family}
       data-polarity={polarity}
     >
-      <p>
-        <FamilyGlyph family={family} />
-        <strong>
-          {selection.anchor.target.kind} {selection.anchor.target.id}
-        </strong>
-        <span>{statementLabel}</span>
-        {polarity === undefined ? null : <span>{POLARITY_LABELS[polarity]}</span>}
-      </p>
-      <code className={styles.selectionPath}>
-        {selection.kind === "exact" ? `path ${path}` : `lens ${path}`}
-      </code>
-      <pre>
-        {resolved.ok ? JSON.stringify(resolved.selection.fragment) : "Unavailable occurrence"}
-      </pre>
+      <span>{FAMILIES[family].label}</span>
+      {resolved.ok ? (
+        <PresentedStatement
+          expression={resolved.selection.fragment}
+          presentation={presentation}
+          view={view}
+        />
+      ) : (
+        "Selection unavailable"
+      )}
     </li>
   );
 }
