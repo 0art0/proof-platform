@@ -150,7 +150,7 @@ export function ArtifactDownload({
         aria-label="Saved proof ID to download"
         placeholder="session:…"
         required
-        pattern="[A-Za-z0-9][A-Za-z0-9._:/\-]*"
+        pattern="\s*[A-Za-z0-9][A-Za-z0-9._:\/\-]*\s*"
         value={sessionId}
         onChange={(event) => {
           setSessionId(event.currentTarget.value);

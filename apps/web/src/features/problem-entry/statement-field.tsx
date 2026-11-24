@@ -41,29 +41,6 @@ export function statementFeedback(
     : { kind: "error", message: parsed.diagnostics.map(({ message }) => message).join(" ") };
 }
 
-const rowFeedbackCache = new WeakMap<LatexRenderer, WeakMap<StatementRow, StatementFeedback>>();
-
-/**
- * `statementFeedback` of a form row, remembered per row object and renderer. The form replaces a
- * row when it is edited, so a keystroke parses only the edited row again.
- */
-export function cachedStatementFeedback(
-  row: StatementRow,
-  latex: LatexRenderer,
-): StatementFeedback {
-  let rows = rowFeedbackCache.get(latex);
-  if (rows === undefined) {
-    rows = new WeakMap();
-    rowFeedbackCache.set(latex, rows);
-  }
-  let feedback = rows.get(row);
-  if (feedback === undefined) {
-    feedback = statementFeedback(row, latex);
-    rows.set(row, feedback);
-  }
-  return feedback;
-}
-
 function recognized(expression: PlainMathJson, latex: LatexRenderer): StatementFeedback {
   const mathJson = JSON.stringify(expression);
   try {
@@ -113,7 +90,8 @@ export function StatementPreview({
 export function StatementField({
   label,
   row,
-  feedback,
+  latex,
+  packs = [],
   onChange,
   onRemove,
   required,
@@ -124,11 +102,12 @@ export function StatementField({
   /** Tints the row in its proof family's colour; the label always names the family too. */
   family?: "goal" | "hypothesis";
   row: StatementRow;
-  /** How the row reads, from `statementFeedback`; the form also reads it for the setup progress. */
-  feedback: StatementFeedback;
+  latex: LatexRenderer;
+  packs?: readonly string[];
   onChange: (row: StatementRow) => void;
   onRemove?: (() => void) | undefined;
 }>) {
+  const feedback = useMemo(() => statementFeedback(row, latex), [row, latex]);
   const input = useRef<HTMLTextAreaElement>(null);
   const insertSymbol = (symbol: string) => {
     const field = input.current;
@@ -201,17 +180,19 @@ export function StatementField({
       />
       {row.format === "latex" ? (
         <div className={styles.symbolPicker} role="group" aria-label={`Symbols for ${label}`}>
-          {STATEMENT_SYMBOLS.map(({ symbol, label: name }) => (
-            <button
-              key={symbol}
-              type="button"
-              title={name}
-              aria-label={`Insert ${name}`}
-              onClick={() => insertSymbol(symbol)}
-            >
-              {symbol}
-            </button>
-          ))}
+          {STATEMENT_SYMBOLS.filter(({ pack }) => pack === undefined || packs.includes(pack)).map(
+            ({ symbol, label: name }) => (
+              <button
+                key={symbol}
+                type="button"
+                title={name}
+                aria-label={`Insert ${name}`}
+                onClick={() => insertSymbol(symbol)}
+              >
+                {symbol}
+              </button>
+            ),
+          )}
         </div>
       ) : null}
       {feedback.kind === "parsed" ? (

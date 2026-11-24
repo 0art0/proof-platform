@@ -188,8 +188,15 @@ test("a proof can be renamed while it is being explored", async ({ page }) => {
 });
 
 test("an unknown proof shows a page with a way back", async ({ page }) => {
-  await page.goto("/sessions/session%3Adoes-not-exist");
+  await page.goto("/");
+  await page.getByText("Resume a saved proof").click();
+  const id = page.getByLabel("Saved proof ID", { exact: true });
+  await id.fill("a b");
+  expect(await id.evaluate((field: HTMLInputElement) => field.validity.patternMismatch)).toBe(true);
+  await id.fill("session:does-not-exist");
+  await page.getByRole("button", { name: "Resume proof" }).click();
   await expect(page.getByRole("heading", { name: "Proof not found" })).toBeVisible();
   await page.getByRole("link", { name: "Back to the start" }).click();
   await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("region", { name: "Recent proofs" })).toHaveCount(0);
 });

@@ -4,12 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLatexRenderer } from "@proof/language";
-import {
-  StatementField,
-  StatementPreview,
-  cachedStatementFeedback,
-  statementFeedback,
-} from "./statement-field";
+import { StatementField, StatementPreview, statementFeedback } from "./statement-field";
 import type { StatementRow } from "./draft-form";
 
 afterEach(cleanup);
@@ -19,13 +14,7 @@ const latex = createLatexRenderer();
 function field(row: Pick<StatementRow, "format" | "text">) {
   const full: StatementRow = { key: 7, ...row };
   const { container } = render(
-    <StatementField
-      label="Goal 1"
-      family="goal"
-      row={full}
-      feedback={statementFeedback(full, latex)}
-      onChange={vi.fn()}
-    />,
+    <StatementField label="Goal 1" family="goal" row={full} latex={latex} onChange={vi.fn()} />,
   );
   return container;
 }
@@ -52,24 +41,18 @@ describe("statementFeedback", () => {
   });
 });
 
-describe("cachedStatementFeedback", () => {
-  it("parses a row object once per renderer and parses an edited row again", () => {
-    // The shared renderer is frozen, so count through a copy of it.
+describe("StatementField feedback", () => {
+  it("reuses a row's preview until its text or renderer changes", () => {
     const parse = vi.fn(latex.parse);
-    const counted = { ...latex, parse };
-    const row: StatementRow = { key: 1, format: "latex", text: "p \\lor q" };
-
-    const first = cachedStatementFeedback(row, counted);
-    expect(first).toEqual(statementFeedback(row, latex));
-    expect(parse).toHaveBeenCalledOnce();
-    expect(cachedStatementFeedback(row, counted)).toBe(first);
-    expect(parse).toHaveBeenCalledOnce();
-
-    const edited = cachedStatementFeedback({ ...row, text: "p \\land q" }, counted);
+    const renderer = { ...latex, parse };
+    const row: StatementRow = { key: 1, format: "latex", text: "p ∨ q" };
+    const props = { label: "Goal 1", row, latex: renderer, onChange: vi.fn() };
+    const { rerender } = render(<StatementField {...props} />);
+    rerender(<StatementField {...props} label="Goal 2" />);
+    expect(parse).toHaveBeenCalledTimes(1);
+    rerender(<StatementField {...props} row={{ ...row, text: "p ∧ q" }} />);
     expect(parse).toHaveBeenCalledTimes(2);
-    expect(edited).toMatchObject({ kind: "parsed", mathJson: '["And","p","q"]' });
-
-    expect(cachedStatementFeedback(row, { ...counted })).not.toBe(first);
+    rerender(<StatementField {...props} latex={{ ...renderer }} />);
     expect(parse).toHaveBeenCalledTimes(3);
   });
 });

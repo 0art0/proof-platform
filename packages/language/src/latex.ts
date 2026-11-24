@@ -541,19 +541,20 @@ function parseEntries(operator: OperatorDeclaration): Partial<LatexDictionaryEnt
   const latex = operator.presentation?.latex;
   const parse = latex?.parse;
   if (latex === undefined || parse === undefined) return [];
+  // These entries add input spellings. Serialization uses the operator presentation above.
   if (parse.notation === "function") {
     const named = /^\\(?:operatorname|mathrm)\{([A-Za-z][A-Za-z0-9]*)\}$/.exec(parse.trigger)?.[1];
     return [
       named === undefined
-        ? { kind: "function", name: operator.symbol, latexTrigger: parse.trigger }
-        : { kind: "function", name: operator.symbol, symbolTrigger: named },
+        ? { kind: "function", parse: operator.symbol, latexTrigger: parse.trigger }
+        : { kind: "function", parse: operator.symbol, symbolTrigger: named },
     ];
   }
   if (parse.notation === "infix") {
     return [
       {
         kind: "infix",
-        name: operator.symbol,
+        parse: operator.symbol,
         latexTrigger: parse.trigger,
         precedence: COMPUTE_ENGINE_INFIX_PRECEDENCE[latex.precedence],
         associativity: "none",
@@ -563,7 +564,7 @@ function parseEntries(operator: OperatorDeclaration): Partial<LatexDictionaryEnt
   return [
     {
       kind: "prefix",
-      name: operator.symbol,
+      parse: operator.symbol,
       latexTrigger: parse.trigger,
       precedence: COMPUTE_ENGINE_PREFIX_PRECEDENCE,
     },

@@ -231,6 +231,16 @@ describe("LaTeX parsing", () => {
     },
   );
 
+  it("reads the standard and session spellings of divisibility with the same dictionary", () => {
+    for (const spelling of [String.raw`a \mid b`, String.raw`a \divides b`]) {
+      expect(renderer.parse(spelling)).toEqual({
+        ok: true,
+        expression: ["Divides", "a", "b"],
+        diagnostics: [],
+      });
+    }
+  });
+
   it("parses custom triggers only when the operator is registered", () => {
     const withOperators = parseLatex("\\operatorname{gcd}\\left(a, b\\right)", {
       operators: OPERATORS,

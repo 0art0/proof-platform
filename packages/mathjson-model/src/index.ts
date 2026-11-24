@@ -186,29 +186,7 @@ export function parsePlainMathJson(source: string): PlainMathJson | undefined {
 }
 
 export function mathJsonEquals(left: PlainMathJson, right: PlainMathJson): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => mathJsonEquals(value, right[index] as PlainMathJson))
-    );
-  }
-  if (!isRecord(left) || !isRecord(right)) return false;
-
-  const leftRecord: Readonly<Record<string, unknown>> = left;
-  const rightRecord: Readonly<Record<string, unknown>> = right;
-  const leftKeys = Object.keys(leftRecord).sort();
-  const rightKeys = Object.keys(rightRecord).sort();
-  if (
-    leftKeys.length !== rightKeys.length ||
-    leftKeys.some((key, index) => key !== rightKeys[index])
-  ) {
-    return false;
-  }
-
-  return leftKeys.every((key) => jsonValueEquals(leftRecord[key], rightRecord[key]));
+  return jsonValueEquals(left, right);
 }
 
 /**
@@ -216,7 +194,7 @@ export function mathJsonEquals(left: PlainMathJson, right: PlainMathJson): boole
  * objects; a key whose value is `undefined` still counts as a key.
  */
 export function jsonValueEquals(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
+  if (left === right || (Number.isNaN(left) && Number.isNaN(right))) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
     return (
       Array.isArray(left) &&

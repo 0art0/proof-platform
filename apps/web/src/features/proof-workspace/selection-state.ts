@@ -30,6 +30,8 @@ export type SelectionGestureFeedback = Readonly<{
 
 export type SelectionGestureState = Readonly<{
   active: readonly AnchoredProofSelection[];
+  /** Treat the next selection as a modifier-click, then resume ordinary selection. */
+  extendNext?: boolean;
   repetition?: Readonly<{
     sourceKey: string;
     activeKey: string;
@@ -46,6 +48,7 @@ export type SelectionGestureAction =
       repeatable: boolean;
       fallbackReason?: string;
     }>
+  | Readonly<{ type: "toggle-extend" }>
   | Readonly<{ type: "clear" }>
   /** A drag-and-drop or "drop on selection" gesture chooses the complete active set. */
   | Readonly<{ type: "set"; selections: readonly AnchoredProofSelection[] }>;
@@ -80,6 +83,7 @@ export function selectionGestureReducer(
   state: SelectionGestureState,
   action: SelectionGestureAction,
 ): SelectionGestureState {
+  if (action.type === "toggle-extend") return { ...state, extendNext: !state.extendNext };
   if (action.type === "clear") {
     return {
       active: EMPTY_SELECTION_GESTURE_STATE.active,
@@ -97,7 +101,7 @@ export function selectionGestureReducer(
   const fallback =
     action.fallbackReason === undefined ? {} : { fallbackReason: action.fallbackReason };
   const sourceKey = proofSelectionKey(action.selection);
-  if (action.modifier) {
+  if (action.modifier || state.extendNext) {
     const existingIndex = state.active.findIndex(
       (selection) => proofSelectionKey(selection) === sourceKey,
     );

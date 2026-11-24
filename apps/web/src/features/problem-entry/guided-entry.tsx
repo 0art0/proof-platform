@@ -14,6 +14,7 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
+import { useHydrated } from "../hydration/use-hydrated";
 import {
   draftStatementRows,
   emptyProblemForm,
@@ -97,6 +98,7 @@ export function GuidedProblemEntry({
   createId = (prefix) => `${prefix}-${crypto.randomUUID()}`,
   createSessionId = () => `session:${crypto.randomUUID()}`,
 }: GuidedProblemEntryProps) {
+  const hydrated = useHydrated();
   const [constructionId] = useState(() => createId("construction:web"));
   const [statement, setStatement] = useState(initialStatement);
   const [title, setTitle] = useState(initialTitle);
@@ -457,7 +459,11 @@ export function GuidedProblemEntry({
 
   const statementFilled = problem.statement.length > 0;
   return (
-    <fieldset aria-label="Prepare problem" className={styles.guided} disabled={running}>
+    <fieldset
+      aria-label="Prepare problem"
+      className={styles.guided}
+      disabled={!hydrated || running}
+    >
       <form
         className={styles.statementCard}
         aria-label="Problem"

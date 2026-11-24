@@ -268,6 +268,14 @@ function ValidatedProofWorkspace({
                 <button
                   className={styles.clearButton}
                   type="button"
+                  aria-pressed={selectionState.extendNext ?? false}
+                  onClick={() => dispatch({ type: "toggle-extend" })}
+                >
+                  Select another
+                </button>
+                <button
+                  className={styles.clearButton}
+                  type="button"
                   aria-keyshortcuts="Escape"
                   onClick={() => dispatch({ type: "clear" })}
                 >
@@ -283,7 +291,9 @@ function ValidatedProofWorkspace({
             data-testid="selection-feedback"
             data-outcome={selectionState.feedback?.outcome}
           >
-            {selectionNotice}
+            {selectionState.extendNext
+              ? "Choose another statement or part of a formula."
+              : selectionNotice}
           </p>
         </aside>
       </div>

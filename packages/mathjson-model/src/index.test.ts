@@ -135,6 +135,14 @@ describe("plain data helpers", () => {
     expect(canonicalJsonEquals([1, 2], [2, 1])).toBe(false);
   });
 
+  it("compares signed zero consistently before and after a JSON round trip", () => {
+    const expression: PlainMathJson = ["Equal", { fn: ["Add", "x", -0] }, 0];
+    const restored = parsePlainMathJson(JSON.stringify(expression));
+    expect(restored).toBeDefined();
+    expect(mathJsonEquals(expression, restored!)).toBe(true);
+    expect(jsonValueEquals(-0, 0)).toBe(true);
+  });
+
   it("is invariant under key permutation and agrees with jsonValueEquals (property)", () => {
     const permuted = (value: unknown, seed: number): unknown => {
       if (Array.isArray(value)) return value.map((item, index) => permuted(item, seed + index));

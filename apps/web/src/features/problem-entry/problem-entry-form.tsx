@@ -16,6 +16,7 @@ import {
   type ProofNode,
 } from "@proof/protocol";
 import { z } from "zod";
+import { useHydrated } from "../hydration/use-hydrated";
 import {
   draftPathLabel,
   emptyProblemForm,
@@ -28,7 +29,7 @@ import {
   type ProblemForm,
 } from "./draft-form";
 import { recordRecentSession } from "./recent-sessions";
-import { StatementField, StatementPreview, cachedStatementFeedback } from "./statement-field";
+import { StatementField, StatementPreview } from "./statement-field";
 import { Rendered, SetupStatements } from "./setup-statements";
 import { Formula } from "./typeset";
 import styles from "./problem-entry.module.css";
@@ -111,6 +112,7 @@ export function ProblemEntryForm({
   initialTitle = "",
   handover,
 }: ProblemEntryFormProps) {
+  const hydrated = useHydrated();
   const [form, setForm] = useState<ProblemForm>(() => ({
     ...emptyProblemForm(),
     statement: initialStatement,
@@ -172,16 +174,6 @@ export function ProblemEntryForm({
     currentDraftKey === reviewed.draftKey &&
     reviewed.accepted?.decisionId === accepted?.decisionId &&
     reviewed.library?.decisionId === approvedLibrary?.decisionId;
-
-  // How each statement row reads, shown under the field. Only an edited row is parsed again.
-  const hypothesisFeedback = useMemo(
-    () => form.hypotheses.map((row) => cachedStatementFeedback(row, latex)),
-    [form.hypotheses, latex],
-  );
-  const goalFeedback = useMemo(
-    () => form.goals.map((row) => cachedStatementFeedback(row, latex)),
-    [form.goals, latex],
-  );
 
   /** Every edit goes through here, and every edit invalidates the review. */
   const update = (change: (previous: ProblemForm) => ProblemForm) => {
@@ -288,7 +280,7 @@ export function ProblemEntryForm({
   };
 
   return (
-    <div className={styles.layout}>
+    <fieldset className={styles.layout} disabled={!hydrated} aria-label="Problem setup">
       <form
         className={styles.entry}
         aria-label="New problem"
@@ -438,15 +430,7 @@ export function ProblemEntryForm({
                   />
                   <span>
                     <strong>{pack.name}</strong> — {pack.description}
-                    {pack.alwaysActive ? (
-                      <em className={styles.hint}> Always included.</em>
-                    ) : (
-                      <em className={styles.hint}>
-                        {" "}
-                        Adds{" "}
-                        {(packOperators.get(pack.id) ?? []).map(({ symbol }) => symbol).join(", ")}.
-                      </em>
-                    )}
+                    {pack.alwaysActive && <em className={styles.hint}> Always included.</em>}
                   </span>
                 </label>
               ))}
@@ -474,7 +458,10 @@ export function ProblemEntryForm({
               onClick={() =>
                 update((f) => ({
                   ...f,
-                  declarations: [...f.declarations, { key: key(), symbol: "", sort: "real" }],
+                  declarations: [
+                    ...f.declarations,
+                    { key: key(), symbol: "", sort: f.declarations.at(-1)?.sort ?? "proposition" },
+                  ],
                 }))
               }
             >
@@ -489,7 +476,8 @@ export function ProblemEntryForm({
                 label={`Hypothesis ${index + 1}`}
                 family="hypothesis"
                 row={row}
-                feedback={hypothesisFeedback[index] ?? { kind: "empty" }}
+                latex={latex}
+                packs={form.packIds}
                 onChange={(next) =>
                   update((f) => ({ ...f, hypotheses: replaceAt(f.hypotheses, index, next) }))
                 }
@@ -520,7 +508,8 @@ export function ProblemEntryForm({
                 family="goal"
                 required={index === 0}
                 row={row}
-                feedback={goalFeedback[index] ?? { kind: "empty" }}
+                latex={latex}
+                packs={form.packIds}
                 onChange={(next) =>
                   update((f) => ({ ...f, goals: replaceAt(f.goals, index, next) }))
                 }
@@ -547,15 +536,13 @@ export function ProblemEntryForm({
         </Section>
 
         <div className={styles.actions}>
-          <div className={styles.actionButtons}>
-            <button
-              type="submit"
-              className={reviewed !== undefined && approvable ? styles.secondary : styles.primary}
-              disabled={busy !== undefined}
-            >
-              {busy === "review" ? "Checking…" : "Check setup"}
-            </button>
-          </div>
+          <button
+            type="submit"
+            className={reviewed !== undefined && approvable ? styles.secondary : styles.primary}
+            disabled={busy !== undefined}
+          >
+            {busy === "review" ? "Checking…" : "Check setup"}
+          </button>
         </div>
 
         {notice === undefined ? null : <NoticeView notice={notice} />}
@@ -573,7 +560,7 @@ export function ProblemEntryForm({
           />
         )}
       </form>
-    </div>
+    </fieldset>
   );
 }
 

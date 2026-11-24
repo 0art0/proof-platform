@@ -81,6 +81,18 @@ describe("proof selection keys", () => {
 });
 
 describe("proof selection gestures", () => {
+  it("extends the current selection for one click, and cancels on clear", () => {
+    const a = exact("goal:a", []);
+    const b = exact("goal:b", []);
+    const single = select(EMPTY_SELECTION_GESTURE_STATE, a);
+    const armed = selectionGestureReducer(single, { type: "toggle-extend" });
+    const pair = select(armed, b);
+    expect(pair.active).toEqual([a, b]);
+    expect(select(pair, a).active).toEqual([a]);
+    const cleared = selectionGestureReducer(armed, { type: "clear" });
+    expect(select(cleared, b).feedback?.outcome).toBe("replaced");
+  });
+
   it("replaces on ordinary gestures and walks semantic parents on repeated clicks", () => {
     const leaf = exact("goal:left", [0, 1]);
     const other = exact("goal:right", [1]);

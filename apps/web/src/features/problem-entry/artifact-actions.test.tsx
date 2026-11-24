@@ -203,8 +203,6 @@ describe("LandingActions", () => {
       "/sessions/session%3Adevelopment",
     );
     expect(others).toContainElement(screen.getByText("Resume a saved proof"));
-    expect(
-      screen.getByRole("complementary", { name: "Try an interactive example" }),
-    ).toContainElement(screen.getByRole("link", { name: "Explore an example" }));
+    expect(others).toContainElement(screen.getByRole("link", { name: "Explore an example" }));
   });
 });

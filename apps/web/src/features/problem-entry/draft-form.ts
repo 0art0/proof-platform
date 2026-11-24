@@ -59,14 +59,21 @@ export function emptyProblemForm(): ProblemForm {
   };
 }
 
-export const STATEMENT_SYMBOLS = [
+type StatementSymbol = Readonly<{ symbol: string; label: string; latex: string; pack?: string }>;
+
+export const STATEMENT_SYMBOLS: readonly StatementSymbol[] = [
   { symbol: "∧", label: "and", latex: "\\land" },
   { symbol: "∨", label: "or", latex: "\\lor" },
   { symbol: "¬", label: "not", latex: "\\neg" },
   { symbol: "⇒", label: "implies", latex: "\\implies" },
   { symbol: "≤", label: "less than or equal to", latex: "\\le" },
   { symbol: "≥", label: "greater than or equal to", latex: "\\ge" },
-] as const;
+  { symbol: "∣", label: "divides", latex: "\\mid", pack: "pack:divisibility" },
+  { symbol: "∈", label: "is an element of", latex: "\\in", pack: "pack:sets" },
+  { symbol: "⊆", label: "is a subset of", latex: "\\subseteq", pack: "pack:sets" },
+  { symbol: "∩", label: "intersection", latex: "\\cap", pack: "pack:sets" },
+  { symbol: "∪", label: "union", latex: "\\cup", pack: "pack:sets" },
+];
 
 export function statementLatex(text: string): string {
   return STATEMENT_SYMBOLS.reduce(
@@ -159,13 +166,6 @@ export function problemTitle(form: Pick<ProblemForm, "title" | "statement">): st
 }
 
 const TITLE_LENGTH = 60;
-
-/** The required fields the AI roles need: the problem and the background, not the statements. */
-export function missingSetupFields(form: ProblemForm): readonly FormProblem[] {
-  return missingRequiredFields(form).filter(
-    ({ field }) => !field.startsWith("Variable or object") && !field.startsWith("Goal"),
-  );
-}
 
 /** Editable rows for the declarations and statements of a draft (an AI draft, for example). */
 export function draftStatementRows(
